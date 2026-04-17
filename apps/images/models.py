@@ -52,3 +52,38 @@ class ImageRelease(models.Model):
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
+
+
+class ImageImportJob(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        RUNNING = "running", _("Running")
+        READY = "ready", _("Ready")
+        FAILED = "failed", _("Failed")
+
+    tag = models.CharField(max_length=64)
+    machine = models.CharField(max_length=32, choices=ImageRelease.Machine.choices)
+    mark_as_latest = models.BooleanField(default=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    error_message = models.TextField(blank=True)
+    image_release = models.ForeignKey(
+        "ImageRelease",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="import_jobs",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"import {self.tag}/{self.machine} ({self.status})"

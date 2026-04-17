@@ -115,3 +115,30 @@ class TestImageRelease:
                         )
                     ]
                 )
+
+
+@pytest.mark.django_db
+class TestImageImportJob:
+    def test_job_defaults(self, admin_user):
+        from apps.images.models import ImageImportJob
+
+        job = ImageImportJob.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            requested_by=admin_user,
+        )
+        assert job.status == ImageImportJob.Status.PENDING
+        assert job.error_message == ""
+        assert job.image_release is None
+
+    def test_terminal_statuses(self, admin_user):
+        from apps.images.models import ImageImportJob
+
+        job = ImageImportJob.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            requested_by=admin_user,
+        )
+        job.status = ImageImportJob.Status.READY
+        job.save()
+        assert ImageImportJob.Status.READY in dict(ImageImportJob.Status.choices)
