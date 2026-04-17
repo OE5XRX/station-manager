@@ -45,6 +45,20 @@ services:
       redis:
         condition: service_started
 
+  background-worker:
+    image: ghcr.io/oe5xrx/station-manager:latest
+    restart: unless-stopped
+    command: python manage.py run_background_jobs --loop --interval 5
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   db:
     image: postgres:17
     restart: unless-stopped
