@@ -12,6 +12,24 @@
 
 **Branch:** `feat/server-side-provisioning-spec` (keep plan + code on the same branch).
 
+## Progress
+
+- [x] Task 1 — Scaffold `images` app + `ImageRelease` (commits `011832e`, `f39c8a8`)
+- [x] Task 2 — `ImageImportJob` model (commits `646378a`, `b0ad778`)
+- [x] Task 3 — github/cosign/storage helpers (commit `de1a9f0`)
+- [x] Task 4 — Image import view + form (commit `2c68d79`)
+- [x] Task 5 — Image importer worker (commit `a40d619`)
+- [ ] Task 6 — Mark-latest + delete actions
+- [ ] Task 7 — `ProvisioningJob` model
+- [ ] Task 8 — guestfish + config_render helpers
+- [ ] Task 9 — Provisioning worker — full pipeline
+- [ ] Task 10 — Provisioning views — create, status, download
+- [ ] Task 11 — Station-detail provisioning section
+- [ ] Task 12 — Sidebar "Images" entry
+- [ ] Task 13 — Dockerfile — libguestfs + cosign
+- [ ] Task 14 — docker-compose background-worker service
+- [ ] Task 15 — E2E verification + final PR
+
 ---
 
 ## File Structure
