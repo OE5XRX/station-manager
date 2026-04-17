@@ -54,6 +54,8 @@ services:
   background-worker:
     build:
       context: .
+      args:
+        DEV: "true"
     command: python manage.py run_background_jobs --loop --interval 5
     volumes:
       - .:/app
@@ -62,8 +64,11 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.dev
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   db:
     image: postgres:17

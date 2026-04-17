@@ -1,3 +1,5 @@
+import re
+
 from django.contrib import messages
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -94,7 +96,12 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
             finally:
                 stream.close()
 
-        filename = job.output_s3_key.split("/")[-1]
+        # Sanitize filename for Content-Disposition header — the s3 key embeds
+        # the user-supplied image tag, which could contain quotes or CRLF that
+        # would break the header or allow response-splitting. Matches the
+        # pattern used in apps/firmware/views.py FirmwareDownloadView.
+        raw_name = job.output_s3_key.split("/")[-1]
+        filename = re.sub(r'["\r\n]', "_", raw_name) or "download.wic.bz2"
         response = StreamingHttpResponse(iterator(), content_type="application/x-bzip2")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         if job.output_size_bytes:

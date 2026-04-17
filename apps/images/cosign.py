@@ -12,6 +12,11 @@ class CosignVerificationError(RuntimeError):
 
 COSIGN_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 
+# cosign verify-blob on a ~70 MB asset completes in seconds locally. A minute
+# is generous; past that we assume the subprocess is stuck and abort rather
+# than let it pin the worker loop forever.
+_COSIGN_TIMEOUT = 60  # seconds
+
 
 def verify_blob(
     blob_bytes: bytes,
@@ -46,7 +51,12 @@ def verify_blob(
             COSIGN_OIDC_ISSUER,
             str(blob_path),
         ]
-        result = subprocess.run(cmd, capture_output=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=_COSIGN_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            raise CosignVerificationError(
+                f"cosign verify-blob timed out after {_COSIGN_TIMEOUT}s"
+            ) from exc
         if result.returncode != 0:
             raise CosignVerificationError(
                 f"cosign verify-blob failed: {result.stderr.decode('utf-8', 'replace')}"

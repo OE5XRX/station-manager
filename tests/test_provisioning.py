@@ -315,6 +315,43 @@ class TestProvisioningViews:
         response = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
         assert response.status_code == 410
 
+    def test_download_sanitizes_content_disposition_filename(
+        self, client, admin_user, station, image_release, monkeypatch
+    ):
+        """A nasty s3 key must not inject CRLF or stray quotes into the header."""
+        import io
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.provisioning.models import ProvisioningJob
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.READY,
+            output_s3_key='provisioning/abc/evil"\r\ninjected: yes".wic.bz2',
+            output_size_bytes=4,
+            ready_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: io.BytesIO(b"xxxx"),
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+        assert response.status_code == 200
+        disposition = response["Content-Disposition"]
+        # No CR/LF anywhere in the rendered header value.
+        assert "\r" not in disposition
+        assert "\n" not in disposition
+        # The only quotes allowed are the two wrapping filename="...".
+        assert disposition.count('"') == 2
+        # Drain the response so the generator closes cleanly in the fixture.
+        b"".join(response.streaming_content)
+
 
 @pytest.mark.django_db
 class TestStationDetailIntegration:

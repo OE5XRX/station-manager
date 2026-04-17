@@ -127,7 +127,21 @@ def _decompress_to(src_path: Path, dst_path: Path) -> None:
 
 
 def _compress_to_bytes(src_path: Path) -> bytes:
-    return bz2.compress(src_path.read_bytes(), compresslevel=9)
+    # Stream the wic through BZ2Compressor in 1 MiB chunks so peak memory is
+    # bounded to chunk size + compressor state (~1 MiB) regardless of input
+    # size. The final join materializes the compressed output (~70 MiB for a
+    # real wic) which is an order of magnitude smaller than the input.
+    compressor = bz2.BZ2Compressor(compresslevel=9)
+    chunks: list[bytes] = []
+    with open(src_path, "rb") as src:
+        while chunk := src.read(1 << 20):
+            out = compressor.compress(chunk)
+            if out:
+                chunks.append(out)
+    tail = compressor.flush()
+    if tail:
+        chunks.append(tail)
+    return b"".join(chunks)
 
 
 def _provisioning_output_key(job: ProvisioningJob) -> str:
@@ -230,7 +244,12 @@ def cleanup_expired_provisioning_outputs() -> None:
         status=ProvisioningJob.Status.DOWNLOADED,
     ).exclude(output_s3_key="")
     for job in downloaded:
-        image_storage.delete(job.output_s3_key)
+        try:
+            image_storage.delete(job.output_s3_key)
+        except Exception:
+            # Best-effort cleanup — leave output_s3_key intact so the next
+            # tick retries. A transient S3 failure must not crash the loop.
+            continue
         ProvisioningJob.objects.filter(pk=job.pk).update(output_s3_key="")
 
     # Expired before download.
@@ -240,7 +259,11 @@ def cleanup_expired_provisioning_outputs() -> None:
     )
     for job in stale:
         if job.output_s3_key:
-            image_storage.delete(job.output_s3_key)
+            try:
+                image_storage.delete(job.output_s3_key)
+            except Exception:
+                # Best-effort cleanup — retry on the next tick.
+                continue
         job.status = ProvisioningJob.Status.EXPIRED
         job.output_s3_key = ""
         job.save(update_fields=["status", "output_s3_key"])

@@ -6,6 +6,10 @@ from dataclasses import dataclass
 
 RELEASE_URL_FMT = "https://github.com/{repo}/releases/download/{tag}/oe5xrx-{machine}-{tag}.{ext}"
 
+# GitHub asset downloads are ~70 MB; a healthy connection finishes in seconds.
+# Without a timeout a stalled connection would pin the worker indefinitely.
+_REQUEST_TIMEOUT = 60  # seconds
+
 
 @dataclass
 class ReleaseAsset:
@@ -15,7 +19,7 @@ class ReleaseAsset:
 
 
 def _get(url: str) -> bytes:
-    with urllib.request.urlopen(url) as resp:
+    with urllib.request.urlopen(url, timeout=_REQUEST_TIMEOUT) as resp:
         return resp.read()
 
 
