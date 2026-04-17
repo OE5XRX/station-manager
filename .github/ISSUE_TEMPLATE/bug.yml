@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in the server, API, or agent misbehaves.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security issues:** please use
+        [security advisories](https://github.com/OE5XRX/station-manager/security/advisories/new)
+        instead of an issue.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - stations / dashboard
+        - firmware / deployments (OTA)
+        - terminal (tunnel)
+        - monitoring / alerts
+        - audit log
+        - api (DRF)
+        - station-agent
+        - deploy / infra
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: "Image tag (e.g. `ghcr.io/oe5xrx/station-manager:abc1234`), short commit SHA, or date."
+      placeholder: "abc1234"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      placeholder: "Describe the observed behavior. Paste logs (web, station-monitor, alert-monitor) or a screenshot if useful."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Logged in as operator
+        2. Clicked "Open Terminal" on station X
+        3. ...
+    validations:
+      required: true
