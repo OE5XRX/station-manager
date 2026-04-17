@@ -1,0 +1,26 @@
+{% load i18n %}
+<div class="mt-20">
+  <h3 class="t-label mb-10">{% trans "Install instructions" %}</h3>
+  <details>
+    <summary>{% trans "Raspberry Pi CM4 (real hardware)" %}</summary>
+    <pre class="codebox"># {% trans "Flash directly onto the SD card (replace /dev/sdX with your card):" %}
+bzcat oe5xrx-station-{{ station.pk }}-*.wic.bz2 | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+# {% trans "Insert + power on the CM4. The station reports online within ~1 min." %}</pre>
+  </details>
+  <details>
+    <summary>{% trans "Proxmox VM" %}</summary>
+    <pre class="codebox">bunzip2 oe5xrx-station-{{ station.pk }}-*.wic.bz2
+# {% trans "On the Proxmox host (replace VMID + STORAGE):" %}
+qm importdisk VMID oe5xrx-station-{{ station.pk }}-*.wic STORAGE
+# {% trans "Configure the VM: BIOS=OVMF, machine=q35, attach disk as virtio, start it." %}</pre>
+  </details>
+  <details>
+    <summary>{% trans "QEMU direct (dev)" %}</summary>
+    <pre class="codebox"># {% trans "Place the .wic.bz2 into the linux-image repo's cache dir and run:" %}
+# {% trans "(see linux-image/scripts/run-qemu.sh for details)" %}
+bunzip2 oe5xrx-station-{{ station.pk }}-*.wic.bz2
+qemu-system-x86_64 -drive file=oe5xrx-station-{{ station.pk }}-*.wic,if=virtio,format=raw \
+  -m 1024 -smp 2 -cpu IvyBridge -machine q35 \
+  -device virtio-net-pci,netdev=n0 -netdev user,id=n0,hostfwd=tcp::2222-:22</pre>
+  </details>
+</div>

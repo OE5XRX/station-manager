@@ -259,3 +259,25 @@ class TestProvisioningViews:
         client.force_login(admin_user)
         response = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
         assert response.status_code == 410
+
+
+@pytest.mark.django_db
+class TestStationDetailIntegration:
+    def test_admin_sees_provisioning_section(self, client, admin_user, station, image_release):
+        client.force_login(admin_user)
+        response = client.get(
+            reverse("stations:station_detail", kwargs={"pk": station.pk}),
+        )
+        assert response.status_code == 200
+        assert b"Provisioning" in response.content
+        assert b"Generate provisioning bundle" in response.content
+
+    def test_operator_does_not_see_provisioning_section(
+        self, client, operator_user, station, image_release
+    ):
+        client.force_login(operator_user)
+        response = client.get(
+            reverse("stations:station_detail", kwargs={"pk": station.pk}),
+        )
+        assert response.status_code == 200
+        assert b"Generate provisioning bundle" not in response.content
