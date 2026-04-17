@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Deployment" %} #{{ deployment.pk }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'deployments:deployment_list' %}">{% trans "Deployments" %}</a>
+  <span class="sep">/</span>
+  <span class="cur frame-id" style="color:var(--ink-0);">{{ deployment.pk|stringformat:"04d" }}</span>
+{% endblock %}
+
+{% block content %}
+<div data-ws-deployments>
+  <div data-deployment-id="{{ deployment.pk }}">
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">
+        <span class="frame-id">{{ deployment.pk|stringformat:"04d" }}</span>
+        <span class="pill pill-{{ deployment.status|slugify }}" data-deployment-status style="margin-left:8px;">{{ deployment.get_status_display|upper }}</span>
+      </div>
+      <h1 class="page-title">{{ deployment.firmware_artifact.name }} <span class="t-mono t-muted" style="font-family:var(--font-mono);font-weight:500;">v{{ deployment.firmware_artifact.version }}</span></h1>
+      <div class="row-gap-8 mt-10">
+        <span class="t-label">{% trans "Strategy" %}</span>
+        <span class="pill pill-muted">{{ deployment.get_strategy_display|upper }}</span>
+        <span class="t-label">{% trans "Created" %}</span>
+        <span class="t-mono-sm t-muted">{{ deployment.created_at|date:"Y-m-d H:i" }}{% if deployment.created_by %} · {{ deployment.created_by.username }}{% endif %}</span>
+      </div>
+    </div>
+    <div class="page-head-actions">
+      {% if deployment.status == "pending" or deployment.status == "in_progress" %}
+      <form method="post" action="{% url 'deployments:deployment_cancel' deployment.pk %}" data-confirm="{% trans 'Cancel this deployment?' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger">{% trans "Cancel deployment" %}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% with p=deployment.progress %}
+  <section class="panel panel-hero mb-24">
+    <div class="panel-body">
+      <div class="row-split mb-14">
+        <div class="stack-gap-2">
+          <div class="t-label">{% trans "Rollout progress" %}</div>
+          <div class="t-display-lg"><span data-deployment-pct>{{ p.percentage }}%</span></div>
+        </div>
+        <div class="stack-gap-2" style="text-align:right;">
+          <div class="t-label">{% trans "Totals" %}</div>
+          <div class="t-mono" data-deployment-totals style="font-size:14px;color:var(--ink-0);">
+            {{ p.completed }} / {{ p.total }} {% trans "OK" %} · {{ p.failed }} {% trans "FAIL" %}
+          </div>
+        </div>
+      </div>
+      <div class="progress" style="height:8px;">
+        <div class="progress-bar {% if p.failed %}warn{% endif %}" style="width: {{ p.percentage }}%;" data-deployment-bar></div>
+      </div>
+      <div class="row-gap-8 mt-14" style="flex-wrap:wrap;">
+        <span class="pill pill-online"><span class="dot"></span>{% trans "OK" %} · {{ p.completed }}</span>
+        <span class="pill pill-in-progress">{% trans "IN-PROGRESS" %} · {{ p.in_progress }}</span>
+        <span class="pill pill-muted">{% trans "PENDING" %} · {{ p.pending }}</span>
+        {% if p.failed %}<span class="pill pill-offline">{% trans "FAIL" %} · {{ p.failed }}</span>{% endif %}
+      </div>
+    </div>
+  </section>
+  {% endwith %}
+
+  <div class="grid grid-main">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Per-station results" %}</div>
+        <span class="t-label">{{ deployment.results.count }}</span>
+      </div>
+      <div class="panel-body flush" data-mobile-cards>
+        {% if deployment.results.all %}
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "Station" %}</th>
+              <th>{% trans "Status" %}</th>
+              <th>{% trans "From → To" %}</th>
+              <th>{% trans "Started" %}</th>
+              <th>{% trans "Completed" %}</th>
+              <th>{% trans "Error" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in deployment.results.all %}
+            <tr data-result-id="{{ r.pk }}">
+              <td data-primary>
+                <a href="{% url 'stations:station_detail' r.station.pk %}" class="callsign">{{ r.station.callsign|default:r.station.name }}</a>
+              </td>
+              <td data-label="{% trans 'Status' %}"><span class="pill pill-{{ r.status }}" data-result-status>{{ r.get_status_display|upper }}</span></td>
+              <td class="t-mono-sm" data-label="{% trans 'Version' %}">{{ r.previous_version|default:"—" }} → {{ r.new_version|default:"…" }}</td>
+              <td class="t-mono-sm t-muted" data-label="{% trans 'Started' %}">{% if r.started_at %}{{ r.started_at|date:"H:i:s" }}{% else %}—{% endif %}</td>
+              <td class="t-mono-sm t-muted" data-label="{% trans 'Completed' %}">{% if r.completed_at %}{{ r.completed_at|date:"H:i:s" }}{% else %}—{% endif %}</td>
+              <td class="t-mono-sm t-danger" data-label="{% trans 'Error' %}">{{ r.error_message|truncatechars:36|default:"" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="empty"><div class="empty-title">{% trans "No targets resolved." %}</div></div>
+        {% endif %}
+      </div>
+    </section>
+
+    <aside>
+      <section class="panel">
+        <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Configuration" %}</div></div>
+        <div class="panel-body">
+          <dl class="dlist">
+            <dt>{% trans "Firmware" %}</dt>
+            <dd><a href="{% url 'firmware:firmware_detail' deployment.firmware_artifact.pk %}">{{ deployment.firmware_artifact }}</a></dd>
+            <dt>{% trans "Target type" %}</dt><dd>{{ deployment.get_target_type_display }}</dd>
+            <dt>{% trans "Target" %}</dt>
+            <dd>
+              {% if deployment.target_tag %}<span class="tag" style="--tag-color: {{ deployment.target_tag.color }};">{{ deployment.target_tag.name }}</span>
+              {% elif deployment.target_station %}<span class="callsign">{{ deployment.target_station }}</span>
+              {% else %}<span class="pill pill-accent">{% trans "ALL" %}</span>{% endif %}
+            </dd>
+            <dt>{% trans "Strategy" %}</dt><dd>{{ deployment.get_strategy_display }}</dd>
+            {% if deployment.phase_config %}
+            <dt>{% trans "Phase config" %}</dt>
+            <dd><pre class="codebox" style="font-size:11px;">{{ deployment.phase_config|pprint }}</pre></dd>
+            {% endif %}
+          </dl>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  </div>
+</div>
+{% endblock %}

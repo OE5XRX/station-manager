@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Tags" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:station_list' %}">{% trans "Stations" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Tags" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Organization" %} · {% trans "Station tags" %}</div>
+    <h1 class="page-title">{% trans "Tags" %}</h1>
+    <p class="page-sub">{% trans "Categorize stations for filtering, batch operations, and OTA rollouts." %}</p>
+  </div>
+  <div class="page-head-actions">
+    <a href="{% url 'stations:tag_create' %}" class="btn btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      {% trans "New tag" %}
+    </a>
+  </div>
+</div>
+
+{% if tags %}
+<div class="table-wrap" data-mobile-cards>
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Name" %}</th>
+        <th>{% trans "Slug" %}</th>
+        <th>{% trans "Color" %}</th>
+        <th>{% trans "Stations" %}</th>
+        <th>{% trans "Description" %}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tag in tags %}
+      <tr>
+        <td data-primary><span class="tag" style="--tag-color: {{ tag.color }};">{{ tag.name }}</span></td>
+        <td class="t-mono" data-label="{% trans 'Slug' %}">{{ tag.slug }}</td>
+        <td class="t-mono" data-label="{% trans 'Color' %}">{{ tag.color }}</td>
+        <td class="t-mono num" data-label="{% trans 'Stations' %}">{{ tag.stations.count }}</td>
+        <td class="t-muted" data-label="{% trans 'Description' %}">{{ tag.description|default:"—" }}</td>
+        <td class="actions">
+          <a href="{% url 'stations:tag_edit' tag.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+          <a href="{% url 'stations:tag_delete' tag.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "includes/pagination.html" %}
+{% else %}
+<div class="panel"><div class="empty"><div class="empty-title">{% trans "No tags yet" %}</div></div></div>
+{% endif %}
+{% endblock %}

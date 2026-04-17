@@ -1,0 +1,19 @@
+server_url: https://ham.oe5xrx.org
+
+# Authentication: Ed25519 signature (required)
+station_id: 1
+ed25519_key_path: /etc/station-agent/device_key.pem
+
+heartbeat_interval: 60
+ota_check_interval: 5  # check for updates every N heartbeats
+download_dir: /tmp/station-agent
+log_level: INFO
+
+# Remote terminal (Web Shell)
+terminal_enabled: false
+terminal_shell: /bin/bash
+
+# Bootloader for A/B partition management.
+# "auto" detects grub-editenv or fw_setenv at runtime.
+# Explicit: "grub" (x64 dev/test) or "uboot" (RPi CM4 production).
+bootloader: auto

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Audit log" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Audit log" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Administration" %} · {% trans "Tamper-evident trail" %}</div>
+    <h1 class="page-title">{% trans "Audit log" %}</h1>
+    <p class="page-sub">{% trans "Every station change, token event, and admin action." %}</p>
+  </div>
+  <div class="page-head-actions">
+    <a href="{% url 'audit:audit_export' %}?{{ request.GET.urlencode }}" class="btn btn-ghost">{% trans "Export CSV" %}</a>
+    <a href="{% url 'audit:audit_export' %}?format=json&{{ request.GET.urlencode }}" class="btn btn-ghost">{% trans "Export JSON" %}</a>
+  </div>
+</div>
+
+<form class="filter-bar" method="get" hx-get="{% url 'audit:audit_list' %}" hx-target="#audit-table" hx-trigger="change, keyup changed delay:300ms from:input[type=date]" hx-push-url="true">
+  <select name="station" class="form-select" style="width:auto;min-width:180px;">
+    <option value="">{% trans "All stations" %}</option>
+    {% for s in stations %}
+      <option value="{{ s.pk }}" {% if current_station == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="event_type" class="form-select" style="width:auto;min-width:180px;">
+    <option value="">{% trans "All events" %}</option>
+    {% for val, label in event_type_choices %}
+      <option value="{{ val }}" {% if current_event_type == val %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <select name="user" class="form-select" style="width:auto;min-width:160px;">
+    <option value="">{% trans "All admins" %}</option>
+    {% for u in users %}
+      <option value="{{ u.pk }}" {% if current_user == u.pk|stringformat:"s" %}selected{% endif %}>{{ u.username }}</option>
+    {% endfor %}
+  </select>
+  <input type="date" name="date_from" value="{{ current_date_from }}" style="width:auto;">
+  <input type="date" name="date_to" value="{{ current_date_to }}" style="width:auto;">
+  <span class="htmx-indicator spinner"></span>
+</form>
+
+<div id="audit-table">
+  {% include "audit/_audit_table.html" %}
+</div>
+{% endblock %}

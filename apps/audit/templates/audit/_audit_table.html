@@ -1,0 +1,36 @@
+{% load i18n %}
+{% if audit_logs %}
+<div class="table-wrap" data-mobile-cards>
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Timestamp" %}</th>
+        <th>{% trans "Station" %}</th>
+        <th>{% trans "Event" %}</th>
+        <th>{% trans "Message" %}</th>
+        <th>{% trans "User" %}</th>
+        <th>{% trans "IP" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for audit in audit_logs %}
+      <tr>
+        <td class="t-mono-sm" style="white-space:nowrap;" data-primary>{{ audit.created_at|date:"Y-m-d H:i:s" }}</td>
+        <td data-label="{% trans 'Station' %}">
+          {% if audit.station %}
+            <a href="{% url 'stations:station_detail' audit.station.pk %}" class="callsign">{{ audit.station.callsign|default:audit.station.name }}</a>
+          {% else %}<span class="t-muted">—</span>{% endif %}
+        </td>
+        <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ audit.get_event_type_display|upper }}</span></td>
+        <td data-label="{% trans 'Message' %}">{{ audit.message }}</td>
+        <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ audit.user.username|default:"—" }}</td>
+        <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ audit.ip_address|default:"—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "includes/pagination.html" %}
+{% else %}
+<div class="panel"><div class="empty"><div class="empty-title">{% trans "No audit entries match those filters." %}</div></div></div>
+{% endif %}

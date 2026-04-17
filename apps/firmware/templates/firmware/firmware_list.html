@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Firmware" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Firmware" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Artifacts" %} · {% trans "OS images & module firmware" %}</div>
+    <h1 class="page-title">{% trans "Firmware" %}</h1>
+    <p class="page-sub">{% trans "Uploaded binaries with SHA-256 checksums, used by deployments across the fleet." %}</p>
+  </div>
+  <div class="page-head-actions">
+    {% if user.role == 'admin' or user.role == 'operator' %}
+    <a href="{% url 'firmware:firmware_upload' %}" class="btn btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      {% trans "Upload artifact" %}
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<form class="filter-bar" method="get" hx-get="{% url 'firmware:firmware_list' %}" hx-target="#firmware-table" hx-trigger="change" hx-push-url="true">
+  <select name="type" class="form-select" style="width:auto;min-width:160px;">
+    <option value="">{% trans "All types" %}</option>
+    <option value="os_image" {% if current_type == "os_image" %}selected{% endif %}>{% trans "OS Image" %}</option>
+    <option value="module_firmware" {% if current_type == "module_firmware" %}selected{% endif %}>{% trans "Module Firmware" %}</option>
+  </select>
+  <select name="stable" class="form-select" style="width:auto;min-width:140px;">
+    <option value="">{% trans "All releases" %}</option>
+    <option value="1" {% if current_stable == "1" %}selected{% endif %}>{% trans "Stable only" %}</option>
+  </select>
+  <span class="htmx-indicator spinner"></span>
+</form>
+
+<div id="firmware-table">
+  {% include "firmware/_firmware_table.html" %}
+</div>
+{% endblock %}

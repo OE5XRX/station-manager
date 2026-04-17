@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Alert rules" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'monitoring:alert_list' %}">{% trans "Alerts" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Rules" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Monitoring" %} · {% trans "Rule configuration" %}</div>
+    <h1 class="page-title">{% trans "Alert rules" %}</h1>
+    <p class="page-sub">{% trans "Thresholds and toggles for automatic alerts." %}</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Rules" %}</div></div>
+  <div class="panel-body flush">
+    <table class="t-table">
+      <thead>
+        <tr>
+          <th>{% trans "Rule" %}</th>
+          <th>{% trans "Severity" %}</th>
+          <th>{% trans "Threshold" %}</th>
+          <th>{% trans "Active" %}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in alert_rules %}
+        <tr>
+          <td>
+            <div class="stack-gap-2">
+              <span style="font-weight:600;color:var(--ink-0);">{{ rule.get_alert_type_display }}</span>
+              <span class="t-mono-sm t-muted">{{ rule.description|default:rule.alert_type }}</span>
+            </div>
+          </td>
+          <td>
+            {% if rule.severity == "critical" %}<span class="pill pill-offline">{% trans "CRITICAL" %}</span>
+            {% else %}<span class="pill pill-warn">{% trans "WARNING" %}</span>{% endif %}
+          </td>
+          <td>
+            <form hx-post="{% url 'monitoring:alert_rule_update' rule.pk %}" class="row-gap-8">
+              {% csrf_token %}
+              <input type="number" step="0.1" name="threshold" value="{{ rule.threshold }}" style="width:120px;">
+              <button type="submit" class="btn btn-sm">{% trans "Save" %}</button>
+            </form>
+          </td>
+          <td>
+            <form hx-post="{% url 'monitoring:alert_rule_update' rule.pk %}">
+              {% csrf_token %}
+              <label style="display:inline-flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-size:13px;color:var(--ink-0);cursor:pointer;">
+                <input type="hidden" name="is_active" value="false">
+                <input type="checkbox" name="is_active" value="true" {% if rule.is_active %}checked{% endif %} data-submit-on-change>
+                {% if rule.is_active %}{% trans "Enabled" %}{% else %}{% trans "Disabled" %}{% endif %}
+              </label>
+            </form>
+          </td>
+          <td></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if user.role == "admin" %}
+<section class="panel mt-20">
+  <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Test notification channels" %}</div></div>
+  <div class="panel-body row-gap-8">
+    <button class="btn" hx-post="{% url 'monitoring:test_email' %}">{% trans "Send test email" %}</button>
+    <button class="btn" hx-post="{% url 'monitoring:test_telegram' %}">{% trans "Send test telegram" %}</button>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

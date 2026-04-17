@@ -1,0 +1,15 @@
+{% load i18n %}
+<form method="post" action="{% url 'stations:station_photo_upload' station.pk %}" enctype="multipart/form-data">
+  {% csrf_token %}
+  <div class="row-gap-8" style="align-items:flex-end;flex-wrap:wrap;">
+    <div class="form-group" style="flex:1;margin:0;min-width:220px;">
+      <label class="form-label">{% trans "Image" %}</label>
+      {{ form.image }}
+    </div>
+    <div class="form-group" style="flex:1;margin:0;min-width:220px;">
+      <label class="form-label">{% trans "Caption" %}</label>
+      {{ form.caption }}
+    </div>
+    <button type="submit" class="btn btn-primary">{% trans "Upload" %}</button>
+  </div>
+</form>

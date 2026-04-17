@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Build job" %} #{{ job.pk }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'builder:buildjob_list' %}">{% trans "Build jobs" %}</a>
+  <span class="sep">/</span>
+  <span class="cur frame-id" style="color:var(--ink-0);">{{ job.pk|stringformat:"04d" }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">
+      <span class="frame-id">{{ job.pk|stringformat:"04d" }}</span>
+      <span class="pill pill-{{ job.status }}" style="margin-left:8px;">{{ job.get_status_display|upper }}</span>
+    </div>
+    <h1 class="page-title">{{ job.build_config.name }} <span class="t-muted" style="font-family:var(--font-body);font-weight:500;">#{{ job.pk }}</span></h1>
+  </div>
+</div>
+
+<div class="summary-bar mb-24">
+  <div class="summary-item"><div class="summary-key">{% trans "Started" %}</div><div class="summary-val mono" style="font-size:13px;">{{ job.started_at|default:"—" }}</div></div>
+  <div class="summary-item"><div class="summary-key">{% trans "Completed" %}</div><div class="summary-val mono" style="font-size:13px;">{{ job.completed_at|default:"—" }}</div></div>
+  <div class="summary-item"><div class="summary-key">{% trans "Created" %}</div><div class="summary-val mono" style="font-size:13px;">{{ job.created_at|date:"Y-m-d H:i" }}</div></div>
+  <div class="summary-item"><div class="summary-key">{% trans "By" %}</div><div class="summary-val mono" style="font-size:13px;">{{ job.created_by.username|default:"—" }}</div></div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Build log" %}</div></div>
+  <div class="panel-body">
+    {% if job.log %}
+    <pre class="codebox" style="max-height:520px;overflow:auto;">{{ job.log }}</pre>
+    {% else %}
+    <div class="t-muted">{% trans "No log output yet." %}</div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

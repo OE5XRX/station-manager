@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Delete tag" %} {{ tag.name }}{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'stations:tag_list' %}">{% trans "Tags" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Delete" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow t-danger">{% trans "Danger zone" %}</div>
+  <h1 class="page-title">{% trans "Delete tag" %}</h1>
+  <p class="page-sub">{% blocktrans with name=tag.name %}Remove tag "{{ name }}" from all stations? Stations themselves will not be deleted.{% endblocktrans %}</p>
+</div></div>
+<form method="post" class="panel" style="max-width:520px;border-left:3px solid var(--danger);">
+  {% csrf_token %}
+  <div class="panel-body"><span class="tag" style="--tag-color: {{ tag.color }};">{{ tag.name }}</span></div>
+  <div class="panel-foot row-gap-8">
+    <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Delete this tag?' %}">{% trans "Delete" %}</button>
+    <a href="{% url 'stations:tag_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}

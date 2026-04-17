@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Delete" %} {{ station.name }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:station_list' %}">{% trans "Stations" %}</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:station_detail' station.pk %}">{{ station.name }}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Delete" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow t-danger">{% trans "Danger zone" %}</div>
+    <h1 class="page-title">{% trans "Delete station" %}</h1>
+    <p class="page-sub">{% blocktrans with name=station.name %}This will permanently remove <strong>{{ name }}</strong> and all its logs, photos, deployments, and audit history. This cannot be undone.{% endblocktrans %}</p>
+  </div>
+</div>
+
+<form method="post" class="panel" style="max-width:640px;border-left:3px solid var(--danger);">
+  {% csrf_token %}
+  <div class="panel-body">
+    <dl class="dlist">
+      <dt>{% trans "Name" %}</dt><dd>{{ station.name }}</dd>
+      <dt>{% trans "Callsign" %}</dt><dd><span class="callsign">{{ station.callsign|default:"—" }}</span></dd>
+      <dt>{% trans "Log entries" %}</dt><dd class="t-mono">{{ station.log_entries.count }}</dd>
+      <dt>{% trans "Photos" %}</dt><dd class="t-mono">{{ station.photos.count }}</dd>
+      <dt>{% trans "Audit entries" %}</dt><dd class="t-mono">{{ station.audit_logs.count }}</dd>
+    </dl>
+  </div>
+  <div class="panel-foot row-gap-8">
+    <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Delete this station permanently?' %}">{% trans "Yes, delete permanently" %}</button>
+    <a href="{% url 'stations:station_detail' station.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}

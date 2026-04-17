@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "New deployment" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'deployments:deployment_list' %}">{% trans "Deployments" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "New" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Rollout plan" %}</div>
+  <h1 class="page-title">{% trans "New deployment" %}</h1>
+  <p class="page-sub">{% trans "Pick a firmware artifact, a target, and a strategy. Progress streams live once the rollout starts." %}</p>
+</div></div>
+
+<form method="post" style="max-width:720px;">
+  {% csrf_token %}
+  <section class="panel">
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label">{% trans "Firmware artifact" %}</label>
+        {{ form.firmware_artifact }}{{ form.firmware_artifact.errors }}
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{% trans "Target type" %}</label>
+          {{ form.target_type }}{{ form.target_type.errors }}
+        </div>
+        <div class="form-group">
+          <label class="form-label">{% trans "Strategy" %}</label>
+          {{ form.strategy }}
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{% trans "Target tag" %}</label>
+          {{ form.target_tag }}{{ form.target_tag.errors }}
+        </div>
+        <div class="form-group">
+          <label class="form-label">{% trans "Target station" %}</label>
+          {{ form.target_station }}{{ form.target_station.errors }}
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">{% trans "Phase config (JSON)" %}</label>
+        {{ form.phase_config }}
+        <div class="form-help">{% trans 'Example: {"batch_size": 2, "delay_seconds": 3600}' %}</div>
+      </div>
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-primary btn-lg">{% trans "Launch rollout" %}</button>
+      <a href="{% url 'deployments:deployment_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    </div>
+  </section>
+</form>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Profile" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Profile" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Your account" %}</div>
+    <h1 class="page-title">{% trans "Profile" %}</h1>
+    <p class="page-sub">{% trans "Update your email, name, and preferred UI language." %}</p>
+  </div>
+</div>
+
+<div class="grid grid-main">
+  <form method="post" class="panel" style="max-width:640px;">
+    {% csrf_token %}
+    <div class="panel-body">
+      <div class="form-group"><label class="form-label">{% trans "Email" %}</label>{{ form.email }}{{ form.email.errors }}</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">{% trans "First name" %}</label>{{ form.first_name }}</div>
+        <div class="form-group"><label class="form-label">{% trans "Last name" %}</label>{{ form.last_name }}</div>
+      </div>
+      <div class="form-group"><label class="form-label">{% trans "Language" %}</label>{{ form.language }}</div>
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-primary">{% trans "Save profile" %}</button>
+    </div>
+  </form>
+
+  <aside class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div></div>
+    <div class="panel-body">
+      <dl class="dlist">
+        <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ user.username }}</dd>
+        <dt>{% trans "Role" %}</dt><dd><span class="pill pill-accent">{{ user.get_role_display|upper }}</span></dd>
+        <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ user.last_login|date:"Y-m-d H:i" }}</dd>
+        <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ user.date_joined|date:"Y-m-d" }}</dd>
+      </dl>
+    </div>
+  </aside>
+</div>
+{% endblock %}

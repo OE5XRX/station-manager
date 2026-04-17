@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Deployments" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Deployments" %}</span>
+{% endblock %}
+
+{% block content %}
+<div data-ws-deployments>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Rollouts" %}</div>
+      <h1 class="page-title">{% trans "Deployments" %}</h1>
+      <p class="page-sub">{% trans "Every firmware rollout, live or historical. Click a row for per-station progress." %}</p>
+    </div>
+    <div class="page-head-actions">
+      <a href="{% url 'deployments:deployment_create' %}" class="btn btn-primary">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        {% trans "New deployment" %}
+      </a>
+    </div>
+  </div>
+
+  <form class="filter-bar" method="get">
+    <select name="status" class="form-select" style="width:auto;min-width:160px;" data-lang-select>
+      <option value="">{% trans "All statuses" %}</option>
+      {% for val, label in status_choices %}
+        <option value="{{ val }}" {% if current_status == val %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </form>
+
+  {% if deployments %}
+  <div class="table-wrap" data-mobile-cards>
+    <table class="t-table">
+      <thead>
+        <tr>
+          <th>{% trans "Deployment" %}</th>
+          <th>{% trans "Firmware" %}</th>
+          <th>{% trans "Target" %}</th>
+          <th>{% trans "Strategy" %}</th>
+          <th>{% trans "Status" %}</th>
+          <th>{% trans "Progress" %}</th>
+          <th>{% trans "Created" %}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in deployments %}
+        <tr data-deployment-id="{{ d.pk }}">
+          <td data-primary>
+            <a href="{% url 'deployments:deployment_detail' d.pk %}" style="color:inherit;text-decoration:none;">
+              <span class="frame-id">{{ d.pk|stringformat:"04d" }}</span>
+            </a>
+          </td>
+          <td data-label="{% trans 'Firmware' %}">
+            <div class="stack-gap-2">
+              <span style="font-weight:600;color:var(--ink-0);">{{ d.firmware_artifact.name }}</span>
+              <span class="t-mono-sm t-muted">v{{ d.firmware_artifact.version }}</span>
+            </div>
+          </td>
+          <td data-label="{% trans 'Target' %}">
+            {% if d.target_type == "tag" and d.target_tag %}
+              <span class="tag" style="--tag-color: {{ d.target_tag.color }};">{{ d.target_tag.name }}</span>
+            {% elif d.target_type == "station" and d.target_station %}
+              <span class="callsign">{{ d.target_station.callsign|default:d.target_station.name }}</span>
+            {% else %}
+              <span class="pill pill-accent">{% trans "ALL" %}</span>
+            {% endif %}
+          </td>
+          <td data-label="{% trans 'Strategy' %}"><span class="pill pill-muted">{{ d.get_strategy_display|upper }}</span></td>
+          <td data-label="{% trans 'Status' %}">
+            <span class="pill pill-{{ d.status|slugify }}" data-deployment-status>{{ d.get_status_display|upper }}</span>
+          </td>
+          <td style="min-width:180px;" data-label="{% trans 'Progress' %}">
+            <div class="row-gap-8" style="flex:1;min-width:0;">
+              <div class="progress" style="flex:1;min-width:80px;">
+                <div class="progress-bar {% if d.result_failed %}warn{% endif %}" style="width: {% widthratio d.result_completed d.result_total 100 %}%" data-deployment-bar></div>
+              </div>
+              <span class="t-mono-sm t-muted" data-deployment-totals>{{ d.result_completed }}/{{ d.result_total }}</span>
+            </div>
+          </td>
+          <td class="t-mono-sm t-muted" data-label="{% trans 'Created' %}">{{ d.created_at|date:"Y-m-d H:i" }}</td>
+          <td class="actions">
+            <a href="{% url 'deployments:deployment_detail' d.pk %}" class="btn btn-sm btn-ghost">{% trans "Open" %} →</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "includes/pagination.html" %}
+  {% else %}
+  <div class="panel"><div class="empty">
+    <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2v14"/><path d="M7 11l5 5 5-5"/></svg></div>
+    <div class="empty-title">{% trans "No deployments yet" %}</div>
+  </div></div>
+  {% endif %}
+
+</div>
+{% endblock %}

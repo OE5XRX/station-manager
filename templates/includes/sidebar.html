@@ -1,0 +1,120 @@
+{% load i18n %}
+<nav class="sidebar" aria-label="{% trans 'Primary navigation' %}">
+  <div class="sidebar-brand">
+    <div class="brand-mark" aria-hidden="true">5X</div>
+    <div class="brand-text">
+      <div class="brand-callsign">OE5XRX</div>
+      <div class="brand-sub">{% trans "Station Manager" %}</div>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">{% trans "Operations" %}</div>
+    <a href="{% url 'dashboard:index' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'dashboard' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'dashboard' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/>
+      </svg>
+      <span class="label">{% trans "Overview" %}</span>
+    </a>
+    <a href="{% url 'stations:station_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'stations' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'stations' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 12a7 7 0 0 1 14 0"/><path d="M2 12a10 10 0 0 1 20 0"/><circle cx="12" cy="19" r="2"/><path d="M12 19V13"/>
+      </svg>
+      <span class="label">{% trans "Stations" %}</span>
+    </a>
+    <a href="{% url 'monitoring:alert_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'monitoring' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'monitoring' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9z"/><path d="M10 20a2 2 0 0 0 4 0"/>
+      </svg>
+      <span class="label">{% trans "Alerts" %}</span>
+      {% if active_alerts_count %}<span class="nav-tag">{{ active_alerts_count }}</span>{% endif %}
+    </a>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">{% trans "Fleet Updates" %}</div>
+    <a href="{% url 'firmware:firmware_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'firmware' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'firmware' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>
+      </svg>
+      <span class="label">{% trans "Firmware" %}</span>
+    </a>
+    <a href="{% url 'deployments:deployment_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'deployments' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'deployments' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
+      </svg>
+      <span class="label">{% trans "Deployments" %}</span>
+    </a>
+    <a href="{% url 'builder:buildconfig_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'builder' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'builder' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+      </svg>
+      <span class="label">{% trans "Builder" %}</span>
+    </a>
+  </div>
+
+  {% if user.role == 'admin' %}
+  <div class="nav-section">
+    <div class="nav-section-label">{% trans "Admin" %}</div>
+    <a href="{% url 'accounts:user_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'accounts' and 'user' in request.resolver_match.url_name %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'accounts' and 'user' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><circle cx="17" cy="10" r="3"/><path d="M15 21a5 5 0 0 1 7 0"/>
+      </svg>
+      <span class="label">{% trans "Users" %}</span>
+    </a>
+    <a href="{% url 'audit:audit_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'audit' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'audit' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 4h12l4 4v12H4z"/><path d="M16 4v4h4"/><path d="M8 13h8M8 17h5"/>
+      </svg>
+      <span class="label">{% trans "Audit Log" %}</span>
+    </a>
+    <a href="{% url 'stations:tag_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'stations' and 'tag' in request.resolver_match.url_name %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'stations' and 'tag' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 12l-8 8-9-9V3h8l9 9z"/><circle cx="7" cy="7" r="1.4"/>
+      </svg>
+      <span class="label">{% trans "Tags" %}</span>
+    </a>
+    <a href="{% url 'monitoring:alert_settings' %}"
+       class="nav-item">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14 3h-4l-.6 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12a7 7 0 0 0 .1 1.2l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2L10 21h4l.6-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/>
+      </svg>
+      <span class="label">{% trans "Alert Rules" %}</span>
+    </a>
+  </div>
+  {% endif %}
+
+  <div class="sidebar-footer">
+    <div class="sb-avatar" aria-hidden="true">{{ user.username|slice:":1"|upper }}</div>
+    <a href="{% url 'accounts:profile' %}" class="sb-user" style="color:inherit;text-decoration:none;">
+      <div class="sb-user-name">{{ user.username }}</div>
+      <div class="sb-user-role">{{ user.get_role_display|default:"" }}</div>
+    </a>
+    <form method="post" action="{% url 'accounts:logout' %}" style="margin:0;">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-ghost btn-sm btn-icon" title="{% trans 'Sign out' %}" aria-label="{% trans 'Sign out' %}">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15 16l4-4-4-4"/><path d="M19 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+        </svg>
+      </button>
+    </form>
+  </div>
+</nav>

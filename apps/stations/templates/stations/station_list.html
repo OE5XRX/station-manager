@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Stations" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Stations" %}</span>
+{% endblock %}
+
+{% block content %}
+<div data-ws-stations>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">{% trans "Fleet" %} · {% trans "Remote stations" %}</div>
+      <h1 class="page-title">{% trans "Stations" %}</h1>
+      <p class="page-sub">{% trans "Search, filter, and manage every station in the OE5XRX network." %}</p>
+    </div>
+    <div class="page-head-actions">
+      {% if user.role == 'admin' or user.role == 'operator' %}
+      <a href="{% url 'stations:tag_list' %}" class="btn btn-ghost">{% trans "Tags" %}</a>
+      <a href="{% url 'stations:station_create' %}" class="btn btn-primary">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        {% trans "New station" %}
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <form class="filter-bar" method="get" hx-get="{% url 'stations:station_list' %}" hx-target="#station-table" hx-trigger="input changed delay:200ms from:input[name=q], change from:select[name=tag]" hx-push-url="true">
+    <div class="search">
+      <input type="search" name="q" value="{{ search_query }}" placeholder="{% trans 'Search by name or callsign…' %}" aria-label="{% trans 'Search stations' %}">
+    </div>
+    <select name="tag" class="form-select" style="width:auto;min-width:160px;">
+      <option value="">{% trans "All tags" %}</option>
+      {% for tag in tags %}
+        <option value="{{ tag.slug }}" {% if tag.slug == selected_tag %}selected{% endif %}>{{ tag.name }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button type="submit" class="btn">{% trans "Filter" %}</button></noscript>
+    <span class="htmx-indicator spinner"></span>
+  </form>
+
+  <div id="station-table">
+    {% include "stations/_station_table.html" %}
+  </div>
+
+</div>
+{% endblock %}

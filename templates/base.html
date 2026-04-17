@@ -1,0 +1,53 @@
+{% load i18n static %}<!DOCTYPE html>
+<html lang="{{ LANGUAGE_CODE }}" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>{% block title %}{% trans "OE5XRX Station Manager" %}{% endblock %}</title>
+  <meta name="description" content="{% trans 'Remote amateur radio station fleet manager for OE5XRX.' %}">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+        nonce="{{ csp_nonce }}">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}" nonce="{{ csp_nonce }}">
+
+  <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23FF8A3D'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='monospace' font-weight='700' font-size='14' fill='%23120A04'%3E5X%3C/text%3E%3C/svg%3E">
+
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  {% block body %}
+    <div class="app-shell">
+      <aside class="rail" aria-hidden="true">
+        <span class="rail-text">OE5XRX // STATION MANAGER / RACK 01</span>
+      </aside>
+
+      {% include "includes/sidebar.html" %}
+      <div class="sidebar-backdrop"></div>
+
+      {% include "includes/topbar.html" %}
+
+      <main class="main" id="main" role="main">
+        <div class="main-inner">
+          {% include "includes/messages.html" %}
+          {% block content %}{% endblock %}
+        </div>
+      </main>
+    </div>
+  {% endblock body %}
+
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"
+          integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+          crossorigin="anonymous"
+          nonce="{{ csp_nonce }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"
+          defer
+          nonce="{{ csp_nonce }}"></script>
+  <script src="{% static 'js/app.js' %}" nonce="{{ csp_nonce }}"></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

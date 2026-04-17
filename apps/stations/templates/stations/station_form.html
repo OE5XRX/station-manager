@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ form_title|default:_("Station") }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:station_list' %}">{% trans "Stations" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ form_title|default:_("Edit station") }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Configuration" %}</div>
+    <h1 class="page-title">{{ form_title|default:_("Edit station") }}</h1>
+  </div>
+</div>
+
+<form method="post" class="stack-gap-20" style="max-width:920px;">
+  {% csrf_token %}
+
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div></div>
+    <div class="panel-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="{{ form.name.id_for_label }}" class="form-label">{% trans "Name" %}</label>
+          {{ form.name }}
+          {{ form.name.errors }}
+        </div>
+        <div class="form-group">
+          <label for="{{ form.callsign.id_for_label }}" class="form-label">{% trans "Callsign" %}</label>
+          {{ form.callsign }}
+          {{ form.callsign.errors }}
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="{{ form.description.id_for_label }}" class="form-label">{% trans "Description" %}</label>
+        {{ form.description }}
+        {{ form.description.errors }}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Location" %}</div></div>
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label">{% trans "Location name" %}</label>
+        {{ form.location_name }}
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{% trans "Latitude" %}</label>
+          {{ form.latitude }}
+        </div>
+        <div class="form-group">
+          <label class="form-label">{% trans "Longitude" %}</label>
+          {{ form.longitude }}
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">{% trans "Altitude (m)" %}</label>
+        {{ form.altitude }}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot" style="background:var(--violet)"></span>{% trans "Hardware & tags" %}</div></div>
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label">{% trans "Hardware revision" %}</label>
+        {{ form.hardware_revision }}
+      </div>
+      <div class="form-group">
+        <label class="form-label">{% trans "Tags" %}</label>
+        {{ form.tags }}
+      </div>
+      <div class="form-group">
+        <label class="form-label">{% trans "Installed modules" %}</label>
+        {{ form.installed_modules }}
+      </div>
+      <div class="form-group">
+        <label class="form-label">{% trans "Operator notes" %}</label>
+        {{ form.notes }}
+      </div>
+    </div>
+  </section>
+
+  <div class="row-gap-8">
+    <button type="submit" class="btn btn-primary btn-lg">{% trans "Save station" %}</button>
+    <a href="{% if object %}{% url 'stations:station_detail' object.pk %}{% else %}{% url 'stations:station_list' %}{% endif %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}

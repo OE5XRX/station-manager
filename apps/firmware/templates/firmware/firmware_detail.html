@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ artifact.name }} v{{ artifact.version }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'firmware:firmware_list' %}">{% trans "Firmware" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ artifact.name }} <span class="t-mono t-muted">v{{ artifact.version }}</span></span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">
+      <span class="frame-id">{{ artifact.pk|stringformat:"04d" }}</span>
+      {% if artifact.artifact_type == "os_image" %}
+        <span class="pill pill-accent" style="margin-left:8px;">OS IMAGE</span>
+      {% else %}
+        <span class="pill pill-violet" style="margin-left:8px;">MODULE FW</span>
+      {% endif %}
+    </div>
+    <h1 class="page-title">{{ artifact.name }} <span class="t-mono t-muted" style="font-family:var(--font-mono);font-weight:500;">v{{ artifact.version }}</span></h1>
+    <div class="row-gap-8 mt-10">
+      {% if artifact.is_stable %}<span class="pill pill-online"><span class="dot"></span>{% trans "STABLE" %}</span>{% else %}<span class="pill pill-muted">BETA</span>{% endif %}
+      {% if artifact.target_module %}<span class="tag"><span>{{ artifact.target_module.name }}</span></span>{% endif %}
+      <span class="t-mono-sm t-muted">{% trans "Uploaded" %} {{ artifact.created_at|date:"Y-m-d H:i" }}{% if artifact.uploaded_by %} · {{ artifact.uploaded_by.username }}{% endif %}</span>
+    </div>
+  </div>
+  <div class="page-head-actions">
+    {% if user.role == 'admin' or user.role == 'operator' %}
+    <a href="{% url 'firmware:firmware_download' artifact.pk %}" class="btn btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      {% trans "Download" %}
+    </a>
+    <a href="{% url 'firmware:firmware_edit' artifact.pk %}" class="btn btn-ghost">{% trans "Edit" %}</a>
+    <a href="{% url 'firmware:firmware_delete' artifact.pk %}" class="btn btn-danger">{% trans "Delete" %}</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="summary-bar mb-24">
+  <div class="summary-item"><div class="summary-key">{% trans "File size" %}</div><div class="summary-val mono">{{ artifact.file_size_display }}</div></div>
+  <div class="summary-item"><div class="summary-key">{% trans "Type" %}</div><div class="summary-val mono">{{ artifact.get_artifact_type_display }}</div></div>
+  <div class="summary-item"><div class="summary-key">{% trans "Stable" %}</div><div class="summary-val mono">{% if artifact.is_stable %}YES{% else %}NO{% endif %}</div></div>
+  <div class="summary-item"><div class="summary-key">{% trans "Compat HW" %}</div><div class="summary-val mono" style="font-size:13px;">{{ artifact.compatible_hw_revisions|default:"—" }}</div></div>
+</div>
+
+<div class="grid grid-main">
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Release notes" %}</div></div>
+    <div class="panel-body">
+      {% if artifact.release_notes %}
+        <div style="white-space:pre-wrap;">{{ artifact.release_notes }}</div>
+      {% else %}
+        <span class="t-muted">{% trans "No release notes provided." %}</span>
+      {% endif %}
+    </div>
+  </section>
+
+  <aside>
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Integrity" %}</div></div>
+      <div class="panel-body">
+        <div class="t-label mb-10">{% trans "SHA-256 checksum" %}</div>
+        <div class="codebox" id="fw-hash">{{ artifact.checksum_sha256 }}</div>
+        <button class="btn btn-sm mt-10" data-copy="#fw-hash">{% trans "COPY" %}</button>
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

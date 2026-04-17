@@ -1,0 +1,40 @@
+{% load i18n %}
+{% if alerts %}
+<div class="stack-gap-10">
+  {% for alert in alerts %}
+  <article class="alert-card severity-{{ alert.severity }} {% if alert.is_resolved %}is-resolved{% endif %}" data-alert-id="{{ alert.pk }}">
+    <div>
+      <h3 class="alert-title">{{ alert.title }}</h3>
+      <div class="alert-meta">
+        <span class="pill pill-{% if alert.severity == 'critical' %}offline{% else %}warn{% endif %}" style="margin-right:6px;">{{ alert.get_severity_display|upper }}</span>
+        <a href="{% url 'stations:station_detail' alert.station.pk %}" class="callsign" style="font-size:11px;">{{ alert.station.callsign|default:alert.station.name }}</a>
+        · {{ alert.created_at|date:"Y-m-d H:i" }}
+      </div>
+      <p class="alert-message">{{ alert.message }}</p>
+      {% if alert.is_acknowledged %}
+        <div class="t-mono-sm t-muted mt-10">{% trans "Acknowledged by" %} {{ alert.acknowledged_by.username|default:"—" }} · {{ alert.acknowledged_at|date:"Y-m-d H:i" }}</div>
+      {% endif %}
+    </div>
+    <div class="stack-gap-6">
+      {% if not alert.is_resolved %}
+        {% if user.role == 'admin' or user.role == 'operator' %}
+          {% if not alert.is_acknowledged %}
+          <button class="btn btn-sm" hx-post="{% url 'monitoring:alert_acknowledge' alert.pk %}">{% trans "Ack" %}</button>
+          {% endif %}
+          <button class="btn btn-sm btn-primary" hx-post="{% url 'monitoring:alert_resolve' alert.pk %}">{% trans "Resolve" %}</button>
+        {% endif %}
+      {% else %}
+        <span class="pill pill-online"><span class="dot"></span>{% trans "RESOLVED" %}</span>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% include "includes/pagination.html" %}
+{% else %}
+<div class="panel"><div class="empty">
+  <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 11l-3 1M2 11l3 1"/><path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9z"/></svg></div>
+  <div class="empty-title">{% trans "All quiet" %}</div>
+  <div>{% trans "No alerts match your filters." %}</div>
+</div></div>
+{% endif %}

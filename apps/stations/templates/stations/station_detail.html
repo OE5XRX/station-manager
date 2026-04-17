@@ -1,0 +1,428 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ station.name }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:station_list' %}">{% trans "Stations" %}</a>
+  <span class="sep">/</span>
+  <span class="cur callsign">{{ station.callsign|default:station.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div data-ws-stations>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">
+        <span>{% trans "Station" %} #{{ station.id|stringformat:"03d" }}</span>
+        {% if station.hardware_revision %}<span class="t-mono t-muted" style="letter-spacing:0.1em;">HW {{ station.hardware_revision }}</span>{% endif %}
+      </div>
+      <h1 class="page-title">
+        <span class="callsign" style="font-family:inherit;font-size:inherit;letter-spacing:-0.02em;">{{ station.callsign|default:"—" }}</span>
+        <span class="t-muted" style="font-family:var(--font-body);font-weight:500;">{{ station.name }}</span>
+      </h1>
+      <div class="row-gap-8 mt-10">
+        <span class="pill pill-{{ station.status }}" data-station-status>
+          <span class="dot"></span>{{ station.get_status_display|upper }}
+        </span>
+        {% for tag in station.tags.all %}
+          <span class="tag" style="--tag-color: {{ tag.color }};">{{ tag.name }}</span>
+        {% endfor %}
+        {% if station.last_seen %}
+          <span class="t-mono-sm t-muted" data-station-seen>
+            {% trans "Last heard" %} {{ station.last_seen|timesince }} {% trans "ago" %}
+          </span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="page-head-actions">
+      {% if user.role == 'admin' or user.role == 'operator' %}
+      <a href="{% url 'stations:station_edit' station.pk %}" class="btn btn-ghost">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4v16h16v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        {% trans "Edit" %}
+      </a>
+      <a href="{% url 'stations:station_delete' station.pk %}" class="btn btn-danger">{% trans "Delete" %}</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="summary-bar mb-24">
+    <div class="summary-item">
+      <div class="summary-key">{% trans "OS Version" %}</div>
+      <div class="summary-val mono" data-station-version>{{ station.current_os_version|default:"—" }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Agent Version" %}</div>
+      <div class="summary-val mono">{{ station.current_agent_version|default:"—" }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Last IP" %}</div>
+      <div class="summary-val mono" data-station-ip>{{ station.last_ip_address|default:"—" }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Coordinates" %}</div>
+      <div class="summary-val mono">
+        {% if station.latitude and station.longitude %}{{ station.latitude }}, {{ station.longitude }}{% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Altitude" %}</div>
+      <div class="summary-val mono">{% if station.altitude %}{{ station.altitude }} m{% else %}—{% endif %}</div>
+    </div>
+  </div>
+
+  <div data-tabs>
+    <div class="tabs">
+      <button type="button" class="tab active" data-tab="overview" aria-selected="true">{% trans "Overview" %}</button>
+      <button type="button" class="tab" data-tab="photos" aria-selected="false">{% trans "Photos" %} <span class="count">{{ station.photos.count }}</span></button>
+      <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
+      <button type="button" class="tab" data-tab="modules" aria-selected="false">{% trans "Modules" %} <span class="count">{{ station.installed_modules.count }}</span></button>
+      <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
+      <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
+      {% if user.role == 'admin' or user.role == 'operator' %}
+      <button type="button" class="tab" data-tab="terminal" aria-selected="false">{% trans "Terminal" %}</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <div data-tab-panel="overview">
+    <div class="grid grid-main">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>{% trans "Metadata" %}</div>
+        </div>
+        <div class="panel-body">
+          <dl class="dlist">
+            <dt>{% trans "Name" %}</dt><dd>{{ station.name }}</dd>
+            <dt>{% trans "Callsign" %}</dt><dd><span class="callsign">{{ station.callsign|default:"—" }}</span></dd>
+            <dt>{% trans "Location" %}</dt><dd>{{ station.location_name|default:"—" }}</dd>
+            <dt>{% trans "Latitude / Longitude" %}</dt>
+            <dd>
+              {% if station.latitude %}<span class="coord"><span class="axis">LAT</span>{{ station.latitude }}</span>{% endif %}
+              {% if station.longitude %} <span class="coord"><span class="axis">LON</span>{{ station.longitude }}</span>{% endif %}
+              {% if not station.latitude and not station.longitude %}—{% endif %}
+            </dd>
+            <dt>{% trans "Altitude" %}</dt><dd>{% if station.altitude %}{{ station.altitude }} m{% else %}—{% endif %}</dd>
+            <dt>{% trans "Hardware Revision" %}</dt><dd class="t-mono">{{ station.hardware_revision|default:"—" }}</dd>
+            <dt>{% trans "Status" %}</dt>
+            <dd>
+              <span class="pill pill-{{ station.status }}"><span class="dot"></span>{{ station.get_status_display|upper }}</span>
+            </dd>
+            <dt>{% trans "Created" %}</dt><dd class="t-mono-sm t-muted">{{ station.created_at|date:"Y-m-d H:i" }}</dd>
+            <dt>{% trans "Updated" %}</dt><dd class="t-mono-sm t-muted">{{ station.updated_at|date:"Y-m-d H:i" }}</dd>
+          </dl>
+
+          {% if station.description %}
+          <div class="mt-20">
+            <div class="t-label mb-10">{% trans "Description" %}</div>
+            <div>{{ station.description|linebreaksbr }}</div>
+          </div>
+          {% endif %}
+
+          {% if station.notes %}
+          <div class="mt-20">
+            <div class="t-label mb-10">{% trans "Operator notes" %}</div>
+            <div>{{ station.notes|linebreaksbr }}</div>
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      <aside class="stack-gap-14">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot" style="background:var(--signal)"></span>{% trans "Authentication" %}</div>
+          </div>
+          <div class="panel-body">
+            {% include "stations/_device_token.html" %}
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Tags" %}</div>
+          </div>
+          <div class="panel-body">
+            {% if station.tags.all %}
+              <div class="row-gap-8" style="flex-wrap:wrap;">
+                {% for tag in station.tags.all %}
+                  <span class="tag" style="--tag-color: {{ tag.color }};">{{ tag.name }}</span>
+                {% endfor %}
+              </div>
+            {% else %}
+              <span class="t-muted">{% trans "No tags assigned." %}</span>
+            {% endif %}
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <div data-tab-panel="photos" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Photos" %}</div>
+        <span class="t-label">{{ station.photos.count }} {% trans "image(s)" %}</span>
+      </div>
+      <div class="panel-body">
+        {% if user.role == 'admin' or user.role == 'operator' %}
+        <form method="post" action="{% url 'stations:station_photo_upload' station.pk %}" enctype="multipart/form-data" class="mb-20">
+          {% csrf_token %}
+          <div class="row-gap-8 photo-upload-row" style="align-items:flex-end;flex-wrap:wrap;">
+            <div class="form-group" style="flex:1 1 200px;margin:0;min-width:160px;">
+              <label class="form-label">{% trans "Upload image" %}</label>
+              {{ photo_form.image }}
+            </div>
+            <div class="form-group" style="flex:1 1 200px;margin:0;min-width:160px;">
+              <label class="form-label">{% trans "Caption" %}</label>
+              {{ photo_form.caption }}
+            </div>
+            <button type="submit" class="btn btn-primary">{% trans "Upload" %}</button>
+          </div>
+        </form>
+        {% endif %}
+
+        {% if station.photos.all %}
+        <div class="photo-grid">
+          {% for photo in station.photos.all %}
+          <figure class="photo-cell">
+            <img src="{{ photo.image.url }}" alt="{{ photo.caption|default:station.name }}" loading="lazy">
+            {% if photo.caption %}<figcaption>{{ photo.caption }}</figcaption>{% endif %}
+          </figure>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">
+          <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5L7 20"/></svg></div>
+          <div class="empty-title">{% trans "No photos yet" %}</div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <div data-tab-panel="logbook" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Station logbook" %}</div>
+      </div>
+      <div class="panel-body">
+        {% if user.role == 'admin' or user.role == 'operator' %}
+        <form method="post" action="{% url 'stations:station_log_add' station.pk %}" class="mb-20">
+          {% csrf_token %}
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">{% trans "Entry type" %}</label>
+              {{ log_form.entry_type }}
+            </div>
+            <div class="form-group">
+              <label class="form-label">{% trans "Title" %}</label>
+              {{ log_form.title }}
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{% trans "Message" %}</label>
+            {{ log_form.message }}
+          </div>
+          <button type="submit" class="btn btn-primary">{% trans "Add entry" %}</button>
+        </form>
+        {% endif %}
+
+        {% if station.log_entries.all %}
+        <ul class="timeline">
+          {% for entry in station.log_entries.all %}
+          <li data-type="{{ entry.entry_type }}">
+            <div class="tl-head">
+              <span class="tl-title">{{ entry.title }}</span>
+              <span class="pill pill-muted" style="font-size:9px;">{{ entry.get_entry_type_display|upper }}</span>
+            </div>
+            <div class="tl-meta">
+              {{ entry.created_at|date:"Y-m-d H:i" }}
+              {% if entry.created_by %} · {{ entry.created_by.username }}{% endif %}
+            </div>
+            {% if entry.message %}<div class="tl-message mt-10">{{ entry.message|linebreaksbr }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty"><div class="empty-title">{% trans "No logbook entries yet" %}</div></div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <div data-tab-panel="modules" hidden>
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Installed modules" %}</div></div>
+      <div class="panel-body flush" data-mobile-cards>
+        {% if station.installed_modules.all %}
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "Module" %}</th>
+              <th>{% trans "Slug" %}</th>
+              <th>{% trans "Flash method" %}</th>
+              <th>{% trans "Description" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for mod in station.installed_modules.all %}
+            <tr>
+              <td data-primary><span style="font-weight:600;color:var(--ink-0);">{{ mod.name }}</span></td>
+              <td class="t-mono" data-label="{% trans 'Slug' %}">{{ mod.slug }}</td>
+              <td data-label="{% trans 'Flash method' %}"><span class="pill pill-muted">{{ mod.get_firmware_flash_method_display|upper }}</span></td>
+              <td class="t-muted" data-label="{% trans 'Description' %}">{{ mod.description|default:"—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="empty"><div class="empty-title">{% trans "No modules attached." %}</div></div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <div data-tab-panel="inventory" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Hardware inventory" %}</div>
+        {% if station.inventory %}<span class="t-label">{% trans "Updated" %} {{ station.inventory.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+      </div>
+      <div class="panel-body">
+        {% if station.inventory and station.inventory.data %}
+          {% with inv=station.inventory.data %}
+          <div class="grid grid-cols-3">
+            {% if inv.cpu %}
+            <div class="panel" style="background:var(--bg-0);">
+              <div class="panel-head"><div class="panel-title" style="font-size:12px;">CPU</div></div>
+              <div class="panel-body">
+                <dl class="dlist" style="grid-template-columns: 110px 1fr;">
+                  {% if inv.cpu.model %}<dt>{% trans "Model" %}</dt><dd class="t-mono-sm">{{ inv.cpu.model }}</dd>{% endif %}
+                  {% if inv.cpu.cores %}<dt>{% trans "Cores" %}</dt><dd>{{ inv.cpu.cores }}</dd>{% endif %}
+                  {% if inv.cpu.temperature %}<dt>{% trans "Temp" %}</dt><dd class="t-mono">{{ inv.cpu.temperature }}°C</dd>{% endif %}
+                  {% if inv.cpu.load %}<dt>{% trans "Load" %}</dt><dd class="t-mono">{{ inv.cpu.load }}</dd>{% endif %}
+                </dl>
+              </div>
+            </div>
+            {% endif %}
+            {% if inv.memory %}
+            <div class="panel" style="background:var(--bg-0);">
+              <div class="panel-head"><div class="panel-title" style="font-size:12px;">{% trans "Memory" %}</div></div>
+              <div class="panel-body">
+                <dl class="dlist" style="grid-template-columns: 110px 1fr;">
+                  {% if inv.memory.total %}<dt>{% trans "Total" %}</dt><dd class="t-mono">{{ inv.memory.total }}</dd>{% endif %}
+                  {% if inv.memory.used %}<dt>{% trans "Used" %}</dt><dd class="t-mono">{{ inv.memory.used }}</dd>{% endif %}
+                  {% if inv.memory.free %}<dt>{% trans "Free" %}</dt><dd class="t-mono">{{ inv.memory.free }}</dd>{% endif %}
+                </dl>
+              </div>
+            </div>
+            {% endif %}
+            {% if inv.disk %}
+            <div class="panel" style="background:var(--bg-0);">
+              <div class="panel-head"><div class="panel-title" style="font-size:12px;">{% trans "Disk" %}</div></div>
+              <div class="panel-body">
+                <dl class="dlist" style="grid-template-columns: 110px 1fr;">
+                  {% if inv.disk.total %}<dt>{% trans "Total" %}</dt><dd class="t-mono">{{ inv.disk.total }}</dd>{% endif %}
+                  {% if inv.disk.used %}<dt>{% trans "Used" %}</dt><dd class="t-mono">{{ inv.disk.used }}</dd>{% endif %}
+                  {% if inv.disk.free %}<dt>{% trans "Free" %}</dt><dd class="t-mono">{{ inv.disk.free }}</dd>{% endif %}
+                </dl>
+              </div>
+            </div>
+            {% endif %}
+            {% if inv.os %}
+            <div class="panel" style="background:var(--bg-0);">
+              <div class="panel-head"><div class="panel-title" style="font-size:12px;">OS</div></div>
+              <div class="panel-body">
+                <dl class="dlist" style="grid-template-columns: 110px 1fr;">
+                  {% if inv.os.name %}<dt>{% trans "Name" %}</dt><dd class="t-mono-sm">{{ inv.os.name }}</dd>{% endif %}
+                  {% if inv.os.kernel %}<dt>{% trans "Kernel" %}</dt><dd class="t-mono-sm">{{ inv.os.kernel }}</dd>{% endif %}
+                  {% if inv.os.uptime %}<dt>{% trans "Uptime" %}</dt><dd class="t-mono">{{ inv.os.uptime }}</dd>{% endif %}
+                </dl>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+
+          <div class="mt-20">
+            <div class="t-label mb-10">{% trans "Raw payload" %}</div>
+            <pre class="codebox" style="max-height:320px;overflow:auto;">{{ inv|pprint }}</pre>
+          </div>
+          {% endwith %}
+        {% else %}
+        <div class="empty">
+          <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></div>
+          <div class="empty-title">{% trans "No inventory data received yet" %}</div>
+          <div>{% trans "Inventory is collected when the agent sends a heartbeat." %}</div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <div data-tab-panel="audit" hidden>
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Station audit log" %}</div></div>
+      <div class="panel-body flush" data-mobile-cards>
+        {% if station.audit_logs.all %}
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "When" %}</th>
+              <th>{% trans "Event" %}</th>
+              <th>{% trans "Message" %}</th>
+              <th>{% trans "User" %}</th>
+              <th>{% trans "IP" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for audit in station.audit_logs.all|slice:":50" %}
+            <tr>
+              <td class="t-mono-sm" data-primary>{{ audit.created_at|date:"Y-m-d H:i:s" }}</td>
+              <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ audit.get_event_type_display|upper }}</span></td>
+              <td data-label="{% trans 'Message' %}">{{ audit.message }}</td>
+              <td data-label="{% trans 'User' %}">{{ audit.user.username|default:"—" }}</td>
+              <td class="t-mono" data-label="{% trans 'IP' %}">{{ audit.ip_address|default:"—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="empty"><div class="empty-title">{% trans "No audit entries yet" %}</div></div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  {% if user.role == 'admin' or user.role == 'operator' %}
+  <div data-tab-panel="terminal" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot" style="background:var(--signal)"></span>{% trans "Remote terminal" %}</div>
+        <span class="t-label">wss://{{ request.get_host }}/ws/terminal/{{ station.id }}/</span>
+      </div>
+      <div class="panel-body">
+        <div class="t-muted mb-14" style="font-size:12.5px;">
+          {% trans "Live shell session. Output is relayed through the station agent. Max 2 concurrent sessions per station." %}
+        </div>
+        <div class="terminal-host">
+          <div id="xterm-container" data-station-id="{{ station.id }}"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" nonce="{{ csp_nonce }}">
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" nonce="{{ csp_nonce }}"></script>
+{% endblock %}

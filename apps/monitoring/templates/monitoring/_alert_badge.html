@@ -1,0 +1,3 @@
+{% if total > 0 %}
+<span class="pill {% if critical > 0 %}pill-offline{% elif warning > 0 %}pill-warn{% else %}pill-muted{% endif %}">{{ total }}</span>
+{% endif %}

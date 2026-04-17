@@ -1,0 +1,60 @@
+{% load i18n %}
+{% if artifacts %}
+<div class="table-wrap" data-mobile-cards>
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Artifact" %}</th>
+        <th>{% trans "Version" %}</th>
+        <th>{% trans "Type" %}</th>
+        <th>{% trans "Target module" %}</th>
+        <th>{% trans "Size" %}</th>
+        <th>{% trans "SHA-256" %}</th>
+        <th>{% trans "Uploaded" %}</th>
+        <th>{% trans "Stable" %}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for artifact in artifacts %}
+      <tr>
+        <td data-primary>
+          <a href="{% url 'firmware:firmware_detail' artifact.pk %}" style="color:inherit;text-decoration:none;">
+            <div class="stack-gap-2">
+              <span style="font-weight:600;color:var(--ink-0);">{{ artifact.name }}</span>
+              <span class="frame-id">{{ artifact.pk|stringformat:"04d" }}</span>
+            </div>
+          </a>
+        </td>
+        <td class="t-mono" data-label="{% trans 'Version' %}">{{ artifact.version }}</td>
+        <td data-label="{% trans 'Type' %}">
+          {% if artifact.artifact_type == "os_image" %}
+            <span class="pill pill-accent">OS IMAGE</span>
+          {% else %}
+            <span class="pill pill-violet">MODULE FW</span>
+          {% endif %}
+        </td>
+        <td data-label="{% trans 'Target module' %}">{% if artifact.target_module %}<span class="t-mono">{{ artifact.target_module.slug }}</span>{% else %}<span class="t-muted">—</span>{% endif %}</td>
+        <td class="t-mono num" data-label="{% trans 'Size' %}">{{ artifact.file_size_display }}</td>
+        <td class="t-mono" title="{{ artifact.checksum_sha256 }}" data-label="SHA-256">{{ artifact.checksum_sha256|slice:":12" }}…</td>
+        <td class="t-mono-sm t-muted" data-label="{% trans 'Uploaded' %}">{{ artifact.created_at|date:"Y-m-d H:i" }}</td>
+        <td data-label="{% trans 'Stable' %}">
+          {% if artifact.is_stable %}<span class="pill pill-online"><span class="dot"></span>STABLE</span>
+          {% else %}<span class="pill pill-muted">BETA</span>{% endif %}
+        </td>
+        <td class="actions">
+          <a href="{% url 'firmware:firmware_detail' artifact.pk %}" class="btn btn-sm btn-ghost">{% trans "Open" %}</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "includes/pagination.html" %}
+{% else %}
+<div class="panel"><div class="empty">
+  <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg></div>
+  <div class="empty-title">{% trans "No firmware artifacts yet" %}</div>
+  <div>{% trans "Upload an OS image or module firmware to get started." %}</div>
+</div></div>
+{% endif %}

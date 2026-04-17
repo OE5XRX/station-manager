@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "station-agent"
+version = "0.1.0"
+description = "OE5XRX Station Agent — remote management for amateur radio stations"
+license = { text = "AGPL-3.0-only" }
+requires-python = ">=3.10"
+authors = [{ name = "OE5XRX" }]
+dependencies = [
+    "requests>=2.32,<3.0",
+    "PyYAML>=6.0,<7.0",
+    "cryptography>=46.0,<47.0",
+    "websockets>=14.0,<15.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/OE5XRX/station-manager"
+
+# Flat layout: package files live next to pyproject.toml (not in a subdir).
+# Map the package name "station_agent" to "." so setuptools finds __init__.py here.
+[tool.setuptools]
+packages = ["station_agent"]
+package-dir = { "station_agent" = "." }

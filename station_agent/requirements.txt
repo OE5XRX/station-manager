@@ -1,0 +1,4 @@
+requests>=2.32,<3.0
+PyYAML>=6.0,<7.0
+cryptography>=46.0,<47.0
+websockets>=14.0,<15.0

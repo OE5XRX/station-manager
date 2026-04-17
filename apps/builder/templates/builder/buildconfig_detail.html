@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ config.name }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'builder:buildconfig_list' %}">{% trans "Builder" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ config.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Build config" %} #{{ config.pk }}</div>
+    <h1 class="page-title">{{ config.name }}</h1>
+    <p class="page-sub">{{ config.description|default:"" }}</p>
+  </div>
+  <div class="page-head-actions">
+    <a href="{% url 'builder:buildconfig_edit' config.pk %}" class="btn btn-ghost">{% trans "Edit" %}</a>
+    <form method="post" action="{% url 'builder:buildconfig_build' config.pk %}" style="margin:0;">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary">{% trans "Trigger build" %}</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid grid-main">
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Build history" %}</div></div>
+    <div class="panel-body flush">
+      {% if config.jobs.all %}
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "Job #" %}</th>
+            <th>{% trans "Status" %}</th>
+            <th>{% trans "Output" %}</th>
+            <th>{% trans "Started" %}</th>
+            <th>{% trans "Completed" %}</th>
+            <th>{% trans "By" %}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in config.jobs.all %}
+          <tr>
+            <td><span class="frame-id">{{ job.pk|stringformat:"04d" }}</span></td>
+            <td><span class="pill pill-{{ job.status }}">{{ job.get_status_display|upper }}</span></td>
+            <td>
+              {% if job.output_artifact %}<a href="{% url 'firmware:firmware_detail' job.output_artifact.pk %}">{{ job.output_artifact }}</a>
+              {% else %}<span class="t-muted">—</span>{% endif %}
+            </td>
+            <td class="t-mono-sm">{{ job.started_at|default:"—" }}</td>
+            <td class="t-mono-sm">{{ job.completed_at|default:"—" }}</td>
+            <td>{{ job.created_by.username|default:"—" }}</td>
+            <td class="actions"><a href="{% url 'builder:buildjob_detail' job.pk %}" class="btn btn-sm btn-ghost">→</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty"><div class="empty-title">{% trans "No builds run yet" %}</div></div>
+      {% endif %}
+    </div>
+  </section>
+
+  <aside class="stack-gap-14">
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Target" %}</div></div>
+      <div class="panel-body">
+        <dl class="dlist">
+          <dt>{% trans "Station" %}</dt><dd>{% if config.station %}<a href="{% url 'stations:station_detail' config.station.pk %}">{{ config.station }}</a>{% else %}<span class="t-muted">—</span>{% endif %}</dd>
+          <dt>{% trans "Tag" %}</dt><dd>{% if config.tag %}<span class="tag" style="--tag-color: {{ config.tag.color }};">{{ config.tag.name }}</span>{% else %}<span class="t-muted">—</span>{% endif %}</dd>
+          <dt>{% trans "Base image" %}</dt><dd><a href="{% url 'firmware:firmware_detail' config.base_image.pk %}">{{ config.base_image }}</a></dd>
+          <dt>{% trans "Created" %}</dt><dd class="t-mono-sm">{{ config.created_at|date:"Y-m-d H:i" }}</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Extra firmware" %}</div></div>
+      <div class="panel-body">
+        {% if config.extra_firmware.all %}
+          <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;">
+            {% for fw in config.extra_firmware.all %}
+              <li><a href="{% url 'firmware:firmware_detail' fw.pk %}">{{ fw }}</a></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <span class="t-muted">{% trans "None" %}</span>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if config.custom_config %}
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Custom config" %}</div></div>
+      <div class="panel-body">
+        <pre class="codebox" style="max-height:240px;overflow:auto;">{{ config.custom_config|pprint }}</pre>
+      </div>
+    </section>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}

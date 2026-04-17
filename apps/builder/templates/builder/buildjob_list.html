@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Build jobs" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'builder:buildconfig_list' %}">{% trans "Builder" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Jobs" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow">{% trans "Build execution" %}</div>
+  <h1 class="page-title">{% trans "Build jobs" %}</h1>
+  {% if filter_config %}<p class="page-sub">{% trans "Filtered to config:" %} <strong>{{ filter_config.name }}</strong></p>{% endif %}
+</div></div>
+
+{% if jobs %}
+<div class="table-wrap" data-mobile-cards>
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Job #" %}</th>
+        <th>{% trans "Config" %}</th>
+        <th>{% trans "Status" %}</th>
+        <th>{% trans "Output" %}</th>
+        <th>{% trans "Created" %}</th>
+        <th>{% trans "By" %}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td data-primary><span class="frame-id">{{ job.pk|stringformat:"04d" }}</span></td>
+        <td data-label="{% trans 'Config' %}"><a href="{% url 'builder:buildconfig_detail' job.build_config.pk %}">{{ job.build_config.name }}</a></td>
+        <td data-label="{% trans 'Status' %}"><span class="pill pill-{{ job.status }}">{{ job.get_status_display|upper }}</span></td>
+        <td data-label="{% trans 'Output' %}">{% if job.output_artifact %}<a href="{% url 'firmware:firmware_detail' job.output_artifact.pk %}">{{ job.output_artifact }}</a>{% else %}<span class="t-muted">—</span>{% endif %}</td>
+        <td class="t-mono-sm t-muted" data-label="{% trans 'Created' %}">{{ job.created_at|date:"Y-m-d H:i" }}</td>
+        <td data-label="{% trans 'By' %}">{{ job.created_by.username|default:"—" }}</td>
+        <td class="actions"><a href="{% url 'builder:buildjob_detail' job.pk %}" class="btn btn-sm btn-ghost">{% trans "Open" %} →</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "includes/pagination.html" %}
+{% else %}
+<div class="panel"><div class="empty"><div class="empty-title">{% trans "No build jobs yet" %}</div></div></div>
+{% endif %}
+{% endblock %}

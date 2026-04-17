@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ form_title|default:_("User") }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'accounts:user_list' %}">{% trans "Users" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ form_title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow">{% trans "Administration" %}</div>
+  <h1 class="page-title">{{ form_title|default:_("Edit user") }}</h1>
+</div></div>
+
+<form method="post" style="max-width:640px;">
+  {% csrf_token %}
+  <section class="panel">
+    <div class="panel-body">
+      {% for field in form %}
+      <div class="form-group">
+        <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<div class="form-help">{{ field.help_text|safe }}</div>{% endif %}
+        {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-primary">{% trans "Save user" %}</button>
+      <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    </div>
+  </section>
+</form>
+{% endblock %}

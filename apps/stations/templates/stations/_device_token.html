@@ -1,0 +1,49 @@
+{% load i18n %}
+
+<div class="stack-gap-14">
+{% if station.device_key %}
+  <div class="panel" style="border-left: 3px solid var(--signal);">
+    <div class="panel-body">
+      <div class="row-split">
+        <div class="stack-gap-2">
+          <div class="t-label">{% trans "Ed25519 device key" %} · {% trans "active" %}</div>
+          <div class="t-mono t-dim" style="font-size:12px;">{{ station.device_key.current_public_key|truncatechars:36 }}</div>
+        </div>
+        {% if request.user.role == "admin" or request.user.role == "operator" %}
+        <form method="post" action="{% url 'stations:station_revoke_key' station.pk %}" data-confirm="{% trans 'Revoke this Ed25519 key? The station will lose access.' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-danger">{% trans "Revoke key" %}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% if show_raw_private_key %}
+      <div class="mt-14">
+        <div class="t-label t-warn">{% trans "Save this private key NOW — it will not be shown again." %}</div>
+        <pre class="codebox sensitive mt-10" id="raw-privkey" style="white-space: pre; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 12px; margin: 0; padding: 12px;">{{ raw_private_key }}</pre>
+        <button type="button" class="btn btn-sm mt-10" data-copy="#raw-privkey">{% trans "COPY PEM" %}</button>
+        <div class="t-muted mt-10" style="font-size:12px;">
+          {% trans "Install at:" %} <code class="t-mono">/etc/station-agent/device_key.pem</code>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+{% else %}
+  <div class="panel" style="border-left: 3px dashed var(--line-bright);">
+    <div class="panel-body">
+      <div class="row-split">
+        <div>
+          <div class="t-label">{% trans "No Ed25519 key configured" %}</div>
+          <div class="t-muted" style="font-size:12.5px;margin-top:4px;">{% trans "Generate a key so the station agent can connect." %}</div>
+        </div>
+        {% if request.user.role == "admin" or request.user.role == "operator" %}
+        <form method="post" action="{% url 'stations:station_generate_key' station.pk %}" style="margin:0;">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary btn-sm">{% trans "Generate Ed25519 key" %}</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+</div>
