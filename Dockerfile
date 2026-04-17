@@ -8,7 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         libguestfs-tools \
-        linux-image-generic \
+        linux-image-amd64 \
         ca-certificates \
         curl \
     && curl -fsSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \

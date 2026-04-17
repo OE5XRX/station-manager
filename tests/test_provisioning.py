@@ -200,6 +200,19 @@ class TestProvisioningViews:
         assert response.status_code == 302
         assert ProvisioningJob.objects.count() == 1
 
+    def test_create_rejects_mismatched_machine(self, client, admin_user, station, image_release):
+        """If the posted machine doesn't match the image's machine, reject."""
+        from apps.provisioning.models import ProvisioningJob
+
+        # image_release fixture is qemux86-64; submit "raspberrypi4-64" as machine
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("provisioning:new", args=[station.pk]),
+            {"machine": "raspberrypi4-64", "image_release": image_release.pk},
+        )
+        assert response.status_code == 302
+        assert ProvisioningJob.objects.count() == 0
+
     def test_operator_cannot_create_job(self, client, operator_user, station, image_release):
         from apps.provisioning.models import ProvisioningJob
 

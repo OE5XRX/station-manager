@@ -29,6 +29,28 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
         form = ProvisioningForm(request.POST)
         if not form.is_valid():
             return HttpResponse(_("invalid form"), status=400)
+        image_release = form.cleaned_data["image_release"]
+        # The template posts `machine` alongside `image_release` for UI
+        # grouping/filtering. If present, it must match the image's machine;
+        # a mismatch means the UI state and the posted image disagree
+        # (broken JS, autofill, or a hand-crafted POST) and we should reject
+        # rather than silently provisioning something the operator didn't
+        # expect. If absent (JS disabled, no dropdown rendered), accept —
+        # the image_release is still the source of truth.
+        posted_machine = request.POST.get("machine", "")
+        if posted_machine and posted_machine != image_release.machine:
+            messages.error(
+                request,
+                _(
+                    "Selected machine (%(machine)s) does not match the image's "
+                    "machine (%(image_machine)s)."
+                )
+                % {
+                    "machine": posted_machine,
+                    "image_machine": image_release.machine,
+                },
+            )
+            return redirect("stations:station_detail", pk=station.pk)
         if ProvisioningJob.objects.filter(
             station=station, status__in=ACTIVE_PROVISIONING_STATUSES
         ).exists():
@@ -36,7 +58,7 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
             return redirect("stations:station_detail", pk=station.pk)
         ProvisioningJob.objects.create(
             station=station,
-            image_release=form.cleaned_data["image_release"],
+            image_release=image_release,
             requested_by=request.user,
         )
         return redirect("stations:station_detail", pk=station.pk)
