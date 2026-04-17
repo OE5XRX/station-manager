@@ -109,3 +109,57 @@ class TestGuestfishInject:
             check=True,
         )
         assert b"server_url: https://x" in result.stdout
+
+
+@pytest.mark.django_db
+class TestProvisioningWorker:
+    def test_pending_job_pipeline_goes_ready(
+        self, station, image_release, admin_user, monkeypatch, settings
+    ):
+        from apps.api.models import DeviceKey
+        from apps.provisioning.management.commands.run_background_jobs import (
+            process_pending_provisioning_jobs,
+        )
+        from apps.provisioning.models import ProvisioningJob
+
+        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+
+        # Stubs for IO-bound steps
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: __import__("io").BytesIO(b"FAKEWICBZ2BYTES"),
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._decompress_to",
+            lambda src, dst: dst.write_bytes(b"FAKEWIC"),
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.guestfish.inject_provisioning_files",
+            lambda **kw: None,
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._compress_to_bytes",
+            lambda path: b"FAKEWICBZ2",
+        )
+        uploaded = {}
+        monkeypatch.setattr(
+            "apps.images.storage.upload_bytes",
+            lambda key, data: uploaded.setdefault(key, data),
+        )
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+        )
+
+        process_pending_provisioning_jobs()
+
+        job.refresh_from_db()
+        assert job.status == ProvisioningJob.Status.READY
+        assert job.output_s3_key.startswith("provisioning/")
+        assert job.output_s3_key.endswith(".wic.bz2")
+        assert job.output_size_bytes == len(b"FAKEWICBZ2")
+        assert job.expires_at is not None
+        # DeviceKey was created (public half stored server-side)
+        assert DeviceKey.objects.filter(station=station).exists()
