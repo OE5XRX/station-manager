@@ -23,6 +23,7 @@
         <th>{% trans "Latest" %}</th>
         <th>{% trans "Size" %}</th>
         <th>{% trans "Imported" %}</th>
+        <th>{% trans "Actions" %}</th>
       </tr>
     </thead>
     <tbody>
@@ -30,9 +31,21 @@
       <tr>
         <td>{{ rel.tag }}</td>
         <td>{{ rel.get_machine_display }}</td>
-        <td>{% if rel.is_latest %}&#10003;{% endif %}</td>
+        <td>{% if rel.is_latest %}&#10003;{% else %}
+          <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button type="submit">{% trans "Mark latest" %}</button>
+          </form>
+        {% endif %}</td>
         <td>{{ rel.size_bytes|filesizeformat }}</td>
         <td>{{ rel.imported_at|date:"Y-m-d H:i" }}</td>
+        <td>
+          <form method="post" action="{% url 'images:delete' rel.pk %}" style="display:inline"
+                onsubmit="return confirm('{% trans "Delete this release from S3 and DB?" %}');">
+            {% csrf_token %}
+            <button type="submit">{% trans "Delete" %}</button>
+          </form>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

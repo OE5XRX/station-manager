@@ -391,3 +391,79 @@ class TestCosignVerify:
                 repo="OE5XRX/linux-image",
                 tag="v1-alpha",
             )
+
+
+@pytest.mark.django_db
+class TestImageManagement:
+    def test_mark_latest_flips(self, client, admin_user):
+        from django.urls import reverse
+
+        from apps.images.models import ImageRelease
+
+        ImageRelease.objects.create(
+            tag="v0.9.0",
+            machine="qemux86-64",
+            s3_key="images/v0.9.0/qemux86-64.wic.bz2",
+            sha256="a" * 64,
+            size_bytes=1,
+            is_latest=True,
+        )
+        new = ImageRelease.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            s3_key="images/v1-alpha/qemux86-64.wic.bz2",
+            sha256="b" * 64,
+            size_bytes=2,
+            is_latest=False,
+        )
+        client.force_login(admin_user)
+        response = client.post(reverse("images:mark_latest", args=[new.pk]))
+        assert response.status_code == 302
+        new.refresh_from_db()
+        assert new.is_latest is True
+        old = ImageRelease.objects.get(tag="v0.9.0")
+        assert old.is_latest is False
+
+    def test_delete_release_removes_s3_and_db(self, client, admin_user, monkeypatch):
+        from django.urls import reverse
+
+        from apps.images.models import ImageRelease
+
+        deleted_keys = []
+        monkeypatch.setattr(
+            "apps.images.storage.delete",
+            lambda key: deleted_keys.append(key),
+        )
+
+        rel = ImageRelease.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            s3_key="images/v1-alpha/qemux86-64.wic.bz2",
+            cosign_bundle_s3_key="images/v1-alpha/qemux86-64.wic.bz2.bundle",
+            sha256="a" * 64,
+            size_bytes=100,
+        )
+        client.force_login(admin_user)
+        response = client.post(reverse("images:delete", args=[rel.pk]))
+        assert response.status_code == 302
+        assert ImageRelease.objects.count() == 0
+        assert "images/v1-alpha/qemux86-64.wic.bz2" in deleted_keys
+        assert "images/v1-alpha/qemux86-64.wic.bz2.bundle" in deleted_keys
+
+    def test_operator_cannot_mark_latest_or_delete(self, client, operator_user):
+        from django.urls import reverse
+
+        from apps.images.models import ImageRelease
+
+        rel = ImageRelease.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            s3_key="images/v1-alpha/qemux86-64.wic.bz2",
+            sha256="a" * 64,
+            size_bytes=1,
+        )
+        client.force_login(operator_user)
+        assert client.post(reverse("images:mark_latest", args=[rel.pk])).status_code == 403
+        assert client.post(reverse("images:delete", args=[rel.pk])).status_code == 403
+        # DB row still present
+        assert ImageRelease.objects.filter(pk=rel.pk).exists()

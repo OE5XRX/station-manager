@@ -1,10 +1,13 @@
 from django.contrib import messages
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from django.views import View
 from django.views.generic import FormView, ListView
 
 from apps.accounts.views import AdminRequiredMixin
 
+from . import storage
 from .forms import ImageImportForm
 from .models import ImageImportJob, ImageRelease
 
@@ -38,3 +41,23 @@ class ImageImportView(AdminRequiredMixin, FormView):
             _("Import queued. It will appear below in a minute or two."),
         )
         return super().form_valid(form)
+
+
+class ImageMarkLatestView(AdminRequiredMixin, View):
+    def post(self, request, pk):
+        release = get_object_or_404(ImageRelease, pk=pk)
+        release.is_latest = True
+        release.save()
+        messages.success(request, _("Marked as latest."))
+        return redirect("images:list")
+
+
+class ImageDeleteView(AdminRequiredMixin, View):
+    def post(self, request, pk):
+        release = get_object_or_404(ImageRelease, pk=pk)
+        storage.delete(release.s3_key)
+        if release.cosign_bundle_s3_key:
+            storage.delete(release.cosign_bundle_s3_key)
+        release.delete()
+        messages.success(request, _("Release deleted."))
+        return redirect("images:list")
