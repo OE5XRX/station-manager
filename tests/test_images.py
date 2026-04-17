@@ -366,14 +366,19 @@ class TestCosignVerify:
         assert cmd[0] == "cosign"
         assert "--bundle" in cmd
         # Identity should pin to this tag, with repo + tag regex-escaped so
-        # metacharacters in user-controlled values cannot widen the match.
+        # metacharacters in user-controlled values cannot widen the match,
+        # and anchored with ^...$ so a shorter tag cannot match a prefix.
         import re
 
         expected_regexp = (
-            f"https://github.com/{re.escape('OE5XRX/linux-image')}"
-            f"/.github/workflows/release.yml@refs/tags/{re.escape('v1-alpha')}"
+            rf"^https://github\.com/{re.escape('OE5XRX/linux-image')}"
+            rf"/\.github/workflows/release\.yml@refs/tags/{re.escape('v1-alpha')}$"
         )
         assert expected_regexp in cmd
+        # Sanity-check the anchoring and escaping explicitly.
+        assert expected_regexp.startswith("^")
+        assert expected_regexp.endswith("$")
+        assert re.escape("v1-alpha") in expected_regexp
 
     def test_verify_raises_on_nonzero(self, monkeypatch):
         from apps.images import cosign

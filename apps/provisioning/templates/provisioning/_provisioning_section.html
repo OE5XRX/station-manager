@@ -16,7 +16,7 @@
         {% csrf_token %}
         <div class="form-group">
           <label class="form-label" for="id_machine">{% trans "Machine" %}</label>
-          <select name="machine" id="id_machine" required onchange="_filterVersions(this.value)">
+          <select name="machine" id="id_machine" required>
             {% for machine_value, machine_label in machine_choices %}
               <option value="{{ machine_value }}">{{ machine_label }}</option>
             {% endfor %}
@@ -43,20 +43,26 @@
 
         <button type="submit" class="btn btn-primary">{% trans "Generate provisioning bundle" %}</button>
       </form>
-      <script>
-        function _filterVersions(machine) {
-          document.querySelectorAll('.version-group').forEach(function (g) {
-            var active = g.dataset.machine === machine;
-            g.style.display = active ? '' : 'none';
-            var sel = g.querySelector('select');
-            sel.required = active;
-            sel.name = active ? 'image_release' : 'image_release_' + g.dataset.machine;
-          });
-        }
-        // Normalize on load so only the active group owns the "image_release" name.
+      <script nonce="{{ csp_nonce }}">
         (function () {
-          var m = document.querySelector('select[name="machine"]');
-          if (m) { _filterVersions(m.value); }
+          function filterVersions(machine) {
+            document.querySelectorAll('.version-group').forEach(function (g) {
+              var active = g.dataset.machine === machine;
+              g.style.display = active ? '' : 'none';
+              var sel = g.querySelector('select');
+              sel.required = active;
+              sel.name = active ? 'image_release' : 'image_release_' + g.dataset.machine;
+            });
+          }
+          // Attach listener via JS (no inline onchange) so the script stays CSP-compatible.
+          var machineSelect = document.getElementById('id_machine');
+          if (machineSelect) {
+            machineSelect.addEventListener('change', function () {
+              filterVersions(this.value);
+            });
+            // Normalize on load so only the active group owns the "image_release" name.
+            filterVersions(machineSelect.value);
+          }
         })();
       </script>
     {% endif %}

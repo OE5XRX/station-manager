@@ -366,6 +366,11 @@ class TestStationDetailIntegration:
         # Machine dropdown must render so the version select can be scoped
         # to a single machine (is_latest is unique per machine, not globally).
         assert b'name="machine"' in response.content
+        # CSP compliance: the provisioning section's <script> must carry a
+        # nonce and must not use the old inline onchange="_filterVersions..."
+        # handler, which the project's nonce-based CSP would block.
+        assert b"nonce=" in response.content
+        assert b'onchange="_filterVersions' not in response.content
 
     def test_operator_does_not_see_provisioning_section(
         self, client, operator_user, station, image_release

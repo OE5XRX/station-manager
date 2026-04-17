@@ -31,9 +31,12 @@ def verify_blob(
     """
     # Escape repo and tag so tag metacharacters (e.g. '.', '+') are treated
     # as literals and cannot widen the trusted identity to unrelated workflows.
+    # Anchor with ^...$ and also escape the literal slashes/dots in the fixed
+    # workflow URL — without anchors, a tag like "v1" would match an identity
+    # for ".../refs/tags/v1-alpha".
     identity_regexp = (
-        f"https://github.com/{re.escape(repo)}"
-        f"/.github/workflows/release.yml@refs/tags/{re.escape(tag)}"
+        rf"^https://github\.com/{re.escape(repo)}"
+        rf"/\.github/workflows/release\.yml@refs/tags/{re.escape(tag)}$"
     )
     with tempfile.TemporaryDirectory() as tmp:
         blob_path = Path(tmp) / "blob"
