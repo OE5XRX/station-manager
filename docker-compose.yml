@@ -51,6 +51,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  background-worker:
+    build:
+      context: .
+      args:
+        DEV: "true"
+    command: python manage.py run_background_jobs --loop --interval 5
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   db:
     image: postgres:17
     volumes:
@@ -63,6 +82,15 @@ services:
       test: ["CMD-SHELL", "pg_isready -U station_manager"]
       interval: 5s
       timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
       retries: 5
 
 volumes:

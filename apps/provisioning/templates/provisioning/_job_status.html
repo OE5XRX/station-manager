@@ -1,0 +1,8 @@
+{% load i18n %}
+<div id="provisioning-status">
+  <strong>{% trans "Status:" %}</strong> {{ job.get_status_display|lower }}
+  {% if job.status == job.Status.READY %}
+    &mdash; <a href="{% url 'provisioning:download' job.id %}">{% trans "Download" %}</a>
+  {% endif %}
+  {% if job.error_message %}<br><small>{{ job.error_message }}</small>{% endif %}
+</div>

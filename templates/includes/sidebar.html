@@ -92,6 +92,14 @@
       </svg>
       <span class="label">{% trans "Tags" %}</span>
     </a>
+    <a href="{% url 'images:list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'images' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'images' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="7" cy="12" r="1.2"/><path d="M11 12h7"/>
+      </svg>
+      <span class="label">{% trans "Images" %}</span>
+    </a>
     <a href="{% url 'monitoring:alert_settings' %}"
        class="nav-item">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

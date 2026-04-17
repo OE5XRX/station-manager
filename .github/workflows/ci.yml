@@ -51,6 +51,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      - name: Install system deps (guestfish for provisioning tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-generic
+          # Ubuntu ships kernels with 0600 perms; libguestfs's supermin needs read access.
+          # Guard the glob so CI does not fail on runner images where
+          # the kernel lives somewhere else (or no file matches).
+          for k in /boot/vmlinuz-*; do
+            [ -e "$k" ] && sudo chmod +r "$k"
+          done
+
       - name: Install dependencies
         run: pip install -r requirements/dev.txt
 

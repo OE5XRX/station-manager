@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>{% trans "Image Releases" %}</h1>
+
+<section>
+  <h2>{% trans "Import from GitHub" %}</h2>
+  <form method="post" action="{% url 'images:import' %}">
+    {% csrf_token %}
+    {{ import_form.as_p }}
+    <button type="submit">{% trans "Queue import" %}</button>
+  </form>
+</section>
+
+<section>
+  <h2>{% trans "Imported images" %}</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>{% trans "Tag" %}</th>
+        <th>{% trans "Machine" %}</th>
+        <th>{% trans "Latest" %}</th>
+        <th>{% trans "Size" %}</th>
+        <th>{% trans "Imported" %}</th>
+        <th>{% trans "Actions" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rel in releases %}
+      <tr>
+        <td>{{ rel.tag }}</td>
+        <td>{{ rel.get_machine_display }}</td>
+        <td>{% if rel.is_latest %}&#10003;{% else %}
+          <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button type="submit">{% trans "Mark latest" %}</button>
+          </form>
+        {% endif %}</td>
+        <td>{{ rel.size_bytes|filesizeformat }}</td>
+        <td>{{ rel.imported_at|date:"Y-m-d H:i" }}</td>
+        <td>
+          <form method="post" action="{% url 'images:delete' rel.pk %}" style="display:inline"
+                onsubmit="return confirm('{% trans "Delete this release from S3 and DB?" %}');">
+            {% csrf_token %}
+            <button type="submit">{% trans "Delete" %}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>{% trans "Recent import jobs" %}</h2>
+  <ul>
+    {% for job in recent_jobs %}
+    <li>{{ job.tag }} / {{ job.machine }} &mdash; {{ job.get_status_display }} ({{ job.created_at|date:"H:i" }})
+      {% if job.error_message %}<br><small>{{ job.error_message }}</small>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

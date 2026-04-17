@@ -64,7 +64,7 @@ jobs:
 
       - name: Start services
         working-directory: ${{ env.DEPLOY_DIR }}
-        run: docker compose -f docker-compose.prod.yml up -d --force-recreate web db redis nginx station-monitor alert-monitor
+        run: docker compose -f docker-compose.prod.yml up -d --force-recreate web db redis nginx station-monitor alert-monitor background-worker
 
       - name: Run migrations
         working-directory: ${{ env.DEPLOY_DIR }}

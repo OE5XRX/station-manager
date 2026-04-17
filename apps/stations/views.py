@@ -14,6 +14,8 @@ from django.views.generic import (
 )
 
 from apps.api.models import DeviceKey
+from apps.images.models import ImageRelease
+from apps.provisioning.models import ProvisioningJob
 
 from .forms import StationForm, StationLogEntryForm, StationPhotoForm, StationTagForm
 from .models import Station, StationAuditLog, StationTag
@@ -99,6 +101,24 @@ class StationDetailView(LoginRequiredMixin, DetailView):
         if raw_private_key:
             context["show_raw_private_key"] = True
             context["raw_private_key"] = raw_private_key
+        # Provisioning section (admin only)
+        if self.request.user.role == "admin":
+            context["image_releases"] = ImageRelease.objects.order_by(
+                "machine", "-is_latest", "-imported_at"
+            )
+            context["machine_choices"] = ImageRelease.Machine.choices
+            context["active_provisioning_job"] = (
+                ProvisioningJob.objects.filter(
+                    station=self.object,
+                    status__in=[
+                        ProvisioningJob.Status.PENDING,
+                        ProvisioningJob.Status.RUNNING,
+                        ProvisioningJob.Status.READY,
+                    ],
+                )
+                .order_by("-created_at")
+                .first()
+            )
         return context
 
 
