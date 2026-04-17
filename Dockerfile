@@ -5,13 +5,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# TARGETARCH is set automatically by BuildKit (amd64/arm64). The kernel
+# package name + cosign binary suffix both follow that convention.
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         libguestfs-tools \
-        linux-image-amd64 \
+        "linux-image-${TARGETARCH}" \
         ca-certificates \
         curl \
-    && curl -fsSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+    && curl -fsSL "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${TARGETARCH}" \
         -o /usr/local/bin/cosign \
     && chmod +x /usr/local/bin/cosign \
     && rm -rf /var/lib/apt/lists/*
