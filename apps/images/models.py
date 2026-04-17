@@ -29,6 +29,11 @@ class ImageRelease(models.Model):
         verbose_name_plural = _("image releases")
         constraints = [
             models.UniqueConstraint(fields=["tag", "machine"], name="uniq_tag_per_machine"),
+            models.UniqueConstraint(
+                fields=["machine"],
+                condition=models.Q(is_latest=True),
+                name="uniq_latest_per_machine",
+            ),
         ]
         ordering = ["-imported_at"]
 
@@ -41,9 +46,9 @@ class ImageRelease(models.Model):
         # worker, data migrations) get it for free.
         if self.is_latest:
             with transaction.atomic():
-                ImageRelease.objects.filter(
-                    machine=self.machine, is_latest=True
-                ).exclude(pk=self.pk).update(is_latest=False)
+                ImageRelease.objects.filter(machine=self.machine, is_latest=True).exclude(
+                    pk=self.pk
+                ).update(is_latest=False)
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)

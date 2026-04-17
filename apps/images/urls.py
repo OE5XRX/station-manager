@@ -1,4 +1,3 @@
-from django.urls import path
-
+# apps/images/urls.py
 app_name = "images"
-urlpatterns: list = []
+urlpatterns = []

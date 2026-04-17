@@ -1,5 +1,5 @@
 import pytest
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 
 from apps.images.models import ImageRelease
 
@@ -64,3 +64,54 @@ class TestImageRelease:
                 sha256="c" * 64,
                 size_bytes=3000,
             )
+
+    def test_promoting_existing_record_demotes_previous_latest(self):
+        old = ImageRelease.objects.create(
+            tag="v0.9.0",
+            machine=ImageRelease.Machine.QEMU,
+            s3_key="images/v0.9.0/qemu.wic.bz2",
+            sha256="a" * 64,
+            size_bytes=1000,
+            is_latest=True,
+        )
+        new = ImageRelease.objects.create(
+            tag="v1-alpha",
+            machine=ImageRelease.Machine.QEMU,
+            s3_key="images/v1-alpha/qemu.wic.bz2",
+            sha256="b" * 64,
+            size_bytes=2000,
+            is_latest=False,
+        )
+        new.is_latest = True
+        new.save()
+        old.refresh_from_db()
+        assert old.is_latest is False
+        assert new.is_latest is True
+
+    def test_db_constraint_blocks_two_latest_per_machine(self):
+        ImageRelease.objects.create(
+            tag="v0.9.0",
+            machine=ImageRelease.Machine.QEMU,
+            s3_key="images/v0.9.0/qemu.wic.bz2",
+            sha256="a" * 64,
+            size_bytes=1000,
+            is_latest=True,
+        )
+        # Bypass save() to simulate a concurrent UPDATE that didn't go through the flip logic.
+        # bulk_create skips Model.save(), and a second is_latest=True row for the same machine
+        # must then be rejected by the partial unique index at the DB layer.
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                ImageRelease.objects.filter(tag="v0.9.0").update(is_latest=True)
+                ImageRelease.objects.bulk_create(
+                    [
+                        ImageRelease(
+                            tag="v1-alpha",
+                            machine=ImageRelease.Machine.QEMU,
+                            s3_key="images/v1-alpha/qemu.wic.bz2",
+                            sha256="b" * 64,
+                            size_bytes=2000,
+                            is_latest=True,
+                        )
+                    ]
+                )
