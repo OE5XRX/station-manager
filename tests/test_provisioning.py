@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from django.urls import reverse
 
 
 @pytest.fixture
@@ -163,3 +164,98 @@ class TestProvisioningWorker:
         assert job.expires_at is not None
         # DeviceKey was created (public half stored server-side)
         assert DeviceKey.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db
+class TestProvisioningViews:
+    def test_admin_creates_provisioning_job(self, client, admin_user, station, image_release):
+        from apps.provisioning.models import ProvisioningJob
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("provisioning:new", kwargs={"station_pk": station.pk}),
+            {"image_release": image_release.pk},
+        )
+        assert response.status_code == 302
+        assert ProvisioningJob.objects.filter(station=station).count() == 1
+        job = ProvisioningJob.objects.get()
+        assert job.status == ProvisioningJob.Status.PENDING
+        assert job.requested_by == admin_user
+        assert job.image_release == image_release
+
+    def test_operator_cannot_create_job(self, client, operator_user, station, image_release):
+        from apps.provisioning.models import ProvisioningJob
+
+        client.force_login(operator_user)
+        response = client.post(
+            reverse("provisioning:new", kwargs={"station_pk": station.pk}),
+            {"image_release": image_release.pk},
+        )
+        assert response.status_code == 403
+        assert ProvisioningJob.objects.count() == 0
+
+    def test_status_endpoint_returns_partial(self, client, admin_user, station, image_release):
+        from apps.provisioning.models import ProvisioningJob
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("provisioning:status", kwargs={"pk": job.id}))
+        assert response.status_code == 200
+        body = response.content.lower()
+        assert b"pending" in body or b"running" in body
+
+    def test_download_ready_job_streams_and_marks_downloaded(
+        self, client, admin_user, station, image_release, monkeypatch
+    ):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.provisioning.models import ProvisioningJob
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.READY,
+            output_s3_key="provisioning/abc/test.wic.bz2",
+            output_size_bytes=10,
+            ready_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: __import__("io").BytesIO(b"0123456789"),
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+        assert response.status_code == 200
+        assert b"".join(response.streaming_content) == b"0123456789"
+        job.refresh_from_db()
+        assert job.status == ProvisioningJob.Status.DOWNLOADED
+        assert job.downloaded_at is not None
+
+    def test_download_expired_job_returns_410(self, client, admin_user, station, image_release):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.provisioning.models import ProvisioningJob
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.READY,
+            output_s3_key="provisioning/abc/test.wic.bz2",
+            output_size_bytes=10,
+            ready_at=timezone.now() - timedelta(hours=2),
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+        assert response.status_code == 410

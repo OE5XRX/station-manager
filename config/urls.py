@@ -19,6 +19,7 @@ urlpatterns += i18n_patterns(
     path("audit/", include("apps.audit.urls")),
     path("monitoring/", include("apps.monitoring.urls")),
     path("images/", include("apps.images.urls")),
+    path("provisioning/", include("apps.provisioning.urls")),
     path("", include("apps.dashboard.urls")),
 )
 
