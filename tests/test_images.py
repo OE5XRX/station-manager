@@ -246,6 +246,98 @@ class TestImportView:
         assert "/accounts/login" in response["Location"]
 
 
+@pytest.mark.django_db
+class TestImageImporterWorker:
+    def test_pending_job_becomes_ready_and_creates_release(
+        self, admin_user, monkeypatch, settings
+    ):
+        from apps.images import github
+        from apps.images.models import ImageImportJob, ImageRelease
+        from apps.provisioning.management.commands.run_background_jobs import (
+            process_pending_image_imports,
+        )
+
+        settings.LINUX_IMAGE_REPO = "OE5XRX/linux-image"
+
+        job = ImageImportJob.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            mark_as_latest=True,
+            requested_by=admin_user,
+        )
+
+        monkeypatch.setattr(
+            github,
+            "fetch_release_asset",
+            lambda repo, tag, machine: github.ReleaseAsset(
+                wic_bytes=b"wic",
+                sha256="e" * 64,
+                bundle_bytes=b"bundle",
+            ),
+        )
+        monkeypatch.setattr(
+            "apps.images.cosign.verify_blob",
+            lambda **kw: None,
+        )
+
+        uploads = []
+
+        def fake_upload(key, data):
+            uploads.append((key, data))
+
+        monkeypatch.setattr("apps.images.storage.upload_bytes", fake_upload)
+
+        process_pending_image_imports()
+
+        job.refresh_from_db()
+        assert job.status == ImageImportJob.Status.READY
+        assert job.image_release is not None
+        assert job.image_release.tag == "v1-alpha"
+        assert job.image_release.is_latest is True
+        assert ImageRelease.objects.count() == 1
+        assert ("images/v1-alpha/qemux86-64.wic.bz2", b"wic") in uploads
+        assert ("images/v1-alpha/qemux86-64.wic.bz2.bundle", b"bundle") in uploads
+
+    def test_cosign_failure_marks_job_failed_and_skips_release(
+        self, admin_user, monkeypatch, settings
+    ):
+        from apps.images import cosign, github
+        from apps.images.models import ImageImportJob, ImageRelease
+        from apps.provisioning.management.commands.run_background_jobs import (
+            process_pending_image_imports,
+        )
+
+        settings.LINUX_IMAGE_REPO = "OE5XRX/linux-image"
+        job = ImageImportJob.objects.create(
+            tag="v1-alpha",
+            machine="qemux86-64",
+            requested_by=admin_user,
+        )
+
+        monkeypatch.setattr(
+            github,
+            "fetch_release_asset",
+            lambda repo, tag, machine: github.ReleaseAsset(
+                wic_bytes=b"wic",
+                sha256="e" * 64,
+                bundle_bytes=b"bundle",
+            ),
+        )
+
+        def bad_verify(**kw):
+            raise cosign.CosignVerificationError("signature mismatch")
+
+        monkeypatch.setattr("apps.images.cosign.verify_blob", bad_verify)
+        monkeypatch.setattr("apps.images.storage.upload_bytes", lambda k, d: None)
+
+        process_pending_image_imports()
+
+        job.refresh_from_db()
+        assert job.status == ImageImportJob.Status.FAILED
+        assert "signature mismatch" in job.error_message
+        assert ImageRelease.objects.count() == 0
+
+
 class TestCosignVerify:
     def test_verify_invokes_cosign_binary(self, tmp_path, monkeypatch):
         from apps.images import cosign
