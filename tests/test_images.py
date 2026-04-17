@@ -467,3 +467,22 @@ class TestImageManagement:
         assert client.post(reverse("images:delete", args=[rel.pk])).status_code == 403
         # DB row still present
         assert ImageRelease.objects.filter(pk=rel.pk).exists()
+
+
+@pytest.mark.django_db
+class TestSidebar:
+    def test_admin_sees_images_link(self, client, admin_user):
+        from django.urls import reverse
+
+        client.force_login(admin_user)
+        response = client.get(reverse("dashboard:index"))
+        assert response.status_code == 200
+        assert b'/images/"' in response.content
+
+    def test_operator_does_not_see_images_link(self, client, operator_user):
+        from django.urls import reverse
+
+        client.force_login(operator_user)
+        response = client.get(reverse("dashboard:index"))
+        assert response.status_code == 200
+        assert b'/images/"' not in response.content
