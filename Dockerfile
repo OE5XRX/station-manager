@@ -6,7 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev \
+        libpq-dev \
+        libguestfs-tools \
+        linux-image-generic \
+        ca-certificates \
+        curl \
+    && curl -fsSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+        -o /usr/local/bin/cosign \
+    && chmod +x /usr/local/bin/cosign \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements/ requirements/
