@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,7 +24,12 @@ def verify_blob(
     Raises:
         CosignVerificationError: if verification fails for any reason.
     """
-    identity_regexp = f"https://github.com/{repo}/.github/workflows/release.yml@refs/tags/{tag}"
+    # Escape repo and tag so tag metacharacters (e.g. '.', '+') are treated
+    # as literals and cannot widen the trusted identity to unrelated workflows.
+    identity_regexp = (
+        f"https://github.com/{re.escape(repo)}"
+        f"/.github/workflows/release.yml@refs/tags/{re.escape(tag)}"
+    )
     with tempfile.TemporaryDirectory() as tmp:
         blob_path = Path(tmp) / "blob"
         bundle_path = Path(tmp) / "bundle"

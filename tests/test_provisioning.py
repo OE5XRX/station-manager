@@ -183,6 +183,23 @@ class TestProvisioningViews:
         assert job.requested_by == admin_user
         assert job.image_release == image_release
 
+    def test_create_rejects_if_active_job_exists(self, client, admin_user, station, image_release):
+        from apps.provisioning.models import ProvisioningJob
+
+        ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.RUNNING,
+        )
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("provisioning:new", args=[station.pk]),
+            {"image_release": image_release.pk},
+        )
+        assert response.status_code == 302
+        assert ProvisioningJob.objects.count() == 1
+
     def test_operator_cannot_create_job(self, client, operator_user, station, image_release):
         from apps.provisioning.models import ProvisioningJob
 
@@ -238,6 +255,44 @@ class TestProvisioningViews:
         job.refresh_from_db()
         assert job.status == ProvisioningJob.Status.DOWNLOADED
         assert job.downloaded_at is not None
+
+    def test_download_aborted_stays_ready(
+        self, client, admin_user, station, image_release, monkeypatch
+    ):
+        import io
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.provisioning.models import ProvisioningJob
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.READY,
+            output_s3_key="provisioning/abc/test.wic.bz2",
+            output_size_bytes=100,
+            ready_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: io.BytesIO(b"0" * 100),
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("provisioning:download", args=[job.id]))
+        assert response.status_code == 200
+        # Pull one chunk, then close the underlying generator — this is what
+        # WSGI servers do when the client disconnects mid-response. Django's
+        # streaming_content wraps the raw generator in a map(); the raw one
+        # is accessible as response._iterator.
+        iterator = iter(response.streaming_content)
+        next(iterator)
+        response._iterator.close()
+        job.refresh_from_db()
+        assert job.status == ProvisioningJob.Status.READY
+        assert job.downloaded_at is None
 
     def test_download_expired_job_returns_410(self, client, admin_user, station, image_release):
         from datetime import timedelta

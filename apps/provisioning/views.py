@@ -1,3 +1,4 @@
+from django.contrib import messages
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -11,6 +12,12 @@ from apps.stations.models import Station
 from .forms import ProvisioningForm
 from .models import ProvisioningJob
 
+ACTIVE_PROVISIONING_STATUSES = [
+    ProvisioningJob.Status.PENDING,
+    ProvisioningJob.Status.RUNNING,
+    ProvisioningJob.Status.READY,
+]
+
 
 class CreateProvisioningJobView(AdminRequiredMixin, View):
     """Admin-only endpoint that creates a new ProvisioningJob for a station."""
@@ -20,6 +27,11 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
         form = ProvisioningForm(request.POST)
         if not form.is_valid():
             return HttpResponse(_("invalid form"), status=400)
+        if ProvisioningJob.objects.filter(
+            station=station, status__in=ACTIVE_PROVISIONING_STATUSES
+        ).exists():
+            messages.error(request, _("This station already has an active provisioning job."))
+            return redirect("stations:station_detail", pk=station.pk)
         ProvisioningJob.objects.create(
             station=station,
             image_release=form.cleaned_data["image_release"],
@@ -61,19 +73,26 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
 
         def iterator():
             try:
-                while chunk := stream.read(chunk_size):
-                    yield chunk
+                try:
+                    while chunk := stream.read(chunk_size):
+                        yield chunk
+                except GeneratorExit:
+                    # Client closed the connection mid-stream; do NOT mark
+                    # DOWNLOADED — the bundle may not have been received.
+                    raise
+                else:
+                    # Full stream consumed — only now count it as a
+                    # successful download. Conditional UPDATE preserves
+                    # any FAILED / EXPIRED transition written concurrently.
+                    ProvisioningJob.objects.filter(
+                        pk=job_pk,
+                        status=ProvisioningJob.Status.READY,
+                    ).update(
+                        status=ProvisioningJob.Status.DOWNLOADED,
+                        downloaded_at=timezone.now(),
+                    )
             finally:
                 stream.close()
-                # Mark downloaded only after a successful full iteration,
-                # and only if the job is still READY (race-safe).
-                ProvisioningJob.objects.filter(
-                    pk=job_pk,
-                    status=ProvisioningJob.Status.READY,
-                ).update(
-                    status=ProvisioningJob.Status.DOWNLOADED,
-                    downloaded_at=timezone.now(),
-                )
 
         filename = job.output_s3_key.split("/")[-1]
         response = StreamingHttpResponse(iterator(), content_type="application/x-bzip2")

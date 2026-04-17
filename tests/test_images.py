@@ -365,10 +365,13 @@ class TestCosignVerify:
         cmd = calls[0]
         assert cmd[0] == "cosign"
         assert "--bundle" in cmd
-        # Identity should pin to this tag
+        # Identity should pin to this tag, with repo + tag regex-escaped so
+        # metacharacters in user-controlled values cannot widen the match.
+        import re
+
         expected_regexp = (
-            "https://github.com/OE5XRX/linux-image/.github/workflows/release.yml"
-            "@refs/tags/v1-alpha"
+            f"https://github.com/{re.escape('OE5XRX/linux-image')}"
+            f"/.github/workflows/release.yml@refs/tags/{re.escape('v1-alpha')}"
         )
         assert expected_regexp in cmd
 
