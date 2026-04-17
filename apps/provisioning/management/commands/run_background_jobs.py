@@ -83,22 +83,33 @@ def _run_import_job(job: ImageImportJob) -> None:
         image_storage.upload_bytes(wic_key, asset.wic_bytes)
         image_storage.upload_bytes(bundle_key, asset.bundle_bytes)
 
-        release, _created = ImageRelease.objects.update_or_create(
-            tag=job.tag,
-            machine=job.machine,
-            defaults={
-                "s3_key": wic_key,
-                "cosign_bundle_s3_key": bundle_key,
-                "sha256": asset.sha256,
-                "size_bytes": len(asset.wic_bytes),
-                "is_latest": job.mark_as_latest,
-                "imported_by": job.requested_by,
-            },
-        )
-        job.image_release = release
-        job.status = ImageImportJob.Status.READY
-        job.completed_at = timezone.now()
-        job.save(update_fields=["image_release", "status", "completed_at"])
+        try:
+            release, _created = ImageRelease.objects.update_or_create(
+                tag=job.tag,
+                machine=job.machine,
+                defaults={
+                    "s3_key": wic_key,
+                    "cosign_bundle_s3_key": bundle_key,
+                    "sha256": asset.sha256,
+                    "size_bytes": len(asset.wic_bytes),
+                    "is_latest": job.mark_as_latest,
+                    "imported_by": job.requested_by,
+                },
+            )
+            job.image_release = release
+            job.status = ImageImportJob.Status.READY
+            job.completed_at = timezone.now()
+            job.save(update_fields=["image_release", "status", "completed_at"])
+        except Exception:
+            # Don't leave orphan S3 objects if the DB write fails.
+            # Cleanup is best-effort; re-raise the original exception so the
+            # outer handler marks the job FAILED with the real error.
+            for key in (wic_key, bundle_key):
+                try:
+                    image_storage.delete(key)
+                except Exception:
+                    pass
+            raise
     except Exception as exc:
         job.status = ImageImportJob.Status.FAILED
         job.error_message = str(exc)
@@ -168,33 +179,43 @@ def _run_provisioning_job(job: ProvisioningJob) -> None:
         out_key = _provisioning_output_key(job)
         image_storage.upload_bytes(out_key, out_bytes)
 
-        # Bundle is safely in S3. Only now rotate the DeviceKey and flip
-        # the job to READY — if anything above raised, the station's
-        # existing key remains the authoritative one.
-        DeviceKey.objects.update_or_create(
-            station=job.station,
-            defaults={
-                "current_public_key": public_b64,
-                "is_active": True,
-                "next_public_key": None,
-            },
-        )
+        try:
+            # Bundle is safely in S3. Only now rotate the DeviceKey and flip
+            # the job to READY — if anything above raised, the station's
+            # existing key remains the authoritative one.
+            DeviceKey.objects.update_or_create(
+                station=job.station,
+                defaults={
+                    "current_public_key": public_b64,
+                    "is_active": True,
+                    "next_public_key": None,
+                },
+            )
 
-        now = timezone.now()
-        job.output_s3_key = out_key
-        job.output_size_bytes = len(out_bytes)
-        job.status = ProvisioningJob.Status.READY
-        job.ready_at = now
-        job.expires_at = now + PROVISIONING_EXPIRY
-        job.save(
-            update_fields=[
-                "output_s3_key",
-                "output_size_bytes",
-                "status",
-                "ready_at",
-                "expires_at",
-            ]
-        )
+            now = timezone.now()
+            job.output_s3_key = out_key
+            job.output_size_bytes = len(out_bytes)
+            job.status = ProvisioningJob.Status.READY
+            job.ready_at = now
+            job.expires_at = now + PROVISIONING_EXPIRY
+            job.save(
+                update_fields=[
+                    "output_s3_key",
+                    "output_size_bytes",
+                    "status",
+                    "ready_at",
+                    "expires_at",
+                ]
+            )
+        except Exception:
+            # Don't leave the uploaded bundle stranded in S3 if we can't
+            # record it against the job. Cleanup is best-effort; re-raise
+            # so the outer handler marks the job FAILED with the real error.
+            try:
+                image_storage.delete(out_key)
+            except Exception:
+                pass
+            raise
     except Exception as exc:
         job.status = ProvisioningJob.Status.FAILED
         job.error_message = str(exc)

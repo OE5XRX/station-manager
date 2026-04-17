@@ -326,6 +326,9 @@ class TestStationDetailIntegration:
         assert response.status_code == 200
         assert b"Provisioning" in response.content
         assert b"Generate provisioning bundle" in response.content
+        # Machine dropdown must render so the version select can be scoped
+        # to a single machine (is_latest is unique per machine, not globally).
+        assert b'name="machine"' in response.content
 
     def test_operator_does_not_see_provisioning_section(
         self, client, operator_user, station, image_release

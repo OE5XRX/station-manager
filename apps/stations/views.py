@@ -106,6 +106,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
             context["image_releases"] = ImageRelease.objects.order_by(
                 "machine", "-is_latest", "-imported_at"
             )
+            context["machine_choices"] = ImageRelease.Machine.choices
             context["active_provisioning_job"] = (
                 ProvisioningJob.objects.filter(
                     station=self.object,

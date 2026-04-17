@@ -42,6 +42,17 @@ class ImageImportView(AdminRequiredMixin, FormView):
         )
         return super().form_valid(form)
 
+    def form_invalid(self, form):
+        # The list template needs import_form/releases/recent_jobs context,
+        # which FormView does not supply. Since the form has only two fields
+        # (tag + machine choice) a dedicated error page is not warranted —
+        # surface the errors via messages and bounce back to the list.
+        messages.error(
+            self.request,
+            _("Invalid import request: %(errors)s") % {"errors": form.errors.as_text()},
+        )
+        return redirect("images:list")
+
 
 class ImageMarkLatestView(AdminRequiredMixin, View):
     def post(self, request, pk):
