@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "apps.tunnel",
     "apps.audit",
     "apps.monitoring",
+    "apps.images",
 ]
 
 MIDDLEWARE = [
