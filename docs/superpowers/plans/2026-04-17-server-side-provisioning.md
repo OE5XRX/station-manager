@@ -19,16 +19,16 @@
 - [x] Task 3 — github/cosign/storage helpers (commit `de1a9f0`)
 - [x] Task 4 — Image import view + form (commit `2c68d79`)
 - [x] Task 5 — Image importer worker (commit `a40d619`)
-- [ ] Task 6 — Mark-latest + delete actions
-- [ ] Task 7 — `ProvisioningJob` model
-- [ ] Task 8 — guestfish + config_render helpers
-- [ ] Task 9 — Provisioning worker — full pipeline
-- [ ] Task 10 — Provisioning views — create, status, download
-- [ ] Task 11 — Station-detail provisioning section
-- [ ] Task 12 — Sidebar "Images" entry
-- [ ] Task 13 — Dockerfile — libguestfs + cosign
-- [ ] Task 14 — docker-compose background-worker service
-- [ ] Task 15 — E2E verification + final PR
+- [x] Task 6 — Mark-latest + delete actions (commit `887c10f`)
+- [x] Task 7 — `ProvisioningJob` model (commit `e2f5682`)
+- [x] Task 8 — guestfish + config_render helpers (commit `7121e6a`)
+- [x] Task 9 — Provisioning worker — full pipeline (commit `113d77d`)
+- [x] Task 10 — Provisioning views — create, status, download (commit `ab9405d`)
+- [x] Task 11 — Station-detail provisioning section (commit `962fa79`)
+- [x] Task 12 — Sidebar "Images" entry (commit `5da31c9`)
+- [x] Task 13 — Dockerfile — libguestfs + cosign (commit `ff89e60`)
+- [x] Task 14 — docker-compose background-worker service (commit `b6bad8e`)
+- [ ] Task 15 — E2E verification + final PR (manual user step once PR is open)
 
 ---
 
