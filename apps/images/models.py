@@ -61,28 +61,34 @@ class ImageImportJob(models.Model):
         READY = "ready", _("Ready")
         FAILED = "failed", _("Failed")
 
-    tag = models.CharField(max_length=64)
-    machine = models.CharField(max_length=32, choices=ImageRelease.Machine.choices)
-    mark_as_latest = models.BooleanField(default=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
-    error_message = models.TextField(blank=True)
+    tag = models.CharField(_("release tag"), max_length=64)
+    machine = models.CharField(_("machine"), max_length=32, choices=ImageRelease.Machine.choices)
+    mark_as_latest = models.BooleanField(_("mark as latest"), default=True)
+    status = models.CharField(
+        _("status"), max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    error_message = models.TextField(_("error message"), blank=True)
     image_release = models.ForeignKey(
         "ImageRelease",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="import_jobs",
+        verbose_name=_("image release"),
     )
     requested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
+        verbose_name=_("requested by"),
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    completed_at = models.DateTimeField(_("completed at"), null=True, blank=True)
 
     class Meta:
+        verbose_name = _("image import job")
+        verbose_name_plural = _("image import jobs")
         ordering = ["-created_at"]
 
     def __str__(self):

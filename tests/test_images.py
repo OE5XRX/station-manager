@@ -134,11 +134,26 @@ class TestImageImportJob:
     def test_terminal_statuses(self, admin_user):
         from apps.images.models import ImageImportJob
 
-        job = ImageImportJob.objects.create(
+        # READY branch
+        ok_job = ImageImportJob.objects.create(
             tag="v1-alpha",
             machine="qemux86-64",
             requested_by=admin_user,
         )
-        job.status = ImageImportJob.Status.READY
-        job.save()
-        assert ImageImportJob.Status.READY in dict(ImageImportJob.Status.choices)
+        ok_job.status = ImageImportJob.Status.READY
+        ok_job.save()
+        ok_job.refresh_from_db()
+        assert ok_job.status == ImageImportJob.Status.READY
+
+        # FAILED branch with error_message
+        bad_job = ImageImportJob.objects.create(
+            tag="v9",
+            machine="qemux86-64",
+            requested_by=admin_user,
+        )
+        bad_job.status = ImageImportJob.Status.FAILED
+        bad_job.error_message = "cosign verification failed"
+        bad_job.save()
+        bad_job.refresh_from_db()
+        assert bad_job.status == ImageImportJob.Status.FAILED
+        assert "cosign" in bad_job.error_message
