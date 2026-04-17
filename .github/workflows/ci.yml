@@ -55,6 +55,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-generic
+          # Ubuntu ships kernels with 0600 perms; libguestfs's supermin needs read access.
+          sudo chmod +r /boot/vmlinuz-*
 
       - name: Install dependencies
         run: pip install -r requirements/dev.txt
