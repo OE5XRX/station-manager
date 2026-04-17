@@ -204,6 +204,48 @@ class TestGithubRelease:
         assert asset.bundle_bytes == b"fakebundle"
 
 
+@pytest.mark.django_db
+class TestImportView:
+    def test_admin_can_create_import_job(self, client, admin_user):
+        from django.urls import reverse
+
+        from apps.images.models import ImageImportJob
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:import"),
+            {"tag": "v1-alpha", "machine": "qemux86-64", "mark_as_latest": "on"},
+        )
+        assert response.status_code == 302  # redirect to list
+        job = ImageImportJob.objects.get()
+        assert job.tag == "v1-alpha"
+        assert job.machine == "qemux86-64"
+        assert job.mark_as_latest is True
+        assert job.status == ImageImportJob.Status.PENDING
+        assert job.requested_by == admin_user
+
+    def test_operator_cannot_create_import_job(self, client, operator_user):
+        from django.urls import reverse
+
+        client.force_login(operator_user)
+        response = client.post(
+            reverse("images:import"),
+            {"tag": "v1-alpha", "machine": "qemux86-64"},
+        )
+        # AdminRequiredMixin returns 403 for non-admin
+        assert response.status_code == 403
+
+    def test_anonymous_redirected_to_login(self, client):
+        from django.urls import reverse
+
+        response = client.post(
+            reverse("images:import"),
+            {"tag": "v1-alpha", "machine": "qemux86-64"},
+        )
+        assert response.status_code == 302
+        assert "/accounts/login" in response["Location"]
+
+
 class TestCosignVerify:
     def test_verify_invokes_cosign_binary(self, tmp_path, monkeypatch):
         from apps.images import cosign
