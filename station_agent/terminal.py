@@ -27,6 +27,12 @@ from .signing import load_private_key
 
 logger = logging.getLogger(__name__)
 
+# base64 is used below only for the Ed25519 signature query param.
+# PTY I/O crosses three layers (agent <-> server <-> browser) as plain
+# UTF-8 strings inside the JSON `data` field. errors="replace" on
+# decode absorbs the occasional split multi-byte char at a read
+# boundary without crashing.
+
 # Reconnect backoff settings
 BACKOFF_INITIAL = 2.0
 BACKOFF_MAX = 60.0
@@ -125,7 +131,7 @@ class TerminalClient:
                 message = json.dumps(
                     {
                         "type": "output",
-                        "data": base64.b64encode(data).decode("ascii"),
+                        "data": data.decode("utf-8", errors="replace"),
                     }
                 )
 
@@ -184,10 +190,7 @@ class TerminalClient:
         if msg_type == "input":
             data = msg.get("data", "")
             if self._master_fd is not None and data:
-                try:
-                    raw = base64.b64decode(data)
-                except Exception:
-                    raw = data.encode("utf-8") if isinstance(data, str) else data
+                raw = data.encode("utf-8") if isinstance(data, str) else data
                 try:
                     os.write(self._master_fd, raw)
                 except OSError as exc:
