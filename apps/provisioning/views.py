@@ -1,3 +1,4 @@
+import logging
 import re
 
 from django.contrib import messages
@@ -13,6 +14,8 @@ from apps.stations.models import Station, StationAuditLog
 
 from .forms import ProvisioningForm
 from .models import ProvisioningJob
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_PROVISIONING_STATUSES = [
     ProvisioningJob.Status.PENDING,
@@ -142,15 +145,27 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
                         )
                         station = Station.objects.filter(pk=station_pk).first()
                         if station is not None:
-                            StationAuditLog.log(
-                                station=station,
-                                event_type=(StationAuditLog.EventType.PROVISIONING_DOWNLOADED),
-                                message=(
-                                    f"Provisioning bundle downloaded "
-                                    f"({image_release_tag}) by {user.username}"
-                                ),
-                                user=user,
-                            )
+                            # Audit logging is ancillary observability — a
+                            # transient DB failure here must not turn a
+                            # fully-streamed download into a 500. The status
+                            # transition above is the authoritative record.
+                            try:
+                                StationAuditLog.log(
+                                    station=station,
+                                    event_type=(StationAuditLog.EventType.PROVISIONING_DOWNLOADED),
+                                    message=(
+                                        f"Provisioning bundle downloaded "
+                                        f"({image_release_tag}) by {user.username}"
+                                    ),
+                                    user=user,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Audit log write failed for station %s "
+                                    "(provisioning_downloaded): %s",
+                                    station_pk,
+                                    exc,
+                                )
             finally:
                 stream.close()
 

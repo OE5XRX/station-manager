@@ -244,6 +244,106 @@ class TestProvisioningWorker:
         assert "simulated S3 failure" in entry.message
         assert entry.user is None
 
+    def test_audit_log_failure_does_not_abort_ready_pipeline(
+        self, station, image_release, admin_user, monkeypatch, settings
+    ):
+        """A transient StationAuditLog.log failure must not tear down a
+        successful provisioning run: the job still reaches READY, the S3
+        upload stays put, and the bundle is not garbage-collected."""
+        from apps.provisioning.management.commands.run_background_jobs import (
+            process_pending_provisioning_jobs,
+        )
+        from apps.provisioning.models import ProvisioningJob
+        from apps.stations.models import StationAuditLog
+
+        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: __import__("io").BytesIO(b"FAKEWICBZ2BYTES"),
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._decompress_to",
+            lambda src, dst: dst.write_bytes(b"FAKEWIC"),
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.guestfish.inject_provisioning_files",
+            lambda **kw: None,
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._compress_to_bytes",
+            lambda path: b"FAKEWICBZ2",
+        )
+        uploaded: dict[str, bytes] = {}
+        monkeypatch.setattr(
+            "apps.images.storage.upload_bytes",
+            lambda key, data: uploaded.setdefault(key, data),
+        )
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            "apps.images.storage.delete",
+            lambda key: deleted.append(key),
+        )
+
+        def exploding_log(**kwargs):
+            raise RuntimeError("simulated audit-log DB failure")
+
+        monkeypatch.setattr(StationAuditLog, "log", staticmethod(exploding_log))
+
+        ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+        )
+
+        process_pending_provisioning_jobs()
+
+        job = ProvisioningJob.objects.get(station=station)
+        # READY, not FAILED: audit-log hiccup must not demote the job.
+        assert job.status == ProvisioningJob.Status.READY
+        assert job.output_s3_key.startswith("provisioning/")
+        # The uploaded bundle stays in S3 — it was NOT cleaned up.
+        assert job.output_s3_key in uploaded
+        assert deleted == []
+
+    def test_cleanup_loop_survives_audit_log_failure(
+        self, station, image_release, admin_user, monkeypatch
+    ):
+        """If StationAuditLog.log raises while expiring a stale job, the
+        cleanup loop must still mark the job EXPIRED and continue."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.provisioning.management.commands.run_background_jobs import (
+            cleanup_expired_provisioning_outputs,
+        )
+        from apps.provisioning.models import ProvisioningJob
+        from apps.stations.models import StationAuditLog
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.READY,
+            output_s3_key="provisioning/abc/test.wic.bz2",
+            output_size_bytes=10,
+            ready_at=timezone.now() - timedelta(hours=3),
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+        monkeypatch.setattr("apps.images.storage.delete", lambda key: None)
+
+        def exploding_log(**kwargs):
+            raise RuntimeError("simulated audit-log DB failure")
+
+        monkeypatch.setattr(StationAuditLog, "log", staticmethod(exploding_log))
+
+        # Must not raise.
+        cleanup_expired_provisioning_outputs()
+
+        job.refresh_from_db()
+        assert job.status == ProvisioningJob.Status.EXPIRED
+
 
 @pytest.mark.django_db
 class TestProvisioningViews:
@@ -371,6 +471,58 @@ class TestProvisioningViews:
         station.refresh_from_db()
         assert station.current_image_release == image_release
         assert StationAuditLog.objects.filter(
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_DOWNLOADED,
+        ).exists()
+
+    def test_download_completes_when_audit_log_raises(
+        self, client, admin_user, station, image_release, monkeypatch
+    ):
+        """If StationAuditLog.log blows up after a fully-streamed download,
+        the response must still complete cleanly and the job must still be
+        marked DOWNLOADED — audit-log is observability, not gate-keeping."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.provisioning.models import ProvisioningJob
+        from apps.stations.models import StationAuditLog
+
+        job = ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+            status=ProvisioningJob.Status.READY,
+            output_s3_key="provisioning/abc/test.wic.bz2",
+            output_size_bytes=10,
+            ready_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: __import__("io").BytesIO(b"0123456789"),
+        )
+
+        def exploding_log(**kwargs):
+            raise RuntimeError("simulated audit-log DB failure")
+
+        monkeypatch.setattr(StationAuditLog, "log", staticmethod(exploding_log))
+
+        client.force_login(admin_user)
+        response = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+        assert response.status_code == 200
+        # Draining the stream must not raise.
+        assert b"".join(response.streaming_content) == b"0123456789"
+        job.refresh_from_db()
+        assert job.status == ProvisioningJob.Status.DOWNLOADED
+        assert job.downloaded_at is not None
+        # The station-to-release link still went through — the audit hiccup
+        # only suppressed the observability record.
+        station.refresh_from_db()
+        assert station.current_image_release == image_release
+        # No audit entry for the downloaded event (log raised), but no other
+        # side-effect was sacrificed.
+        assert not StationAuditLog.objects.filter(
             station=station,
             event_type=StationAuditLog.EventType.PROVISIONING_DOWNLOADED,
         ).exists()
