@@ -35,8 +35,9 @@ ARG DJANGO_SECRET_KEY=build-only-dummy-key
 RUN DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY} \
     python manage.py collectstatic --noinput --settings=config.settings.prod
 
-# Run as non-root user
-RUN adduser --disabled-password --no-create-home appuser
+# Run as non-root user. Home dir is required because cosign writes its
+# TUF trust-root cache under $HOME/.sigstore/root at first verify call.
+RUN adduser --disabled-password --gecos '' appuser
 USER appuser
 
 EXPOSE 8000
