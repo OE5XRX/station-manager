@@ -3,3 +3,7 @@ pytest>=8.0,<10.0
 pytest-django>=4.9,<5.0
 ruff>=0.8,<1.0
 django-debug-toolbar>=5.0,<7.0
+# PyYAML is a transitive dep of station_agent.config; pulling it in here
+# lets the terminal-agent tests actually run under `.venv/bin/pytest`
+# instead of being skipped via pytest.importorskip.
+PyYAML>=6.0,<7.0
