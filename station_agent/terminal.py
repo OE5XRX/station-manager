@@ -7,6 +7,7 @@ terminal that streams stdin/stdout over the WebSocket.
 
 import asyncio
 import base64
+import codecs
 import fcntl
 import hashlib
 import json
@@ -29,9 +30,11 @@ logger = logging.getLogger(__name__)
 
 # base64 is used below only for the Ed25519 signature query param.
 # PTY I/O crosses three layers (agent <-> server <-> browser) as plain
-# UTF-8 strings inside the JSON `data` field. errors="replace" on
-# decode absorbs the occasional split multi-byte char at a read
-# boundary without crashing.
+# UTF-8 strings inside the JSON `data` field. A stateful incremental
+# decoder buffers any incomplete multi-byte codepoint that straddles a
+# read-chunk boundary and feeds its tail into the next decode call, so
+# no legitimate character is ever replaced with U+FFFD just because
+# os.read() split it.
 
 # Reconnect backoff settings
 BACKOFF_INITIAL = 2.0
@@ -114,9 +117,12 @@ class TerminalClient:
         """Read output from the shell and send it over the WebSocket.
 
         Runs in an async loop, using a thread executor for the blocking
-        os.read call.
+        os.read call. Uses an incremental UTF-8 decoder so that a
+        multi-byte codepoint split across two os.read() chunks decodes
+        correctly on the second chunk instead of becoming U+FFFD.
         """
         loop = asyncio.get_running_loop()
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
             while not self._shutdown.is_set():
                 try:
@@ -126,14 +132,24 @@ class TerminalClient:
                     break
 
                 if not data:
+                    # EOF: flush any buffered tail bytes so a dangling
+                    # incomplete sequence is reported (as U+FFFD) instead
+                    # of silently swallowed.
+                    tail = decoder.decode(b"", final=True)
+                    if tail and self._ws is not None:
+                        try:
+                            await self._ws.send(json.dumps({"type": "output", "data": tail}))
+                        except Exception:
+                            pass
                     break
 
-                message = json.dumps(
-                    {
-                        "type": "output",
-                        "data": data.decode("utf-8", errors="replace"),
-                    }
-                )
+                text = decoder.decode(data)
+                if not text:
+                    # The decoder buffered an incomplete sequence; wait
+                    # for the next chunk to complete it.
+                    continue
+
+                message = json.dumps({"type": "output", "data": text})
 
                 try:
                     if self._ws is not None:
