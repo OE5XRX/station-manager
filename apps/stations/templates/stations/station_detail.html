@@ -51,8 +51,18 @@
 
   <div class="summary-bar mb-24">
     <div class="summary-item">
-      <div class="summary-key">{% trans "OS Version" %}</div>
+      <div class="summary-key">{% trans "Reported OS version" %}</div>
       <div class="summary-val mono" data-station-version>{{ station.current_os_version|default:"—" }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Provisioned with" %}</div>
+      <div class="summary-val mono">
+        {% if station.current_image_release %}
+          <a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a>
+        {% else %}
+          —
+        {% endif %}
+      </div>
     </div>
     <div class="summary-item">
       <div class="summary-key">{% trans "Agent Version" %}</div>

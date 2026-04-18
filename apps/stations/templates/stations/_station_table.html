@@ -40,7 +40,7 @@
             <span class="t-muted">—</span>
           {% endif %}
         </td>
-        <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—" }}</td>
+        <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—"|truncatechars:20 }}</td>
         <td class="t-mono" data-label="{% trans 'Agent' %}">{{ station.current_agent_version|default:"—" }}</td>
         <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">
           {% if station.last_seen %}{{ station.last_seen|timesince }} {% trans "ago" %}{% else %}<span class="t-muted">{% trans "never" %}</span>{% endif %}

@@ -7,6 +7,7 @@ terminal that streams stdin/stdout over the WebSocket.
 
 import asyncio
 import base64
+import codecs
 import fcntl
 import hashlib
 import json
@@ -26,6 +27,14 @@ from .config import AgentConfig
 from .signing import load_private_key
 
 logger = logging.getLogger(__name__)
+
+# base64 is used below only for the Ed25519 signature query param.
+# PTY I/O crosses three layers (agent <-> server <-> browser) as plain
+# UTF-8 strings inside the JSON `data` field. A stateful incremental
+# decoder buffers any incomplete multi-byte codepoint that straddles a
+# read-chunk boundary and feeds its tail into the next decode call, so
+# no legitimate character is ever replaced with U+FFFD just because
+# os.read() split it.
 
 # Reconnect backoff settings
 BACKOFF_INITIAL = 2.0
@@ -108,9 +117,12 @@ class TerminalClient:
         """Read output from the shell and send it over the WebSocket.
 
         Runs in an async loop, using a thread executor for the blocking
-        os.read call.
+        os.read call. Uses an incremental UTF-8 decoder so that a
+        multi-byte codepoint split across two os.read() chunks decodes
+        correctly on the second chunk instead of becoming U+FFFD.
         """
         loop = asyncio.get_running_loop()
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
             while not self._shutdown.is_set():
                 try:
@@ -120,14 +132,20 @@ class TerminalClient:
                     break
 
                 if not data:
+                    # EOF: the decoder is flushed in the finally block
+                    # below so a dangling incomplete sequence is reported
+                    # (as U+FFFD) instead of silently swallowed. That
+                    # same flush also runs on shutdown/exception paths
+                    # that never hit this branch, so keep it in one place.
                     break
 
-                message = json.dumps(
-                    {
-                        "type": "output",
-                        "data": base64.b64encode(data).decode("ascii"),
-                    }
-                )
+                text = decoder.decode(data)
+                if not text:
+                    # The decoder buffered an incomplete sequence; wait
+                    # for the next chunk to complete it.
+                    continue
+
+                message = json.dumps({"type": "output", "data": text})
 
                 try:
                     if self._ws is not None:
@@ -139,9 +157,31 @@ class TerminalClient:
                     logger.error("Terminal: failed to send output: %s", exc)
                     break
 
+        except asyncio.CancelledError:
+            # Normal shutdown — the caller cancelled us via reader_task.
+            # Re-raise explicitly so the task's cancellation semantics
+            # stay clear instead of getting entangled with the broad
+            # Exception catch below.
+            raise
         except Exception as exc:
             logger.error("Terminal: output reader error: %s", exc)
         finally:
+            # Flush any buffered tail bytes the decoder is still holding
+            # onto. This covers the EOF path (no-op if already flushed),
+            # the shutdown path (loop exited via self._shutdown), and the
+            # exception path (earlier raise) — in all three cases a
+            # trailing incomplete UTF-8 sequence would otherwise be
+            # silently dropped; flushing emits it as U+FFFD instead.
+            try:
+                tail = decoder.decode(b"", final=True)
+            except Exception:
+                tail = ""
+            if tail and self._ws is not None:
+                try:
+                    await self._ws.send(json.dumps({"type": "output", "data": tail}))
+                except Exception:
+                    pass
+
             reason = "shell exited"
             if self._process is not None:
                 retcode = self._process.poll()
@@ -183,15 +223,26 @@ class TerminalClient:
 
         if msg_type == "input":
             data = msg.get("data", "")
-            if self._master_fd is not None and data:
-                try:
-                    raw = base64.b64decode(data)
-                except Exception:
-                    raw = data.encode("utf-8") if isinstance(data, str) else data
-                try:
-                    os.write(self._master_fd, raw)
-                except OSError as exc:
-                    logger.error("Terminal: write to shell failed: %s", exc)
+            if self._master_fd is None or not data:
+                return
+            # JSON lets any scalar land in `data` (ints, booleans, None,
+            # nested arrays). Coerce only strings and byte-likes; reject
+            # the rest rather than letting os.write raise TypeError and
+            # tearing down the session.
+            if isinstance(data, str):
+                raw = data.encode("utf-8")
+            elif isinstance(data, (bytes, bytearray)):
+                raw = bytes(data)
+            else:
+                logger.warning(
+                    "Terminal: ignoring non-text input payload type=%s",
+                    type(data).__name__,
+                )
+                return
+            try:
+                os.write(self._master_fd, raw)
+            except OSError as exc:
+                logger.error("Terminal: write to shell failed: %s", exc)
 
         elif msg_type == "resize":
             cols = max(1, min(msg.get("cols", 80), 500))

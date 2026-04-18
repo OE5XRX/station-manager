@@ -111,6 +111,18 @@ class Station(models.Model):
         choices=Status.choices,
         default=Status.OFFLINE,
     )
+    current_image_release = models.ForeignKey(
+        "images.ImageRelease",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stations_provisioned_with",
+        verbose_name=_("provisioned with image"),
+        help_text=_(
+            "The image release last used to provision this station. "
+            "Set when a provisioning bundle is downloaded."
+        ),
+    )
 
     # Timestamps
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
@@ -250,6 +262,11 @@ class StationAuditLog(models.Model):
         TOKEN_GENERATED = "token_generated", _("Token Generated")
         TOKEN_REVOKED = "token_revoked", _("Token Revoked")
         FIRMWARE_UPDATE = "firmware_update", _("Firmware Update")
+        PROVISIONING_REQUESTED = "provisioning_requested", _("Provisioning Requested")
+        PROVISIONING_READY = "provisioning_ready", _("Provisioning Ready")
+        PROVISIONING_DOWNLOADED = "provisioning_downloaded", _("Provisioning Downloaded")
+        PROVISIONING_FAILED = "provisioning_failed", _("Provisioning Failed")
+        PROVISIONING_EXPIRED = "provisioning_expired", _("Provisioning Expired")
 
     station = models.ForeignKey(
         Station,
@@ -259,7 +276,7 @@ class StationAuditLog(models.Model):
     )
     event_type = models.CharField(
         _("event type"),
-        max_length=20,
+        max_length=32,
         choices=EventType.choices,
     )
     message = models.TextField(_("message"))
@@ -293,16 +310,41 @@ class StationAuditLog(models.Model):
         return f"{self.station.name} - {self.get_event_type_display()} - {self.created_at}"
 
     @classmethod
-    def log(cls, station, event_type, message, changes=None, user=None, ip_address=None):
-        """Convenience method to create an audit log entry."""
-        return cls.objects.create(
-            station=station,
-            event_type=event_type,
-            message=message,
-            changes=changes or {},
-            user=user,
-            ip_address=ip_address,
-        )
+    def log(
+        cls,
+        station=None,
+        event_type=None,
+        message="",
+        changes=None,
+        user=None,
+        ip_address=None,
+        station_id=None,
+    ):
+        """Convenience method to create an audit log entry.
+
+        Pass either `station` (an instance) or `station_id` (a pk) — the
+        station_id form skips the instance fetch for callers that already
+        have the pk (e.g. streaming views that captured it before the
+        DB session closed).
+        """
+        if station is None and station_id is None:
+            raise ValueError("station or station_id is required")
+        if station is not None and station_id is not None:
+            raise ValueError("pass either station or station_id, not both")
+        if not event_type:
+            raise ValueError("event_type is required")
+        kwargs = {
+            "event_type": event_type,
+            "message": message,
+            "changes": changes or {},
+            "user": user,
+            "ip_address": ip_address,
+        }
+        if station is not None:
+            kwargs["station"] = station
+        else:
+            kwargs["station_id"] = station_id
+        return cls.objects.create(**kwargs)
 
 
 class StationInventory(models.Model):
