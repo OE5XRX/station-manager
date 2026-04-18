@@ -11,7 +11,7 @@ log_level: INFO
 
 # Remote terminal (Web Shell)
 terminal_enabled: false
-terminal_shell: /bin/bash
+terminal_shell: /bin/sh
 
 # Bootloader for A/B partition management.
 # "auto" detects grub-editenv or fw_setenv at runtime.
