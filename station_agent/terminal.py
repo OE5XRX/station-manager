@@ -159,9 +159,9 @@ class TerminalClient:
 
         except asyncio.CancelledError:
             # Normal shutdown — the caller cancelled us via reader_task.
-            # On Python 3.8+ CancelledError is a BaseException (not
-            # Exception), so the broad except below wouldn't catch it
-            # anyway, but be explicit for readers and to document intent.
+            # Re-raise explicitly so the task's cancellation semantics
+            # stay clear instead of getting entangled with the broad
+            # Exception catch below.
             raise
         except Exception as exc:
             logger.error("Terminal: output reader error: %s", exc)

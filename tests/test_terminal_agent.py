@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import codecs
 import json
 import os
 
@@ -135,11 +136,12 @@ def test_output_frame_is_plain_utf8_not_base64():
 
     The loop around os.read + ws.send lives in _read_shell_output, which
     is tightly coupled to asyncio + websockets. Rather than spin up the
-    full machinery, verify the exact formula that function uses: the
-    `data` field is produced by ``data.decode("utf-8", errors="replace")``
-    — so round-tripping a known string through that decode and re-
-    encoding through json must yield that string back, NOT a base64
-    padded form.
+    full machinery, verify the observable contract that function
+    implements: decoded output is sent as plain text in the `data`
+    field, not base64. The real implementation uses an incremental
+    UTF-8 decoder so split multi-byte codepoints round-trip correctly
+    (see test_read_shell_output_reassembles_split_multibyte_codepoint);
+    here we only check the "not base64" aspect of the frame shape.
     """
     raw = b"prompt$ ls\n"
     frame = {
@@ -173,15 +175,10 @@ def test_read_shell_output_reassembles_split_multibyte_codepoint():
     boundary. Without the incremental decoder, the 0xC3 on chunk 1 and the
     0xA4 on chunk 2 each get replaced with U+FFFD; with it, chunk 1 emits
     only the prefix "hello " and chunk 2 completes the `ä`.
-    """
-    import codecs
 
-    read_fd, write_fd = os.pipe()
-    # Feed the two halves of the codepoint into the pipe, then close the
-    # write side so the reader sees EOF after the second chunk.
-    os.write(write_fd, b"hello \xc3")
-    os.write(write_fd, b"\xa4\n")
-    os.close(write_fd)
+    os.read is monkeypatched to return a hand-crafted sequence of
+    chunks, so no real fd is needed — any integer works as _master_fd.
+    """
 
     class _FakeWs:
         def __init__(self):
@@ -211,18 +208,13 @@ def test_read_shell_output_reassembles_split_multibyte_codepoint():
         real_read = terminal_mod.os.read
         terminal_mod.os.read = fake_read
         try:
-            await client._read_shell_output(master_fd=read_fd)
+            # fake_read ignores the fd, so any int works here.
+            await client._read_shell_output(master_fd=0)
         finally:
             terminal_mod.os.read = real_read
         return client._ws.frames
 
-    try:
-        frames = asyncio.run(_drive())
-    finally:
-        try:
-            os.close(read_fd)
-        except OSError:
-            pass
+    frames = asyncio.run(_drive())
 
     # Concatenate all output frames and check the final text.
     assembled = "".join(
