@@ -63,6 +63,9 @@ services:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.dev
+      # See prod compose for rationale — tells libguestfs to build a
+      # TCG-compatible qemu cmdline when /dev/kvm isn't passed in.
+      - LIBGUESTFS_BACKEND_SETTINGS=force_tcg
     depends_on:
       db:
         condition: service_healthy
