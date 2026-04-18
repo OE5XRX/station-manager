@@ -250,6 +250,11 @@ class StationAuditLog(models.Model):
         TOKEN_GENERATED = "token_generated", _("Token Generated")
         TOKEN_REVOKED = "token_revoked", _("Token Revoked")
         FIRMWARE_UPDATE = "firmware_update", _("Firmware Update")
+        PROVISIONING_REQUESTED = "provisioning_requested", _("Provisioning Requested")
+        PROVISIONING_READY = "provisioning_ready", _("Provisioning Ready")
+        PROVISIONING_DOWNLOADED = "provisioning_downloaded", _("Provisioning Downloaded")
+        PROVISIONING_FAILED = "provisioning_failed", _("Provisioning Failed")
+        PROVISIONING_EXPIRED = "provisioning_expired", _("Provisioning Expired")
 
     station = models.ForeignKey(
         Station,
@@ -259,7 +264,7 @@ class StationAuditLog(models.Model):
     )
     event_type = models.CharField(
         _("event type"),
-        max_length=20,
+        max_length=32,
         choices=EventType.choices,
     )
     message = models.TextField(_("message"))
