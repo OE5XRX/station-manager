@@ -17,6 +17,7 @@ from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning import guestfish
 from apps.provisioning.config_render import render_config
 from apps.provisioning.models import ProvisioningJob
+from apps.stations.models import StationAuditLog
 
 
 class Command(BaseCommand):
@@ -222,6 +223,14 @@ def _run_provisioning_job(job: ProvisioningJob) -> None:
                     "expires_at",
                 ]
             )
+            StationAuditLog.log(
+                station=job.station,
+                event_type=StationAuditLog.EventType.PROVISIONING_READY,
+                message=(
+                    f"Bundle ready: {job.output_size_bytes} bytes for {job.image_release.tag}"
+                ),
+                user=None,
+            )
         except Exception:
             # Don't leave the uploaded bundle stranded in S3 if we can't
             # record it against the job. Cleanup is best-effort; re-raise
@@ -235,6 +244,12 @@ def _run_provisioning_job(job: ProvisioningJob) -> None:
         job.status = ProvisioningJob.Status.FAILED
         job.error_message = str(exc)
         job.save(update_fields=["status", "error_message"])
+        StationAuditLog.log(
+            station=job.station,
+            event_type=StationAuditLog.EventType.PROVISIONING_FAILED,
+            message=f"Provisioning failed: {job.error_message}",
+            user=None,
+        )
 
 
 def cleanup_expired_provisioning_outputs() -> None:
@@ -268,3 +283,9 @@ def cleanup_expired_provisioning_outputs() -> None:
         job.status = ProvisioningJob.Status.EXPIRED
         job.output_s3_key = ""
         job.save(update_fields=["status", "output_s3_key"])
+        StationAuditLog.log(
+            station=job.station,
+            event_type=StationAuditLog.EventType.PROVISIONING_EXPIRED,
+            message=(f"Provisioning bundle expired before download ({job.image_release.tag})"),
+            user=None,
+        )

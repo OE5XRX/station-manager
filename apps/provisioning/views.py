@@ -9,7 +9,7 @@ from django.views import View
 
 from apps.accounts.views import AdminRequiredMixin
 from apps.images import storage as image_storage
-from apps.stations.models import Station
+from apps.stations.models import Station, StationAuditLog
 
 from .forms import ProvisioningForm
 from .models import ProvisioningJob
@@ -61,6 +61,15 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
             image_release=image_release,
             requested_by=request.user,
         )
+        StationAuditLog.log(
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_REQUESTED,
+            message=(
+                f"Provisioning bundle requested for {image_release.get_machine_display()} "
+                f"{image_release.tag} by {request.user.username}"
+            ),
+            user=request.user,
+        )
         return redirect("stations:station_detail", pk=station.pk)
 
 
@@ -94,6 +103,10 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
         stream = image_storage.open_stream(job.output_s3_key)
         chunk_size = self.CHUNK
         job_pk = job.pk
+        station_pk = job.station_id
+        image_release_pk = job.image_release_id
+        image_release_tag = job.image_release.tag
+        user = request.user
 
         def iterator():
             try:
@@ -108,13 +121,32 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
                     # Full stream consumed — only now count it as a
                     # successful download. Conditional UPDATE preserves
                     # any FAILED / EXPIRED transition written concurrently.
-                    ProvisioningJob.objects.filter(
+                    updated = ProvisioningJob.objects.filter(
                         pk=job_pk,
                         status=ProvisioningJob.Status.READY,
                     ).update(
                         status=ProvisioningJob.Status.DOWNLOADED,
                         downloaded_at=timezone.now(),
                     )
+                    if updated:
+                        # Record which image release is now on the station,
+                        # and log the download. Use .filter().update() for
+                        # the station write to stay consistent with the
+                        # generator-safe DB access pattern used above.
+                        Station.objects.filter(pk=station_pk).update(
+                            current_image_release_id=image_release_pk,
+                        )
+                        station = Station.objects.filter(pk=station_pk).first()
+                        if station is not None:
+                            StationAuditLog.log(
+                                station=station,
+                                event_type=(StationAuditLog.EventType.PROVISIONING_DOWNLOADED),
+                                message=(
+                                    f"Provisioning bundle downloaded "
+                                    f"({image_release_tag}) by {user.username}"
+                                ),
+                                user=user,
+                            )
             finally:
                 stream.close()
 

@@ -166,6 +166,84 @@ class TestProvisioningWorker:
         # DeviceKey was created (public half stored server-side)
         assert DeviceKey.objects.filter(station=station).exists()
 
+    def test_ready_logs_audit(self, station, image_release, admin_user, monkeypatch, settings):
+        from apps.provisioning.management.commands.run_background_jobs import (
+            process_pending_provisioning_jobs,
+        )
+        from apps.provisioning.models import ProvisioningJob
+        from apps.stations.models import StationAuditLog
+
+        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream",
+            lambda key: __import__("io").BytesIO(b"FAKEWICBZ2BYTES"),
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._decompress_to",
+            lambda src, dst: dst.write_bytes(b"FAKEWIC"),
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.guestfish.inject_provisioning_files",
+            lambda **kw: None,
+        )
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._compress_to_bytes",
+            lambda path: b"FAKEWICBZ2",
+        )
+        monkeypatch.setattr(
+            "apps.images.storage.upload_bytes",
+            lambda key, data: None,
+        )
+
+        ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+        )
+
+        process_pending_provisioning_jobs()
+
+        ready_logs = StationAuditLog.objects.filter(
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_READY,
+        )
+        assert ready_logs.count() == 1
+        entry = ready_logs.first()
+        assert image_release.tag in entry.message
+        assert entry.user is None
+
+    def test_failed_logs_audit(self, station, image_release, admin_user, monkeypatch, settings):
+        from apps.provisioning.management.commands.run_background_jobs import (
+            process_pending_provisioning_jobs,
+        )
+        from apps.provisioning.models import ProvisioningJob
+        from apps.stations.models import StationAuditLog
+
+        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+
+        def boom(key):
+            raise RuntimeError("simulated S3 failure")
+
+        monkeypatch.setattr("apps.images.storage.open_stream", boom)
+
+        ProvisioningJob.objects.create(
+            station=station,
+            image_release=image_release,
+            requested_by=admin_user,
+        )
+
+        process_pending_provisioning_jobs()
+
+        failed_logs = StationAuditLog.objects.filter(
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_FAILED,
+        )
+        assert failed_logs.count() == 1
+        entry = failed_logs.first()
+        assert "simulated S3 failure" in entry.message
+        assert entry.user is None
+
 
 @pytest.mark.django_db
 class TestProvisioningViews:
@@ -183,6 +261,24 @@ class TestProvisioningViews:
         assert job.status == ProvisioningJob.Status.PENDING
         assert job.requested_by == admin_user
         assert job.image_release == image_release
+
+    def test_create_logs_audit_event(self, client, admin_user, station, image_release):
+        from apps.stations.models import StationAuditLog
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("provisioning:new", kwargs={"station_pk": station.pk}),
+            {"image_release": image_release.pk},
+        )
+        assert response.status_code == 302
+        logs = StationAuditLog.objects.filter(
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_REQUESTED,
+        )
+        assert logs.count() == 1
+        entry = logs.first()
+        assert entry.user == admin_user
+        assert image_release.tag in entry.message
 
     def test_create_rejects_if_active_job_exists(self, client, admin_user, station, image_release):
         from apps.provisioning.models import ProvisioningJob
@@ -247,6 +343,7 @@ class TestProvisioningViews:
         from django.utils import timezone
 
         from apps.provisioning.models import ProvisioningJob
+        from apps.stations.models import StationAuditLog
 
         job = ProvisioningJob.objects.create(
             station=station,
@@ -269,6 +366,14 @@ class TestProvisioningViews:
         job.refresh_from_db()
         assert job.status == ProvisioningJob.Status.DOWNLOADED
         assert job.downloaded_at is not None
+        # The station should now be linked to the image release it was
+        # provisioned with, and a DOWNLOADED audit event should exist.
+        station.refresh_from_db()
+        assert station.current_image_release == image_release
+        assert StationAuditLog.objects.filter(
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_DOWNLOADED,
+        ).exists()
 
     def test_download_aborted_stays_ready(
         self, client, admin_user, station, image_release, monkeypatch
