@@ -133,8 +133,12 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
                         # and log the download. Use .filter().update() for
                         # the station write to stay consistent with the
                         # generator-safe DB access pattern used above.
+                        # QuerySet.update() bypasses auto_now, so bump
+                        # updated_at explicitly — the station-list UI uses
+                        # it to show "last changed" timestamps.
                         Station.objects.filter(pk=station_pk).update(
                             current_image_release_id=image_release_pk,
+                            updated_at=timezone.now(),
                         )
                         station = Station.objects.filter(pk=station_pk).first()
                         if station is not None:
