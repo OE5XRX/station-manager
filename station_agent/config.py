@@ -8,7 +8,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = "/etc/station-agent/config.yml"
+DEFAULT_CONFIG_PATH = "/etc/stationagent/config.yml"
 CONFIG_PATH_ENV = "STATION_AGENT_CONFIG"
 
 
@@ -49,7 +49,7 @@ def load_config() -> AgentConfig:
 
     Config path is resolved in order:
     1. STATION_AGENT_CONFIG environment variable
-    2. /etc/station-agent/config.yml
+    2. /etc/stationagent/config.yml
     """
     config_path = os.environ.get(CONFIG_PATH_ENV, DEFAULT_CONFIG_PATH)
     logger.info("Loading config from %s", config_path)

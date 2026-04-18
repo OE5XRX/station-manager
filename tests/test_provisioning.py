@@ -67,7 +67,7 @@ class TestConfigRender:
         )
         assert f"station_id: {station.id}" in yaml_text
         assert "server_url: https://ham.oe5xrx.org" in yaml_text
-        assert "ed25519_key_path: /etc/station-agent/device_key.pem" in yaml_text
+        assert "ed25519_key_path: /etc/stationagent/device_key.pem" in yaml_text
         assert "terminal_enabled: true" in yaml_text
 
 
@@ -104,7 +104,7 @@ class TestGuestfishInject:
                 "/",
                 ":",
                 "cat",
-                "/etc-overlay/station-agent/config.yml",
+                "/etc-overlay/stationagent/config.yml",
             ],
             capture_output=True,
             check=True,

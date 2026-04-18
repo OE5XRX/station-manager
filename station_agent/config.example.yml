@@ -2,7 +2,7 @@ server_url: https://ham.oe5xrx.org
 
 # Authentication: Ed25519 signature (required)
 station_id: 1
-ed25519_key_path: /etc/station-agent/device_key.pem
+ed25519_key_path: /etc/stationagent/device_key.pem
 
 heartbeat_interval: 60
 ota_check_interval: 5  # check for updates every N heartbeats

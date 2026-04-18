@@ -36,10 +36,10 @@ def inject_provisioning_files(
             [
                 "run",
                 f"mount {partition_device} /",
-                "mkdir-p /etc-overlay/station-agent",
-                f"upload {config_path} /etc-overlay/station-agent/config.yml",
-                f"upload {key_path} /etc-overlay/station-agent/device_key.pem",
-                "chmod 0600 /etc-overlay/station-agent/device_key.pem",
+                "mkdir-p /etc-overlay/stationagent",
+                f"upload {config_path} /etc-overlay/stationagent/config.yml",
+                f"upload {key_path} /etc-overlay/stationagent/device_key.pem",
+                "chmod 0600 /etc-overlay/stationagent/device_key.pem",
                 "umount-all",
             ]
         )
