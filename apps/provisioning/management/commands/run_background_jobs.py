@@ -268,11 +268,13 @@ def cleanup_expired_provisioning_outputs() -> None:
             continue
         ProvisioningJob.objects.filter(pk=job.pk).update(output_s3_key="")
 
-    # Expired before download.
+    # Expired before download. The loop below reads job.station and
+    # job.image_release.tag for audit logging, so pull them in the
+    # initial query instead of firing two extra SELECTs per row.
     stale = ProvisioningJob.objects.filter(
         status=ProvisioningJob.Status.READY,
         expires_at__lt=now,
-    )
+    ).select_related("station", "image_release")
     for job in stale:
         if job.output_s3_key:
             try:
