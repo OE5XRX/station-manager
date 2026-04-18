@@ -64,15 +64,25 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
             image_release=image_release,
             requested_by=request.user,
         )
-        StationAuditLog.log(
-            station=station,
-            event_type=StationAuditLog.EventType.PROVISIONING_REQUESTED,
-            message=(
-                f"Provisioning bundle requested for {image_release.get_machine_display()} "
-                f"{image_release.tag} by {request.user.username}"
-            ),
-            user=request.user,
-        )
+        # Audit logging is ancillary observability — a transient DB failure
+        # here must not turn a successful job creation into a 500. The
+        # ProvisioningJob row above is the authoritative record.
+        try:
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.PROVISIONING_REQUESTED,
+                message=(
+                    f"Provisioning bundle requested for {image_release.get_machine_display()} "
+                    f"{image_release.tag} by {request.user.username}"
+                ),
+                user=request.user,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Audit log write failed for station %s (provisioning_requested): %s",
+                station.pk,
+                exc,
+            )
         return redirect("stations:station_detail", pk=station.pk)
 
 
