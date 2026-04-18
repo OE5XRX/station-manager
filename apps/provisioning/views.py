@@ -153,29 +153,29 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
                             current_image_release_id=image_release_pk,
                             updated_at=timezone.now(),
                         )
-                        station = Station.objects.filter(pk=station_pk).first()
-                        if station is not None:
-                            # Audit logging is ancillary observability — a
-                            # transient DB failure here must not turn a
-                            # fully-streamed download into a 500. The status
-                            # transition above is the authoritative record.
-                            try:
-                                StationAuditLog.log(
-                                    station=station,
-                                    event_type=(StationAuditLog.EventType.PROVISIONING_DOWNLOADED),
-                                    message=(
-                                        f"Provisioning bundle downloaded "
-                                        f"({image_release_tag}) by {user.username}"
-                                    ),
-                                    user=user,
-                                )
-                            except Exception as exc:
-                                logger.warning(
-                                    "Audit log write failed for station %s "
-                                    "(provisioning_downloaded): %s",
-                                    station_pk,
-                                    exc,
-                                )
+                        # Audit logging is ancillary observability — a
+                        # transient DB failure here must not turn a
+                        # fully-streamed download into a 500. The status
+                        # transition above is the authoritative record.
+                        # station_id avoids a SELECT just to hydrate an
+                        # instance we only pass through to the helper.
+                        try:
+                            StationAuditLog.log(
+                                station_id=station_pk,
+                                event_type=(StationAuditLog.EventType.PROVISIONING_DOWNLOADED),
+                                message=(
+                                    f"Provisioning bundle downloaded "
+                                    f"({image_release_tag}) by {user.username}"
+                                ),
+                                user=user,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Audit log write failed for station %s "
+                                "(provisioning_downloaded): %s",
+                                station_pk,
+                                exc,
+                            )
             finally:
                 stream.close()
 

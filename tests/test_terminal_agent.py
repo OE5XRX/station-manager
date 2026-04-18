@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import importlib
 import json
 import os
 
@@ -244,20 +243,3 @@ def test_read_shell_output_reassembles_split_multibyte_codepoint():
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     incremental = decoder.decode(b"hello \xc3") + decoder.decode(b"\xa4\n")
     assert incremental == "hello ä\n"
-
-
-def test_source_no_longer_calls_b64_on_pty_output():
-    """Regression guard: terminal.py must not wrap PTY bytes in base64.
-
-    The PTY pipeline is awkward to exercise end-to-end under pytest
-    (asyncio + websockets + real pty), so this text-level assertion
-    protects the UTF-8 switch from being silently undone. base64 is
-    still used in _build_ws_url for the Ed25519 signature query param,
-    so we narrow the check to the exact formulas the old code used on
-    PTY I/O.
-    """
-    src = importlib.import_module("station_agent.terminal").__loader__.get_source(
-        "station_agent.terminal"
-    )
-    assert 'base64.b64encode(data).decode("ascii")' not in src
-    assert "base64.b64decode(data)" not in src

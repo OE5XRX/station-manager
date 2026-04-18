@@ -310,16 +310,37 @@ class StationAuditLog(models.Model):
         return f"{self.station.name} - {self.get_event_type_display()} - {self.created_at}"
 
     @classmethod
-    def log(cls, station, event_type, message, changes=None, user=None, ip_address=None):
-        """Convenience method to create an audit log entry."""
-        return cls.objects.create(
-            station=station,
-            event_type=event_type,
-            message=message,
-            changes=changes or {},
-            user=user,
-            ip_address=ip_address,
-        )
+    def log(
+        cls,
+        station=None,
+        event_type=None,
+        message="",
+        changes=None,
+        user=None,
+        ip_address=None,
+        station_id=None,
+    ):
+        """Convenience method to create an audit log entry.
+
+        Pass either `station` (an instance) or `station_id` (a pk) — the
+        station_id form skips the instance fetch for callers that already
+        have the pk (e.g. streaming views that captured it before the
+        DB session closed).
+        """
+        if station is None and station_id is None:
+            raise ValueError("station or station_id is required")
+        kwargs = {
+            "event_type": event_type,
+            "message": message,
+            "changes": changes or {},
+            "user": user,
+            "ip_address": ip_address,
+        }
+        if station is not None:
+            kwargs["station"] = station
+        else:
+            kwargs["station_id"] = station_id
+        return cls.objects.create(**kwargs)
 
 
 class StationInventory(models.Model):
