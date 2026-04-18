@@ -111,6 +111,18 @@ class Station(models.Model):
         choices=Status.choices,
         default=Status.OFFLINE,
     )
+    current_image_release = models.ForeignKey(
+        "images.ImageRelease",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stations_provisioned_with",
+        verbose_name=_("provisioned with image"),
+        help_text=_(
+            "The image release last used to provision this station. "
+            "Set when a provisioning bundle is downloaded."
+        ),
+    )
 
     # Timestamps
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
