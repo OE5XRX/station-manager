@@ -7,10 +7,11 @@ only verifies the narrow contract that `_handle_message("input", ...)`
 writes raw UTF-8 to the master fd and that the output path never
 base64-encodes the data.
 
-station_agent imports PyYAML transitively (via config.py). If that's not
-installed in the test environment (main project dev.txt does not pull
-it in; the agent has its own requirements.txt), every test in this
-module is skipped instead of producing a collection error.
+station_agent imports PyYAML transitively (via config.py). PyYAML is
+in requirements/dev.txt so CI picks it up; the importorskip below is
+only a safety net for environments where the agent deps haven't been
+installed for some reason (e.g., running this file from a bare Python
+with no extras).
 """
 
 from __future__ import annotations
