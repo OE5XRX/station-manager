@@ -131,7 +131,8 @@ def _compress_to_bytes(src_path: Path) -> bytes:
     # bounded to chunk size + compressor state (~1 MiB) regardless of input
     # size. The final join materializes the compressed output (~70 MiB for a
     # real wic) which is an order of magnitude smaller than the input.
-    compressor = bz2.BZ2Compressor(compresslevel=9)
+    # BZ2Compressor's compresslevel is positional-only on Python 3.14+.
+    compressor = bz2.BZ2Compressor(9)
     chunks: list[bytes] = []
     with open(src_path, "rb") as src:
         while chunk := src.read(1 << 20):
