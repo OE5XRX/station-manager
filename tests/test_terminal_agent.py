@@ -4,8 +4,10 @@ Focused on the JSON-frame shape the agent uses to exchange PTY I/O with
 the server: plain UTF-8 strings in the `data` field. End-to-end coverage
 (asyncio + websockets + real pty) is deliberately skipped — this file
 only verifies the narrow contract that `_handle_message("input", ...)`
-writes raw UTF-8 to the master fd and that the output path never
-base64-encodes the data.
+writes raw UTF-8 to the master fd and that the output path builds a
+JSON frame per chunk via an incremental UTF-8 decoder: complete
+codepoints emit immediately, incomplete multi-byte tails are buffered
+until the next chunk arrives (and flushed as U+FFFD on EOF/shutdown).
 
 station_agent imports PyYAML transitively (via config.py). PyYAML is
 in requirements/dev.txt so CI picks it up; the importorskip below is
@@ -96,6 +98,37 @@ def test_handle_message_input_noop_when_master_fd_missing():
     client._master_fd = None
     # Would raise if the method tried os.write() with fd=None.
     asyncio.run(client._handle_message(json.dumps({"type": "input", "data": "x"})))
+
+
+def test_handle_message_input_ignores_non_text_payload():
+    """A malformed `input` frame with a numeric `data` must not crash.
+
+    Pre-fix, `os.write(fd, 12345)` would raise TypeError and tear down
+    the session. The handler now logs and drops non-string/non-bytes
+    payloads; the pipe must stay empty (nothing written) and no
+    exception may escape.
+    """
+    read_fd, write_fd = os.pipe()
+    try:
+        client = _make_client()
+        client._master_fd = write_fd
+
+        # Must not raise.
+        asyncio.run(client._handle_message(json.dumps({"type": "input", "data": 12345})))
+
+        # And nothing was written to the pipe.
+        os.set_blocking(read_fd, False)
+        try:
+            got = os.read(read_fd, 4096)
+        except BlockingIOError:
+            got = b""
+        assert got == b""
+    finally:
+        for fd in (read_fd, write_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def test_output_frame_is_plain_utf8_not_base64():

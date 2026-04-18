@@ -132,15 +132,11 @@ class TerminalClient:
                     break
 
                 if not data:
-                    # EOF: flush any buffered tail bytes so a dangling
-                    # incomplete sequence is reported (as U+FFFD) instead
-                    # of silently swallowed.
-                    tail = decoder.decode(b"", final=True)
-                    if tail and self._ws is not None:
-                        try:
-                            await self._ws.send(json.dumps({"type": "output", "data": tail}))
-                        except Exception:
-                            pass
+                    # EOF: the decoder is flushed in the finally block
+                    # below so a dangling incomplete sequence is reported
+                    # (as U+FFFD) instead of silently swallowed. That
+                    # same flush also runs on shutdown/exception paths
+                    # that never hit this branch, so keep it in one place.
                     break
 
                 text = decoder.decode(data)
@@ -164,6 +160,22 @@ class TerminalClient:
         except Exception as exc:
             logger.error("Terminal: output reader error: %s", exc)
         finally:
+            # Flush any buffered tail bytes the decoder is still holding
+            # onto. This covers the EOF path (no-op if already flushed),
+            # the shutdown path (loop exited via self._shutdown), and the
+            # exception path (earlier raise) — in all three cases a
+            # trailing incomplete UTF-8 sequence would otherwise be
+            # silently dropped; flushing emits it as U+FFFD instead.
+            try:
+                tail = decoder.decode(b"", final=True)
+            except Exception:
+                tail = ""
+            if tail and self._ws is not None:
+                try:
+                    await self._ws.send(json.dumps({"type": "output", "data": tail}))
+                except Exception:
+                    pass
+
             reason = "shell exited"
             if self._process is not None:
                 retcode = self._process.poll()
@@ -205,12 +217,26 @@ class TerminalClient:
 
         if msg_type == "input":
             data = msg.get("data", "")
-            if self._master_fd is not None and data:
-                raw = data.encode("utf-8") if isinstance(data, str) else data
-                try:
-                    os.write(self._master_fd, raw)
-                except OSError as exc:
-                    logger.error("Terminal: write to shell failed: %s", exc)
+            if self._master_fd is None or not data:
+                return
+            # JSON lets any scalar land in `data` (ints, booleans, None,
+            # nested arrays). Coerce only strings and byte-likes; reject
+            # the rest rather than letting os.write raise TypeError and
+            # tearing down the session.
+            if isinstance(data, str):
+                raw = data.encode("utf-8")
+            elif isinstance(data, (bytes, bytearray)):
+                raw = bytes(data)
+            else:
+                logger.warning(
+                    "Terminal: ignoring non-text input payload type=%s",
+                    type(data).__name__,
+                )
+                return
+            try:
+                os.write(self._master_fd, raw)
+            except OSError as exc:
+                logger.error("Terminal: write to shell failed: %s", exc)
 
         elif msg_type == "resize":
             cols = max(1, min(msg.get("cols", 80), 500))
