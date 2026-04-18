@@ -329,6 +329,10 @@ class StationAuditLog(models.Model):
         """
         if station is None and station_id is None:
             raise ValueError("station or station_id is required")
+        if station is not None and station_id is not None:
+            raise ValueError("pass either station or station_id, not both")
+        if not event_type:
+            raise ValueError("event_type is required")
         kwargs = {
             "event_type": event_type,
             "message": message,
