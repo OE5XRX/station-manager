@@ -24,7 +24,7 @@ class AgentConfig:
     download_dir: str = "/tmp/station-agent"
     log_level: str = "INFO"
     terminal_enabled: bool = False
-    terminal_shell: str = "/bin/bash"
+    terminal_shell: str = "/bin/sh"
     bootloader: str = "auto"
 
     def validate(self):
@@ -71,7 +71,7 @@ def load_config() -> AgentConfig:
         download_dir=str(data.get("download_dir", "/tmp/station-agent")),
         log_level=str(data.get("log_level", "INFO")).upper(),
         terminal_enabled=bool(data.get("terminal_enabled", False)),
-        terminal_shell=str(data.get("terminal_shell", "/bin/bash")),
+        terminal_shell=str(data.get("terminal_shell", "/bin/sh")),
         bootloader=str(data.get("bootloader", "auto")),
     )
     config.validate()

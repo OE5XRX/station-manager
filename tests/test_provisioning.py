@@ -69,6 +69,7 @@ class TestConfigRender:
         assert "server_url: https://ham.oe5xrx.org" in yaml_text
         assert "ed25519_key_path: /etc/stationagent/device_key.pem" in yaml_text
         assert "terminal_enabled: true" in yaml_text
+        assert "terminal_shell: /bin/sh" in yaml_text
 
 
 class TestGuestfishInject:
