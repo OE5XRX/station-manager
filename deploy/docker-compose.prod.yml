@@ -53,6 +53,11 @@ services:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.prod
+      # libguestfs uses supermin to build a small appliance VM for each guestfish
+      # call. Without /dev/kvm (we don't pass it in), the appliance must run
+      # under TCG. force_tcg tells libguestfs to build a qemu cmdline that
+      # works in TCG (drops gic-version=host on aarch64, which is KVM-only).
+      - LIBGUESTFS_BACKEND_SETTINGS=force_tcg
     depends_on:
       db:
         condition: service_healthy
