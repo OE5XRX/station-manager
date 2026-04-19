@@ -1,7 +1,9 @@
+import io
 import logging
 import re
 
-from django.http import FileResponse
+from django.db import transaction
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -11,23 +13,24 @@ from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.deployments.serializers import (
+    DeploymentCheckRequestSerializer,
     DeploymentCheckResponseSerializer,
     DeploymentCommitSerializer,
     DeploymentStatusUpdateSerializer,
 )
-from apps.firmware.models import FirmwareDelta
+from apps.images import storage as image_storage
 from apps.stations.models import StationAuditLog
 
 logger = logging.getLogger(__name__)
 
 
 class DeploymentCheckView(APIView):
-    """Check if there is a pending deployment for the authenticated station."""
+    """Station-agent polls to see if a deployment is pending for it."""
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
 
-    def get(self, request):
+    def post(self, request):
         station = getattr(request.auth, "station", None)
         if station is None:
             return Response(
@@ -35,59 +38,55 @@ class DeploymentCheckView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        req = DeploymentCheckRequestSerializer(data=request.data)
+        req.is_valid(raise_exception=True)
+        logger.debug(
+            "deployment check station=%s current_version=%r",
+            station.pk,
+            req.validated_data["current_version"],
+        )
+
+        # Include the download/install-in-progress states so an agent that
+        # crashed mid-flight can rediscover its own deployment on restart
+        # and resume (download) or re-run (install). Terminal states stay
+        # excluded — nothing to do from the agent's side.
+        resumable_statuses = [
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
+        ]
+        # Newest-wins: if somehow two active results coexist (partial
+        # supersession, race, data fix-up), the station should pick the
+        # latest deployment to match what the admin intended. Matches
+        # DeploymentCommitView's -deployment__created_at ordering.
         result = (
             DeploymentResult.objects.filter(
                 station=station,
-                status=DeploymentResult.Status.PENDING,
+                status__in=resumable_statuses,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
-            .select_related("deployment__firmware_artifact")
-            .order_by("deployment__created_at")
+            .select_related("deployment__image_release")
+            .order_by("-deployment__created_at", "-pk")
             .first()
         )
 
         if result is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        artifact = result.deployment.firmware_artifact
-
-        # Check if a delta is available for this station's current version
-        delta_data = {
-            "is_delta": False,
-            "delta_checksum_sha256": "",
-            "delta_file_size": 0,
-        }
-        current_version = getattr(station, "current_os_version", "") or ""
-        if current_version:
-            delta = FirmwareDelta.objects.filter(
-                source_artifact__version=current_version,
-                source_artifact__name=artifact.name,
-                target_artifact=artifact,
-            ).first()
-            if delta:
-                delta_data = {
-                    "is_delta": True,
-                    "delta_checksum_sha256": delta.checksum_sha256,
-                    "delta_file_size": delta.delta_size,
-                }
-
-        download_url = f"/api/v1/deployments/{result.pk}/download/"
-        if delta_data["is_delta"]:
-            download_url += "?delta=true"
-
+        image = result.deployment.image_release
         data = DeploymentCheckResponseSerializer(
             {
-                "result_id": result.pk,
+                "deployment_result_id": result.pk,
                 "deployment_id": result.deployment_id,
-                "firmware_name": artifact.name,
-                "firmware_version": artifact.version,
-                "download_url": download_url,
-                "checksum_sha256": artifact.checksum_sha256,
-                "file_size": artifact.file_size,
-                **delta_data,
+                "deployment_result_status": result.status,
+                "target_tag": image.tag,
+                "checksum_sha256": image.sha256,
+                "size_bytes": image.size_bytes,
+                "download_url": f"/api/v1/deployments/{result.deployment_id}/download/",
             }
         ).data
-
         return Response(data)
 
 
@@ -106,7 +105,7 @@ class DeploymentStatusUpdateView(APIView):
             )
 
         try:
-            result = DeploymentResult.objects.select_related("deployment__firmware_artifact").get(
+            result = DeploymentResult.objects.select_related("deployment__image_release").get(
                 pk=pk, station=station
             )
         except DeploymentResult.DoesNotExist:
@@ -135,12 +134,25 @@ class DeploymentStatusUpdateView(APIView):
 
         result.save(update_fields=update_fields)
 
-        # Audit log
-        StationAuditLog.log(
-            station=station,
-            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-            message=f"Deployment #{result.deployment_id} status: {new_status}.",
-        )
+        # Audit log is best-effort — a transient DB hiccup here must
+        # not 500 the endpoint after we've already persisted the status
+        # update, or we'd skip _check_deployment_complete and the
+        # WebSocket broadcast below and leave the dashboard stale.
+        try:
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                message=f"Deployment #{result.deployment_id} status: {new_status}.",
+            )
+        except Exception:
+            logger.warning(
+                "Audit log write failed for deployment status update "
+                "(station=%s, deployment=%s, status=%s)",
+                station.pk,
+                result.deployment_id,
+                new_status,
+                exc_info=True,
+            )
 
         # Check if deployment is complete after failure
         if new_status in (DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK):
@@ -186,7 +198,7 @@ class DeploymentCommitView(APIView):
                     DeploymentResult.Status.INSTALLING,
                 ],
             )
-            .select_related("deployment")
+            .select_related("deployment__image_release")
             .order_by("-deployment__created_at")
             .first()
         )
@@ -197,20 +209,97 @@ class DeploymentCommitView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        result.status = DeploymentResult.Status.SUCCESS
-        result.completed_at = timezone.now()
-        result.new_version = version
-        result.save(update_fields=["status", "completed_at", "new_version"])
+        expected_tag = result.deployment.image_release.tag
+        if version != expected_tag:
+            # Agent is running a different image than the one this
+            # deployment targets — most likely a bootloader rollback
+            # after a failed trial boot. Don't mark SUCCESS, don't move
+            # the station's current_image_release pointer; record the
+            # mismatch as rolled_back so the dashboard shows reality.
+            result.status = DeploymentResult.Status.ROLLED_BACK
+            result.completed_at = timezone.now()
+            result.new_version = version
+            result.error_message = (
+                f"Commit version {version!r} does not match deployment "
+                f"target {expected_tag!r}; treating as bootloader rollback."
+            )
+            result.save(update_fields=["status", "completed_at", "new_version", "error_message"])
+            # Audit log is best-effort — a transient DB hiccup here must
+            # not turn the deterministic 409 response into a 500 after
+            # we've already mutated the DeploymentResult row.
+            try:
+                StationAuditLog.log(
+                    station=station,
+                    event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                    message=(
+                        f"Deployment #{result.deployment_id} commit rejected: "
+                        f"station reports {version!r}, target was {expected_tag!r}."
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Audit log write failed for commit mismatch "
+                    "(station=%s, deployment=%s, reported=%r, expected=%r)",
+                    station.pk,
+                    result.deployment_id,
+                    version,
+                    expected_tag,
+                    exc_info=True,
+                )
+            _check_deployment_complete(result.deployment)
+            # Broadcast the rolled_back transition so the upgrade
+            # dashboard and deployment-detail page reflect the
+            # terminal state immediately — otherwise the UI would sit
+            # on "installing" until the next unrelated event.
+            try:
+                from apps.deployments.consumers import broadcast_deployment_status
 
-        # Audit log
-        StationAuditLog.log(
-            station=station,
-            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-            message=(
-                f"Deployment #{result.deployment_id} committed. "
-                f"Version: {result.previous_version} -> {version}."
-            ),
-        )
+                broadcast_deployment_status(result.deployment, result=result)
+            except Exception:
+                logger.exception("Failed to broadcast rolled_back via WebSocket.")
+            return Response(
+                {"detail": "Version mismatch — recorded as rolled_back."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Persist the SUCCESS transition and the Station pointer move
+        # in a single atomic block. Without it, a DB error between the
+        # two saves leaves the result marked SUCCESS but the station
+        # still pointing at the old image — and because the agent-retry
+        # lookup only matches REBOOTING/VERIFYING/INSTALLING, a retry
+        # from the station would 404 and never re-sync the pointer.
+        with transaction.atomic():
+            result.status = DeploymentResult.Status.SUCCESS
+            result.completed_at = timezone.now()
+            result.new_version = version
+            result.save(update_fields=["status", "completed_at", "new_version"])
+
+            # Update the station's "provisioned with" pointer so the UI reflects
+            # what's running on disk right now.
+            station.current_image_release = result.deployment.image_release
+            station.updated_at = timezone.now()
+            station.save(update_fields=["current_image_release", "updated_at"])
+
+        # Audit log is best-effort — a transient DB hiccup on the audit
+        # table must not 500 after we've already committed the success.
+        try:
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                message=(
+                    f"Deployment #{result.deployment_id} committed. "
+                    f"Version: {result.previous_version} -> {version}."
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "Audit log write failed for deployment commit "
+                "(station=%s, deployment=%s, version=%r)",
+                station.pk,
+                result.deployment_id,
+                version,
+                exc_info=True,
+            )
 
         # Check if the entire deployment is now complete
         _check_deployment_complete(result.deployment)
@@ -227,74 +316,173 @@ class DeploymentCommitView(APIView):
 
 
 class DeploymentDownloadView(APIView):
-    """Serve the firmware file for a deployment result."""
+    """Stream the deployment's image from S3 to the requesting station.
+
+    Authz: the station must have a non-terminal DeploymentResult for
+    this deployment. All authz failures (missing deployment, wrong
+    station, terminal status) collapse to 403 so a station cannot
+    probe deployment ids it does not own.
+
+    Range requests are supported for resumable transfers.
+    """
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
 
+    CHUNK = 1 << 20  # 1 MiB
+
     def get(self, request, pk):
         station = getattr(request.auth, "station", None)
         if station is None:
+            # Docstring promises authz failures uniformly collapse to 403
+            # so a station can't distinguish "my key has no station" from
+            # "that deployment isn't mine". Honour that here too.
             return Response(
                 {"detail": "No station linked to this device key."},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
-        try:
-            result = DeploymentResult.objects.select_related("deployment__firmware_artifact").get(
-                pk=pk, station=station
-            )
-        except DeploymentResult.DoesNotExist:
+        # Mirror the check view's resumable set. A station that crashed
+        # in VERIFYING and restarted will re-enter the flow and hit the
+        # download endpoint again; the idempotent re-download is a
+        # cheap way to unblock recovery compared with stuck deployments
+        # that need admin intervention.
+        active_statuses = [
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
+        ]
+        result = (
+            DeploymentResult.objects.select_related("deployment__image_release")
+            .filter(deployment_id=pk, station=station, status__in=active_statuses)
+            .first()
+        )
+        if result is None:
             return Response(
-                {"detail": "Deployment result not found."},
-                status=status.HTTP_404_NOT_FOUND,
+                {"detail": "No active deployment for this station on this deployment id."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
-        artifact = result.deployment.firmware_artifact
-        serve_delta = request.query_params.get("delta", "").lower() == "true"
+        image = result.deployment.image_release
+        # Fail loud but controlled on storage issues — a 500 without a
+        # response body makes agents retry blindly and leaves operators
+        # poking stack traces in sentry. Map missing-key / permission
+        # errors to 502 Bad Gateway (server knows about the deployment,
+        # the upstream object store doesn't have what we need).
+        try:
+            stream = image_storage.open_stream(image.s3_key)
+        except Exception as exc:
+            logger.error(
+                "Failed to open image %s for deployment %s: %s",
+                image.s3_key,
+                result.deployment_id,
+                exc,
+            )
+            return Response(
+                {"detail": "Image artifact unavailable from storage backend."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        # Treat missing / non-positive size_bytes as unknown. If we
+        # coerced it to 0, every response would advertise
+        # Content-Length: 0 and the Range math would reject every
+        # request as start >= 0, even though the stream actually has
+        # bytes to serve.
+        total_size = image.size_bytes if image.size_bytes and image.size_bytes > 0 else None
 
-        if serve_delta:
-            current_version = getattr(result.station, "current_os_version", "") or ""
-            delta = None
-            if current_version:
-                delta = FirmwareDelta.objects.filter(
-                    source_artifact__version=current_version,
-                    source_artifact__name=artifact.name,
-                    target_artifact=artifact,
-                ).first()
+        # Optional Range support - translate HTTP Range into a seek on the stream.
+        range_header = request.META.get("HTTP_RANGE", "")
+        start = 0
+        end = (total_size - 1) if total_size is not None else None
+        http_status = 200
+        length = total_size
+        if range_header:
+            # Without a known total size we can't give a valid 206
+            # (Content-Range requires complete-length) and can't
+            # validate the client's bounds — refuse cleanly so the
+            # agent falls back to a full GET.
+            if total_size is None:
+                if not getattr(stream, "closed", False):
+                    stream.close()
+                return Response(
+                    {"detail": "Requested range not satisfiable."},
+                    status=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                )
+            unsatisfiable = False
+            m = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
+            if m:
+                start = int(m.group(1))
+                end_g = m.group(2)
+                if end_g:
+                    end = int(end_g)
+                if start >= total_size:
+                    unsatisfiable = True
+                elif end is not None and end < start:
+                    unsatisfiable = True
+                else:
+                    if end is not None:
+                        end = min(end, total_size - 1)
+                    try:
+                        stream.seek(start)
+                    except (AttributeError, io.UnsupportedOperation, NotImplementedError):
+                        # Backend can't seek. A read-and-discard fallback
+                        # turns every Range request into a full-object
+                        # read on the wire, which is a bandwidth DoS
+                        # vector from a compromised device. Refuse the
+                        # range instead — the agent will restart from 0.
+                        stream.close()
+                        unsatisfiable = True
+                    else:
+                        http_status = 206
+                        length = (end - start + 1) if end is not None else None
 
-            if delta:
-                response = FileResponse(
-                    delta.delta_file.open("rb"),
-                    content_type="application/octet-stream",
+            if unsatisfiable:
+                # Some storage backends return file-likes that only
+                # implement close()/seekable() without a .closed
+                # attribute — getattr keeps the 416 path from 500ing.
+                if not getattr(stream, "closed", False):
+                    stream.close()
+                response = Response(
+                    {"detail": "Requested range not satisfiable."},
+                    status=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
                 )
-                safe_name = re.sub(
-                    r'["\r\n]',
-                    "_",
-                    f"{artifact.name}-{current_version}_to_{artifact.version}.xdelta3",
-                )
-                response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+                response["Content-Range"] = f"bytes */{total_size}"
                 return response
 
-            # Fall through to full image if delta not found
-            logger.warning(
-                "Delta requested but not found for station %s (version %s -> %s). "
-                "Serving full image.",
-                result.station,
-                current_version,
-                artifact.version,
-            )
+        def iterator():
+            remaining = length
+            try:
+                while True:
+                    to_read = self.CHUNK if remaining is None else min(self.CHUNK, remaining)
+                    if to_read <= 0:
+                        break
+                    chunk = stream.read(to_read)
+                    if not chunk:
+                        break
+                    if remaining is not None:
+                        remaining -= len(chunk)
+                    yield chunk
+            finally:
+                stream.close()
 
-        response = FileResponse(
-            artifact.file.open("rb"),
-            content_type="application/octet-stream",
-        )
-        safe_name = re.sub(
-            r'["\r\n]',
-            "_",
-            f"{artifact.name}-v{artifact.version}",
+        filename = f"oe5xrx-{image.machine}-{image.tag}.wic.bz2"
+        safe_name = re.sub(r'["\r\n]', "_", filename) or "image.wic.bz2"
+        response = StreamingHttpResponse(
+            iterator(), status=http_status, content_type="application/x-bzip2"
         )
         response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+        # Only advertise Range support if the underlying stream is
+        # seekable — otherwise a client would reasonably try a Range
+        # request and get a pointless 416 from the non-seekable path.
+        if getattr(stream, "seekable", lambda: False)():
+            response["Accept-Ranges"] = "bytes"
+        else:
+            response["Accept-Ranges"] = "none"
+        if length is not None:
+            response["Content-Length"] = str(length)
+        if http_status == 206 and end is not None:
+            response["Content-Range"] = f"bytes {start}-{end}/{total_size or '*'}"
         return response
 
 

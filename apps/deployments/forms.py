@@ -8,7 +8,7 @@ class DeploymentForm(forms.ModelForm):
     class Meta:
         model = Deployment
         fields = [
-            "firmware_artifact",
+            "image_release",
             "target_type",
             "target_tag",
             "target_station",
@@ -16,7 +16,7 @@ class DeploymentForm(forms.ModelForm):
             "phase_config",
         ]
         widgets = {
-            "firmware_artifact": forms.Select(attrs={"class": "form-select"}),
+            "image_release": forms.Select(attrs={"class": "form-select"}),
             "target_type": forms.Select(attrs={"class": "form-select"}),
             "target_tag": forms.Select(attrs={"class": "form-select"}),
             "target_station": forms.Select(attrs={"class": "form-select"}),

@@ -1,0 +1,466 @@
+import logging
+
+from django.contrib import messages
+from django.db import transaction
+from django.db.models import Max
+from django.http import HttpResponse, HttpResponseBadRequest
+from django.shortcuts import get_object_or_404, redirect
+from django.utils.translation import gettext_lazy as _
+from django.views import View
+from django.views.generic import TemplateView
+
+from apps.accounts.views import AdminRequiredMixin
+from apps.deployments.models import Deployment, DeploymentResult
+from apps.deployments.supersession import (
+    ActiveDeploymentConflictError,
+    supersede_pending_for_station,
+)
+from apps.images.models import ImageRelease
+from apps.rollouts.grouping import UNASSIGNED_KEY, group_stations_by_sequence
+from apps.stations.models import Station, StationAuditLog, StationTag
+
+from .forms import SequenceAddForm
+from .models import RolloutSequence, RolloutSequenceEntry, current_sequence
+
+logger = logging.getLogger(__name__)
+
+
+def _best_effort_audit_log(*, station, event_type, message, user=None):
+    """Audit logging must never break the real operation.
+
+    Safe to call OUTSIDE a transaction.atomic() block. Inside one,
+    use _defer_audit_log so a transient DB error on the audit table
+    can't poison the enclosing transaction.
+    """
+    try:
+        StationAuditLog.log(
+            station=station,
+            event_type=event_type,
+            message=message,
+            user=user,
+        )
+    except Exception as exc:
+        logger.warning("Audit log write failed (%s): %s", event_type, exc)
+
+
+def _defer_audit_log(*, station, event_type, message, user=None):
+    """Queue a best-effort audit log to run after the current transaction commits.
+
+    Inside a transaction.atomic() block, catching a DatabaseError from an
+    INSERT puts the whole transaction into a rollback-only state, which
+    then poisons every subsequent query in that block. Queuing the write
+    with transaction.on_commit() sidesteps that entirely: the callback
+    runs only after the enclosing atomic block has already committed, so
+    any failure during the audit INSERT can't mark that block rollback-
+    only or abort the real operation.
+    """
+    station_pk = station.pk
+    # Resolve SimpleLazyObject (request.user) to a concrete User *now*,
+    # so each on_commit callback doesn't do a separate SELECT for the
+    # actor — in batch flows like UpgradeGroupView this was an extra
+    # query per station. Touching .pk materializes the lazy wrapper;
+    # ._wrapped is then the real User instance (Django's FK descriptor
+    # previously stumbled on SimpleLazyObject on some code paths).
+    resolved_user = None
+    if user is not None and getattr(user, "pk", None):
+        resolved_user = getattr(user, "_wrapped", user) or user
+
+    def _write() -> None:
+        try:
+            # Pass station_id directly — StationAuditLog.log supports
+            # it natively, which saves a query AND avoids a ValueError
+            # if the station row was deleted between post and commit.
+            StationAuditLog.log(
+                station_id=station_pk,
+                event_type=event_type,
+                message=message,
+                user=resolved_user,
+            )
+        except Exception as exc:
+            logger.warning("Deferred audit log failed (%s): %s", event_type, exc)
+
+    transaction.on_commit(_write)
+
+
+class UpgradeStationView(AdminRequiredMixin, View):
+    """Create a Deployment targeting exactly this one station."""
+
+    def post(self, request, station_pk):
+        station = get_object_or_404(Station, pk=station_pk)
+        current = station.current_image_release
+        if current is None:
+            # We can't pick a target machine without a current release.
+            # Distinguish this from the "machine known but no latest
+            # release imported" case below so the operator isn't left
+            # wondering whether to import an image or provision the box.
+            messages.error(
+                request,
+                _("Station has not been provisioned with an image release yet."),
+            )
+            return redirect("stations:station_detail", pk=station.pk)
+        target = ImageRelease.objects.filter(machine=current.machine, is_latest=True).first()
+        if target is None:
+            messages.error(
+                request,
+                _("No image release imported for machine %(machine)s.")
+                % {"machine": current.machine},
+            )
+            return redirect("stations:station_detail", pk=station.pk)
+
+        if station.current_image_release_id == target.pk:
+            messages.info(request, _("Station is already on the latest release."))
+            return redirect("stations:station_detail", pk=station.pk)
+
+        try:
+            with transaction.atomic():
+                dep = Deployment.objects.create(
+                    image_release=target,
+                    target_type=Deployment.TargetType.STATION,
+                    target_station=station,
+                    status=Deployment.Status.IN_PROGRESS,
+                    created_by=request.user,
+                )
+                DeploymentResult.objects.create(
+                    deployment=dep,
+                    station=station,
+                    status=DeploymentResult.Status.PENDING,
+                    previous_version=station.current_os_version or "",
+                )
+                supersede_pending_for_station(station=station, new_deployment=dep)
+        except ActiveDeploymentConflictError as exc:
+            messages.error(request, str(exc))
+            return redirect("stations:station_detail", pk=station.pk)
+
+        _best_effort_audit_log(
+            station=station,
+            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+            message=(
+                f"Upgrade triggered: {station.current_os_version or '?'} "
+                f"\u2192 {target.tag} (deployment #{dep.pk}) by {request.user.username}"
+            ),
+            user=request.user,
+        )
+        messages.success(request, _("Upgrade to %(tag)s queued.") % {"tag": target.tag})
+        return redirect("stations:station_detail", pk=station.pk)
+
+
+class UpgradeGroupView(AdminRequiredMixin, View):
+    """Create Deployments for every station carrying the given tag (grouped
+    by machine: one Deployment per (tag, machine) tuple).
+    """
+
+    def post(self, request, tag_slug):
+        tag = get_object_or_404(StationTag, slug=tag_slug)
+
+        # Honor first-match-wins: a station carrying both "test" (pos 0)
+        # and "easy" (pos 1) belongs to whichever tag comes first in the
+        # sequence. Resolve the same bucketing as the dashboard, but
+        # purely in SQL — group-upgrade should scale with group size,
+        # not total fleet size.
+        seq = current_sequence()
+        entry = seq.entries.filter(tag=tag).first()
+        if entry is None:
+            messages.info(request, _("Tag is not part of the rollout sequence."))
+            return redirect("rollouts:upgrade_dashboard")
+
+        earlier_tag_ids = list(
+            seq.entries.filter(position__lt=entry.position).values_list("tag_id", flat=True)
+        )
+        stations_qs = Station.objects.filter(tags=tag).select_related("current_image_release")
+        if earlier_tag_ids:
+            # Narrow the claimed-by-earlier query to stations that *also*
+            # carry the target tag — chained .filter() on an M2M forces
+            # an AND intersection. Bound the query to the group, not the
+            # fleet. Pass the queryset to .exclude() so Django emits a
+            # subquery instead of materializing pks into Python.
+            claimed_by_earlier = (
+                Station.objects.filter(tags=tag).filter(tags__in=earlier_tag_ids).values("pk")
+            )
+            stations_qs = stations_qs.exclude(pk__in=claimed_by_earlier)
+        stations = list(stations_qs)
+        if not stations:
+            messages.info(request, _("No stations are currently assigned to this group."))
+            return redirect("rollouts:upgrade_dashboard")
+
+        # Bucket by machine. Stations with no current_image_release cannot
+        # be routed to a target (we don't know their machine) — count them
+        # as skipped so the flash message doesn't silently lose them.
+        by_machine: dict[str, list] = {}
+        unprovisioned = 0
+        for s in stations:
+            if not s.current_image_release:
+                unprovisioned += 1
+                continue
+            by_machine.setdefault(s.current_image_release.machine, []).append(s)
+
+        created = 0
+        skipped = unprovisioned
+        with transaction.atomic():
+            for machine, machine_stations in by_machine.items():
+                target = ImageRelease.objects.filter(machine=machine, is_latest=True).first()
+                if target is None:
+                    skipped += len(machine_stations)
+                    continue
+
+                # Filter out stations that are already on the target or
+                # that have an active deployment — BEFORE creating the
+                # Deployment row, so an all-skipped machine doesn't leave
+                # an empty Deployment floating in the table.
+                eligible: list = []
+                for s in machine_stations:
+                    if s.current_image_release_id == target.pk:
+                        skipped += 1
+                        continue
+                    eligible.append(s)
+
+                if not eligible:
+                    continue
+
+                dep = Deployment.objects.create(
+                    image_release=target,
+                    target_type=Deployment.TargetType.TAG,
+                    target_tag=tag,
+                    status=Deployment.Status.IN_PROGRESS,
+                    created_by=request.user,
+                )
+                for s in eligible:
+                    DeploymentResult.objects.create(
+                        deployment=dep,
+                        station=s,
+                        status=DeploymentResult.Status.PENDING,
+                        previous_version=s.current_os_version or "",
+                    )
+                    try:
+                        supersede_pending_for_station(station=s, new_deployment=dep)
+                    except ActiveDeploymentConflictError:
+                        # Drop this station from the deployment - it will
+                        # be picked up next time.
+                        DeploymentResult.objects.filter(deployment=dep, station=s).delete()
+                        skipped += 1
+                        continue
+                    # Defer audit-log write until AFTER the atomic block
+                    # commits. Running it inside the block risks a
+                    # DatabaseError on the audit table flipping the main
+                    # transaction into rollback-only, which would then
+                    # swallow every subsequent create in the loop. The
+                    # lambda copies all values we need so the closure is
+                    # safe even though `s` / `dep` / `target` / `tag` are
+                    # loop variables that will change.
+                    _defer_audit_log(
+                        station=s,
+                        event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                        message=(
+                            f"Upgrade triggered (group '{tag.name}'): "
+                            f"{s.current_os_version or '?'} \u2192 {target.tag} "
+                            f"(deployment #{dep.pk}) by {request.user.username}"
+                        ),
+                        user=request.user,
+                    )
+                    created += 1
+
+                # If every station in this wave conflicted, back out the
+                # empty deployment we just created.
+                if not dep.results.exists():
+                    dep.delete()
+
+        messages.success(
+            request,
+            _("Queued %(n)d upgrades (%(s)d skipped)") % {"n": created, "s": skipped},
+        )
+        return redirect("rollouts:upgrade_dashboard")
+
+
+class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
+    """Admin-only roll-up of every station bucketed by its first matching
+    rollout-sequence tag, showing pending upgrades and a per-group action.
+    """
+
+    template_name = "rollouts/upgrade_dashboard.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        stations = list(
+            Station.objects.select_related("current_image_release").prefetch_related("tags")
+        )
+        grouped = group_stations_by_sequence(stations)
+
+        latest_per_machine: dict[str, ImageRelease] = {
+            r.machine: r for r in ImageRelease.objects.filter(is_latest=True)
+        }
+
+        # Fetch the latest active DeploymentResult per station so the
+        # initial page render already shows real deployment progress
+        # (pending/downloading/installing/rebooting/verifying) instead
+        # of waiting for the first WebSocket event to correct the UI.
+        active_statuses = [
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
+        ]
+        # stations already holds the whole fleet (the dashboard renders
+        # every station), so an IN-clause over [s.pk for s in stations]
+        # would be a no-op that just risks PG's parameter limit as the
+        # fleet grows. Fetch every active result; the setdefault below
+        # keeps the latest per station_id.
+        active_result_by_station: dict[int, DeploymentResult] = {}
+        for r in (
+            DeploymentResult.objects.filter(
+                status__in=active_statuses,
+                deployment__status=Deployment.Status.IN_PROGRESS,
+            )
+            .order_by("station_id", "-pk")
+            .select_related("deployment__image_release")
+        ):
+            active_result_by_station.setdefault(r.station_id, r)
+
+        # grouped keys are tag slugs; the sidebar + headers want the human
+        # name. One prefetch covers every tag that actually matters here.
+        slug_to_name = dict(StationTag.objects.values_list("slug", "name"))
+
+        rows_by_group: list[tuple[str, str, list]] = []
+        up_to_date: list = []
+        for group_key, stations_in_group in grouped.items():
+            pending = []
+            for s in stations_in_group:
+                target = (
+                    latest_per_machine.get(s.current_image_release.machine)
+                    if s.current_image_release
+                    else None
+                )
+                if target and s.current_image_release_id == target.pk:
+                    up_to_date.append((s, target))
+                else:
+                    pending.append((s, target, active_result_by_station.get(s.pk)))
+            if group_key == UNASSIGNED_KEY:
+                display_name = _("Unassigned")
+            else:
+                display_name = slug_to_name.get(group_key, group_key)
+            rows_by_group.append((group_key, display_name, pending))
+
+        ctx["groups"] = rows_by_group
+        ctx["up_to_date"] = up_to_date
+        ctx["latest_per_machine"] = latest_per_machine
+        ctx["unassigned_key"] = UNASSIGNED_KEY
+        return ctx
+
+
+class SequenceEditView(AdminRequiredMixin, TemplateView):
+    template_name = "rollouts/sequence_edit.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        seq = current_sequence()
+        ctx["sequence"] = seq
+        ctx["entries"] = seq.entries.select_related("tag").order_by("position")
+        ctx["add_form"] = SequenceAddForm(sequence=seq)
+        return ctx
+
+
+class SequenceAddView(AdminRequiredMixin, View):
+    def post(self, request):
+        seq = current_sequence()
+        form = SequenceAddForm(request.POST, sequence=seq)
+        if form.is_valid():
+            # Lock the RolloutSequence row so two concurrent Add clicks
+            # can't both compute the same max(position)+1 and race into
+            # an IntegrityError on uniq_position_per_sequence.
+            with transaction.atomic():
+                (RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first())
+                tag = form.cleaned_data["tag"]
+                # Two admins may each pass the form's uniqueness check
+                # against the same empty-seq snapshot and then both
+                # enter this block serially. Re-check under the lock so
+                # the second one doesn't fall off the (sequence, tag)
+                # unique constraint as an IntegrityError 500. The net
+                # effect is the same "tag is already in the sequence"
+                # the first commit would have caused — so silently
+                # skip and redirect.
+                if not seq.entries.filter(tag=tag).exists():
+                    next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
+                    RolloutSequenceEntry.objects.create(
+                        sequence=seq,
+                        tag=tag,
+                        position=next_pos,
+                    )
+                    seq.updated_by = request.user
+                    seq.save(update_fields=["updated_by", "updated_at"])
+        return redirect("rollouts:sequence_edit")
+
+
+class SequenceRemoveView(AdminRequiredMixin, View):
+    def post(self, request, entry_pk):
+        seq = current_sequence()
+        entry = get_object_or_404(RolloutSequenceEntry, pk=entry_pk, sequence=seq)
+        # Delete + normalize positions + bump sequence metadata all in
+        # one atomic block so a failure mid-way doesn't leave the
+        # sequence with a gap or with updated_by unset. Lock the
+        # RolloutSequence row so concurrent Add/Remove/Reorder clicks
+        # all serialize through the same gate.
+        with transaction.atomic():
+            RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first()
+            entry.delete()
+            for idx, e in enumerate(seq.entries.order_by("position")):
+                if e.position != idx:
+                    e.position = idx
+                    e.save(update_fields=["position"])
+            seq.updated_by = request.user
+            seq.save(update_fields=["updated_by", "updated_at"])
+        return redirect("rollouts:sequence_edit")
+
+
+class SequenceReorderView(AdminRequiredMixin, View):
+    def post(self, request):
+        seq = current_sequence()
+        order_str = request.POST.get("order", "")
+        if not order_str:
+            return HttpResponseBadRequest("order required")
+        try:
+            order_ids = [int(x) for x in order_str.split(",") if x]
+        except ValueError:
+            return HttpResponseBadRequest("order must be ids")
+        # A payload like "1,1,2" would pass the later set() comparison
+        # (because set({1,1,2}) == {1,2}) but then assign two positions
+        # to entry 1 and skip one — leaving the sequence non-normalized.
+        if len(order_ids) != len(set(order_ids)):
+            return HttpResponseBadRequest("order must not contain duplicates")
+        with transaction.atomic():
+            # Serialize against concurrent Add/Remove/Reorder on the
+            # same sequence through a row lock on the RolloutSequence
+            # itself — matches SequenceAddView's behaviour.
+            RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first()
+            # Read entries *after* acquiring the sequence lock. Reading
+            # beforehand races with a concurrent Remove: if a row is
+            # deleted between our read and the lock, the later e.save()
+            # finds no row to UPDATE and Django falls back to INSERT,
+            # re-inserting a deleted entry.
+            existing = {e.pk: e for e in seq.entries.select_for_update()}
+            if set(order_ids) != set(existing.keys()):
+                return HttpResponseBadRequest("order must match existing entries")
+            # Two-phase update so the per-sequence position unique
+            # constraint never sees a collision during the transition.
+            # Pick an offset that can't overlap with either the old or
+            # the new positions, clamped to PositiveSmallIntegerField
+            # (max 32767). The first pass writes e.position + offset,
+            # so the real ceiling is max_current + offset — not
+            # offset + n.
+            n = len(order_ids)
+            max_current = max((e.position for e in existing.values()), default=0)
+            offset = max(max_current, n) + 1
+            if max_current + offset > 32767:
+                return HttpResponseBadRequest("sequence too large to reorder safely")
+            for e in existing.values():
+                e.position = e.position + offset
+                e.save(update_fields=["position"])
+            for idx, pk in enumerate(order_ids):
+                e = existing[pk]
+                e.position = idx
+                e.save(update_fields=["position"])
+            # Keep the updated_by/updated_at bump inside the same
+            # atomic block as the reorder writes — matches the
+            # Add/Remove semantics, and a failure here won't commit a
+            # reorder without the metadata or vice versa.
+            seq.updated_by = request.user
+            seq.save(update_fields=["updated_by", "updated_at"])
+        return HttpResponse(status=200)

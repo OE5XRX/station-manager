@@ -14,6 +14,7 @@ from django.views.generic import (
 )
 
 from apps.api.models import DeviceKey
+from apps.deployments.models import DeploymentResult
 from apps.images.models import ImageRelease
 from apps.provisioning.models import ProvisioningJob
 
@@ -87,7 +88,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("device_key", "inventory")
+            .select_related("device_key", "inventory", "current_image_release")
             .prefetch_related("tags", "installed_modules", "photos", "log_entries", "audit_logs")
         )
 
@@ -118,6 +119,18 @@ class StationDetailView(LoginRequiredMixin, DetailView):
                 )
                 .order_by("-created_at")
                 .first()
+            )
+            current = self.object.current_image_release
+            if current is not None:
+                context["upgrade_target"] = ImageRelease.objects.filter(
+                    machine=current.machine, is_latest=True
+                ).first()
+            else:
+                context["upgrade_target"] = None
+            context["recent_deployments"] = list(
+                DeploymentResult.objects.filter(station=self.object)
+                .select_related("deployment__image_release")
+                .order_by("-pk")[:5]
             )
         return context
 

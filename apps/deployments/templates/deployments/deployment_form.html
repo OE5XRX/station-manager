@@ -13,7 +13,7 @@
 <div class="page-head"><div class="page-head-main">
   <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Rollout plan" %}</div>
   <h1 class="page-title">{% trans "New deployment" %}</h1>
-  <p class="page-sub">{% trans "Pick a firmware artifact, a target, and a strategy. Progress streams live once the rollout starts." %}</p>
+  <p class="page-sub">{% trans "Pick an image release, a target, and a strategy. Progress streams live once the rollout starts." %}</p>
 </div></div>
 
 <form method="post" style="max-width:720px;">
@@ -21,8 +21,8 @@
   <section class="panel">
     <div class="panel-body">
       <div class="form-group">
-        <label class="form-label">{% trans "Firmware artifact" %}</label>
-        {{ form.firmware_artifact }}{{ form.firmware_artifact.errors }}
+        <label class="form-label">{% trans "Image release" %}</label>
+        {{ form.image_release }}{{ form.image_release.errors }}
       </div>
       <div class="form-row">
         <div class="form-group">

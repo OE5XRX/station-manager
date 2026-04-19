@@ -41,7 +41,7 @@
       <thead>
         <tr>
           <th>{% trans "Deployment" %}</th>
-          <th>{% trans "Firmware" %}</th>
+          <th>{% trans "Image release" %}</th>
           <th>{% trans "Target" %}</th>
           <th>{% trans "Strategy" %}</th>
           <th>{% trans "Status" %}</th>
@@ -58,10 +58,10 @@
               <span class="frame-id">{{ d.pk|stringformat:"04d" }}</span>
             </a>
           </td>
-          <td data-label="{% trans 'Firmware' %}">
+          <td data-label="{% trans 'Image release' %}">
             <div class="stack-gap-2">
-              <span style="font-weight:600;color:var(--ink-0);">{{ d.firmware_artifact.name }}</span>
-              <span class="t-mono-sm t-muted">v{{ d.firmware_artifact.version }}</span>
+              <span style="font-weight:600;color:var(--ink-0);">{{ d.image_release.tag }}</span>
+              <span class="t-mono-sm t-muted">{{ d.image_release.machine }}</span>
             </div>
           </td>
           <td data-label="{% trans 'Target' %}">

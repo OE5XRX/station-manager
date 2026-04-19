@@ -1,0 +1,38 @@
+{% load i18n %}
+<tr data-station-id="{{ station.pk }}">
+  <td data-primary>
+    <a href="{% url 'stations:station_detail' pk=station.pk %}" style="color:var(--ink-0);font-weight:600;text-decoration:none;">
+      {{ station.name }}
+    </a>
+    {% if station.callsign %}
+      <span class="t-mono-sm t-muted" style="margin-left:8px;">{{ station.callsign }}</span>
+    {% endif %}
+  </td>
+  <td class="t-mono" data-label="{% trans 'Machine' %}">
+    {% if station.current_image_release %}
+      {{ station.current_image_release.machine }}
+    {% else %}
+      <span class="t-muted">{% trans "unprovisioned" %}</span>
+    {% endif %}
+  </td>
+  <td class="t-mono" data-label="{% trans 'Current → Target' %}">
+    <span>{{ station.current_image_release.tag|default:"—" }}</span>
+    {% if target %}
+      <span class="t-muted" aria-hidden="true" style="margin:0 6px;">→</span>
+      <span style="color:var(--accent);font-weight:600;">{{ target.tag }}</span>
+    {% else %}
+      <span class="t-muted" style="margin-left:6px;">{% trans "no target" %}</span>
+    {% endif %}
+  </td>
+  <td class="status-cell" data-label="{% trans 'Status' %}">
+    {% if active_result %}
+      <span class="pill pill-{{ active_result.status }}">
+        <span class="dot"></span>{{ active_result.get_status_display|upper }}
+      </span>
+    {% else %}
+      <span class="pill pill-{{ station.status }}">
+        <span class="dot"></span>{{ station.get_status_display|upper }}
+      </span>
+    {% endif %}
+  </td>
+</tr>

@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.monitoring",
     "apps.images",
     "apps.provisioning",
+    "apps.rollouts",
 ]
 
 MIDDLEWARE = [

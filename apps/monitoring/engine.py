@@ -245,7 +245,7 @@ def _check_ota_failed():
     failed_results = DeploymentResult.objects.filter(
         status__in=[DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK],
         completed_at__gte=cutoff,
-    ).select_related("station", "deployment__firmware_artifact")
+    ).select_related("station", "deployment__image_release")
 
     for result in failed_results:
         station = result.station
@@ -256,7 +256,7 @@ def _check_ota_failed():
                 title=f"OTA deployment failed: {station.name}",
                 message=(
                     f"Deployment #{result.deployment_id} "
-                    f"({result.deployment.firmware_artifact}) "
+                    f"({result.deployment.image_release}) "
                     f"on {station.name} has {result.get_status_display().lower()}. "
                     f"Error: {result.error_message or 'No details available.'}"
                 ),

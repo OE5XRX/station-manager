@@ -14,7 +14,7 @@ class DeploymentResultInline(admin.TabularInline):
 class DeploymentAdmin(admin.ModelAdmin):
     list_display = [
         "__str__",
-        "firmware_artifact",
+        "image_release",
         "target_type",
         "strategy",
         "status",
@@ -28,8 +28,8 @@ class DeploymentAdmin(admin.ModelAdmin):
         "created_at",
     ]
     search_fields = [
-        "firmware_artifact__name",
-        "firmware_artifact__version",
+        "image_release__tag",
+        "image_release__machine",
     ]
     readonly_fields = [
         "created_at",

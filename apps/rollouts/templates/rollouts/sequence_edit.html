@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Rollout Sequence" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'rollouts:upgrade_dashboard' %}">{% trans "Upgrades" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Rollout Sequence" %}</span>
+{% endblock %}
+
+{% block content %}
+<div data-sequence-edit>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">
+        <span>{% trans "OTA · Rollout" %}</span>
+        <span class="t-mono t-muted" style="letter-spacing:0.1em;">{% trans "EDIT SEQUENCE" %}</span>
+      </div>
+      <h1 class="page-title">{% trans "Rollout Sequence" %}</h1>
+      <p class="page-sub">
+        {% trans "Stations are bucketed by the first matching tag in this ordered list. Stations with none of these tags fall into the Unassigned bucket." %}
+      </p>
+    </div>
+    <div class="page-head-actions">
+      <a href="{% url 'rollouts:upgrade_dashboard' %}" class="btn btn-ghost">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6"/>
+        </svg>
+        {% trans "Back to Upgrades" %}
+      </a>
+    </div>
+  </div>
+
+  <section class="panel mb-20">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--cyan)"></span>
+        <span>{% trans "Order" %}</span>
+        <span class="t-mono-sm t-muted" style="margin-left:10px;letter-spacing:0.1em;">
+          {% blocktrans count n=entries|length %}{{ n }} ENTRY{% plural %}{{ n }} ENTRIES{% endblocktrans %}
+        </span>
+      </div>
+      <span class="t-label">{% trans "Drag to reorder" %}</span>
+    </div>
+    <div class="panel-body">
+      {% if entries %}
+        <ul id="sequence-list" class="sequence-list" data-reorder-url="{% url 'rollouts:sequence_reorder' %}">
+          {% for entry in entries %}
+            <li class="sequence-row" data-entry-id="{{ entry.pk }}">
+              <span class="grip" aria-hidden="true" title="{% trans 'Drag to reorder' %}">&#8801;</span>
+              <span class="sequence-pos t-mono t-muted">{{ forloop.counter }}.</span>
+              <span class="sequence-tag t-mono">{{ entry.tag.name }}</span>
+              {% blocktrans asvar remove_msg with tag=entry.tag.name %}Remove tag {{ tag }} from the rollout sequence?{% endblocktrans %}
+              <form method="post" action="{% url 'rollouts:sequence_remove' entry_pk=entry.pk %}" class="sequence-remove-form" onsubmit="return confirm('{{ remove_msg|escapejs }}');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-danger" aria-label="{% trans 'Remove' %}">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>
+                  </svg>
+                  {% trans "Remove" %}
+                </button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="empty" style="padding:22px 0;">
+          <div class="empty-title">{% trans "No entries — stations will all fall into the Unassigned bucket." %}</div>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel mb-20">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--accent)"></span>
+        <span>{% trans "Add tag" %}</span>
+      </div>
+      <span class="t-label">{% trans "Appended to the end" %}</span>
+    </div>
+    <div class="panel-body">
+      {% if add_form.fields.tag.queryset.exists %}
+        <form method="post" action="{% url 'rollouts:sequence_add' %}" class="sequence-add-form">
+          {% csrf_token %}
+          <div class="row-gap-8" style="flex-wrap:wrap;align-items:center;">
+            <label for="{{ add_form.tag.id_for_label }}" class="t-label">{% trans "Tag" %}</label>
+            {{ add_form.tag }}
+            <button type="submit" class="btn btn-primary">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              {% trans "Add to sequence" %}
+            </button>
+          </div>
+        </form>
+      {% else %}
+        <div class="empty" style="padding:18px 0;">
+          <div class="empty-title">{% trans "Every tag is already in the sequence." %}</div>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <form id="sequence-reorder-csrf" style="display:none;">{% csrf_token %}</form>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script nonce="{{ csp_nonce }}">
+// Native HTML5 drag-and-drop — no external JS dep so CSP's script-src
+// stays SELF+NONCE. SortableJS was nicer (touch, smooth animation) but
+// the admin Sequence Editor is desktop-only, and removing the CDN
+// script removes a whole class of supply-chain questions.
+(function () {
+  var list = document.getElementById('sequence-list');
+  if (!list) return;
+
+  var reorderUrl = list.getAttribute('data-reorder-url');
+  var csrfForm = document.getElementById('sequence-reorder-csrf');
+  var csrfInput = csrfForm ? csrfForm.querySelector('input[name=csrfmiddlewaretoken]') : null;
+  if (!reorderUrl || !csrfInput) return;
+
+  var dragRow = null;
+
+  function rows() {
+    return list.querySelectorAll('.sequence-row');
+  }
+
+  function renumber() {
+    var labels = list.querySelectorAll('.sequence-row .sequence-pos');
+    for (var i = 0; i < labels.length; i++) {
+      labels[i].textContent = (i + 1) + '.';
+    }
+  }
+
+  function saveOrder() {
+    var ids = [];
+    var current = rows();
+    for (var i = 0; i < current.length; i++) {
+      ids.push(current[i].getAttribute('data-entry-id'));
+    }
+    var body = new URLSearchParams();
+    body.set('order', ids.join(','));
+    fetch(reorderUrl, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'X-CSRFToken': csrfInput.value,
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
+    }).then(function (resp) {
+      if (!resp.ok) {
+        alert('{% trans "Failed to save new order. Reloading." %}');
+        window.location.reload();
+        return;
+      }
+      renumber();
+    }).catch(function () {
+      alert('{% trans "Failed to save new order. Reloading." %}');
+      window.location.reload();
+    });
+  }
+
+  function wireRow(row) {
+    var handle = row.querySelector('.grip');
+    if (!handle) return;
+    handle.setAttribute('draggable', 'true');
+
+    handle.addEventListener('dragstart', function (event) {
+      dragRow = row;
+      row.classList.add('sequence-row-ghost');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', row.getAttribute('data-entry-id') || '');
+      }
+    });
+
+    handle.addEventListener('dragend', function () {
+      row.classList.remove('sequence-row-ghost');
+      dragRow = null;
+    });
+  }
+
+  list.addEventListener('dragover', function (event) {
+    if (!dragRow) return;
+    event.preventDefault();
+    var target = event.target.closest('.sequence-row');
+    if (!target || target === dragRow || target.parentNode !== list) return;
+
+    var rect = target.getBoundingClientRect();
+    var insertAfter = event.clientY > rect.top + (rect.height / 2);
+    if (insertAfter) {
+      if (target.nextSibling !== dragRow) {
+        list.insertBefore(dragRow, target.nextSibling);
+      }
+    } else if (target !== dragRow.nextSibling) {
+      list.insertBefore(dragRow, target);
+    }
+  });
+
+  list.addEventListener('drop', function (event) {
+    if (!dragRow) return;
+    event.preventDefault();
+    saveOrder();
+  });
+
+  var initial = rows();
+  for (var i = 0; i < initial.length; i++) {
+    wireRow(initial[i]);
+  }
+})();
+</script>
+{% endblock %}

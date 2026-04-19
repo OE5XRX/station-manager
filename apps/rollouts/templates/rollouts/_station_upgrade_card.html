@@ -1,0 +1,62 @@
+{% load i18n %}
+{% if user.role == 'admin' %}
+<section class="panel mt-20">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--accent)"></span>{% trans "Upgrade" %}
+    </div>
+  </div>
+  <div class="panel-body">
+    {% if upgrade_target %}
+      {% if station.current_image_release_id == upgrade_target.pk %}
+        <p class="t-muted">
+          <em>{% trans "Already on latest" %} ({{ upgrade_target.tag }}).</em>
+        </p>
+      {% else %}
+        <p>
+          {% trans "Current" %}: <code class="t-mono">{{ station.current_image_release.tag|default:'-' }}</code><br>
+          {% trans "Target" %}: <code class="t-mono">{{ upgrade_target.tag }}</code>
+          <span class="t-muted">({% trans "latest for" %} {{ upgrade_target.machine }})</span>
+        </p>
+        {% blocktrans asvar confirm_msg with t=upgrade_target.tag %}Upgrade this station to {{ t }}?{% endblocktrans %}
+        <form method="post"
+              action="{% url 'rollouts:upgrade_station' station_pk=station.pk %}"
+              onsubmit="return confirm('{{ confirm_msg|escapejs }}');"
+              style="margin:0;">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary">
+            {% blocktrans with t=upgrade_target.tag %}Upgrade this station to {{ t }}{% endblocktrans %}
+          </button>
+        </form>
+      {% endif %}
+    {% else %}
+      {% if station.current_image_release_id %}
+        <p class="t-muted"><em>{% trans "No image release imported yet for this station's machine." %}</em></p>
+      {% else %}
+        <p class="t-muted"><em>{% trans "Station has not been provisioned yet." %}</em></p>
+      {% endif %}
+    {% endif %}
+
+    {% if recent_deployments %}
+      <h3 class="t-label mt-20">{% trans "Recent deployments" %}</h3>
+      <table class="t-table">
+        <tbody>
+          {% for d in recent_deployments %}
+            <tr>
+              <td class="t-mono-sm t-muted">{{ d.deployment.created_at|date:"Y-m-d H:i" }}</td>
+              <td class="t-mono">
+                {{ d.previous_version|default:'?' }}
+                <span class="t-muted">&rarr;</span>
+                {{ d.deployment.image_release.tag }}
+              </td>
+              <td>
+                <span class="pill pill-{{ d.status }}"><span class="dot"></span>{{ d.get_status_display|upper }}</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</section>
+{% endif %}

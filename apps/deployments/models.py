@@ -1,8 +1,8 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Count
 from django.utils.translation import gettext_lazy as _
 
-from apps.firmware.models import FirmwareArtifact
 from apps.stations.models import Station, StationTag
 
 
@@ -25,9 +25,9 @@ class Deployment(models.Model):
         FAILED = "failed", _("Failed")
         CANCELLED = "cancelled", _("Cancelled")
 
-    firmware_artifact = models.ForeignKey(
-        FirmwareArtifact,
-        verbose_name=_("firmware artifact"),
+    image_release = models.ForeignKey(
+        "images.ImageRelease",
+        verbose_name=_("image release"),
         on_delete=models.PROTECT,
         related_name="deployments",
     )
@@ -87,7 +87,7 @@ class Deployment(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Deployment #{self.pk} - {self.firmware_artifact} ({self.get_status_display()})"
+        return f"Deployment #{self.pk} - {self.image_release} ({self.get_status_display()})"
 
     def get_target_stations(self):
         """Resolve the queryset of stations targeted by this deployment."""
@@ -101,20 +101,35 @@ class Deployment(models.Model):
 
     @property
     def progress(self):
-        """Return a dict with total/completed/failed/pending counts."""
-        results = self.results.all()
-        total = results.count()
-        completed = results.filter(status=DeploymentResult.Status.SUCCESS).count()
-        failed = results.filter(
-            status__in=[DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK]
-        ).count()
-        pending = results.filter(status=DeploymentResult.Status.PENDING).count()
+        """Return a dict with per-status counts that sum to total.
+
+        ``in_progress`` is computed by explicitly counting the active
+        statuses rather than as ``total - completed - failed - pending``
+        — the subtraction silently folded terminal CANCELLED and
+        SUPERSEDED results into "in progress", which showed up on the
+        deployment detail page and WebSocket payload as stale work.
+        """
+        status_counts = {
+            row["status"]: row["count"]
+            for row in self.results.values("status").annotate(count=Count("id"))
+        }
+        total = sum(status_counts.values())
+        S = DeploymentResult.Status  # noqa: N806 - local alias for readability
+        completed = status_counts.get(S.SUCCESS, 0)
+        failed = status_counts.get(S.FAILED, 0) + status_counts.get(S.ROLLED_BACK, 0)
+        pending = status_counts.get(S.PENDING, 0)
+        in_progress = sum(
+            status_counts.get(s, 0)
+            for s in (S.DOWNLOADING, S.INSTALLING, S.REBOOTING, S.VERIFYING)
+        )
+        cancelled = status_counts.get(S.CANCELLED, 0) + status_counts.get(S.SUPERSEDED, 0)
         return {
             "total": total,
             "completed": completed,
             "failed": failed,
             "pending": pending,
-            "in_progress": total - completed - failed - pending,
+            "in_progress": in_progress,
+            "cancelled": cancelled,
             "percentage": round((completed / total) * 100) if total else 0,
         }
 
@@ -132,6 +147,7 @@ class DeploymentResult(models.Model):
         FAILED = "failed", _("Failed")
         ROLLED_BACK = "rolled_back", _("Rolled Back")
         CANCELLED = "cancelled", _("Cancelled")
+        SUPERSEDED = "superseded", _("Superseded")
 
     deployment = models.ForeignKey(
         Deployment,
