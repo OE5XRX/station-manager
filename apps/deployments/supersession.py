@@ -113,4 +113,4 @@ def _close_out_deployments_with_superseded_results(result_pks: list[int]) -> Non
                 dep.status = Deployment.Status.FAILED
             else:
                 dep.status = Deployment.Status.CANCELLED
-            dep.save(update_fields=["status"])
+            dep.save(update_fields=["status", "updated_at"])

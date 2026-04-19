@@ -409,14 +409,19 @@ class SequenceReorderView(AdminRequiredMixin, View):
             order_ids = [int(x) for x in order_str.split(",") if x]
         except ValueError:
             return HttpResponseBadRequest("order must be ids")
-        existing = {e.pk: e for e in seq.entries.all()}
-        if set(order_ids) != set(existing.keys()):
-            return HttpResponseBadRequest("order must match existing entries")
         with transaction.atomic():
             # Serialize against concurrent Add/Remove/Reorder on the
             # same sequence through a row lock on the RolloutSequence
             # itself — matches SequenceAddView's behaviour.
             RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first()
+            # Read entries *after* acquiring the sequence lock. Reading
+            # beforehand races with a concurrent Remove: if a row is
+            # deleted between our read and the lock, the later e.save()
+            # finds no row to UPDATE and Django falls back to INSERT,
+            # re-inserting a deleted entry.
+            existing = {e.pk: e for e in seq.entries.select_for_update()}
+            if set(order_ids) != set(existing.keys()):
+                return HttpResponseBadRequest("order must match existing entries")
             # Two-phase update so the per-sequence position unique
             # constraint never sees a collision during the transition.
             # Pick an offset that can't overlap with either the old or

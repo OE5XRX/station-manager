@@ -380,7 +380,10 @@ class DeploymentDownloadView(APIView):
                         length = (end - start + 1) if end is not None else None
 
             if unsatisfiable:
-                if not stream.closed:
+                # Some storage backends return file-likes that only
+                # implement close()/seekable() without a .closed
+                # attribute — getattr keeps the 416 path from 500ing.
+                if not getattr(stream, "closed", False):
                     stream.close()
                 response = Response(
                     {"detail": "Requested range not satisfiable."},
