@@ -126,16 +126,49 @@ def download_firmware_resumable(
     dest_path: str,
     *,
     resume: bool = True,
+    expected_size: int | None = None,
 ) -> bool:
     """Download a firmware image, optionally resuming from a partial file.
 
     download_url is used verbatim — callers must not parse or rebuild it.
+
+    If ``expected_size`` is provided and a local partial already matches
+    it, skip the network round-trip entirely and only verify the
+    checksum. A partial larger than ``expected_size`` is treated as
+    stale and discarded before falling through to a fresh download.
     """
     headers: dict[str, str] = {}
     existing_len = 0
     mode = "wb"
     if resume and os.path.exists(dest_path):
         existing_len = os.path.getsize(dest_path)
+        if expected_size is not None and existing_len >= expected_size:
+            if existing_len == expected_size:
+                # File already fully downloaded (e.g. the previous run
+                # wrote it, reported DOWNLOADING, then died before it
+                # could advance to INSTALLING). Skip the HTTP request
+                # and fall straight through to checksum verification.
+                logger.info(
+                    "Partial at %s matches expected size %d — skipping download",
+                    dest_path,
+                    expected_size,
+                )
+                return _verify_checksum(dest_path, expected_checksum)
+            # existing_len > expected_size: partial is stale (probably
+            # left from a larger previous release). Drop it and do a
+            # full download instead of sending a Range that the server
+            # would 416 anyway.
+            logger.info(
+                "Partial at %s is larger than expected (%d > %d); discarding",
+                dest_path,
+                existing_len,
+                expected_size,
+            )
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            existing_len = 0
         if existing_len > 0:
             headers["Range"] = f"bytes={existing_len}-"
             mode = "ab"
@@ -244,37 +277,47 @@ def download_firmware_resumable(
         except Exception as exc:
             logger.debug("Response close failed (ignored): %s", exc)
 
-    if expected_checksum:
-        h = hashlib.sha256()
+    return _verify_checksum(dest_path, expected_checksum)
+
+
+def _verify_checksum(dest_path: str, expected_checksum: str) -> bool:
+    """Verify ``dest_path`` against ``expected_checksum``.
+
+    An empty ``expected_checksum`` means the caller opted out — return
+    True without reading the file. Any filesystem error during the
+    read drops the file and returns False so the agent reports FAILED
+    cleanly instead of crashing.
+    """
+    if not expected_checksum:
+        return True
+    h = hashlib.sha256()
+    try:
+        with open(dest_path, "rb") as f:
+            while True:
+                chunk = f.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+    except OSError as exc:
+        # Disk ejected / file cleared / permissions revoked between
+        # the write and the checksum pass.
+        logger.error("Failed to read firmware for checksum %s: %s", dest_path, exc)
         try:
-            with open(dest_path, "rb") as f:
-                while True:
-                    chunk = f.read(_STREAM_CHUNK)
-                    if not chunk:
-                        break
-                    h.update(chunk)
-        except OSError as exc:
-            # Disk ejected / file cleared / permissions revoked between
-            # the write and the checksum pass. Same contract as above:
-            # return False so the agent reports FAILED instead of
-            # crashing.
-            logger.error("Failed to read firmware for checksum %s: %s", dest_path, exc)
-            try:
-                os.remove(dest_path)
-            except OSError:
-                pass
-            return False
-        if h.hexdigest() != expected_checksum:
-            logger.error(
-                "Checksum mismatch: expected %s got %s",
-                expected_checksum,
-                h.hexdigest(),
-            )
-            try:
-                os.remove(dest_path)
-            except OSError:
-                pass
-            return False
+            os.remove(dest_path)
+        except OSError:
+            pass
+        return False
+    if h.hexdigest() != expected_checksum:
+        logger.error(
+            "Checksum mismatch: expected %s got %s",
+            expected_checksum,
+            h.hexdigest(),
+        )
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        return False
     return True
 
 

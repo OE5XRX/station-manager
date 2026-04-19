@@ -58,6 +58,7 @@ class StationAgent:
         download_url = deployment.get("download_url", "")
         version = deployment.get("target_tag", "")
         expected_checksum = deployment.get("checksum_sha256", "")
+        expected_size = deployment.get("size_bytes") or None
         current_status = deployment.get("deployment_result_status", "pending")
 
         if not result_pk or not download_url:
@@ -94,6 +95,7 @@ class StationAgent:
                 download_url=download_url,
                 expected_checksum=expected_checksum,
                 dest_path=dest_path,
+                expected_size=expected_size,
             ):
                 report_status(
                     config,
@@ -116,6 +118,7 @@ class StationAgent:
                     download_url=download_url,
                     expected_checksum=expected_checksum,
                     dest_path=dest_path,
+                    expected_size=expected_size,
                 ):
                     report_status(
                         config,

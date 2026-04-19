@@ -2,6 +2,7 @@ import io
 import logging
 import re
 
+from django.db import transaction
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -251,26 +252,44 @@ class DeploymentCommitView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        result.status = DeploymentResult.Status.SUCCESS
-        result.completed_at = timezone.now()
-        result.new_version = version
-        result.save(update_fields=["status", "completed_at", "new_version"])
+        # Persist the SUCCESS transition and the Station pointer move
+        # in a single atomic block. Without it, a DB error between the
+        # two saves leaves the result marked SUCCESS but the station
+        # still pointing at the old image — and because the agent-retry
+        # lookup only matches REBOOTING/VERIFYING/INSTALLING, a retry
+        # from the station would 404 and never re-sync the pointer.
+        with transaction.atomic():
+            result.status = DeploymentResult.Status.SUCCESS
+            result.completed_at = timezone.now()
+            result.new_version = version
+            result.save(update_fields=["status", "completed_at", "new_version"])
 
-        # Update the station's "provisioned with" pointer so the UI reflects
-        # what's running on disk right now.
-        station.current_image_release = result.deployment.image_release
-        station.updated_at = timezone.now()
-        station.save(update_fields=["current_image_release", "updated_at"])
+            # Update the station's "provisioned with" pointer so the UI reflects
+            # what's running on disk right now.
+            station.current_image_release = result.deployment.image_release
+            station.updated_at = timezone.now()
+            station.save(update_fields=["current_image_release", "updated_at"])
 
-        # Audit log
-        StationAuditLog.log(
-            station=station,
-            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-            message=(
-                f"Deployment #{result.deployment_id} committed. "
-                f"Version: {result.previous_version} -> {version}."
-            ),
-        )
+        # Audit log is best-effort — a transient DB hiccup on the audit
+        # table must not 500 after we've already committed the success.
+        try:
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                message=(
+                    f"Deployment #{result.deployment_id} committed. "
+                    f"Version: {result.previous_version} -> {version}."
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "Audit log write failed for deployment commit "
+                "(station=%s, deployment=%s, version=%r)",
+                station.pk,
+                result.deployment_id,
+                version,
+                exc_info=True,
+            )
 
         # Check if the entire deployment is now complete
         _check_deployment_complete(result.deployment)

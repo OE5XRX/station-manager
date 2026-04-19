@@ -115,6 +115,80 @@ def test_download_resumes_on_partial(tmp_path):
     assert captured["headers"].get("Range", "").startswith("bytes=100-")
 
 
+def test_download_skips_network_when_partial_matches_expected_size(tmp_path):
+    """If the on-disk partial already matches expected_size, the agent
+    must skip the HTTP round-trip and just verify the checksum — the
+    recovery path for "downloaded once, died before advancing to
+    INSTALLING" should not re-fetch a multi-hundred-MB image."""
+    import hashlib
+
+    from station_agent import ota
+
+    payload = b"FULL_IMAGE_BYTES" * 64  # 1024 bytes
+    dest = tmp_path / "image.wic.bz2"
+    dest.write_bytes(payload)
+
+    calls = []
+
+    class FakeClient:
+        def request(self, *args, **kwargs):
+            calls.append(kwargs)
+            raise AssertionError("HTTP request must not fire when partial is already complete")
+
+    ok = ota.download_firmware_resumable(
+        http_client=FakeClient(),
+        download_url="/path",
+        expected_checksum=hashlib.sha256(payload).hexdigest(),
+        dest_path=str(dest),
+        resume=True,
+        expected_size=len(payload),
+    )
+    assert ok is True
+    assert calls == []
+    # File untouched.
+    assert dest.read_bytes() == payload
+
+
+def test_download_discards_oversized_stale_partial(tmp_path):
+    """A partial larger than expected_size is stale from a previous,
+    bigger release. Discard without sending a Range that would 416."""
+    from station_agent import ota
+
+    dest = tmp_path / "image.wic.bz2"
+    dest.write_bytes(b"X" * 500)
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def iter_content(self, chunk_size):
+            yield b"FRESH" * 40
+
+        def close(self):
+            pass
+
+    class FakeClient:
+        def request(self, method, path, stream=False, headers=None, **kw):
+            calls.append(dict(headers or {}))
+            return FakeResp()
+
+    ok = ota.download_firmware_resumable(
+        http_client=FakeClient(),
+        download_url="/path",
+        expected_checksum="",
+        dest_path=str(dest),
+        resume=True,
+        expected_size=200,
+    )
+    assert ok is True
+    assert len(calls) == 1
+    # No Range header — we dropped the stale partial and did a fresh GET.
+    assert "Range" not in calls[0]
+    assert dest.read_bytes() == b"FRESH" * 40
+
+
 def test_install_to_slot_rejects_truncated_bz2(tmp_path):
     """A truncated .wic.bz2 must raise, not silently write a partial
     image that would brick the next boot."""
