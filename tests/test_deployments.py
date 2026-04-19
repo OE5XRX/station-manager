@@ -10,37 +10,57 @@ from tests.conftest import device_auth_headers
 @pytest.mark.django_db
 class TestDeploymentCheck:
     def test_check_returns_pending_deployment(self, client, station_with_key, deployment_result):
-        """Agent should receive firmware info for a pending deployment."""
         station, private_key = station_with_key
         result = deployment_result
         release = result.deployment.image_release
 
-        response = client.get(
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
             reverse("api:deployment_check"),
-            **device_auth_headers(private_key, station.pk),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["result_id"] == result.pk
+        assert data["deployment_result_id"] == result.pk
         assert data["deployment_id"] == result.deployment_id
-        assert data["firmware_name"] == release.tag
-        assert data["firmware_version"] == release.machine
+        assert data["target_tag"] == release.tag
         assert data["checksum_sha256"] == release.sha256
-        assert data["file_size"] == release.size_bytes
+        assert data["size_bytes"] == release.size_bytes
+        assert data["download_url"].endswith(f"/deployments/{result.deployment_id}/download/")
 
     def test_check_no_pending(self, client, station_with_key):
-        """No pending deployment should return 204 No Content."""
         station, private_key = station_with_key
-        response = client.get(
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
             reverse("api:deployment_check"),
-            **device_auth_headers(private_key, station.pk),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
         )
         assert response.status_code == 204
 
     def test_check_requires_device_auth(self, client):
-        """Request without auth should return 401."""
-        response = client.get(reverse("api:deployment_check"))
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_check"),
+            data=body,
+            content_type="application/json",
+        )
         assert response.status_code == 401
+
+    def test_check_accepts_current_version(self, client, station_with_key, deployment_result):
+        """current_version is parsed but doesn't change behavior in MVP."""
+        station, private_key = station_with_key
+        body = json.dumps({"current_version": "v1-alpha"}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_check"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 200
 
 
 @pytest.mark.django_db

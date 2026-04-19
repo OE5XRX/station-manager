@@ -9,6 +9,7 @@ from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.deployments.serializers import (
+    DeploymentCheckRequestSerializer,
     DeploymentCheckResponseSerializer,
     DeploymentCommitSerializer,
     DeploymentStatusUpdateSerializer,
@@ -19,18 +20,24 @@ logger = logging.getLogger(__name__)
 
 
 class DeploymentCheckView(APIView):
-    """Check if there is a pending deployment for the authenticated station."""
+    """Station-agent polls to see if a deployment is pending for it."""
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
 
-    def get(self, request):
+    def post(self, request):
         station = getattr(request.auth, "station", None)
         if station is None:
             return Response(
                 {"detail": "No station linked to this device key."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        req = DeploymentCheckRequestSerializer(data=request.data)
+        req.is_valid(raise_exception=True)
+        # current_version parsed for forward compatibility (deltas); not
+        # used in the MVP beyond audit.
+        _ = req.validated_data["current_version"]
 
         result = (
             DeploymentResult.objects.filter(
@@ -46,30 +53,17 @@ class DeploymentCheckView(APIView):
         if result is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        release = result.deployment.image_release
-
-        # Delta lookup will be reworked for ImageRelease-based deltas in a later task.
-        delta_data = {
-            "is_delta": False,
-            "delta_checksum_sha256": "",
-            "delta_file_size": 0,
-        }
-
-        download_url = f"/api/v1/deployments/{result.pk}/download/"
-
+        image = result.deployment.image_release
         data = DeploymentCheckResponseSerializer(
             {
-                "result_id": result.pk,
+                "deployment_result_id": result.pk,
                 "deployment_id": result.deployment_id,
-                "firmware_name": release.tag,
-                "firmware_version": release.machine,
-                "download_url": download_url,
-                "checksum_sha256": release.sha256,
-                "file_size": release.size_bytes,
-                **delta_data,
+                "target_tag": image.tag,
+                "checksum_sha256": image.sha256,
+                "size_bytes": image.size_bytes,
+                "download_url": f"/api/v1/deployments/{result.deployment_id}/download/",
             }
         ).data
-
         return Response(data)
 
 
