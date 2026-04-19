@@ -256,3 +256,39 @@ class TestSequenceEdit:
         e2.refresh_from_db()
         assert e1.position == 1
         assert e2.position == 0
+
+
+@pytest.mark.django_db
+class TestStationUpgradeCard:
+    def test_admin_sees_upgrade_button(self, client, admin_user, station, image_release):
+        from django.urls import reverse
+
+        from apps.images.models import ImageRelease
+
+        station.current_image_release = image_release
+        station.save(update_fields=["current_image_release"])
+        # Flip to a newer release so the card offers an upgrade target.
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        ImageRelease.objects.create(
+            tag="v2",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="z" * 64,
+            size_bytes=1,
+            is_latest=True,
+        )
+        client.force_login(admin_user)
+        r = client.get(reverse("stations:station_detail", kwargs={"pk": station.pk}))
+        assert r.status_code == 200
+        assert b"Upgrade this station" in r.content
+        assert b"v2" in r.content
+
+    def test_already_on_latest_disables_button(self, client, admin_user, station, image_release):
+        from django.urls import reverse
+
+        station.current_image_release = image_release  # image_release is is_latest=True
+        station.save(update_fields=["current_image_release"])
+        client.force_login(admin_user)
+        r = client.get(reverse("stations:station_detail", kwargs={"pk": station.pk}))
+        assert r.status_code == 200
+        assert b"Already on latest" in r.content
