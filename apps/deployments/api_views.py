@@ -324,7 +324,24 @@ class DeploymentDownloadView(APIView):
             )
 
         image = result.deployment.image_release
-        stream = image_storage.open_stream(image.s3_key)
+        # Fail loud but controlled on storage issues — a 500 without a
+        # response body makes agents retry blindly and leaves operators
+        # poking stack traces in sentry. Map missing-key / permission
+        # errors to 502 Bad Gateway (server knows about the deployment,
+        # the upstream object store doesn't have what we need).
+        try:
+            stream = image_storage.open_stream(image.s3_key)
+        except Exception as exc:
+            logger.error(
+                "Failed to open image %s for deployment %s: %s",
+                image.s3_key,
+                result.deployment_id,
+                exc,
+            )
+            return Response(
+                {"detail": "Image artifact unavailable from storage backend."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         total_size = image.size_bytes or 0
 
         # Optional Range support - translate HTTP Range into a seek on the stream.

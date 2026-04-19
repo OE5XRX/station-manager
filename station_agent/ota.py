@@ -175,9 +175,19 @@ def download_firmware_resumable(
     # The agent's default download_dir (typically /tmp/station-agent)
     # may not exist on first OTA attempt. Create it every call — cheap
     # and makes the no-partial and resume paths behave identically.
+    # On permission / read-only FS / full-disk errors, fail cleanly so
+    # the caller reports FAILED instead of the agent thread dying.
     parent = os.path.dirname(dest_path)
     if parent:
-        os.makedirs(parent, exist_ok=True)
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as exc:
+            logger.error("Cannot create download dir %s: %s", parent, exc)
+            try:
+                resp.close()
+            except Exception:
+                pass
+            return False
 
     try:
         with open(dest_path, mode) as f:

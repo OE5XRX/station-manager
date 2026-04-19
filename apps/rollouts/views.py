@@ -424,6 +424,10 @@ class SequenceReorderView(AdminRequiredMixin, View):
                 e = existing[pk]
                 e.position = idx
                 e.save(update_fields=["position"])
-        seq.updated_by = request.user
-        seq.save(update_fields=["updated_by", "updated_at"])
+            # Keep the updated_by/updated_at bump inside the same
+            # atomic block as the reorder writes — matches the
+            # Add/Remove semantics, and a failure here won't commit a
+            # reorder without the metadata or vice versa.
+            seq.updated_by = request.user
+            seq.save(update_fields=["updated_by", "updated_at"])
         return HttpResponse(status=200)
