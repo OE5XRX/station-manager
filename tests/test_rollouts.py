@@ -87,3 +87,86 @@ class TestGrouping:
         s = Station.objects.create(name="S-none")
         grouped = group_stations_by_sequence([s])
         assert grouped["__unassigned__"] == [s]
+
+
+@pytest.mark.django_db
+class TestUpgradeActions:
+    def test_admin_can_upgrade_single_station(self, client, admin_user, station, image_release):
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment, DeploymentResult
+
+        # Station must already be "on something" so _target_release_for() resolves a machine.
+        station.current_image_release = image_release
+        station.save(update_fields=["current_image_release"])
+
+        # Introduce a newer release — same machine, is_latest flip.
+        from apps.images.models import ImageRelease
+
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        newer = ImageRelease.objects.create(
+            tag="v2",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="d" * 64,
+            size_bytes=2000,
+            is_latest=True,
+        )
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:upgrade_station", args=[station.pk]),
+        )
+        assert response.status_code == 302
+        dep = Deployment.objects.get(target_station=station)
+        assert dep.image_release == newer
+        assert DeploymentResult.objects.filter(deployment=dep, station=station).exists()
+
+    def test_operator_cannot_upgrade(self, client, operator_user, station):
+        from django.urls import reverse
+
+        client.force_login(operator_user)
+        response = client.post(reverse("rollouts:upgrade_station", args=[station.pk]))
+        assert response.status_code == 403
+
+    def test_upgrade_group_creates_deployment(
+        self, client, admin_user, image_release, make_station_tag
+    ):
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+        from apps.stations.models import Station
+
+        # Two stations on the same machine, both on v1-alpha.
+        tag = make_station_tag("test-stations")
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+
+        s1 = Station.objects.create(name="S1")
+        s1.tags.add(tag)
+        s1.current_image_release = image_release
+        s1.save(update_fields=["current_image_release"])
+
+        # Introduce a newer release for that machine.
+        from apps.images.models import ImageRelease
+
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        ImageRelease.objects.create(
+            tag="v2",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="e" * 64,
+            size_bytes=2000,
+            is_latest=True,
+        )
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:upgrade_group", args=["test-stations"]),
+        )
+        assert response.status_code == 302
+        dep = Deployment.objects.filter(target_tag=tag).first()
+        assert dep is not None
+        assert dep.image_release.tag == "v2"
