@@ -112,6 +112,54 @@ def test_download_resumes_on_partial(tmp_path):
     assert captured["headers"].get("Range", "").startswith("bytes=100-")
 
 
+def test_download_recovers_from_416_on_stale_partial(tmp_path):
+    """A stale partial larger than the current object produces a 416 on
+    the server. Agent must drop the partial and retry without Range —
+    one retry, not a hard failure."""
+    from station_agent import ota
+
+    dest = tmp_path / "image.wic.bz2"
+    # Pretend a stale partial is left over from a previous release.
+    dest.write_bytes(b"STALE" * 100)
+
+    calls = []
+
+    class FakeResp:
+        def __init__(self, status_code, body=b""):
+            self.status_code = status_code
+            self.headers = {}
+            self._body = body
+
+        def iter_content(self, chunk_size):
+            if self._body:
+                yield self._body
+
+        def close(self):
+            pass
+
+    class FakeClient:
+        def request(self, method, path, stream=False, headers=None, **kw):
+            calls.append(dict(headers or {}))
+            if "Range" in (headers or {}):
+                return FakeResp(416)
+            return FakeResp(200, body=b"FRESH" * 20)
+
+    ok = ota.download_firmware_resumable(
+        http_client=FakeClient(),
+        download_url="/path",
+        expected_checksum="",
+        dest_path=str(dest),
+        resume=True,
+    )
+    assert ok is True
+    # Two requests: first with Range (got 416), second without.
+    assert len(calls) == 2
+    assert "Range" in calls[0]
+    assert "Range" not in calls[1]
+    # File was rewritten from scratch.
+    assert dest.read_bytes() == b"FRESH" * 20
+
+
 def test_inventory_reports_current_version(tmp_path, monkeypatch):
     import station_agent.inventory as inv
 

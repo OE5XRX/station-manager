@@ -45,10 +45,20 @@ class DeploymentCheckView(APIView):
             req.validated_data["current_version"],
         )
 
+        # Include the download/install-in-progress states so an agent that
+        # crashed mid-flight can rediscover its own deployment on restart
+        # and resume (download) or re-run (install). Terminal states stay
+        # excluded — nothing to do from the agent's side.
+        resumable_statuses = [
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+        ]
         result = (
             DeploymentResult.objects.filter(
                 station=station,
-                status=DeploymentResult.Status.PENDING,
+                status__in=resumable_statuses,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
             .select_related("deployment__image_release")
@@ -64,6 +74,7 @@ class DeploymentCheckView(APIView):
             {
                 "deployment_result_id": result.pk,
                 "deployment_id": result.deployment_id,
+                "deployment_result_status": result.status,
                 "target_tag": image.tag,
                 "checksum_sha256": image.sha256,
                 "size_bytes": image.size_bytes,

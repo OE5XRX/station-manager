@@ -62,6 +62,45 @@ class TestDeploymentCheck:
         )
         assert response.status_code == 200
 
+    def test_check_returns_active_deployment_for_crash_recovery(
+        self, client, station_with_key, deployment_result
+    ):
+        """An agent that crashed mid-download must be able to find its
+        own deployment again on restart — so the check query must not
+        ignore DOWNLOADING / INSTALLING / REBOOTING results."""
+        station, private_key = station_with_key
+        deployment_result.status = DeploymentResult.Status.DOWNLOADING
+        deployment_result.save(update_fields=["status"])
+
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_check"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deployment_result_id"] == deployment_result.pk
+        assert data["deployment_result_status"] == "downloading"
+
+    def test_check_skips_terminal_results(self, client, station_with_key, deployment_result):
+        """Terminal statuses (success/failed/cancelled/superseded/rolled_back)
+        must not resurface in the check query — the agent has nothing to do
+        with them."""
+        station, private_key = station_with_key
+        deployment_result.status = DeploymentResult.Status.SUCCESS
+        deployment_result.save(update_fields=["status"])
+
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_check"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 204
+
 
 @pytest.mark.django_db
 class TestDeploymentStatusUpdate:

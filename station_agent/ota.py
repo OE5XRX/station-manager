@@ -142,6 +142,27 @@ def download_firmware_resumable(
     if resp is None:
         return False
 
+    if resp.status_code == 416 and existing_len > 0:
+        # Our partial file is stale (e.g. left over from a different
+        # release, or the server decided Range isn't servable). Drop it
+        # and restart from zero without Range — one retry, no loop.
+        try:
+            resp.close()
+        except Exception as exc:
+            logger.debug("Response close failed (ignored): %s", exc)
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        logger.info("Server rejected Range (416); restarting download from 0")
+        return download_firmware_resumable(
+            http_client=http_client,
+            download_url=download_url,
+            expected_checksum=expected_checksum,
+            dest_path=dest_path,
+            resume=False,
+        )
+
     if resp.status_code == 200:
         # Server refused the Range request — restart from zero.
         mode = "wb"
