@@ -2,10 +2,10 @@ import logging
 
 from django.contrib import messages
 from django.db import transaction
-from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.translation import gettext_lazy as _
 from django.views import View
+from django.views.generic import TemplateView
 
 from apps.accounts.views import AdminRequiredMixin
 from apps.deployments.models import Deployment, DeploymentResult
@@ -14,6 +14,7 @@ from apps.deployments.supersession import (
     supersede_pending_for_station,
 )
 from apps.images.models import ImageRelease
+from apps.rollouts.grouping import UNASSIGNED_KEY, group_stations_by_sequence
 from apps.stations.models import Station, StationAuditLog, StationTag
 
 logger = logging.getLogger(__name__)
@@ -165,9 +166,43 @@ class UpgradeGroupView(AdminRequiredMixin, View):
         return redirect("rollouts:upgrade_dashboard")
 
 
-def _upgrade_dashboard_placeholder(request):
-    """Placeholder so `reverse('rollouts:upgrade_dashboard')` resolves.
-
-    Replaced by the real dashboard in Task 10.
+class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
+    """Admin-only roll-up of every station bucketed by its first matching
+    rollout-sequence tag, showing pending upgrades and a per-group action.
     """
-    return HttpResponse("")
+
+    template_name = "rollouts/upgrade_dashboard.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        stations = list(
+            Station.objects.select_related("current_image_release").prefetch_related("tags")
+        )
+        grouped = group_stations_by_sequence(stations)
+
+        latest_per_machine: dict[str, ImageRelease] = {
+            r.machine: r for r in ImageRelease.objects.filter(is_latest=True)
+        }
+
+        rows_by_group: list[tuple[str, str, list]] = []
+        up_to_date: list = []
+        for group_key, stations_in_group in grouped.items():
+            pending = []
+            for s in stations_in_group:
+                target = (
+                    latest_per_machine.get(s.current_image_release.machine)
+                    if s.current_image_release
+                    else None
+                )
+                if target and s.current_image_release_id == target.pk:
+                    up_to_date.append((s, target))
+                else:
+                    pending.append((s, target))
+            display_name = _("Unassigned") if group_key == UNASSIGNED_KEY else group_key
+            rows_by_group.append((group_key, display_name, pending))
+
+        ctx["groups"] = rows_by_group
+        ctx["up_to_date"] = up_to_date
+        ctx["latest_per_machine"] = latest_per_machine
+        ctx["unassigned_key"] = UNASSIGNED_KEY
+        return ctx

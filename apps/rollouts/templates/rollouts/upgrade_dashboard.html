@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Upgrade Dashboard" %} · OE5XRX{% endblock %}
+
+{% block content %}
+<div data-upgrade-dashboard>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">
+        <span>{% trans "OTA · Rollout" %}</span>
+        <span class="t-mono t-muted" style="letter-spacing:0.1em;">{% trans "SEQUENCE VIEW" %}</span>
+      </div>
+      <h1 class="page-title">{% trans "Upgrade Dashboard" %}</h1>
+      <div class="row-gap-8 mt-10">
+        <span class="t-muted" style="font-size:13px;">
+          {% blocktrans count n=groups|length %}
+            {{ n }} rollout wave
+          {% plural %}
+            {{ n }} rollout waves
+          {% endblocktrans %}
+          · {% blocktrans count n=up_to_date|length %}
+            {{ n }} station up to date
+          {% plural %}
+            {{ n }} stations up to date
+          {% endblocktrans %}
+        </span>
+      </div>
+    </div>
+    <div class="page-head-actions">
+      <a href="{% url 'deployments:deployment_list' %}" class="btn btn-ghost">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
+        </svg>
+        {% trans "Deployments" %}
+      </a>
+      <a href="{% url 'images:list' %}" class="btn btn-ghost">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="7" cy="12" r="1.2"/><path d="M11 12h7"/>
+        </svg>
+        {% trans "Images" %}
+      </a>
+    </div>
+  </div>
+
+  <section class="panel mb-24">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot" style="background:var(--accent)"></span>{% trans "Latest images" %}</div>
+      <span class="t-label">{% trans "Target state per machine" %}</span>
+    </div>
+    <div class="panel-body">
+      {% if latest_per_machine %}
+        <div class="row-gap-8" style="flex-wrap:wrap;">
+          {% for machine, release in latest_per_machine.items %}
+            <span class="pill pill-accent" style="padding:6px 12px;">
+              <span class="t-mono" style="font-size:11px;opacity:0.8;">{{ machine }}</span>
+              <span style="margin:0 6px;opacity:0.5;">→</span>
+              <span class="t-mono" style="font-weight:600;">{{ release.tag }}</span>
+            </span>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty" style="padding:18px 0;">
+          <div class="empty-title">{% trans "No image releases imported yet." %}</div>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {% for group_key, display_name, pending in groups %}
+    <section class="panel mb-20">
+      <div class="panel-head">
+        <div class="panel-title" style="min-width:0;">
+          <span class="dot" style="background:var(--cyan)"></span>
+          {% if group_key == unassigned_key %}
+            <span>{{ display_name }}</span>
+            <span class="t-mono-sm t-muted" style="margin-left:10px;letter-spacing:0.1em;">{% trans "NO ROLLOUT TAG" %}</span>
+          {% else %}
+            <span class="t-mono" style="font-family:var(--font-mono);font-weight:600;">{{ display_name }}</span>
+          {% endif %}
+          {% if pending %}
+            <span class="pill pill-accent" style="margin-left:12px;font-size:10px;">
+              {% blocktrans count n=pending|length %}{{ n }} pending{% plural %}{{ n }} pending{% endblocktrans %}
+            </span>
+          {% else %}
+            <span class="pill pill-muted" style="margin-left:12px;font-size:10px;">{% trans "NONE PENDING" %}</span>
+          {% endif %}
+        </div>
+        {% if pending and group_key != unassigned_key %}
+          <form method="post"
+                action="{% url 'rollouts:upgrade_group' tag_name=group_key %}"
+                onsubmit="return confirm('{% blocktrans with name=display_name n=pending|length %}Upgrade {{ n }} station(s) in group {{ name }} to the latest image?{% endblocktrans %}');"
+                style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 20V6"/><path d="M7 11l5-5 5 5"/>
+              </svg>
+              {% trans "Upgrade group" %}
+            </button>
+          </form>
+        {% endif %}
+      </div>
+      <div class="panel-body flush" data-mobile-cards>
+        {% if pending %}
+          <table class="t-table">
+            <thead>
+              <tr>
+                <th>{% trans "Station" %}</th>
+                <th>{% trans "Machine" %}</th>
+                <th>{% trans "Current" %} → {% trans "Target" %}</th>
+                <th>{% trans "Status" %}</th>
+              </tr>
+            </thead>
+            <tbody id="rows-{{ group_key }}">
+              {% for station, target in pending %}
+                {% include "rollouts/_dashboard_row.html" with station=station target=target %}
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty" style="padding:22px 0;">
+            <div class="empty-title">
+              {% if group_key == unassigned_key %}
+                {% trans "No unassigned stations." %}
+              {% else %}
+                {% trans "All stations in this group are up to date." %}
+              {% endif %}
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  {% endfor %}
+
+  <details class="panel" style="margin-top:24px;">
+    <summary class="panel-head" style="cursor:pointer;list-style:none;">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--signal)"></span>
+        <span>{% trans "Up to date" %}</span>
+        <span class="pill pill-completed" style="margin-left:12px;font-size:10px;">
+          {{ up_to_date|length }}
+        </span>
+      </div>
+      <span class="t-label">{% trans "Expand to review" %}</span>
+    </summary>
+    <div class="panel-body flush" data-mobile-cards>
+      {% if up_to_date %}
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "Station" %}</th>
+              <th>{% trans "Machine" %}</th>
+              <th>{% trans "Tag" %}</th>
+              <th style="width:1%;">{% trans "OK" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for station, target in up_to_date %}
+              <tr>
+                <td data-primary>
+                  <a href="{% url 'stations:station_detail' pk=station.pk %}" style="color:var(--ink-0);font-weight:600;text-decoration:none;">
+                    {{ station.name }}
+                  </a>
+                </td>
+                <td class="t-mono" data-label="{% trans 'Machine' %}">{{ station.current_image_release.machine }}</td>
+                <td class="t-mono" data-label="{% trans 'Tag' %}">{{ station.current_image_release.tag }}</td>
+                <td data-label="{% trans 'OK' %}" style="color:var(--signal);font-weight:700;">&#10003;</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="empty" style="padding:22px 0;">
+          <div class="empty-title">{% trans "No stations have reached the latest image yet." %}</div>
+        </div>
+      {% endif %}
+    </div>
+  </details>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var ws;
+  var retryDelay = 1000;
+  function connect() {
+    try {
+      ws = new WebSocket(proto + '//' + location.host + '/ws/deployments/');
+    } catch (_) { return; }
+    ws.addEventListener('open', function () { retryDelay = 1000; });
+    ws.addEventListener('message', function (ev) {
+      try {
+        var msg = JSON.parse(ev.data);
+        var r = msg.result;
+        if (!r) return;
+        var row = document.querySelector('tr[data-station-id="' + r.station_id + '"]');
+        if (!row) return;
+        var statusCell = row.querySelector('.status-cell');
+        if (statusCell) statusCell.textContent = r.status;
+      } catch (_) { /* ignore */ }
+    });
+    ws.addEventListener('close', function () {
+      setTimeout(connect, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 15000);
+    });
+  }
+  connect();
+})();
+</script>
+{% endblock %}

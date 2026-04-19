@@ -170,3 +170,33 @@ class TestUpgradeActions:
         dep = Deployment.objects.filter(target_tag=tag).first()
         assert dep is not None
         assert dep.image_release.tag == "v2"
+
+
+@pytest.mark.django_db
+class TestUpgradeDashboard:
+    def test_admin_sees_groups(self, client, admin_user, station, image_release, make_station_tag):
+        from django.urls import reverse
+
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+
+        tag = make_station_tag("test-stations")
+        station.tags.add(tag)
+        station.current_image_release = None
+        station.save(update_fields=["current_image_release"])
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+
+        client.force_login(admin_user)
+        response = client.get(reverse("rollouts:upgrade_dashboard"))
+        assert response.status_code == 200
+        assert b"test-stations" in response.content
+        # The "Upgrade group" form action must render for this non-empty, non-unassigned group.
+        assert b"upgrade/group/test-stations/" in response.content
+
+    def test_operator_forbidden(self, client, operator_user):
+        from django.urls import reverse
+
+        client.force_login(operator_user)
+        response = client.get(reverse("rollouts:upgrade_dashboard"))
+        assert response.status_code == 403

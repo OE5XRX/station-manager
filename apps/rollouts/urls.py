@@ -6,7 +6,7 @@ app_name = "rollouts"
 urlpatterns = [
     path(
         "upgrade/",
-        views._upgrade_dashboard_placeholder,
+        views.UpgradeDashboardView.as_view(),
         name="upgrade_dashboard",
     ),
     path(
