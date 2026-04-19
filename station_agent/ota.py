@@ -5,6 +5,7 @@ and committing successful boots. Actual partition writing is deferred
 to Yocto integration.
 """
 
+import bz2
 import hashlib
 import logging
 import os
@@ -14,6 +15,20 @@ from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, se
 from .http_client import HttpClient
 
 logger = logging.getLogger(__name__)
+
+_STREAM_CHUNK = 1 << 20  # 1 MiB
+
+
+def _stream_read(fh, n: int) -> bytes:
+    # Indirection so tests can count reads.
+    return fh.read(n)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
 
 
 def check_for_update(config, http_client: HttpClient) -> dict | None:
@@ -229,3 +244,28 @@ def apply_update(config, firmware_path: str) -> bool:
 
     logger.info("Update applied to slot %s — reboot to activate", target_slot)
     return True
+
+
+def install_to_slot(wic_bz2_path, partition_device: str) -> None:
+    """Stream-decompress a .wic.bz2 into a block device.
+
+    `partition_device` is e.g. "/dev/sda4". The caller is responsible
+    for making sure this is the inactive slot — typically derived via
+    bootloader.get_inactive_slot() + a machine-specific slot→device map.
+
+    Raises OSError on I/O failure.
+    """
+    decomp = bz2.BZ2Decompressor()
+    with open(str(wic_bz2_path), "rb") as src:
+        fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+        try:
+            while True:
+                chunk = _stream_read(src, _STREAM_CHUNK)
+                if not chunk:
+                    break
+                decompressed = decomp.decompress(chunk)
+                if decompressed:
+                    _write_all(fd, decompressed)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
