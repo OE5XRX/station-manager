@@ -107,9 +107,19 @@ class UpgradeGroupView(AdminRequiredMixin, View):
 
     def post(self, request, tag_name):
         tag = get_object_or_404(StationTag, name=tag_name)
-        stations = list(Station.objects.filter(tags=tag).select_related("current_image_release"))
+
+        # Honor first-match-wins: a station carrying both "test" and "easy"
+        # belongs to whichever tag comes first in the sequence, not to
+        # whichever group button the admin happens to press. Pull the
+        # bucket for this tag from the same grouping helper the dashboard
+        # uses so the two views can't disagree.
+        all_stations = list(
+            Station.objects.select_related("current_image_release").prefetch_related("tags")
+        )
+        buckets = group_stations_by_sequence(all_stations)
+        stations = buckets.get(tag_name, [])
         if not stations:
-            messages.info(request, _("No stations carry this tag."))
+            messages.info(request, _("No stations are currently assigned to this group."))
             return redirect("rollouts:upgrade_dashboard")
 
         # Bucket by machine. Stations with no current_image_release cannot
@@ -131,6 +141,21 @@ class UpgradeGroupView(AdminRequiredMixin, View):
                 if target is None:
                     skipped += len(machine_stations)
                     continue
+
+                # Filter out stations that are already on the target or
+                # that have an active deployment — BEFORE creating the
+                # Deployment row, so an all-skipped machine doesn't leave
+                # an empty Deployment floating in the table.
+                eligible: list = []
+                for s in machine_stations:
+                    if s.current_image_release_id == target.pk:
+                        skipped += 1
+                        continue
+                    eligible.append(s)
+
+                if not eligible:
+                    continue
+
                 dep = Deployment.objects.create(
                     image_release=target,
                     target_type=Deployment.TargetType.TAG,
@@ -138,10 +163,7 @@ class UpgradeGroupView(AdminRequiredMixin, View):
                     status=Deployment.Status.IN_PROGRESS,
                     created_by=request.user,
                 )
-                for s in machine_stations:
-                    if s.current_image_release_id == target.pk:
-                        skipped += 1
-                        continue
+                for s in eligible:
                     DeploymentResult.objects.create(
                         deployment=dep,
                         station=s,
@@ -167,6 +189,11 @@ class UpgradeGroupView(AdminRequiredMixin, View):
                         user=request.user,
                     )
                     created += 1
+
+                # If every station in this wave conflicted, back out the
+                # empty deployment we just created.
+                if not dep.results.exists():
+                    dep.delete()
 
         messages.success(
             request,

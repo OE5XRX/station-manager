@@ -171,6 +171,81 @@ class TestUpgradeActions:
         assert dep is not None
         assert dep.image_release.tag == "v2"
 
+    def test_upgrade_group_honors_first_match_wins(
+        self, client, admin_user, image_release, make_station_tag
+    ):
+        """A station carrying both `test` (pos 0) and `easy` (pos 1) must
+        only be upgraded when the `test` group button is pressed, never
+        when the `easy` button is pressed — the dashboard and the action
+        agree on which bucket the station lives in."""
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+        from apps.stations.models import Station
+
+        t_test = make_station_tag("test")
+        t_easy = make_station_tag("easy")
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_test, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_easy, position=1)
+
+        s = Station.objects.create(name="Dual")
+        s.tags.add(t_test, t_easy)
+        s.current_image_release = image_release
+        s.save(update_fields=["current_image_release"])
+
+        from apps.images.models import ImageRelease
+
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        ImageRelease.objects.create(
+            tag="v2",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="f" * 64,
+            size_bytes=2000,
+            is_latest=True,
+        )
+
+        client.force_login(admin_user)
+        # Press the "easy" group's button — station is in the test bucket,
+        # so no deployment should be queued against the easy tag.
+        response = client.post(reverse("rollouts:upgrade_group", args=["easy"]))
+        assert response.status_code == 302
+        assert not Deployment.objects.filter(target_tag=t_easy).exists()
+
+        # Press the "test" group's button — the station's real bucket.
+        response = client.post(reverse("rollouts:upgrade_group", args=["test"]))
+        assert response.status_code == 302
+        assert Deployment.objects.filter(target_tag=t_test).exists()
+
+    def test_upgrade_group_skips_unprovisioned_stations(
+        self, client, admin_user, image_release, make_station_tag
+    ):
+        """Stations with no current_image_release have no known machine
+        and must be counted as skipped, not silently dropped."""
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+        from apps.stations.models import Station
+
+        tag = make_station_tag("test")
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+
+        s = Station.objects.create(name="UnprovS")
+        s.tags.add(tag)
+        # current_image_release left None — station has no known machine.
+
+        client.force_login(admin_user)
+        response = client.post(reverse("rollouts:upgrade_group", args=["test"]))
+        assert response.status_code == 302
+        # No Deployment should be created since there's nothing to target.
+        assert not Deployment.objects.filter(target_tag=tag).exists()
+
 
 @pytest.mark.django_db
 class TestUpgradeDashboard:

@@ -266,6 +266,7 @@ class DeploymentDownloadView(APIView):
         http_status = 200
         length = total_size
         if range_header:
+            unsatisfiable = False
             m = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
             if m:
                 start = int(m.group(1))
@@ -273,32 +274,35 @@ class DeploymentDownloadView(APIView):
                 if end_g:
                     end = int(end_g)
                 if total_size and start >= total_size:
-                    # RFC 7233: unsatisfiable range → 416 with the total.
+                    unsatisfiable = True
+                elif end is not None and end < start:
+                    unsatisfiable = True
+                else:
+                    if total_size and end is not None:
+                        end = min(end, total_size - 1)
+                    try:
+                        stream.seek(start)
+                    except (AttributeError, io.UnsupportedOperation, NotImplementedError):
+                        # Backend can't seek. A read-and-discard fallback
+                        # turns every Range request into a full-object
+                        # read on the wire, which is a bandwidth DoS
+                        # vector from a compromised device. Refuse the
+                        # range instead — the agent will restart from 0.
+                        stream.close()
+                        unsatisfiable = True
+                    else:
+                        http_status = 206
+                        length = (end - start + 1) if end is not None else None
+
+            if unsatisfiable:
+                if not stream.closed:
                     stream.close()
-                    response = Response(
-                        {"detail": "Requested range not satisfiable."},
-                        status=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                    )
-                    response["Content-Range"] = f"bytes */{total_size}"
-                    return response
-                if total_size and end is not None:
-                    end = min(end, total_size - 1)
-                try:
-                    stream.seek(start)
-                except (AttributeError, io.UnsupportedOperation, NotImplementedError):
-                    # Backend doesn't support seek (some default_storage
-                    # implementations); fall back to read-and-discard. Real
-                    # IO errors are allowed to propagate.
-                    stream.close()
-                    stream = image_storage.open_stream(image.s3_key)
-                    discarded = 0
-                    while discarded < start:
-                        chunk = stream.read(min(self.CHUNK, start - discarded))
-                        if not chunk:
-                            break
-                        discarded += len(chunk)
-                http_status = 206
-                length = (end - start + 1) if end is not None else None
+                response = Response(
+                    {"detail": "Requested range not satisfiable."},
+                    status=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                )
+                response["Content-Range"] = f"bytes */{total_size}"
+                return response
 
         def iterator():
             remaining = length

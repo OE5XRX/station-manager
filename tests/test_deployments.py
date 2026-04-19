@@ -425,6 +425,84 @@ class TestDeploymentDownload:
         assert body == b"X" * 10
         assert r["Content-Range"] == "bytes 10-19/1000"
 
+    def test_range_end_before_start_returns_416(
+        self, client, station_with_key, image_release, admin_user, monkeypatch
+    ):
+        import io
+
+        from apps.deployments.models import Deployment, DeploymentResult
+
+        station, priv = station_with_key
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep, station=station, status=DeploymentResult.Status.PENDING
+        )
+        monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(b"X" * 1000))
+        headers = device_auth_headers(priv, station.pk, b"")
+        r = client.get(
+            reverse("api:deployment_download", args=[dep.pk]),
+            HTTP_RANGE="bytes=10-9",
+            **headers,
+        )
+        assert r.status_code == 416
+        assert r["Content-Range"] == "bytes */1000"
+
+    def test_range_on_non_seekable_backend_returns_416(
+        self, client, station_with_key, image_release, admin_user, monkeypatch
+    ):
+        """When the storage backend can't seek, Range must not fall back to
+        read-and-discard — that's a bandwidth DoS vector. Return 416 so the
+        agent restarts from 0."""
+        import io
+
+        from apps.deployments.models import Deployment, DeploymentResult
+
+        class NoSeekStream:
+            def __init__(self, data):
+                self._data = data
+                self._pos = 0
+                self.closed = False
+
+            def read(self, n):
+                chunk = self._data[self._pos : self._pos + n]
+                self._pos += len(chunk)
+                return chunk
+
+            def seek(self, _):
+                raise io.UnsupportedOperation("seek")
+
+            def close(self):
+                self.closed = True
+
+        station, priv = station_with_key
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep, station=station, status=DeploymentResult.Status.PENDING
+        )
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream", lambda key: NoSeekStream(b"X" * 1000)
+        )
+        headers = device_auth_headers(priv, station.pk, b"")
+        r = client.get(
+            reverse("api:deployment_download", args=[dep.pk]),
+            HTTP_RANGE="bytes=500-",
+            **headers,
+        )
+        assert r.status_code == 416
+        assert r["Content-Range"] == "bytes */1000"
+
 
 @pytest.mark.django_db
 class TestCommitSetsCurrentImage:
