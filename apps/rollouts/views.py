@@ -20,7 +20,7 @@ from apps.rollouts.grouping import UNASSIGNED_KEY, group_stations_by_sequence
 from apps.stations.models import Station, StationAuditLog, StationTag
 
 from .forms import SequenceAddForm
-from .models import RolloutSequenceEntry, current_sequence
+from .models import RolloutSequence, RolloutSequenceEntry, current_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -357,14 +357,19 @@ class SequenceAddView(AdminRequiredMixin, View):
         seq = current_sequence()
         form = SequenceAddForm(request.POST, sequence=seq)
         if form.is_valid():
-            next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
-            RolloutSequenceEntry.objects.create(
-                sequence=seq,
-                tag=form.cleaned_data["tag"],
-                position=next_pos,
-            )
-            seq.updated_by = request.user
-            seq.save(update_fields=["updated_by", "updated_at"])
+            # Lock the RolloutSequence row so two concurrent Add clicks
+            # can't both compute the same max(position)+1 and race into
+            # an IntegrityError on uniq_position_per_sequence.
+            with transaction.atomic():
+                (RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first())
+                next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
+                RolloutSequenceEntry.objects.create(
+                    sequence=seq,
+                    tag=form.cleaned_data["tag"],
+                    position=next_pos,
+                )
+                seq.updated_by = request.user
+                seq.save(update_fields=["updated_by", "updated_at"])
         return redirect("rollouts:sequence_edit")
 
 

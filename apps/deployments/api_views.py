@@ -292,9 +292,12 @@ class DeploymentDownloadView(APIView):
     def get(self, request, pk):
         station = getattr(request.auth, "station", None)
         if station is None:
+            # Docstring promises authz failures uniformly collapse to 403
+            # so a station can't distinguish "my key has no station" from
+            # "that deployment isn't mine". Honour that here too.
             return Response(
                 {"detail": "No station linked to this device key."},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         # Mirror the check view's resumable set. A station that crashed

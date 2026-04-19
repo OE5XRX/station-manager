@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.deployments.models import Deployment, DeploymentResult
+from apps.stations.models import Station
 
 
 class ActiveDeploymentConflictError(Exception):
@@ -22,6 +23,14 @@ def supersede_pending_for_station(
     Runs in a transaction with SELECT FOR UPDATE so concurrent calls don't race.
     """
     with transaction.atomic():
+        # Lock the Station row itself so two concurrent "create new
+        # deployment + supersede" flows on the same station serialize
+        # against each other. Without this, both transactions can see
+        # "no relevant rows yet" simultaneously and each commit a new
+        # PENDING result — leaving the station with two active
+        # deployments.
+        Station.objects.select_for_update().filter(pk=station.pk).first()
+
         active_statuses = {
             DeploymentResult.Status.DOWNLOADING,
             DeploymentResult.Status.INSTALLING,
