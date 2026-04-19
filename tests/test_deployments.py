@@ -219,3 +219,75 @@ class TestDeploymentImageReleaseFK:
         )
         with pytest.raises(ProtectedError):
             image_release.delete()
+
+
+@pytest.mark.django_db
+class TestSupersession:
+    def _second_release(self):
+        from apps.images.models import ImageRelease
+
+        # Unset the fixture's is_latest so we don't hit the partial-unique index.
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        return ImageRelease.objects.create(
+            tag="v1-beta",
+            machine="qemux86-64",
+            s3_key="images/v1-beta/qemux86-64.wic.bz2",
+            sha256="b" * 64,
+            size_bytes=1000,
+            is_latest=True,
+        )
+
+    def test_pending_result_gets_superseded(self, image_release, station, admin_user):
+        from apps.deployments.models import Deployment, DeploymentResult
+        from apps.deployments.supersession import supersede_pending_for_station
+
+        dep1 = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            created_by=admin_user,
+        )
+        r1 = DeploymentResult.objects.create(deployment=dep1, station=station)
+
+        newer = self._second_release()
+        dep2 = Deployment.objects.create(
+            image_release=newer,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            created_by=admin_user,
+        )
+        superseded = supersede_pending_for_station(station=station, new_deployment=dep2)
+        assert superseded == [r1.pk]
+
+        r1.refresh_from_db()
+        assert r1.status == DeploymentResult.Status.SUPERSEDED
+
+    def test_active_result_blocks_new_deployment(self, image_release, station, admin_user):
+        from apps.deployments.models import Deployment, DeploymentResult
+        from apps.deployments.supersession import (
+            ActiveDeploymentConflict,
+            supersede_pending_for_station,
+        )
+
+        dep1 = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep1,
+            station=station,
+            status=DeploymentResult.Status.INSTALLING,
+        )
+
+        newer = self._second_release()
+        dep2 = Deployment.objects.create(
+            image_release=newer,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            created_by=admin_user,
+        )
+
+        with pytest.raises(ActiveDeploymentConflict):
+            supersede_pending_for_station(station=station, new_deployment=dep2)
