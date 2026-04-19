@@ -388,6 +388,33 @@ class TestSequenceEdit:
         assert e1.position == 1
         assert e2.position == 0
 
+    def test_reorder_rejects_duplicate_ids(self, client, admin_user, make_station_tag):
+        """`1,1,2` used to pass the set-equality check and leave the
+        sequence non-normalized — one entry double-assigned, one
+        position skipped. Now it must be rejected up front."""
+        from django.urls import reverse
+
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+
+        seq = current_sequence()
+        seq.entries.all().delete()
+        t1 = make_station_tag("t1")
+        t2 = make_station_tag("t2")
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=0)
+        e2 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=1)
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:sequence_reorder"),
+            {"order": f"{e1.pk},{e1.pk},{e2.pk}"},
+        )
+        assert response.status_code == 400
+        e1.refresh_from_db()
+        e2.refresh_from_db()
+        # Nothing moved.
+        assert e1.position == 0
+        assert e2.position == 1
+
 
 @pytest.mark.django_db
 class TestStationUpgradeCard:

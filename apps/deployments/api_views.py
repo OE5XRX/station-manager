@@ -374,15 +374,31 @@ class DeploymentDownloadView(APIView):
                 {"detail": "Image artifact unavailable from storage backend."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        total_size = image.size_bytes or 0
+        # Treat missing / non-positive size_bytes as unknown. If we
+        # coerced it to 0, every response would advertise
+        # Content-Length: 0 and the Range math would reject every
+        # request as start >= 0, even though the stream actually has
+        # bytes to serve.
+        total_size = image.size_bytes if image.size_bytes and image.size_bytes > 0 else None
 
         # Optional Range support - translate HTTP Range into a seek on the stream.
         range_header = request.META.get("HTTP_RANGE", "")
         start = 0
-        end = total_size - 1 if total_size else None
+        end = (total_size - 1) if total_size is not None else None
         http_status = 200
         length = total_size
         if range_header:
+            # Without a known total size we can't give a valid 206
+            # (Content-Range requires complete-length) and can't
+            # validate the client's bounds — refuse cleanly so the
+            # agent falls back to a full GET.
+            if total_size is None:
+                if not getattr(stream, "closed", False):
+                    stream.close()
+                return Response(
+                    {"detail": "Requested range not satisfiable."},
+                    status=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                )
             unsatisfiable = False
             m = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
             if m:
@@ -390,12 +406,12 @@ class DeploymentDownloadView(APIView):
                 end_g = m.group(2)
                 if end_g:
                     end = int(end_g)
-                if total_size and start >= total_size:
+                if start >= total_size:
                     unsatisfiable = True
                 elif end is not None and end < start:
                     unsatisfiable = True
                 else:
-                    if total_size and end is not None:
+                    if end is not None:
                         end = min(end, total_size - 1)
                     try:
                         stream.seek(start)

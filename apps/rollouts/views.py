@@ -410,6 +410,11 @@ class SequenceReorderView(AdminRequiredMixin, View):
             order_ids = [int(x) for x in order_str.split(",") if x]
         except ValueError:
             return HttpResponseBadRequest("order must be ids")
+        # A payload like "1,1,2" would pass the later set() comparison
+        # (because set({1,1,2}) == {1,2}) but then assign two positions
+        # to entry 1 and skip one — leaving the sequence non-normalized.
+        if len(order_ids) != len(set(order_ids)):
+            return HttpResponseBadRequest("order must not contain duplicates")
         with transaction.atomic():
             # Serialize against concurrent Add/Remove/Reorder on the
             # same sequence through a row lock on the RolloutSequence
