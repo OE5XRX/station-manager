@@ -133,12 +133,25 @@ class DeploymentStatusUpdateView(APIView):
 
         result.save(update_fields=update_fields)
 
-        # Audit log
-        StationAuditLog.log(
-            station=station,
-            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-            message=f"Deployment #{result.deployment_id} status: {new_status}.",
-        )
+        # Audit log is best-effort — a transient DB hiccup here must
+        # not 500 the endpoint after we've already persisted the status
+        # update, or we'd skip _check_deployment_complete and the
+        # WebSocket broadcast below and leave the dashboard stale.
+        try:
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                message=f"Deployment #{result.deployment_id} status: {new_status}.",
+            )
+        except Exception:
+            logger.warning(
+                "Audit log write failed for deployment status update "
+                "(station=%s, deployment=%s, status=%s)",
+                station.pk,
+                result.deployment_id,
+                new_status,
+                exc_info=True,
+            )
 
         # Check if deployment is complete after failure
         if new_status in (DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK):
