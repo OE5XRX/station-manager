@@ -4,10 +4,15 @@ from django.utils.translation import gettext_lazy as _
 
 
 class RolloutSequence(models.Model):
-    """Singleton-in-practice: system-wide ordered tag list for manual phased
-    rollouts. Created once via data migration, edited via the Rollout
-    Sequence page.
+    """System-wide ordered tag list for manual phased rollouts.
+
+    Enforced singleton: the ``singleton_key`` field has a unique index
+    and a fixed default, so the DB rejects any attempt to insert a
+    second row (whether from a race inside ``current_sequence()`` or
+    from an admin creating one by hand).
     """
+
+    SINGLETON_KEY = "current"
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -17,6 +22,13 @@ class RolloutSequence(models.Model):
         null=True,
         blank=True,
         related_name="updated_rollout_sequences",
+    )
+    singleton_key = models.CharField(
+        max_length=16,
+        default=SINGLETON_KEY,
+        editable=False,
+        unique=True,
+        help_text=_("Fixed value; the unique index makes this table a singleton."),
     )
 
     class Meta:
@@ -56,17 +68,13 @@ class RolloutSequenceEntry(models.Model):
 
 
 def current_sequence() -> RolloutSequence:
-    """Return the singleton RolloutSequence.
+    """Return the singleton RolloutSequence, creating it if missing.
 
-    The row is seeded by migration 0002_seed_singleton; this helper
-    returns whichever RolloutSequence exists, or creates one (without
-    forcing a specific pk) if the table is somehow empty.
-
-    We deliberately avoid a hard-coded pk — on Postgres, explicit-pk
-    inserts don't advance the underlying sequence, which would cause
-    later Django-admin-style creates to collide on pk=1.
+    Two requests racing through this function on an empty table used
+    to be able to create two rows; the ``singleton_key`` unique index
+    plus ``get_or_create`` now serializes them at the DB level — the
+    loser hits IntegrityError inside ``get_or_create`` which re-reads
+    the row the winner inserted.
     """
-    seq = RolloutSequence.objects.order_by("pk").first()
-    if seq is None:
-        seq = RolloutSequence.objects.create()
+    seq, _ = RolloutSequence.objects.get_or_create(singleton_key=RolloutSequence.SINGLETON_KEY)
     return seq

@@ -7,8 +7,15 @@ from apps.stations.models import StationTag
 
 @pytest.mark.django_db
 class TestRolloutSequence:
+    # RolloutSequence is a DB-enforced singleton (unique singleton_key),
+    # so these tests reuse the migration-seeded row via current_sequence()
+    # instead of creating their own — the old pattern would now hit the
+    # unique index.
+
     def test_entries_are_ordered_by_position(self):
-        seq = RolloutSequence.objects.create()
+        from apps.rollouts.models import current_sequence
+
+        seq = current_sequence()
         tag_a = StationTag.objects.create(name="alpha", slug="alpha")
         tag_b = StationTag.objects.create(name="beta", slug="beta")
         tag_c = StationTag.objects.create(name="gamma", slug="gamma")
@@ -21,7 +28,9 @@ class TestRolloutSequence:
         assert ordered == ["alpha", "beta", "gamma"]
 
     def test_tag_unique_per_sequence(self):
-        seq = RolloutSequence.objects.create()
+        from apps.rollouts.models import current_sequence
+
+        seq = current_sequence()
         tag = StationTag.objects.create(name="t1", slug="t1")
 
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
@@ -29,7 +38,9 @@ class TestRolloutSequence:
             RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=1)
 
     def test_position_unique_per_sequence(self):
-        seq = RolloutSequence.objects.create()
+        from apps.rollouts.models import current_sequence
+
+        seq = current_sequence()
         t1 = StationTag.objects.create(name="t1", slug="t1")
         t2 = StationTag.objects.create(name="t2", slug="t2")
 
@@ -58,6 +69,16 @@ class TestSingletonSeed:
         seq2 = current_sequence()
         assert seq1 == seq2
         assert RolloutSequence.objects.count() == 1
+
+    def test_singleton_key_prevents_a_second_row(self):
+        """DB-level safety net: a second RolloutSequence row — whether
+        from a concurrent current_sequence() race or an admin clicking
+        Add — must be rejected by the singleton_key unique index, not
+        silently accepted."""
+        from django.db import IntegrityError, transaction
+
+        with transaction.atomic(), pytest.raises(IntegrityError):
+            RolloutSequence.objects.create()
 
 
 @pytest.mark.django_db
