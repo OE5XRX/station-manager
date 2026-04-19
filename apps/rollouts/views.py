@@ -247,11 +247,14 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
             DeploymentResult.Status.REBOOTING,
             DeploymentResult.Status.VERIFYING,
         ]
-        station_pks = [s.pk for s in stations]
+        # stations already holds the whole fleet (the dashboard renders
+        # every station), so an IN-clause over [s.pk for s in stations]
+        # would be a no-op that just risks PG's parameter limit as the
+        # fleet grows. Fetch every active result; the setdefault below
+        # keeps the latest per station_id.
         active_result_by_station: dict[int, DeploymentResult] = {}
         for r in (
             DeploymentResult.objects.filter(
-                station_id__in=station_pks,
                 status__in=active_statuses,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
@@ -354,11 +357,13 @@ class SequenceReorderView(AdminRequiredMixin, View):
             # constraint never sees a collision during the transition.
             # Pick an offset that can't overlap with either the old or
             # the new positions, clamped to PositiveSmallIntegerField
-            # (max 32767) so a very large sequence can't overflow.
+            # (max 32767). The first pass writes e.position + offset,
+            # so the real ceiling is max_current + offset — not
+            # offset + n.
             n = len(order_ids)
             max_current = max((e.position for e in existing.values()), default=0)
             offset = max(max_current, n) + 1
-            if offset + n > 32767:
+            if max_current + offset > 32767:
                 return HttpResponseBadRequest("sequence too large to reorder safely")
             for e in existing.values():
                 e.position = e.position + offset
