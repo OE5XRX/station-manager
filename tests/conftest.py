@@ -146,11 +146,18 @@ def image_release(db):
 
 @pytest.fixture
 def make_station_tag(db):
-    """Factory to create StationTag with slug defaulted to name."""
+    """Factory to create StationTag with slug defaulted to slugify(name).
+
+    Mirrors how production flows (admin form + import scripts) generate
+    slugs, so tests can't accidentally create tags with names that
+    would be rejected by the `<slug:tag_slug>` URL converter.
+    """
+    from django.utils.text import slugify
+
     from apps.stations.models import StationTag
 
     def _make(name, **kwargs):
-        kwargs.setdefault("slug", name)
+        kwargs.setdefault("slug", slugify(name))
         return StationTag.objects.create(name=name, **kwargs)
 
     return _make

@@ -1,7 +1,13 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
+# Slugs reserved by the rollout machinery (apps.rollouts.grouping) —
+# creating a StationTag with one of these slugs would let a real tag
+# shadow the sentinel bucket used for "stations outside the sequence".
+RESERVED_TAG_SLUGS = frozenset({"__unassigned__"})
 
 
 class StationTag(models.Model):
@@ -29,6 +35,11 @@ class StationTag(models.Model):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        if self.slug in RESERVED_TAG_SLUGS:
+            raise ValidationError({"slug": _("This slug is reserved by the rollout system.")})
 
 
 class ModuleType(models.Model):
