@@ -124,10 +124,15 @@ class UpgradeGroupView(AdminRequiredMixin, View):
         )
         stations_qs = Station.objects.filter(tags=tag).select_related("current_image_release")
         if earlier_tag_ids:
-            claimed_by_earlier = Station.objects.filter(tags__in=earlier_tag_ids).values_list(
-                "pk", flat=True
+            # Narrow the claimed-by-earlier query to stations that *also*
+            # carry the target tag — chained .filter() on an M2M forces
+            # an AND intersection. Bound the query to the group, not the
+            # fleet. Pass the queryset to .exclude() so Django emits a
+            # subquery instead of materializing pks into Python.
+            claimed_by_earlier = (
+                Station.objects.filter(tags=tag).filter(tags__in=earlier_tag_ids).values("pk")
             )
-            stations_qs = stations_qs.exclude(pk__in=list(claimed_by_earlier))
+            stations_qs = stations_qs.exclude(pk__in=claimed_by_earlier)
         stations = list(stations_qs)
         if not stations:
             messages.info(request, _("No stations are currently assigned to this group."))
