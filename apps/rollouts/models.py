@@ -53,3 +53,9 @@ class RolloutSequenceEntry(models.Model):
 
     def __str__(self):
         return f"{self.position}: {self.tag}"
+
+
+def current_sequence() -> RolloutSequence:
+    """Return the singleton RolloutSequence, creating it on first access."""
+    seq, _created = RolloutSequence.objects.get_or_create(pk=1)
+    return seq

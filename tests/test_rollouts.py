@@ -36,3 +36,18 @@ class TestRolloutSequence:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=0)
         with pytest.raises(IntegrityError):
             RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=0)
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSingletonSeed:
+    def test_exactly_one_sequence_exists_after_migrations(self):
+        # django_db rolls back — check via a fresh count.
+        assert RolloutSequence.objects.count() == 1
+
+    def test_current_sequence_helper_returns_the_singleton(self):
+        from apps.rollouts.models import current_sequence
+
+        seq1 = current_sequence()
+        seq2 = current_sequence()
+        assert seq1 == seq2
+        assert RolloutSequence.objects.count() == 1
