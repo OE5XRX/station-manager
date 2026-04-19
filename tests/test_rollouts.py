@@ -41,8 +41,10 @@ class TestRolloutSequence:
 @pytest.mark.django_db(transaction=True)
 class TestSingletonSeed:
     def test_exactly_one_sequence_exists_after_migrations(self):
-        # django_db rolls back — check via a fresh count.
+        # transaction=True → each test starts from the migrated DB state,
+        # so the singleton seeded by 0002_seed_singleton is present.
         assert RolloutSequence.objects.count() == 1
+        assert RolloutSequence.objects.filter(pk=1).exists()
 
     def test_current_sequence_helper_returns_the_singleton(self):
         from apps.rollouts.models import current_sequence

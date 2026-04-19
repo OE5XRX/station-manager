@@ -56,6 +56,11 @@ class RolloutSequenceEntry(models.Model):
 
 
 def current_sequence() -> RolloutSequence:
-    """Return the singleton RolloutSequence, creating it on first access."""
+    """Return the singleton RolloutSequence.
+
+    The pk=1 row is seeded by migration 0002_seed_singleton; the
+    get_or_create fallback exists only as a safety net and should never
+    fire in production.
+    """
     seq, _created = RolloutSequence.objects.get_or_create(pk=1)
     return seq
