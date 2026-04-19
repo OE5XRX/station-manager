@@ -18,9 +18,9 @@
 
 - [x] Phase 1 — Data model (Tasks 1-4)
 - [x] Phase 2 — Server-side upgrade logic (Tasks 5-9)
-- [ ] Phase 3 — UI (Tasks 10-14)
-- [ ] Phase 4 — Agent (Tasks 15-17)
-- [ ] Phase 5 — Plumbing + E2E (Tasks 18-19)
+- [x] Phase 3 — UI (Tasks 10-14)
+- [x] Phase 4 — Agent (Tasks 15-17)
+- [ ] Phase 5 — Plumbing + E2E (Tasks 18-19 — bzip2 recipe PR merged in linux-image; E2E + final PR in progress)
 
 ### Execution notes (for the next session)
 
