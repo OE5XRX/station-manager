@@ -26,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def _best_effort_audit_log(*, station, event_type, message, user=None):
-    """Audit logging must never break the real operation."""
+    """Audit logging must never break the real operation.
+
+    Safe to call OUTSIDE a transaction.atomic() block. Inside one,
+    use _defer_audit_log so a transient DB error on the audit table
+    can't poison the enclosing transaction.
+    """
     try:
         StationAuditLog.log(
             station=station,
@@ -36,6 +41,36 @@ def _best_effort_audit_log(*, station, event_type, message, user=None):
         )
     except Exception as exc:
         logger.warning("Audit log write failed (%s): %s", event_type, exc)
+
+
+def _defer_audit_log(*, station, event_type, message, user=None):
+    """Queue a best-effort audit log to run after the current transaction commits.
+
+    Inside a transaction.atomic() block, catching a DatabaseError from an
+    INSERT puts the whole transaction into a rollback-only state, which
+    then poisons every subsequent query in that block. Queuing the write
+    with transaction.on_commit() sidesteps that entirely: the call fires
+    only if the outer transaction actually commits, and any failure then
+    is on its own connection.
+    """
+    station_pk = station.pk
+    user_pk = getattr(user, "pk", None)
+
+    def _write() -> None:
+        try:
+            # Re-resolve the Station/User by pk so we don't hold stale
+            # instances from the transaction across the commit boundary.
+            actor = type(user).objects.filter(pk=user_pk).first() if user_pk else None
+            StationAuditLog.log(
+                station=Station.objects.filter(pk=station_pk).first(),
+                event_type=event_type,
+                message=message,
+                user=actor,
+            )
+        except Exception as exc:
+            logger.warning("Deferred audit log failed (%s): %s", event_type, exc)
+
+    transaction.on_commit(_write)
 
 
 def _target_release_for(station) -> ImageRelease | None:
@@ -194,7 +229,15 @@ class UpgradeGroupView(AdminRequiredMixin, View):
                         DeploymentResult.objects.filter(deployment=dep, station=s).delete()
                         skipped += 1
                         continue
-                    _best_effort_audit_log(
+                    # Defer audit-log write until AFTER the atomic block
+                    # commits. Running it inside the block risks a
+                    # DatabaseError on the audit table flipping the main
+                    # transaction into rollback-only, which would then
+                    # swallow every subsequent create in the loop. The
+                    # lambda copies all values we need so the closure is
+                    # safe even though `s` / `dep` / `target` / `tag` are
+                    # loop variables that will change.
+                    _defer_audit_log(
                         station=s,
                         event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
                         message=(

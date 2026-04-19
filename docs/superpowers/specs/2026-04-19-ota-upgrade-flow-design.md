@@ -99,9 +99,11 @@ class Status(models.TextChoices):
     DOWNLOADING = "downloading"
     INSTALLING = "installing"
     REBOOTING = "rebooting"
-    COMMITTED = "committed"
+    VERIFYING = "verifying"
+    SUCCESS = "success"         # agent committed; this is the committed terminal state
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    CANCELLED = "cancelled"
     SUPERSEDED = "superseded"   # NEW — a newer deployment replaced this before agent started
 ```
 
@@ -389,15 +391,21 @@ Approach (no external tools required beyond `os.open`):
 def install_to_slot(wic_bz2_path: Path, partition_device: str) -> None:
     """Stream-decompress the wic.bz2 into the given block device."""
     decomp = bz2.BZ2Decompressor()
-    with open(wic_bz2_path, "rb") as src, os.open(partition_device, os.O_WRONLY | os.O_SYNC) as fd:
-        while chunk := src.read(1 << 20):
-            out = decomp.decompress(chunk)
-            if out:
-                _write_all(fd, out)
-        tail = decomp.flush()
-        if tail:
-            _write_all(fd, tail)
-        os.fsync(fd)
+    with open(wic_bz2_path, "rb") as src:
+        # os.open returns a raw int fd, not a context manager — close
+        # it explicitly in a try/finally so a mid-stream raise doesn't
+        # leak it.
+        fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+        try:
+            while chunk := src.read(1 << 20):
+                out = decomp.decompress(chunk)
+                if out:
+                    _write_all(fd, out)
+            if not decomp.eof:
+                raise ValueError(f"{wic_bz2_path} is a truncated bz2 stream")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 ```
 
 Edge cases handled:
@@ -406,8 +414,11 @@ Edge cases handled:
   drained (block devices usually write in full but safe is safe).
 - `fsync` before returning ensures the partition is actually on the
   medium (not just in cache) before we flip the bootloader env.
-- Decompressor is called even on a `b""` chunk at EOF to emit any
-  buffered tail bytes.
+- `decomp.eof` is the only honest signal that the bz2 stream reached
+  its end — SHA-256 over a truncated file that happens to match its
+  own expected checksum would not be caught any other way.
+  (`BZ2Decompressor` has no `.flush()`; checking `.eof` is the
+  idiomatic end-of-stream test.)
 
 ### Opaque download URL handling
 
