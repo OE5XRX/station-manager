@@ -8,7 +8,6 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "config/asgi.py" = ["E402"]
-"apps/deployments/supersession.py" = ["N818"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"

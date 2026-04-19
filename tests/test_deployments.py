@@ -265,7 +265,7 @@ class TestSupersession:
     def test_active_result_blocks_new_deployment(self, image_release, station, admin_user):
         from apps.deployments.models import Deployment, DeploymentResult
         from apps.deployments.supersession import (
-            ActiveDeploymentConflict,
+            ActiveDeploymentConflictError,
             supersede_pending_for_station,
         )
 
@@ -289,5 +289,5 @@ class TestSupersession:
             created_by=admin_user,
         )
 
-        with pytest.raises(ActiveDeploymentConflict):
+        with pytest.raises(ActiveDeploymentConflictError):
             supersede_pending_for_station(station=station, new_deployment=dep2)

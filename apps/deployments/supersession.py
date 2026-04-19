@@ -5,7 +5,7 @@ from django.db import transaction
 from apps.deployments.models import Deployment, DeploymentResult
 
 
-class ActiveDeploymentConflict(Exception):
+class ActiveDeploymentConflictError(Exception):
     """Raised when a station has a deployment beyond PENDING, which cannot be superseded."""
 
 
@@ -15,7 +15,7 @@ def supersede_pending_for_station(
     new_deployment: Deployment,
 ) -> list[int]:
     """Mark any PENDING DeploymentResult for `station` (other than for
-    `new_deployment`) as SUPERSEDED. Raise ActiveDeploymentConflict if a
+    `new_deployment`) as SUPERSEDED. Raise ActiveDeploymentConflictError if a
     non-PENDING, non-terminal result exists.
 
     Runs in a transaction with SELECT FOR UPDATE so concurrent calls don't race.
@@ -39,7 +39,7 @@ def supersede_pending_for_station(
             if r.status == DeploymentResult.Status.PENDING:
                 to_supersede.append(r.pk)
             elif r.status in active_statuses:
-                raise ActiveDeploymentConflict(
+                raise ActiveDeploymentConflictError(
                     f"Station {station.pk} is mid-deployment "
                     f"({r.get_status_display()} on deployment #{r.deployment_id})"
                 )
