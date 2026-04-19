@@ -49,9 +49,10 @@ def _defer_audit_log(*, station, event_type, message, user=None):
     Inside a transaction.atomic() block, catching a DatabaseError from an
     INSERT puts the whole transaction into a rollback-only state, which
     then poisons every subsequent query in that block. Queuing the write
-    with transaction.on_commit() sidesteps that entirely: the call fires
-    only if the outer transaction actually commits, and any failure then
-    is on its own connection.
+    with transaction.on_commit() sidesteps that entirely: the callback
+    runs only after the enclosing atomic block has already committed, so
+    any failure during the audit INSERT can't mark that block rollback-
+    only or abort the real operation.
     """
     from django.contrib.auth import get_user_model
 

@@ -222,10 +222,22 @@ def download_firmware_resumable(
             return False
 
     try:
-        with open(dest_path, mode) as f:
-            for chunk in resp.iter_content(chunk_size=_STREAM_CHUNK):
-                if chunk:
-                    f.write(chunk)
+        try:
+            with open(dest_path, mode) as f:
+                for chunk in resp.iter_content(chunk_size=_STREAM_CHUNK):
+                    if chunk:
+                        f.write(chunk)
+        except OSError as exc:
+            # Full disk, permission error, read-only FS, etc. Must return
+            # cleanly so the agent reports FAILED and tries again next
+            # poll cycle — letting this propagate would crash the OTA
+            # worker thread.
+            logger.error("Failed to write firmware to %s: %s", dest_path, exc)
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            return False
     finally:
         try:
             resp.close()
@@ -234,12 +246,24 @@ def download_firmware_resumable(
 
     if expected_checksum:
         h = hashlib.sha256()
-        with open(dest_path, "rb") as f:
-            while True:
-                chunk = f.read(_STREAM_CHUNK)
-                if not chunk:
-                    break
-                h.update(chunk)
+        try:
+            with open(dest_path, "rb") as f:
+                while True:
+                    chunk = f.read(_STREAM_CHUNK)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+        except OSError as exc:
+            # Disk ejected / file cleared / permissions revoked between
+            # the write and the checksum pass. Same contract as above:
+            # return False so the agent reports FAILED instead of
+            # crashing.
+            logger.error("Failed to read firmware for checksum %s: %s", dest_path, exc)
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            return False
         if h.hexdigest() != expected_checksum:
             logger.error(
                 "Checksum mismatch: expected %s got %s",
