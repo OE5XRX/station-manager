@@ -159,7 +159,24 @@ class StationAgent:
         from .inventory import get_current_version
 
         running_version = get_current_version()
-        if running_version and running_version != version:
+        if not running_version:
+            # /etc/os-release doesn't expose OE5XRX_RELEASE — we cannot
+            # prove what image we're actually running. Fail closed: if
+            # the bootloader rolled back we'd otherwise commit the new
+            # deployment against the old kernel.
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "rolled_back",
+                error_message=(
+                    "Cannot verify running version (OE5XRX_RELEASE not found "
+                    "in /etc/os-release); refusing to commit."
+                ),
+            )
+            logger.warning("Refusing to commit deployment %s: running version unknown", result_pk)
+            return
+        if running_version != version:
             report_status(
                 config,
                 http_client,

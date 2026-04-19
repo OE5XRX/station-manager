@@ -90,12 +90,18 @@ def _close_out_deployments_with_superseded_results(result_pks: list[int]) -> Non
             continue
         statuses = set(dep.results.values_list("status", flat=True))
         if statuses and statuses.issubset(terminal):
-            # Every child is terminal — mark the parent as completed
-            # (or cancelled if nothing actually succeeded). We pick
-            # CANCELLED when the superseded set dominates so the UI
-            # labels it honestly as "was displaced".
+            # Every child is terminal — roll the parent up consistently
+            # with _check_deployment_complete's semantics:
+            #   - COMPLETED if any child succeeded
+            #   - FAILED  if any child failed / rolled back
+            #   - else CANCELLED (all cancelled or superseded)
             if DeploymentResult.Status.SUCCESS in statuses:
                 dep.status = Deployment.Status.COMPLETED
+            elif statuses & {
+                DeploymentResult.Status.FAILED,
+                DeploymentResult.Status.ROLLED_BACK,
+            }:
+                dep.status = Deployment.Status.FAILED
             else:
                 dep.status = Deployment.Status.CANCELLED
             dep.save(update_fields=["status"])
