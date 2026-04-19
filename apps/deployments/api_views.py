@@ -168,7 +168,7 @@ class DeploymentCommitView(APIView):
                     DeploymentResult.Status.INSTALLING,
                 ],
             )
-            .select_related("deployment")
+            .select_related("deployment__image_release")
             .order_by("-deployment__created_at")
             .first()
         )
@@ -183,6 +183,12 @@ class DeploymentCommitView(APIView):
         result.completed_at = timezone.now()
         result.new_version = version
         result.save(update_fields=["status", "completed_at", "new_version"])
+
+        # Update the station's "provisioned with" pointer so the UI reflects
+        # what's running on disk right now.
+        station.current_image_release = result.deployment.image_release
+        station.updated_at = timezone.now()
+        station.save(update_fields=["current_image_release", "updated_at"])
 
         # Audit log
         StationAuditLog.log(

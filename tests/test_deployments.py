@@ -424,3 +424,37 @@ class TestDeploymentDownload:
         body = b"".join(r.streaming_content)
         assert body == b"X" * 10
         assert r["Content-Range"] == "bytes 10-19/1000"
+
+
+@pytest.mark.django_db
+class TestCommitSetsCurrentImage:
+    def test_commit_updates_current_image_release(
+        self, client, station_with_key, image_release, admin_user
+    ):
+        import json
+
+        from apps.deployments.models import Deployment, DeploymentResult
+
+        station, priv = station_with_key
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep,
+            station=station,
+            status=DeploymentResult.Status.REBOOTING,
+        )
+        body = json.dumps({"version": image_release.tag}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_commit"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(priv, station.pk, body),
+        )
+        assert response.status_code == 200
+        station.refresh_from_db()
+        assert station.current_image_release_id == image_release.pk
