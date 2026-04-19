@@ -108,16 +108,27 @@ class UpgradeGroupView(AdminRequiredMixin, View):
     def post(self, request, tag_slug):
         tag = get_object_or_404(StationTag, slug=tag_slug)
 
-        # Honor first-match-wins: a station carrying both "test" and "easy"
-        # belongs to whichever tag comes first in the sequence, not to
-        # whichever group button the admin happens to press. Pull the
-        # bucket for this tag from the same grouping helper the dashboard
-        # uses so the two views can't disagree.
-        all_stations = list(
-            Station.objects.select_related("current_image_release").prefetch_related("tags")
+        # Honor first-match-wins: a station carrying both "test" (pos 0)
+        # and "easy" (pos 1) belongs to whichever tag comes first in the
+        # sequence. Resolve the same bucketing as the dashboard, but
+        # purely in SQL — group-upgrade should scale with group size,
+        # not total fleet size.
+        seq = current_sequence()
+        entry = seq.entries.filter(tag=tag).first()
+        if entry is None:
+            messages.info(request, _("Tag is not part of the rollout sequence."))
+            return redirect("rollouts:upgrade_dashboard")
+
+        earlier_tag_ids = list(
+            seq.entries.filter(position__lt=entry.position).values_list("tag_id", flat=True)
         )
-        buckets = group_stations_by_sequence(all_stations)
-        stations = buckets.get(tag.slug, [])
+        stations_qs = Station.objects.filter(tags=tag).select_related("current_image_release")
+        if earlier_tag_ids:
+            claimed_by_earlier = Station.objects.filter(tags__in=earlier_tag_ids).values_list(
+                "pk", flat=True
+            )
+            stations_qs = stations_qs.exclude(pk__in=list(claimed_by_earlier))
+        stations = list(stations_qs)
         if not stations:
             messages.info(request, _("No stations are currently assigned to this group."))
             return redirect("rollouts:upgrade_dashboard")
