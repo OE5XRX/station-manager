@@ -247,6 +247,16 @@ class DeploymentCommitView(APIView):
                     exc_info=True,
                 )
             _check_deployment_complete(result.deployment)
+            # Broadcast the rolled_back transition so the upgrade
+            # dashboard and deployment-detail page reflect the
+            # terminal state immediately — otherwise the UI would sit
+            # on "installing" until the next unrelated event.
+            try:
+                from apps.deployments.consumers import broadcast_deployment_status
+
+                broadcast_deployment_status(result.deployment, result=result)
+            except Exception:
+                logger.exception("Failed to broadcast rolled_back via WebSocket.")
             return Response(
                 {"detail": "Version mismatch — recorded as rolled_back."},
                 status=status.HTTP_409_CONFLICT,

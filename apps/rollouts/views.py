@@ -82,28 +82,28 @@ def _defer_audit_log(*, station, event_type, message, user=None):
     transaction.on_commit(_write)
 
 
-def _target_release_for(station) -> ImageRelease | None:
-    """Look up the latest ImageRelease for the station's machine.
-
-    Machine is taken from station.current_image_release.machine; if the
-    station has never been provisioned through our flow, return None.
-    """
-    current = getattr(station, "current_image_release", None)
-    if current is None:
-        return None
-    return ImageRelease.objects.filter(machine=current.machine, is_latest=True).first()
-
-
 class UpgradeStationView(AdminRequiredMixin, View):
     """Create a Deployment targeting exactly this one station."""
 
     def post(self, request, station_pk):
         station = get_object_or_404(Station, pk=station_pk)
-        target = _target_release_for(station)
+        current = station.current_image_release
+        if current is None:
+            # We can't pick a target machine without a current release.
+            # Distinguish this from the "machine known but no latest
+            # release imported" case below so the operator isn't left
+            # wondering whether to import an image or provision the box.
+            messages.error(
+                request,
+                _("Station has not been provisioned with an image release yet."),
+            )
+            return redirect("stations:station_detail", pk=station.pk)
+        target = ImageRelease.objects.filter(machine=current.machine, is_latest=True).first()
         if target is None:
             messages.error(
                 request,
-                _("No image release available for this station's machine."),
+                _("No image release imported for machine %(machine)s.")
+                % {"machine": current.machine},
             )
             return redirect("stations:station_detail", pk=station.pk)
 

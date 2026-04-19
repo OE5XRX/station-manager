@@ -122,7 +122,7 @@ class TestUpgradeActions:
 
         from apps.deployments.models import Deployment, DeploymentResult
 
-        # Station must already be "on something" so _target_release_for() resolves a machine.
+        # Station must already be "on something" so UpgradeStationView can resolve a machine.
         station.current_image_release = image_release
         station.save(update_fields=["current_image_release"])
 
