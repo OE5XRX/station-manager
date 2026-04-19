@@ -53,3 +53,37 @@ class TestSingletonSeed:
         seq2 = current_sequence()
         assert seq1 == seq2
         assert RolloutSequence.objects.count() == 1
+
+
+@pytest.mark.django_db
+class TestGrouping:
+    def test_first_matching_tag_wins(self, make_station_tag):
+        from apps.rollouts.grouping import group_stations_by_sequence
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+        from apps.stations.models import Station
+
+        t_test = make_station_tag("test")
+        t_easy = make_station_tag("easy")
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_test, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_easy, position=1)
+
+        s = Station.objects.create(name="S1")
+        s.tags.add(t_test, t_easy)
+
+        grouped = group_stations_by_sequence([s])
+        # s must appear ONLY in the 'test' bucket, not in 'easy' too.
+        assert grouped["test"] == [s]
+        assert grouped["easy"] == []
+
+    def test_unassigned_bucket(self):
+        from apps.rollouts.grouping import group_stations_by_sequence
+        from apps.rollouts.models import current_sequence
+        from apps.stations.models import Station
+
+        seq = current_sequence()
+        seq.entries.all().delete()
+        s = Station.objects.create(name="S-none")
+        grouped = group_stations_by_sequence([s])
+        assert grouped["__unassigned__"] == [s]

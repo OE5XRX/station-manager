@@ -145,6 +145,18 @@ def image_release(db):
 
 
 @pytest.fixture
+def make_station_tag(db):
+    """Factory to create StationTag with slug defaulted to name."""
+    from apps.stations.models import StationTag
+
+    def _make(name, **kwargs):
+        kwargs.setdefault("slug", name)
+        return StationTag.objects.create(name=name, **kwargs)
+
+    return _make
+
+
+@pytest.fixture
 def deployment(image_release, station, operator_user):
     """An in-progress Deployment targeting a single station."""
     dep = Deployment.objects.create(
