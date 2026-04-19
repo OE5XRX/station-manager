@@ -54,7 +54,8 @@
               <span class="grip" aria-hidden="true" title="{% trans 'Drag to reorder' %}">&#8801;</span>
               <span class="sequence-pos t-mono t-muted">{{ forloop.counter }}.</span>
               <span class="sequence-tag t-mono">{{ entry.tag.name }}</span>
-              <form method="post" action="{% url 'rollouts:sequence_remove' entry_pk=entry.pk %}" class="sequence-remove-form" onsubmit="return confirm('{% blocktrans with tag=entry.tag.name %}Remove tag {{ tag }} from the rollout sequence?{% endblocktrans %}');">
+              {% blocktrans asvar remove_msg with tag=entry.tag.name %}Remove tag {{ tag }} from the rollout sequence?{% endblocktrans %}
+              <form method="post" action="{% url 'rollouts:sequence_remove' entry_pk=entry.pk %}" class="sequence-remove-form" onsubmit="return confirm('{{ remove_msg|escapejs }}');">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-danger" aria-label="{% trans 'Remove' %}">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

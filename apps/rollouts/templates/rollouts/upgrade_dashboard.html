@@ -202,7 +202,19 @@
         var row = document.querySelector('tr[data-station-id="' + r.station_id + '"]');
         if (!row) return;
         var statusCell = row.querySelector('.status-cell');
-        if (statusCell) statusCell.textContent = r.status;
+        if (statusCell && typeof r.status === 'string') {
+          // Whitelist the status token so a crafted payload cannot inject
+          // arbitrary class names.
+          var safe = r.status.toLowerCase().replace(/[^a-z_]/g, '');
+          while (statusCell.firstChild) statusCell.removeChild(statusCell.firstChild);
+          var pill = document.createElement('span');
+          pill.className = 'pill pill-' + safe;
+          var dot = document.createElement('span');
+          dot.className = 'dot';
+          pill.appendChild(dot);
+          pill.appendChild(document.createTextNode(safe.toUpperCase().replace(/_/g, ' ')));
+          statusCell.appendChild(pill);
+        }
       } catch (_) { /* ignore */ }
     });
     ws.addEventListener('close', function () {
