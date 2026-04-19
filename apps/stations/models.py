@@ -32,6 +32,16 @@ class StationTag(models.Model):
         verbose_name = _("station tag")
         verbose_name_plural = _("station tags")
         ordering = ["name"]
+        constraints = [
+            # DB-level guard: clean() alone doesn't fire for
+            # .objects.create() / bulk_create() / raw .save(), so
+            # enforce the reservation here too. Admin/form paths also
+            # keep calling full_clean() so the user gets a nice error.
+            models.CheckConstraint(
+                condition=~models.Q(slug__in=sorted(RESERVED_TAG_SLUGS)),
+                name="stationtag_slug_not_reserved",
+            ),
+        ]
 
     def __str__(self):
         return self.name

@@ -167,8 +167,8 @@ so a concurrent poll can't see both results at the same time.
 The existing sidebar has a "Deployments" entry. It becomes a section
 with three subpages (admin-only):
 
-1. **Upgrade Dashboard** (default landing page) — `/deployments/upgrade/`
-2. **Rollout Sequence** — `/deployments/sequence/`
+1. **Upgrade Dashboard** (default landing page) — `/rollouts/upgrade/`
+2. **Rollout Sequence** — `/rollouts/sequence/`
 3. **History** — the existing `DeploymentListView` at `/deployments/`
 
 ### Upgrade Dashboard
@@ -216,7 +216,7 @@ rows without polling.
 **"Upgrade group"** button (one per group):
 
 1. Confirm dialog: "Upgrade N stations in `<tag>` to v1-Gamma?"
-2. POST to `/deployments/upgrade-group/` with `tag=<slug>`
+2. POST to `/rollouts/upgrade/group/<tag_slug>/`
 3. Server:
    a. Picks each station that has `<tag>` assigned (and for which
       `<tag>` is the first-matching sequence entry — avoids
@@ -254,9 +254,11 @@ Admin-only. Drag-to-reorder tag list.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Drag-reorder implemented with `SortableJS` (vanilla, ~15 KB).
-`hx-post` on drag-end to `/deployments/sequence/reorder/` with the new
-position list. Add/remove via separate `hx-post` endpoints.
+Drag-reorder implemented with native HTML5 drag-and-drop (no external
+JS dep, keeps CSP `script-src` at SELF+NONCE). A `fetch()` on drag-end
+POSTs the new position list to `/rollouts/sequence/reorder/`. Add and
+remove go through the adjacent `/rollouts/sequence/add/` and
+`/rollouts/sequence/remove/<entry_pk>/` endpoints.
 
 ### Station detail
 
@@ -285,7 +287,7 @@ If no `ImageRelease(is_latest=True)` exists for the station's machine
 (e.g. no import yet): button disabled, label says "No image release
 imported yet for this machine".
 
-Click posts to `/deployments/upgrade-station/<station_pk>/`. Same
+Click posts to `/rollouts/upgrade/station/<station_pk>/`. Same
 backend path as the group upgrade, target_type=STATION.
 
 ## API — server ↔ agent
