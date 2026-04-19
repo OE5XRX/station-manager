@@ -326,16 +326,17 @@ class SequenceRemoveView(AdminRequiredMixin, View):
     def post(self, request, entry_pk):
         seq = current_sequence()
         entry = get_object_or_404(RolloutSequenceEntry, pk=entry_pk, sequence=seq)
-        entry.delete()
-        # Normalize positions (0..N-1) after removal so a later add/reorder
-        # never collides with a gap.
+        # Delete + normalize positions + bump sequence metadata all in
+        # one atomic block so a failure mid-way doesn't leave the
+        # sequence with a gap or with updated_by unset.
         with transaction.atomic():
+            entry.delete()
             for idx, e in enumerate(seq.entries.order_by("position")):
                 if e.position != idx:
                     e.position = idx
                     e.save(update_fields=["position"])
-        seq.updated_by = request.user
-        seq.save(update_fields=["updated_by", "updated_at"])
+            seq.updated_by = request.user
+            seq.save(update_fields=["updated_by", "updated_at"])
         return redirect("rollouts:sequence_edit")
 
 

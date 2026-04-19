@@ -56,6 +56,10 @@ class DeploymentCheckView(APIView):
             DeploymentResult.Status.REBOOTING,
             DeploymentResult.Status.VERIFYING,
         ]
+        # Newest-wins: if somehow two active results coexist (partial
+        # supersession, race, data fix-up), the station should pick the
+        # latest deployment to match what the admin intended. Matches
+        # DeploymentCommitView's -deployment__created_at ordering.
         result = (
             DeploymentResult.objects.filter(
                 station=station,
@@ -63,7 +67,7 @@ class DeploymentCheckView(APIView):
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
             .select_related("deployment__image_release")
-            .order_by("deployment__created_at")
+            .order_by("-deployment__created_at", "-pk")
             .first()
         )
 
