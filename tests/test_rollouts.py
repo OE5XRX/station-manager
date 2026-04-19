@@ -200,3 +200,59 @@ class TestUpgradeDashboard:
         client.force_login(operator_user)
         response = client.get(reverse("rollouts:upgrade_dashboard"))
         assert response.status_code == 403
+
+
+@pytest.mark.django_db
+class TestSequenceEdit:
+    def test_add_entry(self, client, admin_user, make_station_tag):
+        from django.urls import reverse
+
+        from apps.rollouts.models import current_sequence
+
+        current_sequence().entries.all().delete()
+        tag = make_station_tag("test")
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:sequence_add"),
+            {"tag": tag.pk},
+        )
+        assert response.status_code == 302
+        seq = current_sequence()
+        assert seq.entries.count() == 1
+
+    def test_remove_entry(self, client, admin_user, make_station_tag):
+        from django.urls import reverse
+
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+
+        tag = make_station_tag("test")
+        seq = current_sequence()
+        seq.entries.all().delete()
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        client.force_login(admin_user)
+        response = client.post(reverse("rollouts:sequence_remove", args=[entry.pk]))
+        assert response.status_code == 302
+        assert not RolloutSequenceEntry.objects.filter(pk=entry.pk).exists()
+
+    def test_reorder(self, client, admin_user, make_station_tag):
+        from django.urls import reverse
+
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+
+        seq = current_sequence()
+        seq.entries.all().delete()
+        t1 = make_station_tag("t1")
+        t2 = make_station_tag("t2")
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=0)
+        e2 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=1)
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:sequence_reorder"),
+            {"order": f"{e2.pk},{e1.pk}"},
+        )
+        assert response.status_code == 200
+        e1.refresh_from_db()
+        e2.refresh_from_db()
+        assert e1.position == 1
+        assert e2.position == 0

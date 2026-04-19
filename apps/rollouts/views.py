@@ -2,6 +2,8 @@ import logging
 
 from django.contrib import messages
 from django.db import transaction
+from django.db.models import Max
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -16,6 +18,9 @@ from apps.deployments.supersession import (
 from apps.images.models import ImageRelease
 from apps.rollouts.grouping import UNASSIGNED_KEY, group_stations_by_sequence
 from apps.stations.models import Station, StationAuditLog, StationTag
+
+from .forms import SequenceAddForm
+from .models import RolloutSequenceEntry, current_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -206,3 +211,75 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
         ctx["latest_per_machine"] = latest_per_machine
         ctx["unassigned_key"] = UNASSIGNED_KEY
         return ctx
+
+
+class SequenceEditView(AdminRequiredMixin, TemplateView):
+    template_name = "rollouts/sequence_edit.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        seq = current_sequence()
+        ctx["sequence"] = seq
+        ctx["entries"] = seq.entries.select_related("tag").order_by("position")
+        ctx["add_form"] = SequenceAddForm(sequence=seq)
+        return ctx
+
+
+class SequenceAddView(AdminRequiredMixin, View):
+    def post(self, request):
+        seq = current_sequence()
+        form = SequenceAddForm(request.POST, sequence=seq)
+        if form.is_valid():
+            next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
+            RolloutSequenceEntry.objects.create(
+                sequence=seq,
+                tag=form.cleaned_data["tag"],
+                position=next_pos,
+            )
+            seq.updated_by = request.user
+            seq.save(update_fields=["updated_by", "updated_at"])
+        return redirect("rollouts:sequence_edit")
+
+
+class SequenceRemoveView(AdminRequiredMixin, View):
+    def post(self, request, entry_pk):
+        seq = current_sequence()
+        entry = get_object_or_404(RolloutSequenceEntry, pk=entry_pk, sequence=seq)
+        entry.delete()
+        # Normalize positions (0..N-1) after removal so a later add/reorder
+        # never collides with a gap.
+        with transaction.atomic():
+            for idx, e in enumerate(seq.entries.order_by("position")):
+                if e.position != idx:
+                    e.position = idx
+                    e.save(update_fields=["position"])
+        seq.updated_by = request.user
+        seq.save(update_fields=["updated_by", "updated_at"])
+        return redirect("rollouts:sequence_edit")
+
+
+class SequenceReorderView(AdminRequiredMixin, View):
+    def post(self, request):
+        seq = current_sequence()
+        order_str = request.POST.get("order", "")
+        if not order_str:
+            return HttpResponseBadRequest("order required")
+        try:
+            order_ids = [int(x) for x in order_str.split(",") if x]
+        except ValueError:
+            return HttpResponseBadRequest("order must be ids")
+        existing = {e.pk: e for e in seq.entries.all()}
+        if set(order_ids) != set(existing.keys()):
+            return HttpResponseBadRequest("order must match existing entries")
+        with transaction.atomic():
+            # First pass: offset positions to avoid unique collisions, then set real values.
+            for e in existing.values():
+                e.position = e.position + 10000
+                e.save(update_fields=["position"])
+            for idx, pk in enumerate(order_ids):
+                e = existing[pk]
+                e.position = idx
+                e.save(update_fields=["position"])
+        seq.updated_by = request.user
+        seq.save(update_fields=["updated_by", "updated_at"])
+        return HttpResponse(status=200)

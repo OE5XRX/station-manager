@@ -65,12 +65,20 @@
     </a>
     {% if user.role == 'admin' %}
     <a href="{% url 'rollouts:upgrade_dashboard' %}"
-       class="nav-item{% if request.resolver_match.namespace == 'rollouts' %} active{% endif %}"
-       {% if request.resolver_match.namespace == 'rollouts' %}aria-current="page"{% endif %}>
+       class="nav-item{% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %}aria-current="page"{% endif %}>
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 19V5"/><path d="M6 11l6-6 6 6"/><path d="M4 20h16"/>
       </svg>
       <span class="label">{% trans "Upgrades" %}</span>
+    </a>
+    <a href="{% url 'rollouts:sequence_edit' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'rollouts' and 'sequence' in request.resolver_match.url_name %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'rollouts' and 'sequence' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+      </svg>
+      <span class="label">{% trans "Rollout Sequence" %}</span>
     </a>
     {% endif %}
   </div>
