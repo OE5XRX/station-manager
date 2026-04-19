@@ -384,8 +384,11 @@ class SequenceRemoveView(AdminRequiredMixin, View):
         entry = get_object_or_404(RolloutSequenceEntry, pk=entry_pk, sequence=seq)
         # Delete + normalize positions + bump sequence metadata all in
         # one atomic block so a failure mid-way doesn't leave the
-        # sequence with a gap or with updated_by unset.
+        # sequence with a gap or with updated_by unset. Lock the
+        # RolloutSequence row so concurrent Add/Remove/Reorder clicks
+        # all serialize through the same gate.
         with transaction.atomic():
+            RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first()
             entry.delete()
             for idx, e in enumerate(seq.entries.order_by("position")):
                 if e.position != idx:
@@ -410,6 +413,10 @@ class SequenceReorderView(AdminRequiredMixin, View):
         if set(order_ids) != set(existing.keys()):
             return HttpResponseBadRequest("order must match existing entries")
         with transaction.atomic():
+            # Serialize against concurrent Add/Remove/Reorder on the
+            # same sequence through a row lock on the RolloutSequence
+            # itself — matches SequenceAddView's behaviour.
+            RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first()
             # Two-phase update so the per-sequence position unique
             # constraint never sees a collision during the transition.
             # Pick an offset that can't overlap with either the old or

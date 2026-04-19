@@ -83,7 +83,10 @@ def test_download_resumes_on_partial(tmp_path):
 
     class FakeResp:
         status_code = 206
-        headers = {}
+        # Honest Content-Range matching the Range we requested — the
+        # agent now validates the reported start against existing_len
+        # before appending, so the header has to be present.
+        headers = {"Content-Range": "bytes 100-199/200"}
 
         def __init__(self, tail):
             self._tail = tail
@@ -132,6 +135,57 @@ def test_install_to_slot_rejects_truncated_bz2(tmp_path):
 
     with pytest.raises(ValueError, match="truncated"):
         install_to_slot(src, str(target))
+
+
+def test_download_rejects_mismatched_content_range(tmp_path):
+    """If the server/proxy returns 206 but with a start offset that
+    doesn't match our partial size, the partial must be discarded and
+    the download restarted from 0 — otherwise we'd silently append
+    the wrong bytes and fail only at the final checksum."""
+    from station_agent import ota
+
+    dest = tmp_path / "image.wic.bz2"
+    partial = bytes(range(100))
+    dest.write_bytes(partial)
+
+    calls = []
+
+    class FakeResp:
+        def __init__(self, status, body=b"", content_range=None):
+            self.status_code = status
+            self._body = body
+            self.headers = {"Content-Range": content_range} if content_range else {}
+
+        def iter_content(self, chunk_size):
+            if self._body:
+                yield self._body
+
+        def close(self):
+            pass
+
+    class FakeClient:
+        def request(self, method, path, stream=False, headers=None, **kw):
+            calls.append(dict(headers or {}))
+            # First call: resumed, but server lies about the offset.
+            if "Range" in (headers or {}):
+                return FakeResp(206, body=b"GARBAGE" * 10, content_range="bytes 50-149/200")
+            # Second call (restart): fresh, no Range.
+            return FakeResp(200, body=b"FRESH" * 40)
+
+    ok = ota.download_firmware_resumable(
+        http_client=FakeClient(),
+        download_url="/path",
+        expected_checksum="",
+        dest_path=str(dest),
+        resume=True,
+    )
+    assert ok is True
+    # Two calls: first with Range (rejected), second without.
+    assert len(calls) == 2
+    assert "Range" in calls[0]
+    assert "Range" not in calls[1]
+    # File was rewritten from scratch — old partial + lying tail are gone.
+    assert dest.read_bytes() == b"FRESH" * 40
 
 
 def test_download_recovers_from_416_on_stale_partial(tmp_path):

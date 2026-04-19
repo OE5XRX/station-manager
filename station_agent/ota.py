@@ -10,6 +10,7 @@ import bz2
 import hashlib
 import logging
 import os
+import re
 
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
 from .http_client import HttpClient
@@ -168,7 +169,38 @@ def download_firmware_resumable(
         # Server refused the Range request — restart from zero.
         mode = "wb"
         existing_len = 0
-    elif resp.status_code != 206:
+    elif resp.status_code == 206:
+        # A misbehaving proxy may return 206 with a different start
+        # offset than we asked for. If we trust it and append, the
+        # local file becomes garbage and the SHA-256 check fails at
+        # the end — terminal FAILED, no retry. Validate Content-Range
+        # against existing_len; on mismatch, drop the partial and
+        # restart from 0 in a single recursive call.
+        content_range = getattr(resp, "headers", {}).get("Content-Range", "")
+        m = re.match(r"bytes\s+(\d+)-", content_range)
+        reported_start = int(m.group(1)) if m else None
+        if existing_len > 0 and reported_start != existing_len:
+            try:
+                resp.close()
+            except Exception as exc:
+                logger.debug("Response close failed (ignored): %s", exc)
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            logger.warning(
+                "Content-Range start=%r != expected %d; restarting from 0",
+                reported_start,
+                existing_len,
+            )
+            return download_firmware_resumable(
+                http_client=http_client,
+                download_url=download_url,
+                expected_checksum=expected_checksum,
+                dest_path=dest_path,
+                resume=False,
+            )
+    else:
         logger.error("Firmware download failed: %s", resp.status_code)
         return False
 

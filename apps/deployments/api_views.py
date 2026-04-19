@@ -411,7 +411,13 @@ class DeploymentDownloadView(APIView):
             iterator(), status=http_status, content_type="application/x-bzip2"
         )
         response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
-        response["Accept-Ranges"] = "bytes"
+        # Only advertise Range support if the underlying stream is
+        # seekable — otherwise a client would reasonably try a Range
+        # request and get a pointless 416 from the non-seekable path.
+        if getattr(stream, "seekable", lambda: False)():
+            response["Accept-Ranges"] = "bytes"
+        else:
+            response["Accept-Ranges"] = "none"
         if length is not None:
             response["Content-Length"] = str(length)
         if http_status == 206 and end is not None:
