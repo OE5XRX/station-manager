@@ -105,8 +105,8 @@ class UpgradeGroupView(AdminRequiredMixin, View):
     by machine: one Deployment per (tag, machine) tuple).
     """
 
-    def post(self, request, tag_name):
-        tag = get_object_or_404(StationTag, name=tag_name)
+    def post(self, request, tag_slug):
+        tag = get_object_or_404(StationTag, slug=tag_slug)
 
         # Honor first-match-wins: a station carrying both "test" and "easy"
         # belongs to whichever tag comes first in the sequence, not to
@@ -117,7 +117,7 @@ class UpgradeGroupView(AdminRequiredMixin, View):
             Station.objects.select_related("current_image_release").prefetch_related("tags")
         )
         buckets = group_stations_by_sequence(all_stations)
-        stations = buckets.get(tag_name, [])
+        stations = buckets.get(tag.slug, [])
         if not stations:
             messages.info(request, _("No stations are currently assigned to this group."))
             return redirect("rollouts:upgrade_dashboard")
@@ -244,6 +244,10 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
         ):
             active_result_by_station.setdefault(r.station_id, r)
 
+        # grouped keys are tag slugs; the sidebar + headers want the human
+        # name. One prefetch covers every tag that actually matters here.
+        slug_to_name = dict(StationTag.objects.values_list("slug", "name"))
+
         rows_by_group: list[tuple[str, str, list]] = []
         up_to_date: list = []
         for group_key, stations_in_group in grouped.items():
@@ -258,7 +262,10 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
                     up_to_date.append((s, target))
                 else:
                     pending.append((s, target, active_result_by_station.get(s.pk)))
-            display_name = _("Unassigned") if group_key == UNASSIGNED_KEY else group_key
+            if group_key == UNASSIGNED_KEY:
+                display_name = _("Unassigned")
+            else:
+                display_name = slug_to_name.get(group_key, group_key)
             rows_by_group.append((group_key, display_name, pending))
 
         ctx["groups"] = rows_by_group

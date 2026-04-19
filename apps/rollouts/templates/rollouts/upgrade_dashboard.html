@@ -90,7 +90,7 @@
         {% if pending and group_key != unassigned_key %}
           {% blocktrans asvar confirm_msg with name=display_name n=pending|length %}Upgrade {{ n }} station(s) in group {{ name }} to the latest image?{% endblocktrans %}
           <form method="post"
-                action="{% url 'rollouts:upgrade_group' tag_name=group_key %}"
+                action="{% url 'rollouts:upgrade_group' tag_slug=group_key %}"
                 onsubmit="return confirm('{{ confirm_msg|escapejs }}');"
                 style="margin:0;">
             {% csrf_token %}
