@@ -99,8 +99,8 @@ class UpgradeGroupView(AdminRequiredMixin, View):
     by machine: one Deployment per (tag, machine) tuple).
     """
 
-    def post(self, request, tag_slug):
-        tag = get_object_or_404(StationTag, name=tag_slug)
+    def post(self, request, tag_name):
+        tag = get_object_or_404(StationTag, name=tag_name)
         stations = list(Station.objects.filter(tags=tag).select_related("current_image_release"))
         if not stations:
             messages.info(request, _("No stations carry this tag."))

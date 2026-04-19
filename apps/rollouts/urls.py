@@ -15,7 +15,7 @@ urlpatterns = [
         name="upgrade_station",
     ),
     path(
-        "upgrade/group/<str:tag_slug>/",
+        "upgrade/group/<str:tag_name>/",
         views.UpgradeGroupView.as_view(),
         name="upgrade_group",
     ),
