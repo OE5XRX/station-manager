@@ -311,3 +311,116 @@ class TestSupersession:
 
         with pytest.raises(ActiveDeploymentConflictError):
             supersede_pending_for_station(station=station, new_deployment=dep2)
+
+
+@pytest.mark.django_db
+class TestDeploymentDownload:
+    def test_full_download_streams_from_s3(
+        self, client, station_with_key, image_release, admin_user, monkeypatch
+    ):
+        import io
+
+        from apps.deployments.models import Deployment, DeploymentResult
+
+        station, priv = station_with_key
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep, station=station, status=DeploymentResult.Status.PENDING
+        )
+
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream", lambda key: io.BytesIO(b"IMAGE" * 10)
+        )
+        headers = device_auth_headers(priv, station.pk, b"")
+        r = client.get(reverse("api:deployment_download", args=[dep.pk]), **headers)
+        assert r.status_code == 200
+        assert b"".join(r.streaming_content) == b"IMAGE" * 10
+
+    def test_download_rejects_other_station(
+        self, client, station_with_key, image_release, admin_user, db
+    ):
+        import base64
+        import hashlib
+        import time
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            PublicFormat,
+        )
+
+        from apps.api.models import DeviceKey
+        from apps.stations.models import Station
+
+        station_a, _ = station_with_key
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station_a,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep,
+            station=station_a,
+            status=DeploymentResult.Status.PENDING,
+        )
+
+        # A different station with its own key.
+        other = Station.objects.create(name="Other")
+        priv_b = Ed25519PrivateKey.generate()
+        pub = priv_b.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+        DeviceKey.objects.create(
+            station=other, current_public_key=base64.b64encode(pub).decode("ascii")
+        )
+        body_hash = hashlib.sha256(b"").hexdigest()
+        ts = str(time.time())
+        sig = base64.b64encode(priv_b.sign(f"{ts}:{body_hash}".encode())).decode("ascii")
+        r = client.get(
+            reverse("api:deployment_download", args=[dep.pk]),
+            HTTP_AUTHORIZATION=f"DeviceKey {other.pk}",
+            HTTP_X_DEVICE_SIGNATURE=sig,
+            HTTP_X_DEVICE_TIMESTAMP=ts,
+        )
+        assert r.status_code == 403
+
+    def test_range_returns_206(
+        self, client, station_with_key, image_release, admin_user, monkeypatch
+    ):
+        import io
+
+        from apps.deployments.models import Deployment, DeploymentResult
+
+        station, priv = station_with_key
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep,
+            station=station,
+            status=DeploymentResult.Status.PENDING,
+        )
+        # ImageRelease.size_bytes is 1000 (fixture); supply enough bytes so the Range
+        # offset (e.g. 10) is valid.
+        payload = b"X" * 1000
+        monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(payload))
+        headers = device_auth_headers(priv, station.pk, b"")
+        r = client.get(
+            reverse("api:deployment_download", args=[dep.pk]),
+            HTTP_RANGE="bytes=10-19",
+            **headers,
+        )
+        assert r.status_code == 206
+        body = b"".join(r.streaming_content)
+        assert body == b"X" * 10
+        assert r["Content-Range"] == "bytes 10-19/1000"

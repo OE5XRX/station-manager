@@ -1,5 +1,7 @@
 import logging
+import re
 
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -14,6 +16,7 @@ from apps.deployments.serializers import (
     DeploymentCommitSerializer,
     DeploymentStatusUpdateSerializer,
 )
+from apps.images import storage as image_storage
 from apps.stations.models import StationAuditLog
 
 logger = logging.getLogger(__name__)
@@ -205,10 +208,16 @@ class DeploymentCommitView(APIView):
 
 
 class DeploymentDownloadView(APIView):
-    """Interim stub. Returns 501; S3-backed download lands in Task 8."""
+    """Stream the deployment's image from S3 to the requesting station.
+
+    Authz: the station must have a non-terminal DeploymentResult for
+    this deployment. Range requests are supported for resumable transfers.
+    """
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+
+    CHUNK = 1 << 20  # 1 MiB
 
     def get(self, request, pk):
         station = getattr(request.auth, "station", None)
@@ -218,16 +227,84 @@ class DeploymentDownloadView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not DeploymentResult.objects.filter(pk=pk, station=station).exists():
+        active_statuses = [
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+        ]
+        result = (
+            DeploymentResult.objects.select_related("deployment__image_release")
+            .filter(deployment_id=pk, station=station, status__in=active_statuses)
+            .first()
+        )
+        if result is None:
             return Response(
-                {"detail": "Deployment result not found."},
-                status=status.HTTP_404_NOT_FOUND,
+                {"detail": "No active deployment for this station on this deployment id."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
-        return Response(
-            {"detail": "Image download via S3 is not yet implemented."},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
+        image = result.deployment.image_release
+        stream = image_storage.open_stream(image.s3_key)
+        total_size = image.size_bytes or 0
+
+        # Optional Range support - translate HTTP Range into a seek on the stream.
+        range_header = request.META.get("HTTP_RANGE", "")
+        start = 0
+        end = total_size - 1 if total_size else None
+        http_status = 200
+        length = total_size
+        if range_header:
+            m = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            if m:
+                start = int(m.group(1))
+                end_g = m.group(2)
+                if end_g:
+                    end = int(end_g)
+                try:
+                    stream.seek(start)
+                except Exception:
+                    # Fallback: read-and-discard (default_storage backends
+                    # don't all support seek; boto3 S3 does).
+                    stream.close()
+                    stream = image_storage.open_stream(image.s3_key)
+                    discarded = 0
+                    while discarded < start:
+                        chunk = stream.read(min(self.CHUNK, start - discarded))
+                        if not chunk:
+                            break
+                        discarded += len(chunk)
+                http_status = 206
+                length = (end - start + 1) if end is not None else None
+
+        def iterator():
+            remaining = length
+            try:
+                while True:
+                    to_read = self.CHUNK if remaining is None else min(self.CHUNK, remaining)
+                    if to_read <= 0:
+                        break
+                    chunk = stream.read(to_read)
+                    if not chunk:
+                        break
+                    if remaining is not None:
+                        remaining -= len(chunk)
+                    yield chunk
+            finally:
+                stream.close()
+
+        filename = f"oe5xrx-{image.machine}-{image.tag}.wic.bz2"
+        safe_name = re.sub(r'["\r\n]', "_", filename) or "image.wic.bz2"
+        response = StreamingHttpResponse(
+            iterator(), status=http_status, content_type="application/x-bzip2"
         )
+        response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+        response["Accept-Ranges"] = "bytes"
+        if length is not None:
+            response["Content-Length"] = str(length)
+        if http_status == 206 and end is not None:
+            response["Content-Range"] = f"bytes {start}-{end}/{total_size or '*'}"
+        return response
 
 
 def _check_deployment_complete(deployment):
