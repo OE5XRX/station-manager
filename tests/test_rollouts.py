@@ -276,6 +276,57 @@ class TestUpgradeDashboard:
         response = client.get(reverse("rollouts:upgrade_dashboard"))
         assert response.status_code == 403
 
+    def test_dashboard_renders_active_deployment_status(
+        self, client, admin_user, station, image_release, make_station_tag
+    ):
+        """The Status column must reflect the active DeploymentResult
+        status on initial render — so a mid-flight deployment doesn't
+        flash station connectivity for the split second before the first
+        WebSocket event arrives."""
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment, DeploymentResult
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+
+        tag = make_station_tag("test-stations")
+        station.tags.add(tag)
+        station.current_image_release = image_release
+        station.save(update_fields=["current_image_release"])
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+
+        # Introduce a newer release so the station has something pending.
+        from apps.images.models import ImageRelease
+
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        newer = ImageRelease.objects.create(
+            tag="v2",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="f" * 64,
+            size_bytes=2000,
+            is_latest=True,
+        )
+        dep = Deployment.objects.create(
+            image_release=newer,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            status=Deployment.Status.IN_PROGRESS,
+            created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep,
+            station=station,
+            status=DeploymentResult.Status.DOWNLOADING,
+        )
+
+        client.force_login(admin_user)
+        response = client.get(reverse("rollouts:upgrade_dashboard"))
+        assert response.status_code == 200
+        assert b"pill-downloading" in response.content
+        assert b"DOWNLOADING" in response.content
+
 
 @pytest.mark.django_db
 class TestSequenceEdit:

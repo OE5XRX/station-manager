@@ -220,6 +220,30 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
             r.machine: r for r in ImageRelease.objects.filter(is_latest=True)
         }
 
+        # Fetch the latest active DeploymentResult per station so the
+        # initial page render already shows real deployment progress
+        # (pending/downloading/installing/rebooting/verifying) instead
+        # of waiting for the first WebSocket event to correct the UI.
+        active_statuses = [
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
+        ]
+        station_pks = [s.pk for s in stations]
+        active_result_by_station: dict[int, DeploymentResult] = {}
+        for r in (
+            DeploymentResult.objects.filter(
+                station_id__in=station_pks,
+                status__in=active_statuses,
+                deployment__status=Deployment.Status.IN_PROGRESS,
+            )
+            .order_by("station_id", "-pk")
+            .select_related("deployment__image_release")
+        ):
+            active_result_by_station.setdefault(r.station_id, r)
+
         rows_by_group: list[tuple[str, str, list]] = []
         up_to_date: list = []
         for group_key, stations_in_group in grouped.items():
@@ -233,7 +257,7 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
                 if target and s.current_image_release_id == target.pk:
                     up_to_date.append((s, target))
                 else:
-                    pending.append((s, target))
+                    pending.append((s, target, active_result_by_station.get(s.pk)))
             display_name = _("Unassigned") if group_key == UNASSIGNED_KEY else group_key
             rows_by_group.append((group_key, display_name, pending))
 

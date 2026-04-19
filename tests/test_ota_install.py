@@ -112,6 +112,27 @@ def test_download_resumes_on_partial(tmp_path):
     assert captured["headers"].get("Range", "").startswith("bytes=100-")
 
 
+def test_install_to_slot_rejects_truncated_bz2(tmp_path):
+    """A truncated .wic.bz2 must raise, not silently write a partial
+    image that would brick the next boot."""
+    from station_agent.ota import install_to_slot
+
+    payload = b"hello world" * 4096
+    src = tmp_path / "image.wic.bz2"
+    full = bz2.compress(payload)
+    # Chop off the last 8 bytes to simulate an interrupted download that
+    # survived the SHA-256 check only because the truncated file happened
+    # to match its own checksum — checksum collisions are what validates
+    # THIS defense.
+    src.write_bytes(full[:-8])
+
+    target = tmp_path / "fake-slot.bin"
+    target.write_bytes(b"\x00" * len(payload))
+
+    with pytest.raises(ValueError, match="truncated"):
+        install_to_slot(src, str(target))
+
+
 def test_download_recovers_from_416_on_stale_partial(tmp_path):
     """A stale partial larger than the current object produces a 416 on
     the server. Agent must drop the partial and retry without Range —

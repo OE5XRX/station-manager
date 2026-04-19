@@ -115,8 +115,8 @@
               </tr>
             </thead>
             <tbody id="rows-{{ group_key|slugify }}">
-              {% for station, target in pending %}
-                {% include "rollouts/_dashboard_row.html" with station=station target=target %}
+              {% for station, target, active_result in pending %}
+                {% include "rollouts/_dashboard_row.html" with station=station target=target active_result=active_result %}
               {% endfor %}
             </tbody>
           </table>

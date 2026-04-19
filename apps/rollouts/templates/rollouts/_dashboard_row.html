@@ -25,8 +25,14 @@
     {% endif %}
   </td>
   <td class="status-cell" data-label="{% trans 'Status' %}">
-    <span class="pill pill-{{ station.status }}">
-      <span class="dot"></span>{{ station.get_status_display|upper }}
-    </span>
+    {% if active_result %}
+      <span class="pill pill-{{ active_result.status }}">
+        <span class="dot"></span>{{ active_result.get_status_display|upper }}
+      </span>
+    {% else %}
+      <span class="pill pill-{{ station.status }}">
+        <span class="dot"></span>{{ station.get_status_display|upper }}
+      </span>
+    {% endif %}
   </td>
 </tr>

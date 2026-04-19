@@ -1,8 +1,9 @@
 """OTA update client for the Station Agent.
 
-Handles checking for updates, downloading firmware, reporting status,
-and committing successful boots. Actual partition writing is deferred
-to Yocto integration.
+Handles checking for updates, downloading firmware (resumable, opaque
+URL), reporting status, stream-decompressing the .wic.bz2 into the
+inactive rootfs partition (install_to_slot), arming the bootloader for
+a trial boot, and committing successful boots.
 """
 
 import bz2
@@ -304,7 +305,7 @@ def apply_update(config, firmware_path: str) -> bool:
     logger.info("Writing %s to %s (slot %s)", firmware_path, target_dev, target_slot)
     try:
         install_to_slot(firmware_path, target_dev)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         logger.error("install_to_slot failed: %s", exc)
         return False
 
@@ -324,6 +325,9 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
     bootloader.get_inactive_slot() + a machine-specific slot→device map.
 
     Raises OSError on I/O failure.
+    Raises ValueError if the bz2 stream is truncated (decompressor did
+    not reach EOF) — writing a partial image to a boot slot would
+    silently brick the next boot, so fail loud.
     """
     decomp = bz2.BZ2Decompressor()
     with open(str(wic_bz2_path), "rb") as src:
@@ -336,6 +340,11 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
                 decompressed = decomp.decompress(chunk)
                 if decompressed:
                     _write_all(fd, decompressed)
+            if not decomp.eof:
+                raise ValueError(
+                    f"bz2 stream in {wic_bz2_path} is truncated: "
+                    "decompressor did not reach end-of-stream"
+                )
             os.fsync(fd)
         finally:
             os.close(fd)
