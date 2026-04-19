@@ -30,7 +30,11 @@
         </form>
       {% endif %}
     {% else %}
-      <p class="t-muted"><em>{% trans "No image release imported yet for this station's machine." %}</em></p>
+      {% if station.current_image_release_id %}
+        <p class="t-muted"><em>{% trans "No image release imported yet for this station's machine." %}</em></p>
+      {% else %}
+        <p class="t-muted"><em>{% trans "Station has not been provisioned yet." %}</em></p>
+      {% endif %}
     {% endif %}
 
     {% if recent_deployments %}

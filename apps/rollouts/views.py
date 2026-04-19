@@ -350,9 +350,18 @@ class SequenceReorderView(AdminRequiredMixin, View):
         if set(order_ids) != set(existing.keys()):
             return HttpResponseBadRequest("order must match existing entries")
         with transaction.atomic():
-            # First pass: offset positions to avoid unique collisions, then set real values.
+            # Two-phase update so the per-sequence position unique
+            # constraint never sees a collision during the transition.
+            # Pick an offset that can't overlap with either the old or
+            # the new positions, clamped to PositiveSmallIntegerField
+            # (max 32767) so a very large sequence can't overflow.
+            n = len(order_ids)
+            max_current = max((e.position for e in existing.values()), default=0)
+            offset = max(max_current, n) + 1
+            if offset + n > 32767:
+                return HttpResponseBadRequest("sequence too large to reorder safely")
             for e in existing.values():
-                e.position = e.position + 10000
+                e.position = e.position + offset
                 e.save(update_fields=["position"])
             for idx, pk in enumerate(order_ids):
                 e = existing[pk]

@@ -38,11 +38,15 @@ class TestRolloutSequence:
             RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=0)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 class TestSingletonSeed:
+    # Plain django_db (savepoint rollback) — migration-seeded data is
+    # set up once per test DB and restored between tests implicitly.
+    # The earlier transaction=True flavour was flushing tables in some
+    # pytest-django versions, which made the "exactly one sequence"
+    # assertion brittle depending on test ordering.
+
     def test_exactly_one_sequence_exists_after_migrations(self):
-        # transaction=True → each test starts from the migrated DB state,
-        # so the singleton seeded by 0002_seed_singleton is present.
         assert RolloutSequence.objects.count() == 1
         assert RolloutSequence.objects.filter(pk=1).exists()
 

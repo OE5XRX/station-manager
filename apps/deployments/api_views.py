@@ -54,6 +54,7 @@ class DeploymentCheckView(APIView):
             DeploymentResult.Status.DOWNLOADING,
             DeploymentResult.Status.INSTALLING,
             DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
         ]
         result = (
             DeploymentResult.objects.filter(
@@ -249,11 +250,17 @@ class DeploymentDownloadView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Mirror the check view's resumable set. A station that crashed
+        # in VERIFYING and restarted will re-enter the flow and hit the
+        # download endpoint again; the idempotent re-download is a
+        # cheap way to unblock recovery compared with stuck deployments
+        # that need admin intervention.
         active_statuses = [
             DeploymentResult.Status.PENDING,
             DeploymentResult.Status.DOWNLOADING,
             DeploymentResult.Status.INSTALLING,
             DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
         ]
         result = (
             DeploymentResult.objects.select_related("deployment__image_release")
