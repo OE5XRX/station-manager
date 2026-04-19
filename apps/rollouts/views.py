@@ -54,27 +54,27 @@ def _defer_audit_log(*, station, event_type, message, user=None):
     any failure during the audit INSERT can't mark that block rollback-
     only or abort the real operation.
     """
-    from django.contrib.auth import get_user_model
-
     station_pk = station.pk
-    user_pk = getattr(user, "pk", None)
-    # request.user is normally a SimpleLazyObject, so type(user) would
-    # be SimpleLazyObject, not User, and its .objects manager doesn't
-    # exist. Use the project's configured user model directly.
-    user_model = get_user_model()
+    # Resolve SimpleLazyObject (request.user) to a concrete User *now*,
+    # so each on_commit callback doesn't do a separate SELECT for the
+    # actor — in batch flows like UpgradeGroupView this was an extra
+    # query per station. Touching .pk materializes the lazy wrapper;
+    # ._wrapped is then the real User instance (Django's FK descriptor
+    # previously stumbled on SimpleLazyObject on some code paths).
+    resolved_user = None
+    if user is not None and getattr(user, "pk", None):
+        resolved_user = getattr(user, "_wrapped", user) or user
 
     def _write() -> None:
         try:
             # Pass station_id directly — StationAuditLog.log supports
             # it natively, which saves a query AND avoids a ValueError
             # if the station row was deleted between post and commit.
-            # The user lookup is defensive in the same way.
-            actor = user_model.objects.filter(pk=user_pk).first() if user_pk else None
             StationAuditLog.log(
                 station_id=station_pk,
                 event_type=event_type,
                 message=message,
-                user=actor,
+                user=resolved_user,
             )
         except Exception as exc:
             logger.warning("Deferred audit log failed (%s): %s", event_type, exc)
@@ -368,14 +368,24 @@ class SequenceAddView(AdminRequiredMixin, View):
             # an IntegrityError on uniq_position_per_sequence.
             with transaction.atomic():
                 (RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first())
-                next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
-                RolloutSequenceEntry.objects.create(
-                    sequence=seq,
-                    tag=form.cleaned_data["tag"],
-                    position=next_pos,
-                )
-                seq.updated_by = request.user
-                seq.save(update_fields=["updated_by", "updated_at"])
+                tag = form.cleaned_data["tag"]
+                # Two admins may each pass the form's uniqueness check
+                # against the same empty-seq snapshot and then both
+                # enter this block serially. Re-check under the lock so
+                # the second one doesn't fall off the (sequence, tag)
+                # unique constraint as an IntegrityError 500. The net
+                # effect is the same "tag is already in the sequence"
+                # the first commit would have caused — so silently
+                # skip and redirect.
+                if not seq.entries.filter(tag=tag).exists():
+                    next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
+                    RolloutSequenceEntry.objects.create(
+                        sequence=seq,
+                        tag=tag,
+                        position=next_pos,
+                    )
+                    seq.updated_by = request.user
+                    seq.save(update_fields=["updated_by", "updated_at"])
         return redirect("rollouts:sequence_edit")
 
 
