@@ -16,11 +16,21 @@
 
 ## Progress
 
-- [ ] Phase 1 — Data model (Tasks 1-4)
-- [ ] Phase 2 — Server-side upgrade logic (Tasks 5-9)
+- [x] Phase 1 — Data model (Tasks 1-4)
+- [x] Phase 2 — Server-side upgrade logic (Tasks 5-9)
 - [ ] Phase 3 — UI (Tasks 10-14)
 - [ ] Phase 4 — Agent (Tasks 15-17)
 - [ ] Phase 5 — Plumbing + E2E (Tasks 18-19)
+
+### Execution notes (for the next session)
+
+- **Rename applied in Task 4:** `ActiveDeploymentConflict` → `ActiveDeploymentConflictError` (ruff N818, matches project convention `GuestfishError`/`CosignVerificationError`). Downstream tasks must use the `*Error` form. The plan text below still shows the old name in several places (Tasks 6/7-style code blocks) — read those as prescriptions of the behavior, not literal import names.
+- **URL kwarg rename in Task 6:** `upgrade_group` URL uses `<str:tag_name>`, not `<str:tag_slug>`. The view does a `StationTag.name` lookup so the kwarg now matches the lookup.
+- **URL name convention:** project uses underscores (`api:deployment_check`, `api:deployment_download`), not dashes. The plan's Task 7/8 test snippets say `api:deployment-check`/`deployment-download` — translate to underscores.
+- **Task 10's placeholder:** Task 6 registered a temporary `rollouts:upgrade_dashboard` URL → `_upgrade_dashboard_placeholder` (empty `HttpResponse`) so `reverse()` resolves. Task 10 replaces it with the real `UpgradeDashboardView`.
+- **Task 3 scope expansion:** swapping `firmware_artifact` → `image_release` also touched `apps/dashboard/views.py`, `apps/dashboard/templates/dashboard/index.html`, and `apps/monitoring/engine.py` (mechanical renames). The `DeploymentDownloadView` went through a 501 stub phase in Task 3 and was fully rewritten in Task 8.
+- **Test fixture:** `tests/conftest.py` now has a `make_station_tag(name, **kwargs)` factory (slug defaults to name) to cut `slug=` boilerplate in new tests. Prefer it over raw `StationTag.objects.create(...)`.
+- **Station-agent is out of scope** through Task 8 — it still sends GET to `deployment_check` and will receive 405. Task 16 aligns the agent with the new POST + response shape.
 
 ---
 
