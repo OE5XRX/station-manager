@@ -9,7 +9,6 @@ import bz2
 import hashlib
 import logging
 import os
-import subprocess
 
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
 from .http_client import HttpClient
@@ -263,12 +262,12 @@ def commit_boot(config, http_client: HttpClient, version: str) -> bool:
 def apply_update(config, firmware_path: str) -> bool:
     """Apply a firmware update to the inactive partition.
 
-    Writes the firmware image to the inactive root partition via dd,
-    then sets the bootloader to trial-boot from it on next reboot.
+    Stream-decompresses the downloaded `.wic.bz2` into the inactive
+    root partition, then arms the bootloader for a trial boot.
 
     Args:
         config: AgentConfig instance.
-        firmware_path: Path to the downloaded firmware file.
+        firmware_path: Path to the downloaded .wic.bz2 file.
 
     Returns:
         True if the update was applied successfully.
@@ -283,14 +282,9 @@ def apply_update(config, firmware_path: str) -> bool:
 
     logger.info("Writing %s to %s (slot %s)", firmware_path, target_dev, target_slot)
     try:
-        subprocess.run(
-            ["dd", f"if={firmware_path}", f"of={target_dev}", "bs=4M", "conv=fsync"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.error("dd failed (rc=%d): %s", exc.returncode, exc.stderr.strip())
+        install_to_slot(firmware_path, target_dev)
+    except OSError as exc:
+        logger.error("install_to_slot failed: %s", exc)
         return False
 
     if not set_upgrade_pending(bl, target_slot):
