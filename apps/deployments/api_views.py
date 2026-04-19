@@ -35,9 +35,11 @@ class DeploymentCheckView(APIView):
 
         req = DeploymentCheckRequestSerializer(data=request.data)
         req.is_valid(raise_exception=True)
-        # current_version parsed for forward compatibility (deltas); not
-        # used in the MVP beyond audit.
-        _ = req.validated_data["current_version"]
+        logger.debug(
+            "deployment check station=%s current_version=%r",
+            station.pk,
+            req.validated_data["current_version"],
+        )
 
         result = (
             DeploymentResult.objects.filter(
