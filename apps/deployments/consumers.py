@@ -18,10 +18,11 @@ class DeploymentStatusConsumer(AsyncWebsocketConsumer):
         if not user or user.is_anonymous:
             await self.close(code=4401)
             return
-        # The deployment feed carries admin-flavoured data (station names,
-        # failure messages). Operators / members should not see it — the
-        # Upgrade Dashboard that renders it is already admin-gated.
-        if getattr(user, "role", None) != "admin":
+        # Align with the deployments pages that actually render this feed:
+        # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
+        # and the upgrade dashboard. Members stay excluded (4403) so their
+        # auto-reconnect loop from static/js/app.js stops cleanly.
+        if getattr(user, "role", None) not in ("admin", "operator"):
             await self.close(code=4403)
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)

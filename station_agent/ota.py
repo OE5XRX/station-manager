@@ -172,6 +172,13 @@ def download_firmware_resumable(
         logger.error("Firmware download failed: %s", resp.status_code)
         return False
 
+    # The agent's default download_dir (typically /tmp/station-agent)
+    # may not exist on first OTA attempt. Create it every call — cheap
+    # and makes the no-partial and resume paths behave identically.
+    parent = os.path.dirname(dest_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
     try:
         with open(dest_path, mode) as f:
             for chunk in resp.iter_content(chunk_size=_STREAM_CHUNK):
