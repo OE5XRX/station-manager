@@ -55,14 +55,17 @@ def _defer_audit_log(*, station, event_type, message, user=None):
     """
     station_pk = station.pk
     user_pk = getattr(user, "pk", None)
+    user_type = type(user) if user is not None else None
 
     def _write() -> None:
         try:
-            # Re-resolve the Station/User by pk so we don't hold stale
-            # instances from the transaction across the commit boundary.
-            actor = type(user).objects.filter(pk=user_pk).first() if user_pk else None
+            # Pass station_id directly — StationAuditLog.log supports
+            # it natively, which saves a query AND avoids a ValueError
+            # if the station row was deleted between post and commit.
+            # The user lookup is defensive in the same way.
+            actor = user_type.objects.filter(pk=user_pk).first() if user_pk else None
             StationAuditLog.log(
-                station=Station.objects.filter(pk=station_pk).first(),
+                station_id=station_pk,
                 event_type=event_type,
                 message=message,
                 user=actor,
