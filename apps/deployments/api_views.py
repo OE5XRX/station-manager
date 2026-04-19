@@ -1,3 +1,4 @@
+import io
 import logging
 import re
 
@@ -211,7 +212,11 @@ class DeploymentDownloadView(APIView):
     """Stream the deployment's image from S3 to the requesting station.
 
     Authz: the station must have a non-terminal DeploymentResult for
-    this deployment. Range requests are supported for resumable transfers.
+    this deployment. All authz failures (missing deployment, wrong
+    station, terminal status) collapse to 403 so a station cannot
+    probe deployment ids it does not own.
+
+    Range requests are supported for resumable transfers.
     """
 
     authentication_classes = [DeviceKeyAuthentication]
@@ -255,17 +260,20 @@ class DeploymentDownloadView(APIView):
         http_status = 200
         length = total_size
         if range_header:
-            m = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            m = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
             if m:
                 start = int(m.group(1))
                 end_g = m.group(2)
                 if end_g:
                     end = int(end_g)
+                if total_size and end is not None:
+                    end = min(end, total_size - 1)
                 try:
                     stream.seek(start)
-                except Exception:
-                    # Fallback: read-and-discard (default_storage backends
-                    # don't all support seek; boto3 S3 does).
+                except (AttributeError, io.UnsupportedOperation, NotImplementedError):
+                    # Backend doesn't support seek (some default_storage
+                    # implementations); fall back to read-and-discard. Real
+                    # IO errors are allowed to propagate.
                     stream.close()
                     stream = image_storage.open_stream(image.s3_key)
                     discarded = 0
