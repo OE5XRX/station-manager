@@ -151,6 +151,31 @@ class StationAgent:
         """Run health checks and commit or roll back the update."""
         report_status(config, http_client, result_pk, "verifying")
 
+        # Guard against a silent bootloader rollback: if we're here from
+        # a REBOOTING/VERIFYING resume, the kernel that's actually
+        # running may be the old slot. Health checks alone don't
+        # distinguish the two, so confirm /etc/os-release matches the
+        # target tag before accepting "committed".
+        from .inventory import get_current_version
+
+        running_version = get_current_version()
+        if running_version and running_version != version:
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "rolled_back",
+                error_message=(
+                    f"Bootloader rolled back: running {running_version!r}, expected {version!r}"
+                ),
+            )
+            logger.warning(
+                "Refusing to commit: running %s but deployment target is %s",
+                running_version,
+                version,
+            )
+            return
+
         passed, messages = run_health_checks(server_url=config.server_url)
         for msg in messages:
             logger.info("Health: %s", msg)

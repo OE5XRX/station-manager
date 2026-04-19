@@ -120,10 +120,11 @@ def test_install_to_slot_rejects_truncated_bz2(tmp_path):
     payload = b"hello world" * 4096
     src = tmp_path / "image.wic.bz2"
     full = bz2.compress(payload)
-    # Chop off the last 8 bytes to simulate an interrupted download that
-    # survived the SHA-256 check only because the truncated file happened
-    # to match its own checksum — checksum collisions are what validates
-    # THIS defense.
+    # Chop off the last 8 bytes to simulate a .wic.bz2 that reached the
+    # installer intact-looking (e.g. the expected checksum was computed
+    # over the same truncated object and happens to match). SHA-256 can't
+    # catch that — install_to_slot must independently require the bz2
+    # stream to reach EOF before calling the write a success.
     src.write_bytes(full[:-8])
 
     target = tmp_path / "fake-slot.bin"

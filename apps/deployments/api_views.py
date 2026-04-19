@@ -191,6 +191,35 @@ class DeploymentCommitView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        expected_tag = result.deployment.image_release.tag
+        if version != expected_tag:
+            # Agent is running a different image than the one this
+            # deployment targets — most likely a bootloader rollback
+            # after a failed trial boot. Don't mark SUCCESS, don't move
+            # the station's current_image_release pointer; record the
+            # mismatch as rolled_back so the dashboard shows reality.
+            result.status = DeploymentResult.Status.ROLLED_BACK
+            result.completed_at = timezone.now()
+            result.new_version = version
+            result.error_message = (
+                f"Commit version {version!r} does not match deployment "
+                f"target {expected_tag!r}; treating as bootloader rollback."
+            )
+            result.save(update_fields=["status", "completed_at", "new_version", "error_message"])
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                message=(
+                    f"Deployment #{result.deployment_id} commit rejected: "
+                    f"station reports {version!r}, target was {expected_tag!r}."
+                ),
+            )
+            _check_deployment_complete(result.deployment)
+            return Response(
+                {"detail": "Version mismatch — recorded as rolled_back."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         result.status = DeploymentResult.Status.SUCCESS
         result.completed_at = timezone.now()
         result.new_version = version

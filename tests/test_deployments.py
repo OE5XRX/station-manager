@@ -156,13 +156,17 @@ class TestDeploymentStatusUpdate:
 @pytest.mark.django_db
 class TestDeploymentCommit:
     def test_commit_marks_success(self, client, station_with_key, deployment_result):
-        """Agent commit should mark result as SUCCESS."""
+        """Agent commit should mark result as SUCCESS when version matches."""
         station, private_key = station_with_key
         # Move result to REBOOTING first (commit looks for rebooting/verifying/installing)
         deployment_result.status = DeploymentResult.Status.REBOOTING
         deployment_result.save(update_fields=["status"])
 
-        body = json.dumps({"version": "1.0.0"}).encode("utf-8")
+        # Version must match the deployment's image_release tag ("v1-alpha"
+        # from the shared image_release fixture) — mismatches are
+        # treated as bootloader rollbacks now.
+        target_tag = deployment_result.deployment.image_release.tag
+        body = json.dumps({"version": target_tag}).encode("utf-8")
         response = client.post(
             reverse("api:deployment_commit"),
             data=body,
@@ -173,7 +177,30 @@ class TestDeploymentCommit:
         deployment_result.refresh_from_db()
         assert deployment_result.status == DeploymentResult.Status.SUCCESS
         assert deployment_result.completed_at is not None
-        assert deployment_result.new_version == "1.0.0"
+        assert deployment_result.new_version == target_tag
+
+    def test_commit_rejects_version_mismatch(self, client, station_with_key, deployment_result):
+        """A commit with a non-matching version means the bootloader
+        rolled back — record as ROLLED_BACK, don't move the station's
+        current_image_release, return 409."""
+        station, private_key = station_with_key
+        deployment_result.status = DeploymentResult.Status.REBOOTING
+        deployment_result.save(update_fields=["status"])
+
+        body = json.dumps({"version": "something-else"}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_commit"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 409
+        deployment_result.refresh_from_db()
+        assert deployment_result.status == DeploymentResult.Status.ROLLED_BACK
+        assert "rollback" in deployment_result.error_message.lower()
+        # Station's current_image_release must NOT have been bumped.
+        station.refresh_from_db()
+        assert station.current_image_release_id != deployment_result.deployment.image_release_id
 
     def test_commit_completes_deployment(self, client, station_with_key, deployment_result):
         """When all results are done, deployment status should update."""
@@ -181,7 +208,8 @@ class TestDeploymentCommit:
         deployment_result.status = DeploymentResult.Status.REBOOTING
         deployment_result.save(update_fields=["status"])
 
-        body = json.dumps({"version": "1.0.0"}).encode("utf-8")
+        target_tag = deployment_result.deployment.image_release.tag
+        body = json.dumps({"version": target_tag}).encode("utf-8")
         client.post(
             reverse("api:deployment_commit"),
             data=body,
