@@ -458,3 +458,42 @@ class TestCommitSetsCurrentImage:
         assert response.status_code == 200
         station.refresh_from_db()
         assert station.current_image_release_id == image_release.pk
+
+
+@pytest.mark.django_db
+def test_broadcast_includes_machine_and_tag(station, image_release, admin_user, monkeypatch):
+    from apps.deployments.consumers import broadcast_deployment_status
+    from apps.deployments.models import Deployment, DeploymentResult
+
+    captured = {}
+
+    def fake_group_send(group, event):
+        captured["event"] = event
+
+    monkeypatch.setattr(
+        "apps.deployments.consumers.async_to_sync",
+        lambda fn: lambda *a, **k: fn(*a, **k),
+    )
+    monkeypatch.setattr(
+        "apps.deployments.consumers.get_channel_layer",
+        lambda: type("CL", (), {"group_send": staticmethod(fake_group_send)})(),
+    )
+
+    dep = Deployment.objects.create(
+        image_release=image_release,
+        target_type=Deployment.TargetType.STATION,
+        target_station=station,
+        status=Deployment.Status.IN_PROGRESS,
+        created_by=admin_user,
+    )
+    result = DeploymentResult.objects.create(
+        deployment=dep,
+        station=station,
+        status=DeploymentResult.Status.INSTALLING,
+    )
+    broadcast_deployment_status(dep, result=result)
+
+    payload = captured["event"]["data"]
+    assert payload["result"]["station_id"] == station.pk
+    assert payload["result"]["tag"] == image_release.tag
+    assert payload["result"]["machine"] == image_release.machine

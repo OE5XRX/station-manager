@@ -49,6 +49,7 @@ def broadcast_deployment_status(deployment, result=None):
     }
 
     if result is not None:
+        image = deployment.image_release
         data["result"] = {
             "id": result.id,
             "station_id": result.station_id,
@@ -57,6 +58,8 @@ def broadcast_deployment_status(deployment, result=None):
             "error_message": result.error_message or "",
             "started_at": result.started_at.isoformat() if result.started_at else None,
             "completed_at": result.completed_at.isoformat() if result.completed_at else None,
+            "tag": image.tag if image else "",
+            "machine": image.machine if image else "",
         }
 
     async_to_sync(channel_layer.group_send)(
