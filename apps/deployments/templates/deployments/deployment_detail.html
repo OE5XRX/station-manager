@@ -19,7 +19,7 @@
         <span class="frame-id">{{ deployment.pk|stringformat:"04d" }}</span>
         <span class="pill pill-{{ deployment.status|slugify }}" data-deployment-status style="margin-left:8px;">{{ deployment.get_status_display|upper }}</span>
       </div>
-      <h1 class="page-title">{{ deployment.firmware_artifact.name }} <span class="t-mono t-muted" style="font-family:var(--font-mono);font-weight:500;">v{{ deployment.firmware_artifact.version }}</span></h1>
+      <h1 class="page-title">{{ deployment.image_release.tag }} <span class="t-mono t-muted" style="font-family:var(--font-mono);font-weight:500;">{{ deployment.image_release.machine }}</span></h1>
       <div class="row-gap-8 mt-10">
         <span class="t-label">{% trans "Strategy" %}</span>
         <span class="pill pill-muted">{{ deployment.get_strategy_display|upper }}</span>
@@ -110,8 +110,8 @@
         <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Configuration" %}</div></div>
         <div class="panel-body">
           <dl class="dlist">
-            <dt>{% trans "Firmware" %}</dt>
-            <dd><a href="{% url 'firmware:firmware_detail' deployment.firmware_artifact.pk %}">{{ deployment.firmware_artifact }}</a></dd>
+            <dt>{% trans "Image release" %}</dt>
+            <dd>{{ deployment.image_release }}</dd>
             <dt>{% trans "Target type" %}</dt><dd>{{ deployment.get_target_type_display }}</dd>
             <dt>{% trans "Target" %}</dt>
             <dd>

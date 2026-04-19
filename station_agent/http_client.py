@@ -36,6 +36,7 @@ class HttpClient:
         json_data: dict | None = None,
         timeout: int = DEFAULT_TIMEOUT,
         stream: bool = False,
+        headers: dict | None = None,
     ) -> requests.Response | None:
         """Send an authenticated HTTP request to the server.
 
@@ -45,6 +46,8 @@ class HttpClient:
             json_data: Optional JSON-serializable body.
             timeout: Request timeout in seconds.
             stream: If True, stream the response body.
+            headers: Optional extra headers to merge into the outgoing request
+                (e.g. a Range header for resumable downloads).
 
         Returns:
             The requests.Response object, or None on connection failure.
@@ -59,13 +62,15 @@ class HttpClient:
         else:
             body_bytes = b""
 
-        headers = {
+        headers_out = {
             "User-Agent": f"StationAgent/{__version__}",
             "Content-Type": "application/json",
         }
+        if headers:
+            headers_out.update(headers)
 
         auth_headers = sign_request(self._private_key, self._config.station_id, body_bytes)
-        headers.update(auth_headers)
+        headers_out.update(auth_headers)
 
         try:
             # Send body_bytes directly instead of json= to ensure the exact
@@ -74,7 +79,7 @@ class HttpClient:
                 method,
                 url,
                 data=body_bytes if json_data is not None else None,
-                headers=headers,
+                headers=headers_out,
                 timeout=timeout,
                 stream=stream,
             )

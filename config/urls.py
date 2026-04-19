@@ -20,6 +20,7 @@ urlpatterns += i18n_patterns(
     path("monitoring/", include("apps.monitoring.urls")),
     path("images/", include("apps.images.urls")),
     path("provisioning/", include("apps.provisioning.urls")),
+    path("rollouts/", include("apps.rollouts.urls")),
     path("", include("apps.dashboard.urls")),
 )
 

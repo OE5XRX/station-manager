@@ -1,7 +1,13 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
+# Slugs reserved by the rollout machinery (apps.rollouts.grouping) —
+# creating a StationTag with one of these slugs would let a real tag
+# shadow the sentinel bucket used for "stations outside the sequence".
+RESERVED_TAG_SLUGS = frozenset({"__unassigned__"})
 
 
 class StationTag(models.Model):
@@ -26,9 +32,24 @@ class StationTag(models.Model):
         verbose_name = _("station tag")
         verbose_name_plural = _("station tags")
         ordering = ["name"]
+        constraints = [
+            # DB-level guard: clean() alone doesn't fire for
+            # .objects.create() / bulk_create() / raw .save(), so
+            # enforce the reservation here too. Admin/form paths also
+            # keep calling full_clean() so the user gets a nice error.
+            models.CheckConstraint(
+                condition=~models.Q(slug__in=sorted(RESERVED_TAG_SLUGS)),
+                name="stationtag_slug_not_reserved",
+            ),
+        ]
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        if self.slug in RESERVED_TAG_SLUGS:
+            raise ValidationError({"slug": _("This slug is reserved by the rollout system.")})
 
 
 class ModuleType(models.Model):

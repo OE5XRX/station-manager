@@ -173,7 +173,7 @@
                 <div class="row-split">
                   <div class="stack-gap-2" style="min-width:0;">
                     <div class="t-mono-sm t-muted">DEPLOY #{{ d.pk }}</div>
-                    <div class="truncate" style="font-weight:600;color:var(--ink-0);font-size:13px;">{{ d.firmware_artifact }}</div>
+                    <div class="truncate" style="font-weight:600;color:var(--ink-0);font-size:13px;">{{ d.image_release }}</div>
                   </div>
                   <span class="pill pill-{{ d.status|slugify }}">{{ d.get_status_display|upper }}</span>
                 </div>

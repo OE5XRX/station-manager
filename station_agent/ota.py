@@ -1,52 +1,56 @@
 """OTA update client for the Station Agent.
 
-Handles checking for updates, downloading firmware, reporting status,
-and committing successful boots. Actual partition writing is deferred
-to Yocto integration.
+Handles checking for updates, downloading firmware (resumable, opaque
+URL), reporting status, stream-decompressing the .wic.bz2 into the
+inactive rootfs partition (install_to_slot), arming the bootloader for
+a trial boot, and committing successful boots.
 """
 
+import bz2
 import hashlib
 import logging
 import os
-import subprocess
 
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
 from .http_client import HttpClient
+from .inventory import get_current_version
 
 logger = logging.getLogger(__name__)
+
+_STREAM_CHUNK = 1 << 20  # 1 MiB
+
+
+def _stream_read(fh, n: int) -> bytes:
+    # Indirection so tests can count reads.
+    return fh.read(n)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
 
 
 def check_for_update(config, http_client: HttpClient) -> dict | None:
     """Check the server for a pending deployment.
 
-    Args:
-        config: AgentConfig instance.
-        http_client: Authenticated HTTP client.
-
-    Returns:
-        Deployment info dict if an update is available, None otherwise.
+    POSTs the current firmware version so the server can decide whether the
+    station needs an upgrade. Returns the deployment info dict on 200, or
+    None for 204 (no update) / transport failures / unexpected statuses.
     """
-    response = http_client.request("GET", "/api/v1/deployments/check/")
-    if response is None:
+    current_version = get_current_version()
+    body = {"current_version": current_version}
+    response = http_client.request("POST", "/api/v1/deployments/check/", json_data=body)
+    if response is None or response.status_code == 204:
         return None
-
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            logger.info("Update available: deployment %s", data.get("id", "?"))
-            return data
-        except ValueError:
-            logger.error("Invalid JSON in deployment check response")
-            return None
-    elif response.status_code == 204:
-        logger.debug("No update available")
+    if response.status_code != 200:
+        logger.warning("Unexpected status from deployment check: %s", response.status_code)
         return None
-    else:
-        logger.warning(
-            "Unexpected status from deployment check: %s %s",
-            response.status_code,
-            response.text[:200],
-        )
+    try:
+        return response.json()
+    except ValueError:
+        logger.error("Invalid JSON in deployment check response")
         return None
 
 
@@ -111,6 +115,100 @@ def download_firmware(
         return False
 
     logger.info("Firmware downloaded and verified: %s", dest_path)
+    return True
+
+
+def download_firmware_resumable(
+    http_client,
+    download_url: str,
+    expected_checksum: str,
+    dest_path: str,
+    *,
+    resume: bool = True,
+) -> bool:
+    """Download a firmware image, optionally resuming from a partial file.
+
+    download_url is used verbatim — callers must not parse or rebuild it.
+    """
+    headers: dict[str, str] = {}
+    existing_len = 0
+    mode = "wb"
+    if resume and os.path.exists(dest_path):
+        existing_len = os.path.getsize(dest_path)
+        if existing_len > 0:
+            headers["Range"] = f"bytes={existing_len}-"
+            mode = "ab"
+
+    resp = http_client.request("GET", download_url, stream=True, headers=headers)
+    if resp is None:
+        return False
+
+    if resp.status_code == 416 and existing_len > 0:
+        # Our partial file is stale (e.g. left over from a different
+        # release, or the server decided Range isn't servable). Drop it
+        # and restart from zero without Range — one retry, no loop.
+        try:
+            resp.close()
+        except Exception as exc:
+            logger.debug("Response close failed (ignored): %s", exc)
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        logger.info("Server rejected Range (416); restarting download from 0")
+        return download_firmware_resumable(
+            http_client=http_client,
+            download_url=download_url,
+            expected_checksum=expected_checksum,
+            dest_path=dest_path,
+            resume=False,
+        )
+
+    if resp.status_code == 200:
+        # Server refused the Range request — restart from zero.
+        mode = "wb"
+        existing_len = 0
+    elif resp.status_code != 206:
+        logger.error("Firmware download failed: %s", resp.status_code)
+        return False
+
+    # The agent's default download_dir (typically /tmp/station-agent)
+    # may not exist on first OTA attempt. Create it every call — cheap
+    # and makes the no-partial and resume paths behave identically.
+    parent = os.path.dirname(dest_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    try:
+        with open(dest_path, mode) as f:
+            for chunk in resp.iter_content(chunk_size=_STREAM_CHUNK):
+                if chunk:
+                    f.write(chunk)
+    finally:
+        try:
+            resp.close()
+        except Exception as exc:
+            logger.debug("Response close failed (ignored): %s", exc)
+
+    if expected_checksum:
+        h = hashlib.sha256()
+        with open(dest_path, "rb") as f:
+            while True:
+                chunk = f.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+        if h.hexdigest() != expected_checksum:
+            logger.error(
+                "Checksum mismatch: expected %s got %s",
+                expected_checksum,
+                h.hexdigest(),
+            )
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            return False
     return True
 
 
@@ -193,12 +291,12 @@ def commit_boot(config, http_client: HttpClient, version: str) -> bool:
 def apply_update(config, firmware_path: str) -> bool:
     """Apply a firmware update to the inactive partition.
 
-    Writes the firmware image to the inactive root partition via dd,
-    then sets the bootloader to trial-boot from it on next reboot.
+    Stream-decompresses the downloaded `.wic.bz2` into the inactive
+    root partition, then arms the bootloader for a trial boot.
 
     Args:
         config: AgentConfig instance.
-        firmware_path: Path to the downloaded firmware file.
+        firmware_path: Path to the downloaded .wic.bz2 file.
 
     Returns:
         True if the update was applied successfully.
@@ -213,14 +311,9 @@ def apply_update(config, firmware_path: str) -> bool:
 
     logger.info("Writing %s to %s (slot %s)", firmware_path, target_dev, target_slot)
     try:
-        subprocess.run(
-            ["dd", f"if={firmware_path}", f"of={target_dev}", "bs=4M", "conv=fsync"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.error("dd failed (rc=%d): %s", exc.returncode, exc.stderr.strip())
+        install_to_slot(firmware_path, target_dev)
+    except (OSError, ValueError) as exc:
+        logger.error("install_to_slot failed: %s", exc)
         return False
 
     if not set_upgrade_pending(bl, target_slot):
@@ -229,3 +322,36 @@ def apply_update(config, firmware_path: str) -> bool:
 
     logger.info("Update applied to slot %s — reboot to activate", target_slot)
     return True
+
+
+def install_to_slot(wic_bz2_path, partition_device: str) -> None:
+    """Stream-decompress a .wic.bz2 into a block device.
+
+    `partition_device` is e.g. "/dev/sda4". The caller is responsible
+    for making sure this is the inactive slot — typically derived via
+    bootloader.get_inactive_slot() + a machine-specific slot→device map.
+
+    Raises OSError on I/O failure.
+    Raises ValueError if the bz2 stream is truncated (decompressor did
+    not reach EOF) — writing a partial image to a boot slot would
+    silently brick the next boot, so fail loud.
+    """
+    decomp = bz2.BZ2Decompressor()
+    with open(str(wic_bz2_path), "rb") as src:
+        fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+        try:
+            while True:
+                chunk = _stream_read(src, _STREAM_CHUNK)
+                if not chunk:
+                    break
+                decompressed = decomp.decompress(chunk)
+                if decompressed:
+                    _write_all(fd, decompressed)
+            if not decomp.eof:
+                raise ValueError(
+                    f"bz2 stream in {wic_bz2_path} is truncated: "
+                    "decompressor did not reach end-of-stream"
+                )
+            os.fsync(fd)
+        finally:
+            os.close(fd)

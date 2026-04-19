@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -14,7 +15,7 @@ from .ota import (
     apply_update,
     check_for_update,
     commit_boot,
-    download_firmware,
+    download_firmware_resumable,
     report_status,
 )
 from .terminal import TerminalClient
@@ -37,46 +38,93 @@ class StationAgent:
     def _handle_ota(self, config, http_client):
         """Check for and process an OTA update.
 
-        Flow: check -> report downloading -> download -> verify checksum ->
-              report installing -> apply -> report rebooting.
+        Flow is state-driven off `deployment_result_status` from the
+        server so a crash-recover restart picks up where it left off
+        without overwriting the rollback slot:
 
-        On next startup (or after simulated reboot), health checks run
-        and the boot is committed.
+          PENDING / DOWNLOADING  -> download -> install -> reboot -> verify
+          INSTALLING             -> install -> reboot -> verify
+          REBOOTING / VERIFYING  -> verify+commit only (image is already
+                                    on disk; we're booted into it, so
+                                    writing again to the *now-inactive*
+                                    slot would corrupt the known-good
+                                    rollback target)
         """
         deployment = check_for_update(config, http_client)
         if deployment is None:
             return
 
-        result_pk = deployment.get("result_id")
+        result_pk = deployment.get("deployment_result_id")
         download_url = deployment.get("download_url", "")
-        version = deployment.get("firmware_version", "")
-        is_delta = deployment.get("is_delta", False)
-
-        # Use delta checksum when downloading a delta, full checksum otherwise
-        if is_delta and deployment.get("delta_checksum_sha256"):
-            expected_checksum = deployment["delta_checksum_sha256"]
-        else:
-            expected_checksum = deployment.get("checksum_sha256", "")
+        version = deployment.get("target_tag", "")
+        expected_checksum = deployment.get("checksum_sha256", "")
+        current_status = deployment.get("deployment_result_status", "pending")
 
         if not result_pk or not download_url:
             logger.error("Deployment response missing required fields")
             return
 
-        # Report downloading
-        report_status(config, http_client, result_pk, "downloading")
-
-        # Download firmware
-        suffix = ".xdelta3" if is_delta else ".bin"
-        dest_path = os.path.join(config.download_dir, f"firmware-{version}{suffix}")
-        if not download_firmware(config, http_client, download_url, expected_checksum, dest_path):
-            report_status(
-                config,
-                http_client,
+        # Post-reboot recovery: the image is already on the slot we're
+        # running from, and the slot we'd call "inactive" is the old
+        # rollback target. Running the install path here would overwrite
+        # it. Go straight to health-check + commit.
+        if current_status in ("rebooting", "verifying"):
+            logger.info(
+                "Resuming deployment %s from %s — skipping download+install",
                 result_pk,
-                "failed",
-                error_message="Firmware download or checksum verification failed",
+                current_status,
             )
+            self._verify_and_commit(config, http_client, result_pk, version)
             return
+
+        # Sanitize the tag before it becomes a filename: a compromised or
+        # sloppy server could return a tag like "../" and turn dest_path
+        # into a traversal outside download_dir.
+        safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", version) or "image"
+        dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.wic.bz2")
+
+        if current_status != "installing":
+            # Report downloading (idempotent — transitioning PENDING or
+            # stale DOWNLOADING both map to "downloading now").
+            report_status(config, http_client, result_pk, "downloading")
+
+            # Download firmware (resumable; download_url is opaque — pass verbatim).
+            if not download_firmware_resumable(
+                http_client=http_client,
+                download_url=download_url,
+                expected_checksum=expected_checksum,
+                dest_path=dest_path,
+            ):
+                report_status(
+                    config,
+                    http_client,
+                    result_pk,
+                    "failed",
+                    error_message="Firmware download or checksum verification failed",
+                )
+                return
+        else:
+            # Resuming from INSTALLING means the download completed once
+            # before. If the file is still there, trust it (checksum was
+            # already verified). If it's gone (e.g. /tmp was cleared on
+            # reboot), re-download before re-installing.
+            if not os.path.exists(dest_path):
+                logger.info("INSTALLING resume but partial is gone — re-downloading")
+                report_status(config, http_client, result_pk, "downloading")
+                if not download_firmware_resumable(
+                    http_client=http_client,
+                    download_url=download_url,
+                    expected_checksum=expected_checksum,
+                    dest_path=dest_path,
+                ):
+                    report_status(
+                        config,
+                        http_client,
+                        result_pk,
+                        "failed",
+                        error_message="Firmware re-download failed during INSTALLING resume",
+                    )
+                    return
 
         # Report installing
         report_status(config, http_client, result_pk, "installing")
@@ -102,6 +150,31 @@ class StationAgent:
     def _verify_and_commit(self, config, http_client, result_pk, version):
         """Run health checks and commit or roll back the update."""
         report_status(config, http_client, result_pk, "verifying")
+
+        # Guard against a silent bootloader rollback: if we're here from
+        # a REBOOTING/VERIFYING resume, the kernel that's actually
+        # running may be the old slot. Health checks alone don't
+        # distinguish the two, so confirm /etc/os-release matches the
+        # target tag before accepting "committed".
+        from .inventory import get_current_version
+
+        running_version = get_current_version()
+        if running_version and running_version != version:
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "rolled_back",
+                error_message=(
+                    f"Bootloader rolled back: running {running_version!r}, expected {version!r}"
+                ),
+            )
+            logger.warning(
+                "Refusing to commit: running %s but deployment target is %s",
+                running_version,
+                version,
+            )
+            return
 
         passed, messages = run_health_checks(server_url=config.server_url)
         for msg in messages:

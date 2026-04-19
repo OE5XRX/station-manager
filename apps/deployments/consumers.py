@@ -18,6 +18,13 @@ class DeploymentStatusConsumer(AsyncWebsocketConsumer):
         if not user or user.is_anonymous:
             await self.close(code=4401)
             return
+        # Align with the deployments pages that actually render this feed:
+        # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
+        # and the upgrade dashboard. Members stay excluded (4403) so their
+        # auto-reconnect loop from static/js/app.js stops cleanly.
+        if getattr(user, "role", None) not in ("admin", "operator"):
+            await self.close(code=4403)
+            return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
         await self.accept()
 
@@ -49,6 +56,7 @@ def broadcast_deployment_status(deployment, result=None):
     }
 
     if result is not None:
+        image = deployment.image_release
         data["result"] = {
             "id": result.id,
             "station_id": result.station_id,
@@ -57,6 +65,8 @@ def broadcast_deployment_status(deployment, result=None):
             "error_message": result.error_message or "",
             "started_at": result.started_at.isoformat() if result.started_at else None,
             "completed_at": result.completed_at.isoformat() if result.completed_at else None,
+            "tag": image.tag if image else "",
+            "machine": image.machine if image else "",
         }
 
     async_to_sync(channel_layer.group_send)(
