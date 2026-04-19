@@ -4,20 +4,6 @@ import pytest
 from django.urls import reverse
 
 
-@pytest.fixture
-def image_release(db):
-    from apps.images.models import ImageRelease
-
-    return ImageRelease.objects.create(
-        tag="v1-alpha",
-        machine="qemux86-64",
-        s3_key="images/v1-alpha/qemux86-64.wic.bz2",
-        sha256="a" * 64,
-        size_bytes=1000,
-        is_latest=True,
-    )
-
-
 @pytest.mark.django_db
 class TestProvisioningJob:
     def test_defaults(self, station, image_release, admin_user):

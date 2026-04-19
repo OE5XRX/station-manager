@@ -1,7 +1,5 @@
 import logging
-import re
 
-from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -15,7 +13,6 @@ from apps.deployments.serializers import (
     DeploymentCommitSerializer,
     DeploymentStatusUpdateSerializer,
 )
-from apps.firmware.models import FirmwareDelta
 from apps.stations.models import StationAuditLog
 
 logger = logging.getLogger(__name__)
@@ -41,7 +38,7 @@ class DeploymentCheckView(APIView):
                 status=DeploymentResult.Status.PENDING,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
-            .select_related("deployment__firmware_artifact")
+            .select_related("deployment__image_release")
             .order_by("deployment__created_at")
             .first()
         )
@@ -49,41 +46,26 @@ class DeploymentCheckView(APIView):
         if result is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        artifact = result.deployment.firmware_artifact
+        release = result.deployment.image_release
 
-        # Check if a delta is available for this station's current version
+        # Delta lookup will be reworked for ImageRelease-based deltas in a later task.
         delta_data = {
             "is_delta": False,
             "delta_checksum_sha256": "",
             "delta_file_size": 0,
         }
-        current_version = getattr(station, "current_os_version", "") or ""
-        if current_version:
-            delta = FirmwareDelta.objects.filter(
-                source_artifact__version=current_version,
-                source_artifact__name=artifact.name,
-                target_artifact=artifact,
-            ).first()
-            if delta:
-                delta_data = {
-                    "is_delta": True,
-                    "delta_checksum_sha256": delta.checksum_sha256,
-                    "delta_file_size": delta.delta_size,
-                }
 
         download_url = f"/api/v1/deployments/{result.pk}/download/"
-        if delta_data["is_delta"]:
-            download_url += "?delta=true"
 
         data = DeploymentCheckResponseSerializer(
             {
                 "result_id": result.pk,
                 "deployment_id": result.deployment_id,
-                "firmware_name": artifact.name,
-                "firmware_version": artifact.version,
+                "firmware_name": release.tag,
+                "firmware_version": release.machine,
                 "download_url": download_url,
-                "checksum_sha256": artifact.checksum_sha256,
-                "file_size": artifact.file_size,
+                "checksum_sha256": release.sha256,
+                "file_size": release.size_bytes,
                 **delta_data,
             }
         ).data
@@ -106,7 +88,7 @@ class DeploymentStatusUpdateView(APIView):
             )
 
         try:
-            result = DeploymentResult.objects.select_related("deployment__firmware_artifact").get(
+            result = DeploymentResult.objects.select_related("deployment__image_release").get(
                 pk=pk, station=station
             )
         except DeploymentResult.DoesNotExist:
@@ -241,7 +223,7 @@ class DeploymentDownloadView(APIView):
             )
 
         try:
-            result = DeploymentResult.objects.select_related("deployment__firmware_artifact").get(
+            result = DeploymentResult.objects.select_related("deployment__image_release").get(
                 pk=pk, station=station
             )
         except DeploymentResult.DoesNotExist:
@@ -250,52 +232,13 @@ class DeploymentDownloadView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        artifact = result.deployment.firmware_artifact
-        serve_delta = request.query_params.get("delta", "").lower() == "true"
-
-        if serve_delta:
-            current_version = getattr(result.station, "current_os_version", "") or ""
-            delta = None
-            if current_version:
-                delta = FirmwareDelta.objects.filter(
-                    source_artifact__version=current_version,
-                    source_artifact__name=artifact.name,
-                    target_artifact=artifact,
-                ).first()
-
-            if delta:
-                response = FileResponse(
-                    delta.delta_file.open("rb"),
-                    content_type="application/octet-stream",
-                )
-                safe_name = re.sub(
-                    r'["\r\n]',
-                    "_",
-                    f"{artifact.name}-{current_version}_to_{artifact.version}.xdelta3",
-                )
-                response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
-                return response
-
-            # Fall through to full image if delta not found
-            logger.warning(
-                "Delta requested but not found for station %s (version %s -> %s). "
-                "Serving full image.",
-                result.station,
-                current_version,
-                artifact.version,
-            )
-
-        response = FileResponse(
-            artifact.file.open("rb"),
-            content_type="application/octet-stream",
+        # ImageRelease serves artifacts via S3; direct download will be implemented
+        # in a later task. For now, return 501 so agents fall back gracefully.
+        _ = result.deployment.image_release
+        return Response(
+            {"detail": "Image download via S3 is not yet implemented."},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
         )
-        safe_name = re.sub(
-            r'["\r\n]',
-            "_",
-            f"{artifact.name}-v{artifact.version}",
-        )
-        response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
-        return response
 
 
 def _check_deployment_complete(deployment):

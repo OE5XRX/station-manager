@@ -13,7 +13,7 @@ class TestDeploymentCheck:
         """Agent should receive firmware info for a pending deployment."""
         station, private_key = station_with_key
         result = deployment_result
-        artifact = result.deployment.firmware_artifact
+        release = result.deployment.image_release
 
         response = client.get(
             reverse("api:deployment_check"),
@@ -23,10 +23,10 @@ class TestDeploymentCheck:
         data = response.json()
         assert data["result_id"] == result.pk
         assert data["deployment_id"] == result.deployment_id
-        assert data["firmware_name"] == artifact.name
-        assert data["firmware_version"] == artifact.version
-        assert data["checksum_sha256"] == artifact.checksum_sha256
-        assert data["file_size"] == artifact.file_size
+        assert data["firmware_name"] == release.tag
+        assert data["firmware_version"] == release.machine
+        assert data["checksum_sha256"] == release.sha256
+        assert data["file_size"] == release.size_bytes
 
     def test_check_no_pending(self, client, station_with_key):
         """No pending deployment should return 204 No Content."""
@@ -137,14 +137,14 @@ class TestDeploymentCommit:
 @pytest.mark.django_db
 class TestDeploymentWebViews:
     def test_create_deployment_creates_results(
-        self, client, operator_user, firmware_artifact, station
+        self, client, operator_user, image_release, station
     ):
         """Creating a deployment should create DeploymentResult per target station."""
         client.force_login(operator_user)
         response = client.post(
             reverse("deployments:deployment_create"),
             data={
-                "firmware_artifact": firmware_artifact.pk,
+                "image_release": image_release.pk,
                 "target_type": Deployment.TargetType.STATION,
                 "target_station": station.pk,
                 "strategy": Deployment.Strategy.IMMEDIATE,
@@ -184,3 +184,38 @@ class TestDeploymentWebViews:
             reverse("deployments:deployment_detail", kwargs={"pk": deployment.pk}),
         )
         assert response.status_code == 200
+
+
+@pytest.mark.django_db
+class TestDeploymentImageReleaseFK:
+    def test_deployment_uses_image_release(self, image_release, station, admin_user):
+        from apps.deployments.models import Deployment
+
+        dep = Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            created_by=admin_user,
+        )
+        assert dep.image_release == image_release
+        assert not hasattr(dep, "firmware_artifact")
+
+    def test_superseded_status_exists(self):
+        from apps.deployments.models import DeploymentResult
+
+        assert DeploymentResult.Status.SUPERSEDED == "superseded"
+        assert "superseded" in dict(DeploymentResult.Status.choices)
+
+    def test_image_release_protect_on_delete(self, image_release, station, admin_user):
+        from django.db.models.deletion import ProtectedError
+
+        from apps.deployments.models import Deployment
+
+        Deployment.objects.create(
+            image_release=image_release,
+            target_type=Deployment.TargetType.STATION,
+            target_station=station,
+            created_by=admin_user,
+        )
+        with pytest.raises(ProtectedError):
+            image_release.delete()

@@ -2,7 +2,6 @@ from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-from apps.firmware.models import FirmwareArtifact
 from apps.stations.models import Station, StationTag
 
 
@@ -25,9 +24,9 @@ class Deployment(models.Model):
         FAILED = "failed", _("Failed")
         CANCELLED = "cancelled", _("Cancelled")
 
-    firmware_artifact = models.ForeignKey(
-        FirmwareArtifact,
-        verbose_name=_("firmware artifact"),
+    image_release = models.ForeignKey(
+        "images.ImageRelease",
+        verbose_name=_("image release"),
         on_delete=models.PROTECT,
         related_name="deployments",
     )
@@ -87,7 +86,7 @@ class Deployment(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Deployment #{self.pk} - {self.firmware_artifact} ({self.get_status_display()})"
+        return f"Deployment #{self.pk} - {self.image_release} ({self.get_status_display()})"
 
     def get_target_stations(self):
         """Resolve the queryset of stations targeted by this deployment."""
@@ -132,6 +131,7 @@ class DeploymentResult(models.Model):
         FAILED = "failed", _("Failed")
         ROLLED_BACK = "rolled_back", _("Rolled Back")
         CANCELLED = "cancelled", _("Cancelled")
+        SUPERSEDED = "superseded", _("Superseded")
 
     deployment = models.ForeignKey(
         Deployment,

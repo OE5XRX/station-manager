@@ -28,7 +28,7 @@ class DeploymentListView(AdminOrOperatorRequiredMixin, ListView):
         qs = (
             super()
             .get_queryset()
-            .select_related("firmware_artifact", "target_tag", "target_station", "created_by")
+            .select_related("image_release", "target_tag", "target_station", "created_by")
             .annotate(
                 result_total=Count("results"),
                 result_completed=Count(
@@ -69,7 +69,7 @@ class DeploymentDetailView(AdminOrOperatorRequiredMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("firmware_artifact", "target_tag", "target_station", "created_by")
+            .select_related("image_release", "target_tag", "target_station", "created_by")
             .prefetch_related("results__station")
         )
 
@@ -112,7 +112,7 @@ class DeploymentCreateView(AdminOrOperatorRequiredMixin, CreateView):
                 event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
                 message=(
                     f"Deployment #{self.object.pk} created: "
-                    f"{self.object.firmware_artifact} targeting {station.name}."
+                    f"{self.object.image_release} targeting {station.name}."
                 ),
                 user=self.request.user,
                 ip_address=_get_client_ip(self.request),

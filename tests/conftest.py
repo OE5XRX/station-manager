@@ -130,10 +130,25 @@ def firmware_artifact(db, operator_user):
 
 
 @pytest.fixture
-def deployment(firmware_artifact, station, operator_user):
+def image_release(db):
+    """An ImageRelease marked as latest for qemux86-64."""
+    from apps.images.models import ImageRelease
+
+    return ImageRelease.objects.create(
+        tag="v1-alpha",
+        machine="qemux86-64",
+        s3_key="images/v1-alpha/qemux86-64.wic.bz2",
+        sha256="a" * 64,
+        size_bytes=1000,
+        is_latest=True,
+    )
+
+
+@pytest.fixture
+def deployment(image_release, station, operator_user):
     """An in-progress Deployment targeting a single station."""
     dep = Deployment.objects.create(
-        firmware_artifact=firmware_artifact,
+        image_release=image_release,
         target_type=Deployment.TargetType.STATION,
         target_station=station,
         status=Deployment.Status.IN_PROGRESS,
