@@ -642,6 +642,7 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
 .pill-success     { background: var(--signal-soft); color: var(--signal); border-color: rgba(62,213,152,0.3); }
 .pill-failed      { background: var(--danger-soft); color: var(--danger); border-color: rgba(255,93,115,0.3); }
 .pill-cancelled   { background: var(--bg-3);       color: var(--ink-2);  border-color: var(--line); }
+.pill-superseded  { background: var(--bg-3);       color: var(--ink-2);  border-color: var(--line); }
 .pill-building    { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(78,225,242,0.3); }
 .pill-downloading { background: var(--cyan-soft);  color: var(--cyan); }
 .pill-installing  { background: var(--accent-tint);color: var(--accent); }
