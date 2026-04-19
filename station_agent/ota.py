@@ -13,6 +13,7 @@ import subprocess
 
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
 from .http_client import HttpClient
+from .inventory import get_current_version
 
 logger = logging.getLogger(__name__)
 
@@ -34,34 +35,22 @@ def _write_all(fd: int, data: bytes) -> None:
 def check_for_update(config, http_client: HttpClient) -> dict | None:
     """Check the server for a pending deployment.
 
-    Args:
-        config: AgentConfig instance.
-        http_client: Authenticated HTTP client.
-
-    Returns:
-        Deployment info dict if an update is available, None otherwise.
+    POSTs the current firmware version so the server can decide whether the
+    station needs an upgrade. Returns the deployment info dict on 200, or
+    None for 204 (no update) / transport failures / unexpected statuses.
     """
-    response = http_client.request("GET", "/api/v1/deployments/check/")
-    if response is None:
+    current_version = get_current_version()
+    body = {"current_version": current_version}
+    response = http_client.request("POST", "/api/v1/deployments/check/", json_data=body)
+    if response is None or response.status_code == 204:
         return None
-
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            logger.info("Update available: deployment %s", data.get("id", "?"))
-            return data
-        except ValueError:
-            logger.error("Invalid JSON in deployment check response")
-            return None
-    elif response.status_code == 204:
-        logger.debug("No update available")
+    if response.status_code != 200:
+        logger.warning("Unexpected status from deployment check: %s", response.status_code)
         return None
-    else:
-        logger.warning(
-            "Unexpected status from deployment check: %s %s",
-            response.status_code,
-            response.text[:200],
-        )
+    try:
+        return response.json()
+    except ValueError:
+        logger.error("Invalid JSON in deployment check response")
         return None
 
 
@@ -126,6 +115,72 @@ def download_firmware(
         return False
 
     logger.info("Firmware downloaded and verified: %s", dest_path)
+    return True
+
+
+def download_firmware_resumable(
+    http_client,
+    download_url: str,
+    expected_checksum: str,
+    dest_path: str,
+    *,
+    resume: bool = True,
+) -> bool:
+    """Download a firmware image, optionally resuming from a partial file.
+
+    download_url is used verbatim — callers must not parse or rebuild it.
+    """
+    headers: dict[str, str] = {}
+    existing_len = 0
+    mode = "wb"
+    if resume and os.path.exists(dest_path):
+        existing_len = os.path.getsize(dest_path)
+        if existing_len > 0:
+            headers["Range"] = f"bytes={existing_len}-"
+            mode = "ab"
+
+    resp = http_client.request("GET", download_url, stream=True, headers=headers)
+    if resp is None:
+        return False
+
+    if resp.status_code == 200:
+        # Server refused the Range request — restart from zero.
+        mode = "wb"
+        existing_len = 0
+    elif resp.status_code != 206:
+        logger.error("Firmware download failed: %s", resp.status_code)
+        return False
+
+    try:
+        with open(dest_path, mode) as f:
+            for chunk in resp.iter_content(chunk_size=_STREAM_CHUNK):
+                if chunk:
+                    f.write(chunk)
+    finally:
+        try:
+            resp.close()
+        except Exception as exc:
+            logger.debug("Response close failed (ignored): %s", exc)
+
+    if expected_checksum:
+        h = hashlib.sha256()
+        with open(dest_path, "rb") as f:
+            while True:
+                chunk = f.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+        if h.hexdigest() != expected_checksum:
+            logger.error(
+                "Checksum mismatch: expected %s got %s",
+                expected_checksum,
+                h.hexdigest(),
+            )
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            return False
     return True
 
 

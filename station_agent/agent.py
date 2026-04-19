@@ -14,7 +14,7 @@ from .ota import (
     apply_update,
     check_for_update,
     commit_boot,
-    download_firmware,
+    download_firmware_resumable,
     report_status,
 )
 from .terminal import TerminalClient
@@ -47,16 +47,10 @@ class StationAgent:
         if deployment is None:
             return
 
-        result_pk = deployment.get("result_id")
+        result_pk = deployment.get("deployment_result_id")
         download_url = deployment.get("download_url", "")
-        version = deployment.get("firmware_version", "")
-        is_delta = deployment.get("is_delta", False)
-
-        # Use delta checksum when downloading a delta, full checksum otherwise
-        if is_delta and deployment.get("delta_checksum_sha256"):
-            expected_checksum = deployment["delta_checksum_sha256"]
-        else:
-            expected_checksum = deployment.get("checksum_sha256", "")
+        version = deployment.get("target_tag", "")
+        expected_checksum = deployment.get("checksum_sha256", "")
 
         if not result_pk or not download_url:
             logger.error("Deployment response missing required fields")
@@ -65,10 +59,14 @@ class StationAgent:
         # Report downloading
         report_status(config, http_client, result_pk, "downloading")
 
-        # Download firmware
-        suffix = ".xdelta3" if is_delta else ".bin"
-        dest_path = os.path.join(config.download_dir, f"firmware-{version}{suffix}")
-        if not download_firmware(config, http_client, download_url, expected_checksum, dest_path):
+        # Download firmware (resumable; download_url is opaque — pass verbatim)
+        dest_path = os.path.join(config.download_dir, f"firmware-{version}.wic.bz2")
+        if not download_firmware_resumable(
+            http_client=http_client,
+            download_url=download_url,
+            expected_checksum=expected_checksum,
+            dest_path=dest_path,
+        ):
             report_status(
                 config,
                 http_client,

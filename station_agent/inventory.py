@@ -12,6 +12,20 @@ import socket
 
 logger = logging.getLogger(__name__)
 
+_OS_RELEASE_PATH = "/etc/os-release"
+
+
+def get_current_version() -> str:
+    """Return the OE5XRX firmware release tag from /etc/os-release, or ""."""
+    try:
+        with open(_OS_RELEASE_PATH) as f:
+            for line in f:
+                if line.startswith("OE5XRX_RELEASE="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
+
 
 def _read_file(path: str) -> str:
     """Read a file and return its contents, or empty string on failure."""
