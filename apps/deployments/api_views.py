@@ -209,7 +209,7 @@ class DeploymentCommitView(APIView):
 
 
 class DeploymentDownloadView(APIView):
-    """Serve the firmware file for a deployment result."""
+    """Interim stub. Returns 501; S3-backed download lands in Task 8."""
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
@@ -222,19 +222,12 @@ class DeploymentDownloadView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        try:
-            result = DeploymentResult.objects.select_related("deployment__image_release").get(
-                pk=pk, station=station
-            )
-        except DeploymentResult.DoesNotExist:
+        if not DeploymentResult.objects.filter(pk=pk, station=station).exists():
             return Response(
                 {"detail": "Deployment result not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # ImageRelease serves artifacts via S3; direct download will be implemented
-        # in a later task. For now, return 501 so agents fall back gracefully.
-        _ = result.deployment.image_release
         return Response(
             {"detail": "Image download via S3 is not yet implemented."},
             status=status.HTTP_501_NOT_IMPLEMENTED,
