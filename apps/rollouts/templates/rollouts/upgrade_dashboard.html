@@ -114,7 +114,7 @@
                 <th>{% trans "Status" %}</th>
               </tr>
             </thead>
-            <tbody id="rows-{{ group_key }}">
+            <tbody id="rows-{{ group_key|slugify }}">
               {% for station, target in pending %}
                 {% include "rollouts/_dashboard_row.html" with station=station target=target %}
               {% endfor %}

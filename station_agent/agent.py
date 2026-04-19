@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -59,8 +60,12 @@ class StationAgent:
         # Report downloading
         report_status(config, http_client, result_pk, "downloading")
 
-        # Download firmware (resumable; download_url is opaque — pass verbatim)
-        dest_path = os.path.join(config.download_dir, f"firmware-{version}.wic.bz2")
+        # Download firmware (resumable; download_url is opaque — pass verbatim).
+        # Sanitize the tag before it becomes a filename: a compromised or
+        # sloppy server could return a tag like "../" and turn dest_path
+        # into a traversal outside download_dir.
+        safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", version) or "image"
+        dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.wic.bz2")
         if not download_firmware_resumable(
             http_client=http_client,
             download_url=download_url,

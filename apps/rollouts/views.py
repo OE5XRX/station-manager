@@ -112,15 +112,19 @@ class UpgradeGroupView(AdminRequiredMixin, View):
             messages.info(request, _("No stations carry this tag."))
             return redirect("rollouts:upgrade_dashboard")
 
-        # Bucket by machine.
+        # Bucket by machine. Stations with no current_image_release cannot
+        # be routed to a target (we don't know their machine) — count them
+        # as skipped so the flash message doesn't silently lose them.
         by_machine: dict[str, list] = {}
+        unprovisioned = 0
         for s in stations:
             if not s.current_image_release:
+                unprovisioned += 1
                 continue
             by_machine.setdefault(s.current_image_release.machine, []).append(s)
 
         created = 0
-        skipped = 0
+        skipped = unprovisioned
         with transaction.atomic():
             for machine, machine_stations in by_machine.items():
                 target = ImageRelease.objects.filter(machine=machine, is_latest=True).first()

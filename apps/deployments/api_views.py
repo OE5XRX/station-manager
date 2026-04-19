@@ -272,6 +272,15 @@ class DeploymentDownloadView(APIView):
                 end_g = m.group(2)
                 if end_g:
                     end = int(end_g)
+                if total_size and start >= total_size:
+                    # RFC 7233: unsatisfiable range → 416 with the total.
+                    stream.close()
+                    response = Response(
+                        {"detail": "Requested range not satisfiable."},
+                        status=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                    )
+                    response["Content-Range"] = f"bytes */{total_size}"
+                    return response
                 if total_size and end is not None:
                     end = min(end, total_size - 1)
                 try:
