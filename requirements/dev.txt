@@ -8,3 +8,7 @@ django-debug-toolbar>=5.0,<7.0
 # instead of being skipped via pytest.importorskip.
 PyYAML>=6.0,<7.0
 websockets>=14.0,<15.0
+# station_agent.ota imports requests transitively via .http_client;
+# pulling it into dev so the OTA install tests actually run in CI
+# instead of being skipped via pytest.importorskip.
+requests>=2.32,<3.0
