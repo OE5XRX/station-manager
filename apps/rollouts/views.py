@@ -53,9 +53,14 @@ def _defer_audit_log(*, station, event_type, message, user=None):
     only if the outer transaction actually commits, and any failure then
     is on its own connection.
     """
+    from django.contrib.auth import get_user_model
+
     station_pk = station.pk
     user_pk = getattr(user, "pk", None)
-    user_type = type(user) if user is not None else None
+    # request.user is normally a SimpleLazyObject, so type(user) would
+    # be SimpleLazyObject, not User, and its .objects manager doesn't
+    # exist. Use the project's configured user model directly.
+    user_model = get_user_model()
 
     def _write() -> None:
         try:
@@ -63,7 +68,7 @@ def _defer_audit_log(*, station, event_type, message, user=None):
             # it natively, which saves a query AND avoids a ValueError
             # if the station row was deleted between post and commit.
             # The user lookup is defensive in the same way.
-            actor = user_type.objects.filter(pk=user_pk).first() if user_pk else None
+            actor = user_model.objects.filter(pk=user_pk).first() if user_pk else None
             StationAuditLog.log(
                 station_id=station_pk,
                 event_type=event_type,

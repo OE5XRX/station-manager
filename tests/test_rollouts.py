@@ -48,7 +48,8 @@ class TestSingletonSeed:
 
     def test_exactly_one_sequence_exists_after_migrations(self):
         assert RolloutSequence.objects.count() == 1
-        assert RolloutSequence.objects.filter(pk=1).exists()
+        # No hard-coded pk — the migration deliberately doesn't force one
+        # (explicit-pk inserts on Postgres leave the sequence un-advanced).
 
     def test_current_sequence_helper_returns_the_singleton(self):
         from apps.rollouts.models import current_sequence

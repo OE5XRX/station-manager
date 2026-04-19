@@ -2,13 +2,21 @@ from django.db import migrations
 
 
 def seed_singleton(apps, schema_editor):
+    """Seed one RolloutSequence row if none exists.
+
+    Deliberately does NOT pass an explicit pk. On Postgres, explicit-pk
+    inserts don't advance the underlying sequence, which would cause a
+    later pk-free create (Django admin, factory, etc.) to collide on
+    whichever id we would have hard-coded here.
+    """
     RolloutSequence = apps.get_model("rollouts", "RolloutSequence")
-    RolloutSequence.objects.get_or_create(pk=1)
+    if not RolloutSequence.objects.exists():
+        RolloutSequence.objects.create()
 
 
 def unseed_singleton(apps, schema_editor):
     RolloutSequence = apps.get_model("rollouts", "RolloutSequence")
-    RolloutSequence.objects.filter(pk=1).delete()
+    RolloutSequence.objects.all().delete()
 
 
 class Migration(migrations.Migration):

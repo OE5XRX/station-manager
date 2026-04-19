@@ -58,9 +58,15 @@ class RolloutSequenceEntry(models.Model):
 def current_sequence() -> RolloutSequence:
     """Return the singleton RolloutSequence.
 
-    The pk=1 row is seeded by migration 0002_seed_singleton; the
-    get_or_create fallback exists only as a safety net and should never
-    fire in production.
+    The row is seeded by migration 0002_seed_singleton; this helper
+    returns whichever RolloutSequence exists, or creates one (without
+    forcing a specific pk) if the table is somehow empty.
+
+    We deliberately avoid a hard-coded pk — on Postgres, explicit-pk
+    inserts don't advance the underlying sequence, which would cause
+    later Django-admin-style creates to collide on pk=1.
     """
-    seq, _created = RolloutSequence.objects.get_or_create(pk=1)
+    seq = RolloutSequence.objects.order_by("pk").first()
+    if seq is None:
+        seq = RolloutSequence.objects.create()
     return seq
