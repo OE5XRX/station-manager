@@ -24,7 +24,9 @@ def group_stations_by_sequence(stations: Iterable) -> OrderedDict[str, list]:
     buckets[UNASSIGNED_KEY] = []
 
     for station in stations:
-        station_tag_names = set(station.tags.values_list("name", flat=True))
+        # Use .all() so a caller's .prefetch_related("tags") actually hits.
+        # values_list() bypasses the prefetch cache and re-queries per row.
+        station_tag_names = {t.name for t in station.tags.all()}
         placed = False
         for name in ordered_tag_names:
             if name in station_tag_names:
