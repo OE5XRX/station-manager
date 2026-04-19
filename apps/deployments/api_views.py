@@ -206,14 +206,28 @@ class DeploymentCommitView(APIView):
                 f"target {expected_tag!r}; treating as bootloader rollback."
             )
             result.save(update_fields=["status", "completed_at", "new_version", "error_message"])
-            StationAuditLog.log(
-                station=station,
-                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-                message=(
-                    f"Deployment #{result.deployment_id} commit rejected: "
-                    f"station reports {version!r}, target was {expected_tag!r}."
-                ),
-            )
+            # Audit log is best-effort — a transient DB hiccup here must
+            # not turn the deterministic 409 response into a 500 after
+            # we've already mutated the DeploymentResult row.
+            try:
+                StationAuditLog.log(
+                    station=station,
+                    event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                    message=(
+                        f"Deployment #{result.deployment_id} commit rejected: "
+                        f"station reports {version!r}, target was {expected_tag!r}."
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Audit log write failed for commit mismatch "
+                    "(station=%s, deployment=%s, reported=%r, expected=%r)",
+                    station.pk,
+                    result.deployment_id,
+                    version,
+                    expected_tag,
+                    exc_info=True,
+                )
             _check_deployment_complete(result.deployment)
             return Response(
                 {"detail": "Version mismatch — recorded as rolled_back."},
