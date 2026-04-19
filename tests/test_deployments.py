@@ -272,6 +272,52 @@ class TestDeploymentWebViews:
         )
         assert response.status_code == 200
 
+    def test_progress_excludes_cancelled_and_superseded_from_in_progress(
+        self, deployment, station, image_release
+    ):
+        """Regression: in_progress used to be computed as
+        total - completed - failed - pending, so CANCELLED and
+        SUPERSEDED results were silently counted as 'in progress'
+        — the dashboard and WebSocket payload both lied about the
+        amount of live work left in a wave that had been cancelled.
+        """
+        from apps.deployments.models import DeploymentResult
+        from apps.stations.models import Station
+
+        s2 = Station.objects.create(name="s2", callsign="S2TEST")
+        s3 = Station.objects.create(name="s3", callsign="S3TEST")
+        s4 = Station.objects.create(name="s4", callsign="S4TEST")
+        s5 = Station.objects.create(name="s5", callsign="S5TEST")
+
+        DeploymentResult.objects.create(
+            deployment=deployment, station=station, status=DeploymentResult.Status.SUCCESS
+        )
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s2, status=DeploymentResult.Status.DOWNLOADING
+        )
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s3, status=DeploymentResult.Status.PENDING
+        )
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s4, status=DeploymentResult.Status.CANCELLED
+        )
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s5, status=DeploymentResult.Status.SUPERSEDED
+        )
+
+        p = deployment.progress
+        assert p["total"] == 5
+        assert p["completed"] == 1
+        assert p["in_progress"] == 1  # only DOWNLOADING
+        assert p["pending"] == 1
+        assert p["cancelled"] == 2  # CANCELLED + SUPERSEDED
+        assert p["failed"] == 0
+        # Categories must sum to total — no silent leakage.
+        assert (
+            p["completed"] + p["in_progress"] + p["pending"] + p["cancelled"] + p["failed"]
+            == p["total"]
+        )
+
 
 @pytest.mark.django_db
 class TestDeploymentImageReleaseFK:
