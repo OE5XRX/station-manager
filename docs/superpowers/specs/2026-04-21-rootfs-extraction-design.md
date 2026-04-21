@@ -31,7 +31,7 @@ same worker with no build-side churn.
 | Backward compat | Leave existing ImageReleases with empty `rootfs_*`; the deployment-creation guard refuses to make new Deployments against them, so operators get a loud, local error instead of a station retry-loop. | User has 3 existing releases, only `is_latest` matters, and re-import is one admin click. Migration cost not worth it for three rows. |
 | Execution | Async in the existing `run_background_jobs` worker | Extraction is 1-3 min CPU + I/O for the qemu image. Keeping it in the view would risk HTTP timeouts and block a Gunicorn worker. The import flow is already async. |
 | Extraction tool | Pure Python (GPT parser ≈30 LOC + `bz2.BZ2Compressor`) | No new runtime deps on the server (no sfdisk, no guestfish in the hot path). Pure functions unit-test cleanly with synthetic binary fixtures. Matches the existing `_decompress_to` / `_compress_to_bytes` helpers in the provisioning worker. |
-| Failure mode | Strict rollback | If extraction fails, delete the already-uploaded wic + bundle from S3 and don't create the ImageRelease. Guarantees: every ImageRelease row is OTA-capable. Keeps the server state clean and matches the existing "don't leave orphan S3 objects" cleanup pattern. |
+| Failure mode | Fail closed; clean up newly uploaded artifacts when safe | First-import failure: delete uploaded wic + bundle from S3, don't create the ImageRelease row. Re-import failure: atomic rollback on the DB side keeps the existing release row unchanged, and the S3 cleanup skips keys that still-persisting release points at (overwrites may have changed the stable object's content — download-time sha256 mismatch is preferred over deleting a key an existing row still references). Newly-created rows always land OTA-capable; pre-existing rows stay usable for provisioning / bare-metal flash until re-imported. |
 
 ## Architecture
 
@@ -151,8 +151,21 @@ both success and failure paths.
 ```python
 @property
 def is_ota_ready(self) -> bool:
-    return bool(self.rootfs_s3_key)
+    return bool(
+        self.rootfs_s3_key
+        and self.rootfs_sha256
+        and self.rootfs_size_bytes
+        and self.rootfs_size_bytes > 0
+    )
 ```
+
+Requires all three rootfs fields populated because the check/download
+endpoints serialize the hash + size directly — a partially-populated
+row (from a regression, admin mutation, or interrupted migration)
+would 500 the response serializer on a NULL size_bytes. Under the
+worker's strict-rollback + atomic DB block the three are always
+written together, so the extra conditions are defence against
+external mutation, not the happy path.
 
 `UpgradeStationView` and `UpgradeGroupView` check
 `release.is_ota_ready` before creating the Deployment row. If it's
