@@ -455,22 +455,26 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
     """
     fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
     try:
-        try:
-            with bz2.open(str(wic_bz2_path), "rb") as src:
-                while True:
+        with bz2.open(str(wic_bz2_path), "rb") as src:
+            while True:
+                # Narrow the translation to the decompression read only:
+                # BZ2File surfaces a truncated stream as EOFError and a
+                # corrupt stream as OSError. Either way the image on the
+                # slot would be partial and brick the next trial boot —
+                # re-raise as ValueError so apply_update can distinguish
+                # a bad firmware artifact from real I/O trouble on the
+                # target device (os.open / _write_all / os.fsync /
+                # bz2.open's own file-missing OSError all still propagate
+                # as OSError, matching this function's documented contract).
+                try:
                     chunk = _stream_read(src, _STREAM_CHUNK)
-                    if not chunk:
-                        break
-                    _write_all(fd, chunk)
-        except (EOFError, OSError) as exc:
-            # BZ2File surfaces a truncated stream as EOFError ("Compressed
-            # file ended before the end-of-stream marker was reached") and
-            # a corrupt stream as OSError. Either way, the image on the
-            # slot is now partial and would brick the next trial boot —
-            # fail loud so apply_update refuses to arm the bootloader.
-            raise ValueError(
-                f"bz2 stream in {wic_bz2_path} is truncated or corrupt: {exc}"
-            ) from exc
+                except (EOFError, OSError) as exc:
+                    raise ValueError(
+                        f"bz2 stream in {wic_bz2_path} is truncated or corrupt: {exc}"
+                    ) from exc
+                if not chunk:
+                    break
+                _write_all(fd, chunk)
         os.fsync(fd)
     finally:
         os.close(fd)
