@@ -12,7 +12,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.api.models import DeviceKey
-from apps.images import cosign, github
+from apps.images import cosign, extraction, github
 from apps.images import storage as image_storage
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning import guestfish
@@ -92,6 +92,7 @@ def process_pending_image_imports() -> None:
 
 def _run_import_job(job: ImageImportJob) -> None:
     repo = getattr(settings, "LINUX_IMAGE_REPO", "OE5XRX/linux-image")
+    uploaded_keys: list[str] = []
     try:
         asset = github.fetch_release_asset(repo=repo, tag=job.tag, machine=job.machine)
         cosign.verify_blob(
@@ -100,39 +101,56 @@ def _run_import_job(job: ImageImportJob) -> None:
             repo=repo,
             tag=job.tag,
         )
+
         wic_key = image_storage.release_key(job.tag, job.machine)
         bundle_key = image_storage.release_bundle_key(job.tag, job.machine)
-        image_storage.upload_bytes(wic_key, asset.wic_bytes)
-        image_storage.upload_bytes(bundle_key, asset.bundle_bytes)
+        rootfs_key = image_storage.release_rootfs_key(job.tag, job.machine)
 
-        try:
-            release, _created = ImageRelease.objects.update_or_create(
-                tag=job.tag,
-                machine=job.machine,
-                defaults={
-                    "s3_key": wic_key,
-                    "cosign_bundle_s3_key": bundle_key,
-                    "sha256": asset.sha256,
-                    "size_bytes": len(asset.wic_bytes),
-                    "is_latest": job.mark_as_latest,
-                    "imported_by": job.requested_by,
-                },
-            )
-            job.image_release = release
-            job.status = ImageImportJob.Status.READY
-            job.completed_at = timezone.now()
-            job.save(update_fields=["image_release", "status", "completed_at"])
-        except Exception:
-            # Don't leave orphan S3 objects if the DB write fails.
-            # Cleanup is best-effort; re-raise the original exception so the
-            # outer handler marks the job FAILED with the real error.
-            for key in (wic_key, bundle_key):
-                try:
-                    image_storage.delete(key)
-                except Exception:
-                    pass
-            raise
+        image_storage.upload_bytes(wic_key, asset.wic_bytes)
+        uploaded_keys.append(wic_key)
+        image_storage.upload_bytes(bundle_key, asset.bundle_bytes)
+        uploaded_keys.append(bundle_key)
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            compressed_in = tmp / "base.wic.bz2"
+            decompressed = tmp / "base.wic"
+            rootfs_out = tmp / "rootfs.bz2"
+
+            compressed_in.write_bytes(asset.wic_bytes)
+            _decompress_to(compressed_in, decompressed)
+
+            rootfs_size, rootfs_sha = extraction.extract_rootfs(decompressed, rootfs_out)
+            image_storage.upload_bytes(rootfs_key, rootfs_out.read_bytes())
+            uploaded_keys.append(rootfs_key)
+
+        release, _created = ImageRelease.objects.update_or_create(
+            tag=job.tag,
+            machine=job.machine,
+            defaults={
+                "s3_key": wic_key,
+                "cosign_bundle_s3_key": bundle_key,
+                "sha256": asset.sha256,
+                "size_bytes": len(asset.wic_bytes),
+                "rootfs_s3_key": rootfs_key,
+                "rootfs_sha256": rootfs_sha,
+                "rootfs_size_bytes": rootfs_size,
+                "is_latest": job.mark_as_latest,
+                "imported_by": job.requested_by,
+            },
+        )
+        job.image_release = release
+        job.status = ImageImportJob.Status.READY
+        job.completed_at = timezone.now()
+        job.save(update_fields=["image_release", "status", "completed_at"])
     except Exception as exc:
+        # Strict rollback: any success upstream still leaves S3 clean,
+        # and no half-populated ImageRelease row ever appears.
+        for key in uploaded_keys:
+            try:
+                image_storage.delete(key)
+            except Exception:
+                pass
         job.status = ImageImportJob.Status.FAILED
         job.error_message = str(exc)
         job.completed_at = timezone.now()

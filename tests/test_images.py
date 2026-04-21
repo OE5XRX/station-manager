@@ -286,6 +286,16 @@ class TestImageImporterWorker:
             uploads.append((key, data))
 
         monkeypatch.setattr("apps.images.storage.upload_bytes", fake_upload)
+        monkeypatch.setattr(
+            "apps.provisioning.management.commands.run_background_jobs._decompress_to",
+            lambda src, dst: dst.write_bytes(b"fake-wic-content"),
+        )
+
+        def fake_extract_rootfs(wic, out):
+            out.write_bytes(b"fake-rootfs")
+            return len(b"fake-rootfs"), "f" * 64
+
+        monkeypatch.setattr("apps.images.extraction.extract_rootfs", fake_extract_rootfs)
 
         process_pending_image_imports()
 
@@ -475,6 +485,127 @@ class TestImageManagement:
         assert client.post(reverse("images:delete", args=[rel.pk])).status_code == 403
         # DB row still present
         assert ImageRelease.objects.filter(pk=rel.pk).exists()
+
+
+@pytest.mark.django_db
+class TestRunImportJobRootfsExtraction:
+    """Integration tests for the rootfs-extraction step in the worker."""
+
+    @pytest.fixture
+    def synthetic_wic_bytes(self, tmp_path):
+        """A valid bz2-compressed synthetic wic with a root_a partition."""
+        import bz2 as bz2_mod
+
+        from tests.test_images_extraction import _build_synthetic_wic
+
+        wic, _ = _build_synthetic_wic(tmp_path)
+        return bz2_mod.compress(wic.read_bytes())
+
+    def test_run_import_job_populates_rootfs_fields(self, db, synthetic_wic_bytes, monkeypatch):
+        from apps.images import cosign, github
+        from apps.images import storage as image_storage
+        from apps.images.models import ImageImportJob, ImageRelease
+        from apps.provisioning.management.commands.run_background_jobs import (
+            _run_import_job,
+        )
+
+        # Collect uploaded keys so we can assert the rootfs one is there.
+        uploaded: dict[str, bytes] = {}
+
+        def fake_fetch(repo, tag, machine):
+            return github.ReleaseAsset(
+                wic_bytes=synthetic_wic_bytes,
+                sha256="a" * 64,
+                bundle_bytes=b"fake-bundle",
+            )
+
+        def fake_upload(key, data):
+            uploaded[key] = data
+
+        def fake_open(key):
+            from io import BytesIO
+
+            return BytesIO(uploaded[key])
+
+        monkeypatch.setattr(github, "fetch_release_asset", fake_fetch)
+        monkeypatch.setattr(cosign, "verify_blob", lambda **kw: None)
+        monkeypatch.setattr(image_storage, "upload_bytes", fake_upload)
+        monkeypatch.setattr(image_storage, "open_stream", fake_open)
+
+        job = ImageImportJob.objects.create(
+            tag="test-1",
+            machine=ImageRelease.Machine.QEMU,
+            status=ImageImportJob.Status.RUNNING,
+        )
+        _run_import_job(job)
+        job.refresh_from_db()
+
+        assert job.status == ImageImportJob.Status.READY, job.error_message
+        release = ImageRelease.objects.get(tag="test-1", machine=ImageRelease.Machine.QEMU)
+        assert release.rootfs_s3_key == "images/test-1/qemux86-64.rootfs.bz2"
+        assert release.rootfs_s3_key in uploaded
+        assert release.rootfs_size_bytes == len(uploaded[release.rootfs_s3_key])
+        assert len(release.rootfs_sha256) == 64
+        assert release.is_ota_ready is True
+
+    def test_run_import_job_rolls_back_on_extraction_failure(
+        self, db, synthetic_wic_bytes, monkeypatch
+    ):
+        from apps.images import cosign, extraction, github
+        from apps.images import storage as image_storage
+        from apps.images.models import ImageImportJob, ImageRelease
+        from apps.provisioning.management.commands.run_background_jobs import (
+            _run_import_job,
+        )
+
+        uploaded: dict[str, bytes] = {}
+        deleted: list[str] = []
+
+        monkeypatch.setattr(
+            github,
+            "fetch_release_asset",
+            lambda **kw: github.ReleaseAsset(
+                wic_bytes=synthetic_wic_bytes,
+                sha256="a" * 64,
+                bundle_bytes=b"fake-bundle",
+            ),
+        )
+        monkeypatch.setattr(cosign, "verify_blob", lambda **kw: None)
+        monkeypatch.setattr(
+            image_storage,
+            "upload_bytes",
+            lambda key, data: uploaded.__setitem__(key, data),
+        )
+        monkeypatch.setattr(image_storage, "delete", lambda key: deleted.append(key))
+
+        def boom(*args, **kwargs):
+            raise ValueError("synthetic: extraction exploded")
+
+        monkeypatch.setattr(extraction, "extract_rootfs", boom)
+
+        job = ImageImportJob.objects.create(
+            tag="fail-1",
+            machine=ImageRelease.Machine.QEMU,
+            status=ImageImportJob.Status.RUNNING,
+        )
+        _run_import_job(job)
+        job.refresh_from_db()
+
+        assert job.status == ImageImportJob.Status.FAILED
+        assert "extraction exploded" in job.error_message
+
+        # Every already-uploaded key was cleaned up (wic + bundle; the
+        # rootfs key was never uploaded because extraction raised before
+        # that step). Order reflects the insertion order in uploaded_keys.
+        wic_key = image_storage.release_key("fail-1", ImageRelease.Machine.QEMU)
+        bundle_key = image_storage.release_bundle_key("fail-1", ImageRelease.Machine.QEMU)
+        assert wic_key in deleted
+        assert bundle_key in deleted
+
+        # No half-populated ImageRelease row.
+        assert not ImageRelease.objects.filter(
+            tag="fail-1", machine=ImageRelease.Machine.QEMU
+        ).exists()
 
 
 @pytest.mark.django_db
