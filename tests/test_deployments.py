@@ -570,9 +570,10 @@ class TestDeploymentDownload:
             station=station,
             status=DeploymentResult.Status.PENDING,
         )
-        # ImageRelease.rootfs_size_bytes is 500 (fixture); supply enough bytes so
-        # the Range offset (e.g. 10) is valid.
-        payload = b"X" * 1000
+        # ImageRelease.rootfs_size_bytes is 500 (fixture); match the
+        # payload to that so the test exercises a realistic
+        # Content-Length/Range response, not a metadata/content mismatch.
+        payload = b"X" * 500
         monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(payload))
         headers = device_auth_headers(priv, station.pk, b"")
         r = client.get(
