@@ -440,27 +440,44 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
     for making sure this is the inactive slot — typically derived via
     bootloader.get_inactive_slot() + a machine-specific slot→device map.
 
+    Uses ``bz2.open()`` rather than a manual ``BZ2Decompressor`` loop so
+    multi-stream bz2 files (e.g. produced by ``pbzip2`` or Yocto's
+    parallel compression paths) decompress correctly — the old manual
+    loop raised ``EOFError: End of stream already reached`` as soon as
+    it tried to feed more bytes into the decompressor after the first
+    stream ended. ``BZ2File`` handles both multi-stream and trailing
+    padding the same way the ``bunzip2`` CLI does.
+
     Raises OSError on I/O failure.
-    Raises ValueError if the bz2 stream is truncated (decompressor did
-    not reach EOF) — writing a partial image to a boot slot would
-    silently brick the next boot, so fail loud.
+    Raises ValueError if the bz2 stream is truncated or corrupt —
+    writing a partial image to a boot slot would silently brick the
+    next boot, so fail loud.
     """
-    decomp = bz2.BZ2Decompressor()
-    with open(str(wic_bz2_path), "rb") as src:
-        fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
-        try:
+    fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+    try:
+        with bz2.open(str(wic_bz2_path), "rb") as src:
             while True:
-                chunk = _stream_read(src, _STREAM_CHUNK)
+                # Narrow the translation to the decompression read only.
+                # BZ2File signals truncation as EOFError and a corrupt
+                # data stream as OSError *without* errno (e.g. "Invalid
+                # data stream"). A real I/O error on the backing file
+                # during read (EIO / ESTALE / EBADF / ...) also surfaces
+                # as OSError, but *with* errno set — those must keep
+                # propagating as OSError so the documented "Raises
+                # OSError on I/O failure" contract still holds. Only
+                # the former two classes mean "bad firmware artifact"
+                # and get translated to ValueError.
+                try:
+                    chunk = _stream_read(src, _STREAM_CHUNK)
+                except EOFError as exc:
+                    raise ValueError(f"bz2 stream in {wic_bz2_path} is truncated: {exc}") from exc
+                except OSError as exc:
+                    if exc.errno is not None:
+                        raise
+                    raise ValueError(f"bz2 stream in {wic_bz2_path} is corrupt: {exc}") from exc
                 if not chunk:
                     break
-                decompressed = decomp.decompress(chunk)
-                if decompressed:
-                    _write_all(fd, decompressed)
-            if not decomp.eof:
-                raise ValueError(
-                    f"bz2 stream in {wic_bz2_path} is truncated: "
-                    "decompressor did not reach end-of-stream"
-                )
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+                _write_all(fd, chunk)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
