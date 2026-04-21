@@ -609,6 +609,72 @@ class TestRunImportJobRootfsExtraction:
             tag="fail-1", machine=ImageRelease.Machine.QEMU
         ).exists()
 
+    def test_run_import_job_rolls_back_release_on_job_save_failure(
+        self, db, synthetic_wic_bytes, monkeypatch
+    ):
+        """Regression: a failure in the final job.save() must NOT
+        leave a created/updated ImageRelease row behind. The
+        transaction.atomic() around the two DB ops guarantees that."""
+        from apps.images import cosign, github
+        from apps.images import storage as image_storage
+        from apps.images.models import ImageImportJob, ImageRelease
+        from apps.provisioning.management.commands.run_background_jobs import (
+            _run_import_job,
+        )
+
+        uploaded: dict[str, bytes] = {}
+
+        monkeypatch.setattr(
+            github,
+            "fetch_release_asset",
+            lambda **kw: github.ReleaseAsset(
+                wic_bytes=synthetic_wic_bytes,
+                sha256="a" * 64,
+                bundle_bytes=b"fake-bundle",
+            ),
+        )
+        monkeypatch.setattr(cosign, "verify_blob", lambda **kw: None)
+        monkeypatch.setattr(
+            image_storage,
+            "upload_bytes",
+            lambda key, data: uploaded.__setitem__(key, data),
+        )
+        monkeypatch.setattr(image_storage, "delete", lambda key: None)
+        monkeypatch.setattr(
+            image_storage,
+            "open_stream",
+            lambda key: __import__("io").BytesIO(uploaded[key]),
+        )
+
+        # Let update_or_create succeed, then make the subsequent
+        # job.save() blow up. The atomic() block must roll the release
+        # update back.
+        original_save = ImageImportJob.save
+
+        def exploding_save(self, *args, **kwargs):
+            if self.status == ImageImportJob.Status.READY:
+                raise RuntimeError("synthetic: job.save after release-create")
+            return original_save(self, *args, **kwargs)
+
+        monkeypatch.setattr(ImageImportJob, "save", exploding_save)
+
+        job = ImageImportJob.objects.create(
+            tag="fail-atomic",
+            machine=ImageRelease.Machine.QEMU,
+            status=ImageImportJob.Status.RUNNING,
+        )
+        _run_import_job(job)
+        job.refresh_from_db()
+
+        assert job.status == ImageImportJob.Status.FAILED
+        assert "synthetic: job.save" in job.error_message
+
+        # The ImageRelease row must not exist despite update_or_create
+        # having run before the explosion.
+        assert not ImageRelease.objects.filter(
+            tag="fail-atomic", machine=ImageRelease.Machine.QEMU
+        ).exists()
+
 
 @pytest.mark.django_db
 class TestImageReleaseIsOtaReady:

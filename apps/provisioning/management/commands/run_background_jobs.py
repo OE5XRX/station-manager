@@ -9,6 +9,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.utils import timezone
 
 from apps.api.models import DeviceKey
@@ -124,25 +125,26 @@ def _run_import_job(job: ImageImportJob) -> None:
             image_storage.upload_bytes(rootfs_key, rootfs_out.read_bytes())
             uploaded_keys.append(rootfs_key)
 
-        release, _created = ImageRelease.objects.update_or_create(
-            tag=job.tag,
-            machine=job.machine,
-            defaults={
-                "s3_key": wic_key,
-                "cosign_bundle_s3_key": bundle_key,
-                "sha256": asset.sha256,
-                "size_bytes": len(asset.wic_bytes),
-                "rootfs_s3_key": rootfs_key,
-                "rootfs_sha256": rootfs_sha,
-                "rootfs_size_bytes": rootfs_size,
-                "is_latest": job.mark_as_latest,
-                "imported_by": job.requested_by,
-            },
-        )
-        job.image_release = release
-        job.status = ImageImportJob.Status.READY
-        job.completed_at = timezone.now()
-        job.save(update_fields=["image_release", "status", "completed_at"])
+        with transaction.atomic():
+            release, _created = ImageRelease.objects.update_or_create(
+                tag=job.tag,
+                machine=job.machine,
+                defaults={
+                    "s3_key": wic_key,
+                    "cosign_bundle_s3_key": bundle_key,
+                    "sha256": asset.sha256,
+                    "size_bytes": len(asset.wic_bytes),
+                    "rootfs_s3_key": rootfs_key,
+                    "rootfs_sha256": rootfs_sha,
+                    "rootfs_size_bytes": rootfs_size,
+                    "is_latest": job.mark_as_latest,
+                    "imported_by": job.requested_by,
+                },
+            )
+            job.image_release = release
+            job.status = ImageImportJob.Status.READY
+            job.completed_at = timezone.now()
+            job.save(update_fields=["image_release", "status", "completed_at"])
     except Exception as exc:
         # Strict rollback: any success upstream still leaves S3 clean,
         # and no half-populated ImageRelease row ever appears.

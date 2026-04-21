@@ -86,8 +86,7 @@ class DeploymentCheckView(APIView):
             # 409. The operator sees the Deployment row stuck in
             # PENDING and can investigate.
             logger.error(
-                "DeploymentCheck: release %s has empty rootfs_s3_key; "
-                "Deployment %d cannot proceed",
+                "DeploymentCheck: release %s is not OTA-ready; Deployment %d cannot proceed",
                 image.tag,
                 result.deployment_id,
             )
@@ -389,8 +388,7 @@ class DeploymentDownloadView(APIView):
             # the full wic (which is 4× the target slot size) if
             # something regressed.
             logger.error(
-                "DeploymentDownload: release %s has empty rootfs_s3_key; "
-                "deployment %d cannot be served",
+                "DeploymentDownload: release %s is not OTA-ready; deployment %d cannot be served",
                 image.tag,
                 result.deployment_id,
             )
