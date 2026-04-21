@@ -211,6 +211,35 @@ def test_install_to_slot_rejects_truncated_bz2(tmp_path):
         install_to_slot(src, str(target))
 
 
+def test_install_to_slot_passes_through_real_io_errors(tmp_path, monkeypatch):
+    """Underlying I/O failures during the decompression read (EIO,
+    ENOSPC, etc.) must surface as OSError, not be masked as
+    ``ValueError: bz2 stream is corrupt``. BZ2File raises OSError for
+    both classes of failure, distinguished by whether ``errno`` is
+    set — we only translate the data-error flavour (errno is None).
+    """
+    import errno as errno_mod
+
+    from station_agent import ota
+    from station_agent.ota import install_to_slot
+
+    payload = b"hello world" * 4096
+    src = tmp_path / "image.wic.bz2"
+    src.write_bytes(bz2.compress(payload))
+    target = tmp_path / "fake-slot.bin"
+    target.write_bytes(b"\x00" * len(payload))
+
+    # Simulate EIO on the backing file midway through the read.
+    def fake_read(fh, n):
+        raise OSError(errno_mod.EIO, "Input/output error")
+
+    monkeypatch.setattr(ota, "_stream_read", fake_read)
+
+    with pytest.raises(OSError) as excinfo:
+        install_to_slot(src, str(target))
+    assert excinfo.value.errno == errno_mod.EIO
+
+
 def test_install_to_slot_handles_multi_stream_bz2(tmp_path):
     """Regression test: pbzip2-style multi-stream .wic.bz2 must
     decompress correctly.

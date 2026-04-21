@@ -457,21 +457,24 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
     try:
         with bz2.open(str(wic_bz2_path), "rb") as src:
             while True:
-                # Narrow the translation to the decompression read only:
-                # BZ2File surfaces a truncated stream as EOFError and a
-                # corrupt stream as OSError. Either way the image on the
-                # slot would be partial and brick the next trial boot —
-                # re-raise as ValueError so apply_update can distinguish
-                # a bad firmware artifact from real I/O trouble on the
-                # target device (os.open / _write_all / os.fsync /
-                # bz2.open's own file-missing OSError all still propagate
-                # as OSError, matching this function's documented contract).
+                # Narrow the translation to the decompression read only.
+                # BZ2File signals truncation as EOFError and a corrupt
+                # data stream as OSError *without* errno (e.g. "Invalid
+                # data stream"). A real I/O error on the backing file
+                # (EIO / ENOSPC / ...) also surfaces as OSError, but
+                # *with* errno set — those must keep propagating as
+                # OSError so the documented "Raises OSError on I/O
+                # failure" contract still holds. Only the former two
+                # classes mean "bad firmware artifact" and get
+                # translated to ValueError.
                 try:
                     chunk = _stream_read(src, _STREAM_CHUNK)
-                except (EOFError, OSError) as exc:
-                    raise ValueError(
-                        f"bz2 stream in {wic_bz2_path} is truncated or corrupt: {exc}"
-                    ) from exc
+                except EOFError as exc:
+                    raise ValueError(f"bz2 stream in {wic_bz2_path} is truncated: {exc}") from exc
+                except OSError as exc:
+                    if exc.errno is not None:
+                        raise
+                    raise ValueError(f"bz2 stream in {wic_bz2_path} is corrupt: {exc}") from exc
                 if not chunk:
                     break
                 _write_all(fd, chunk)
