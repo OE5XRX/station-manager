@@ -26,8 +26,8 @@ class TestDeploymentCheck:
         assert data["deployment_result_id"] == result.pk
         assert data["deployment_id"] == result.deployment_id
         assert data["target_tag"] == release.tag
-        assert data["checksum_sha256"] == release.sha256
-        assert data["size_bytes"] == release.size_bytes
+        assert data["checksum_sha256"] == release.rootfs_sha256
+        assert data["size_bytes"] == release.rootfs_size_bytes
         assert data["download_url"].endswith(f"/deployments/{result.deployment_id}/download/")
 
     def test_check_no_pending(self, client, station_with_key):
@@ -91,6 +91,53 @@ class TestDeploymentCheck:
         station, private_key = station_with_key
         deployment_result.status = DeploymentResult.Status.SUCCESS
         deployment_result.save(update_fields=["status"])
+
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_check"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 204
+
+    def test_check_returns_rootfs_metadata_not_full_wic(
+        self, client, station_with_key, deployment_result
+    ):
+        """After the extraction change, the check response must point
+        the agent at the rootfs artifact, not the full wic."""
+        station, private_key = station_with_key
+        release = deployment_result.deployment.image_release
+        release.rootfs_s3_key = "images/test/qemux86-64.rootfs.bz2"
+        release.rootfs_sha256 = "c" * 64
+        release.rootfs_size_bytes = 250_000_000
+        release.save(update_fields=["rootfs_s3_key", "rootfs_sha256", "rootfs_size_bytes"])
+
+        body = json.dumps({"current_version": ""}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_check"),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["checksum_sha256"] == "c" * 64
+        assert data["size_bytes"] == 250_000_000
+        # The wic values must NOT leak through.
+        assert data["checksum_sha256"] != release.sha256
+
+    def test_check_returns_204_when_release_has_no_rootfs(
+        self, client, station_with_key, deployment_result
+    ):
+        """Defense-in-depth: even if a deployment somehow got created
+        against a non-OTA-ready release, the check endpoint must
+        return 204 (not 200, not 409) so the agent falls back to the
+        no-deployment-for-me path instead of retry-looping."""
+        station, private_key = station_with_key
+        release = deployment_result.deployment.image_release
+        release.rootfs_s3_key = ""
+        release.save(update_fields=["rootfs_s3_key"])
 
         body = json.dumps({"current_version": ""}).encode("utf-8")
         response = client.post(
@@ -523,8 +570,8 @@ class TestDeploymentDownload:
             station=station,
             status=DeploymentResult.Status.PENDING,
         )
-        # ImageRelease.size_bytes is 1000 (fixture); supply enough bytes so the Range
-        # offset (e.g. 10) is valid.
+        # ImageRelease.rootfs_size_bytes is 500 (fixture); supply enough bytes so
+        # the Range offset (e.g. 10) is valid.
         payload = b"X" * 1000
         monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(payload))
         headers = device_auth_headers(priv, station.pk, b"")
@@ -536,7 +583,7 @@ class TestDeploymentDownload:
         assert r.status_code == 206
         body = b"".join(r.streaming_content)
         assert body == b"X" * 10
-        assert r["Content-Range"] == "bytes 10-19/1000"
+        assert r["Content-Range"] == "bytes 10-19/500"
 
     def test_range_end_before_start_returns_416(
         self, client, station_with_key, image_release, admin_user, monkeypatch
@@ -564,7 +611,7 @@ class TestDeploymentDownload:
             **headers,
         )
         assert r.status_code == 416
-        assert r["Content-Range"] == "bytes */1000"
+        assert r["Content-Range"] == "bytes */500"
 
     def test_range_on_non_seekable_backend_returns_416(
         self, client, station_with_key, image_release, admin_user, monkeypatch
@@ -614,7 +661,58 @@ class TestDeploymentDownload:
             **headers,
         )
         assert r.status_code == 416
-        assert r["Content-Range"] == "bytes */1000"
+        assert r["Content-Range"] == "bytes */500"
+
+    def test_download_streams_rootfs_artifact(
+        self, client, station_with_key, deployment_result, monkeypatch
+    ):
+        from io import BytesIO
+
+        from apps.images import storage as image_storage
+
+        station, private_key = station_with_key
+        release = deployment_result.deployment.image_release
+        deployment_result.status = deployment_result.Status.DOWNLOADING
+        deployment_result.save(update_fields=["status"])
+
+        captured: dict[str, str] = {}
+
+        def fake_open(key):
+            captured["key"] = key
+            return BytesIO(b"rootfs-bytes")
+
+        monkeypatch.setattr(image_storage, "open_stream", fake_open)
+
+        response = client.get(
+            reverse(
+                "api:deployment_download",
+                kwargs={"pk": deployment_result.deployment_id},
+            ),
+            **device_auth_headers(private_key, station.pk, b""),
+        )
+        assert response.status_code == 200
+        # DownloadView must stream from the rootfs_s3_key, not s3_key.
+        assert captured["key"] == release.rootfs_s3_key
+        assert captured["key"] != release.s3_key
+
+    def test_download_returns_404_when_release_has_no_rootfs(
+        self, client, station_with_key, deployment_result
+    ):
+        station, private_key = station_with_key
+        deployment_result.status = deployment_result.Status.DOWNLOADING
+        deployment_result.save(update_fields=["status"])
+        release = deployment_result.deployment.image_release
+        release.rootfs_s3_key = ""
+        release.save(update_fields=["rootfs_s3_key"])
+
+        response = client.get(
+            reverse(
+                "api:deployment_download",
+                kwargs={"pk": deployment_result.deployment_id},
+            ),
+            **device_auth_headers(private_key, station.pk, b""),
+        )
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db

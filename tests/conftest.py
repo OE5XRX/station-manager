@@ -141,6 +141,10 @@ def image_release(db):
         sha256="a" * 64,
         size_bytes=1000,
         is_latest=True,
+        # NEW: make the fixture OTA-ready by default.
+        rootfs_s3_key="images/v1-alpha/qemux86-64.rootfs.bz2",
+        rootfs_sha256="b" * 64,
+        rootfs_size_bytes=500,
     )
 
 
