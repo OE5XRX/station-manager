@@ -609,6 +609,87 @@ class TestRunImportJobRootfsExtraction:
             tag="fail-1", machine=ImageRelease.Machine.QEMU
         ).exists()
 
+    def test_run_import_job_preserves_existing_release_keys_on_reimport_failure(
+        self, db, synthetic_wic_bytes, monkeypatch
+    ):
+        """Regression: a re-import failure must not delete S3 keys the
+        pre-existing ImageRelease row still points at. Otherwise a
+        single flaky re-import would strand provisioning/flash for a
+        previously-working release."""
+        from apps.images import cosign, extraction, github
+        from apps.images import storage as image_storage
+        from apps.images.models import ImageImportJob, ImageRelease
+        from apps.provisioning.management.commands.run_background_jobs import (
+            _run_import_job,
+        )
+
+        # Pre-existing release (simulates a successful earlier import).
+        existing_wic_key = "images/pre-existing/qemux86-64.wic.bz2"
+        existing_bundle_key = f"{existing_wic_key}.bundle"
+        existing_rootfs_key = "images/pre-existing/qemux86-64.rootfs.bz2"
+        ImageRelease.objects.create(
+            tag="pre-existing",
+            machine=ImageRelease.Machine.QEMU,
+            s3_key=existing_wic_key,
+            cosign_bundle_s3_key=existing_bundle_key,
+            sha256="x" * 64,
+            size_bytes=1,
+            rootfs_s3_key=existing_rootfs_key,
+            rootfs_sha256="y" * 64,
+            rootfs_size_bytes=1,
+            is_latest=True,
+        )
+
+        uploaded: dict[str, bytes] = {}
+        deleted: list[str] = []
+
+        monkeypatch.setattr(
+            github,
+            "fetch_release_asset",
+            lambda **kw: github.ReleaseAsset(
+                wic_bytes=synthetic_wic_bytes,
+                sha256="a" * 64,
+                bundle_bytes=b"fake-bundle",
+            ),
+        )
+        monkeypatch.setattr(cosign, "verify_blob", lambda **kw: None)
+        monkeypatch.setattr(
+            image_storage,
+            "upload_bytes",
+            lambda key, data: uploaded.__setitem__(key, data),
+        )
+        monkeypatch.setattr(image_storage, "delete", lambda key: deleted.append(key))
+
+        def boom(*args, **kwargs):
+            raise ValueError("synthetic: extraction exploded during re-import")
+
+        monkeypatch.setattr(extraction, "extract_rootfs", boom)
+
+        job = ImageImportJob.objects.create(
+            tag="pre-existing",  # same tag+machine as existing
+            machine=ImageRelease.Machine.QEMU,
+            status=ImageImportJob.Status.RUNNING,
+        )
+        _run_import_job(job)
+        job.refresh_from_db()
+
+        assert job.status == ImageImportJob.Status.FAILED
+        assert "extraction exploded" in job.error_message
+
+        # The stable keys the existing release points at must NOT
+        # appear in the rollback deletion list — otherwise that
+        # release would 502 on every download from now on.
+        assert existing_wic_key not in deleted, deleted
+        assert existing_bundle_key not in deleted, deleted
+
+        # The existing ImageRelease row survives unchanged (atomic
+        # rollback on the update_or_create + it still has its
+        # original sha256).
+        still_there = ImageRelease.objects.get(
+            tag="pre-existing", machine=ImageRelease.Machine.QEMU
+        )
+        assert still_there.sha256 == "x" * 64
+
     def test_run_import_job_rolls_back_release_on_job_save_failure(
         self, db, synthetic_wic_bytes, monkeypatch
     ):

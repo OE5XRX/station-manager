@@ -146,9 +146,25 @@ def _run_import_job(job: ImageImportJob) -> None:
             job.completed_at = timezone.now()
             job.save(update_fields=["image_release", "status", "completed_at"])
     except Exception as exc:
-        # Strict rollback: any success upstream still leaves S3 clean,
-        # and no half-populated ImageRelease row ever appears.
+        # If the release already existed before this re-import, don't
+        # strand its S3 pointers. We still uploaded (overwriting) new
+        # content at the stable keys — the row's sha256 will now
+        # mismatch until the operator re-runs the import — but leaving
+        # the keys in place keeps provisioning / bare-metal flash
+        # resolvable instead of 502'ing every download.
+        existing = ImageRelease.objects.filter(tag=job.tag, machine=job.machine).first()
+        in_use: set[str] = set()
+        if existing is not None:
+            for key in (
+                existing.s3_key,
+                existing.cosign_bundle_s3_key,
+                existing.rootfs_s3_key,
+            ):
+                if key:
+                    in_use.add(key)
         for key in uploaded_keys:
+            if key in in_use:
+                continue
             try:
                 image_storage.delete(key)
             except Exception:
