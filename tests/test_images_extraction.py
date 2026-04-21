@@ -35,6 +35,8 @@ def _build_synthetic_wic(
     The caller gets the raw partition payload back so the happy-path test
     can compare extracted (decompressed) bytes against it.
     """
+    assert total_sectors * _SECTOR >= (end_lba + 1) * _SECTOR, "sparse room needed"
+
     buf = bytearray(total_sectors * _SECTOR)
 
     # LBA 1 (offset 0x200): GPT header — only the fields our parser reads
@@ -56,25 +58,22 @@ def _build_synthetic_wic(
     entry[56 : 56 + len(name_utf16)] = name_utf16
     buf[2 * _SECTOR : 2 * _SECTOR + 128] = entry
 
-    # Partition payload: only written when the declared range fits in the file
-    # (out-of-bounds tests pass end_lba beyond total_sectors deliberately).
+    # Partition payload.
     partition_offset = start_lba * _SECTOR
     partition_size = (end_lba - start_lba + 1) * _SECTOR
-    fits = (partition_offset + partition_size) <= len(buf)
-    if fits:
-        pattern = bytes(range(256))
-        repeats = partition_size // 256
-        tail = partition_size % 256
-        payload = pattern * repeats + pattern[:tail]
-        buf[partition_offset : partition_offset + partition_size] = payload
+    pattern = bytes(range(256))
+    repeats = partition_size // 256
+    tail = partition_size % 256
+    payload = pattern * repeats + pattern[:tail]
+    buf[partition_offset : partition_offset + partition_size] = payload
 
-        # ext4 superblock magic at offset 1080 from partition start.
-        if ext4_magic:
-            buf[partition_offset + 1080 : partition_offset + 1082] = b"\x53\xef"
+    # ext4 superblock magic at offset 1080 from partition start.
+    if ext4_magic:
+        buf[partition_offset + 1080 : partition_offset + 1082] = b"\x53\xef"
 
     wic = tmp_path / "synthetic.wic"
     wic.write_bytes(bytes(buf))
-    return wic, bytes(buf[partition_offset : partition_offset + partition_size]) if fits else b""
+    return wic, bytes(buf[partition_offset : partition_offset + partition_size])
 
 
 def test_extract_rootfs_round_trip(tmp_path):
@@ -117,8 +116,35 @@ def test_extract_rootfs_rejects_non_gpt(tmp_path):
 
 
 def test_extract_rootfs_rejects_out_of_bounds(tmp_path):
-    # end_lba points past the 64-sector file (start=8, end=999).
-    wic, _ = _build_synthetic_wic(tmp_path, start_lba=8, end_lba=999)
+    """A GPT entry that declares end_lba past the file size must be
+    caught by _verify_bounds before any partition bytes are read.
+    Built inline rather than through _build_synthetic_wic because that
+    helper intentionally rejects partitions that don't fit."""
+    import struct as _struct
+
+    total_sectors = 64
+    buf = bytearray(total_sectors * _SECTOR)
+
+    # Minimal GPT header at LBA 1.
+    header = bytearray(92)
+    header[0:8] = b"EFI PART"
+    header[8:12] = _struct.pack("<I", 0x00010000)
+    header[12:16] = _struct.pack("<I", 92)
+    header[72:80] = _struct.pack("<Q", 2)  # partition entries start at LBA 2
+    header[80:84] = _struct.pack("<I", 1)  # one entry
+    header[84:88] = _struct.pack("<I", 128)  # 128 bytes per entry
+    buf[_SECTOR : _SECTOR + 92] = header
+
+    # Partition entry declaring end_lba=999 — well past the 64-sector file.
+    entry = bytearray(128)
+    entry[32:40] = _struct.pack("<Q", 8)
+    entry[40:48] = _struct.pack("<Q", 999)
+    name_utf16 = "root_a".encode("utf-16-le")
+    entry[56 : 56 + len(name_utf16)] = name_utf16
+    buf[2 * _SECTOR : 2 * _SECTOR + 128] = entry
+
+    wic = tmp_path / "truncated.wic"
+    wic.write_bytes(bytes(buf))
     out = tmp_path / "rootfs.bz2"
 
     with pytest.raises(ValueError, match=r"exceeds wic size"):

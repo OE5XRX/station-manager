@@ -34,6 +34,12 @@ def extract_rootfs(wic_path: Path, out_path: Path) -> tuple[int, str]:
     - the partition's declared range exceeds the wic file size
     - the partition does not begin with an ext4 superblock magic
       (the cheapest sanity check against a corrupt partition table)
+
+    On any ValueError raised mid-stream (e.g. partition read ended
+    early), ``out_path`` may be partially written — callers should
+    discard the file on any exception. The intended caller places
+    ``out_path`` inside a ``tempfile.TemporaryDirectory()`` so the
+    partial is reaped automatically.
     """
     wic_path = Path(wic_path)
     out_path = Path(out_path)
@@ -66,8 +72,13 @@ def _locate_root_partition(src) -> tuple[int, int]:
     src.seek(entry_start_lba * _SECTOR)
     for _ in range(num_entries):
         entry = src.read(entry_size)
-        if len(entry) != entry_size:
-            break  # truncated, treat as no match
+        # UEFI spec minimum is 128 bytes per entry; if a malformed header
+        # claims fewer, `entry[56:128]` would silently slice to whatever
+        # was read and produce a spurious decode. Bail out instead and
+        # fall through to the "no partition named 'root_a'" error below,
+        # which an operator can investigate.
+        if len(entry) != entry_size or entry_size < 128:
+            break
         name = entry[56:128].decode("utf-16-le").rstrip("\x00")
         if name == _ROOT_PARTITION_NAME:
             start_lba = struct.unpack("<Q", entry[32:40])[0]
