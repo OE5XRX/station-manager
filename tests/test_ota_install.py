@@ -213,7 +213,7 @@ def test_install_to_slot_rejects_truncated_bz2(tmp_path):
 
 def test_install_to_slot_passes_through_real_io_errors(tmp_path, monkeypatch):
     """Underlying I/O failures during the decompression read (EIO,
-    ENOSPC, etc.) must surface as OSError, not be masked as
+    ESTALE, EBADF, ...) must surface as OSError, not be masked as
     ``ValueError: bz2 stream is corrupt``. BZ2File raises OSError for
     both classes of failure, distinguished by whether ``errno`` is
     set — we only translate the data-error flavour (errno is None).
