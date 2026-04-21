@@ -59,15 +59,20 @@ def _locate_root_partition(src) -> tuple[int, int]:
     header = src.read(96)
     if header[0:8] != _GPT_SIGNATURE:
         raise ValueError("not a GPT image")
+    if len(header) < 88:
+        raise ValueError("truncated GPT header")
 
     # Only the fields we need from the 92-byte GPT header. CRCs are
     # intentionally not verified — this file came from a cosign-verified
     # release asset, we're inside the import worker, and the downstream
     # ext4 magic check catches the "header pointed us at garbage"
     # failure modes that matter to us.
-    entry_start_lba = struct.unpack("<Q", header[72:80])[0]
-    num_entries = struct.unpack("<I", header[80:84])[0]
-    entry_size = struct.unpack("<I", header[84:88])[0]
+    try:
+        entry_start_lba = struct.unpack("<Q", header[72:80])[0]
+        num_entries = struct.unpack("<I", header[80:84])[0]
+        entry_size = struct.unpack("<I", header[84:88])[0]
+    except struct.error as exc:
+        raise ValueError(f"malformed GPT header: {exc}") from exc
 
     src.seek(entry_start_lba * _SECTOR)
     for _ in range(num_entries):
@@ -79,16 +84,26 @@ def _locate_root_partition(src) -> tuple[int, int]:
         # which an operator can investigate.
         if len(entry) != entry_size or entry_size < 128:
             break
-        name = entry[56:128].decode("utf-16-le").rstrip("\x00")
+        try:
+            name = entry[56:128].decode("utf-16-le").rstrip("\x00")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"malformed partition entry name: {exc}") from exc
         if name == _ROOT_PARTITION_NAME:
-            start_lba = struct.unpack("<Q", entry[32:40])[0]
-            end_lba = struct.unpack("<Q", entry[40:48])[0]
+            try:
+                start_lba = struct.unpack("<Q", entry[32:40])[0]
+                end_lba = struct.unpack("<Q", entry[40:48])[0]
+            except struct.error as exc:
+                raise ValueError("malformed partition entry") from exc
             return start_lba, end_lba
 
     raise ValueError(f"no partition named {_ROOT_PARTITION_NAME!r}")
 
 
 def _verify_bounds(wic_path: Path, start_lba: int, end_lba: int) -> None:
+    if end_lba < start_lba:
+        raise ValueError(
+            f"{_ROOT_PARTITION_NAME} has inverted range (start={start_lba}, end={end_lba})"
+        )
     file_size = wic_path.stat().st_size
     partition_end_byte = (end_lba + 1) * _SECTOR
     if partition_end_byte > file_size:

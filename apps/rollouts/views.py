@@ -107,16 +107,16 @@ class UpgradeStationView(AdminRequiredMixin, View):
             )
             return redirect("stations:station_detail", pk=station.pk)
 
+        if station.current_image_release_id == target.pk:
+            messages.info(request, _("Station is already on the latest release."))
+            return redirect("stations:station_detail", pk=station.pk)
+
         if not target.is_ota_ready:
             messages.error(
                 request,
                 _("Release %(tag)s is not prepared for OTA — re-import it first.")
                 % {"tag": target.tag},
             )
-            return redirect("stations:station_detail", pk=station.pk)
-
-        if station.current_image_release_id == target.pk:
-            messages.info(request, _("Station is already on the latest release."))
             return redirect("stations:station_detail", pk=station.pk)
 
         try:

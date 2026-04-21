@@ -55,14 +55,20 @@ class ImageRelease(models.Model):
 
     @property
     def is_ota_ready(self) -> bool:
-        """True iff the rootfs artifact has been extracted and uploaded.
+        """True iff the rootfs artifact and required OTA metadata exist.
 
-        OTA deployments against this release are only viable when this
-        returns True. Provisioning / bare-metal flash only need the
-        full wic (``s3_key``), so an ``is_ota_ready == False`` release
-        is still usable for those flows.
+        OTA deployments against this release are only viable when the
+        extracted rootfs has been uploaded and its checksum and size are
+        available. Provisioning / bare-metal flash only need the full
+        wic (``s3_key``), so an ``is_ota_ready == False`` release is
+        still usable for those flows.
         """
-        return bool(self.rootfs_s3_key)
+        return bool(
+            self.rootfs_s3_key
+            and self.rootfs_sha256
+            and self.rootfs_size_bytes
+            and self.rootfs_size_bytes > 0
+        )
 
     def save(self, *args, **kwargs):
         # Single `is_latest=True` per machine is an application-level invariant;

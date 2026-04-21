@@ -611,6 +611,50 @@ class TestRunImportJobRootfsExtraction:
 
 
 @pytest.mark.django_db
+class TestImageReleaseIsOtaReady:
+    """is_ota_ready requires rootfs_s3_key AND rootfs_sha256 AND
+    positive rootfs_size_bytes — partial population (e.g. mid-migration
+    or admin mutation) counts as not-ready."""
+
+    @pytest.fixture
+    def base_release(self, db):
+        from apps.images.models import ImageRelease
+
+        return ImageRelease.objects.create(
+            tag="test-ota-ready",
+            machine=ImageRelease.Machine.QEMU,
+            s3_key="images/x/y.wic.bz2",
+            sha256="a" * 64,
+            size_bytes=1,
+        )
+
+    def test_empty_everything_is_not_ready(self, base_release):
+        assert base_release.is_ota_ready is False
+
+    def test_all_three_set_is_ready(self, base_release):
+        base_release.rootfs_s3_key = "rootfs.bz2"
+        base_release.rootfs_sha256 = "b" * 64
+        base_release.rootfs_size_bytes = 100
+        assert base_release.is_ota_ready is True
+
+    def test_missing_sha_is_not_ready(self, base_release):
+        base_release.rootfs_s3_key = "rootfs.bz2"
+        base_release.rootfs_size_bytes = 100
+        assert base_release.is_ota_ready is False
+
+    def test_missing_size_is_not_ready(self, base_release):
+        base_release.rootfs_s3_key = "rootfs.bz2"
+        base_release.rootfs_sha256 = "b" * 64
+        assert base_release.is_ota_ready is False
+
+    def test_zero_size_is_not_ready(self, base_release):
+        base_release.rootfs_s3_key = "rootfs.bz2"
+        base_release.rootfs_sha256 = "b" * 64
+        base_release.rootfs_size_bytes = 0
+        assert base_release.is_ota_ready is False
+
+
+@pytest.mark.django_db
 class TestSidebar:
     def test_admin_sees_images_link(self, client, admin_user):
         from django.urls import reverse

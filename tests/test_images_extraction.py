@@ -115,6 +115,58 @@ def test_extract_rootfs_rejects_non_gpt(tmp_path):
         extract_rootfs(wic, out)
 
 
+def test_extract_rootfs_rejects_truncated_gpt_header(tmp_path):
+    """A file shorter than the GPT header at LBA 1 must raise
+    ValueError, not propagate struct.error."""
+    wic = tmp_path / "tiny.wic"
+    # 550 bytes total: LBA 1 starts at byte 512, leaving only 38 bytes
+    # for the GPT header — well below the 88-byte minimum the parser
+    # needs. Include the GPT signature so we pass the signature check
+    # and reach the length guard.
+    buf = bytearray(550)
+    buf[512:520] = b"EFI PART"
+    wic.write_bytes(bytes(buf))
+    out = tmp_path / "rootfs.bz2"
+
+    with pytest.raises(ValueError, match=r"truncated GPT header"):
+        extract_rootfs(wic, out)
+
+
+def test_extract_rootfs_rejects_inverted_range(tmp_path):
+    """end_lba < start_lba must raise ValueError instead of silently
+    emitting an empty rootfs artifact."""
+    # Use the helper with a valid partition, then hand-edit the entry
+    # to swap start/end. Simpler: construct a helper fixture manually.
+    import struct as _struct
+
+    total_sectors = 64
+    buf = bytearray(total_sectors * _SECTOR)
+
+    header = bytearray(92)
+    header[0:8] = b"EFI PART"
+    header[8:12] = _struct.pack("<I", 0x00010000)
+    header[12:16] = _struct.pack("<I", 92)
+    header[72:80] = _struct.pack("<Q", 2)
+    header[80:84] = _struct.pack("<I", 1)
+    header[84:88] = _struct.pack("<I", 128)
+    buf[_SECTOR : _SECTOR + 92] = header
+
+    entry = bytearray(128)
+    # Inverted: end_lba=4, start_lba=20.
+    entry[32:40] = _struct.pack("<Q", 20)
+    entry[40:48] = _struct.pack("<Q", 4)
+    name_utf16 = "root_a".encode("utf-16-le")
+    entry[56 : 56 + len(name_utf16)] = name_utf16
+    buf[2 * _SECTOR : 2 * _SECTOR + 128] = entry
+
+    wic = tmp_path / "inverted.wic"
+    wic.write_bytes(bytes(buf))
+    out = tmp_path / "rootfs.bz2"
+
+    with pytest.raises(ValueError, match=r"inverted range"):
+        extract_rootfs(wic, out)
+
+
 def test_extract_rootfs_rejects_out_of_bounds(tmp_path):
     """A GPT entry that declares end_lba past the file size must be
     caught by _verify_bounds before any partition bytes are read.

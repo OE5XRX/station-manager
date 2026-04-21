@@ -49,7 +49,7 @@ apps/provisioning/management/commands/run_background_jobs.py
 
 apps/deployments/api_views.py
     DeploymentCheckView     # reads rootfs_* instead of s3_*
-    DeploymentDownloadView  # streams from rootfs_s3_key, 409 if empty
+    DeploymentDownloadView  # streams from rootfs_s3_key, 404 if empty
 
 tests/
     test_images_extraction.py  # NEW: synthetic-wic unit tests
