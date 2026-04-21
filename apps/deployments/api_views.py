@@ -76,7 +76,7 @@ class DeploymentCheckView(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         image = result.deployment.image_release
-        if not image.rootfs_s3_key:
+        if not image.is_ota_ready:
             # Defense-in-depth: the creation-time guard in
             # UpgradeStationView/UpgradeGroupView should prevent
             # deployments from being created against non-OTA-ready
@@ -383,7 +383,7 @@ class DeploymentDownloadView(APIView):
             )
 
         image = result.deployment.image_release
-        if not image.rootfs_s3_key:
+        if not image.is_ota_ready:
             # Defense-in-depth — the creation-time guard should keep
             # us out of this branch, but we refuse rather than stream
             # the full wic (which is 4× the target slot size) if
