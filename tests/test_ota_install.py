@@ -211,6 +211,38 @@ def test_install_to_slot_rejects_truncated_bz2(tmp_path):
         install_to_slot(src, str(target))
 
 
+def test_install_to_slot_handles_multi_stream_bz2(tmp_path):
+    """Regression test: pbzip2-style multi-stream .wic.bz2 must
+    decompress correctly.
+
+    On 2026-04-21 an installer on-station failed 33 ms into the write
+    with ``EOFError: End of stream already reached``. The manual
+    ``BZ2Decompressor`` loop at the time only handled single-stream
+    bz2; once the first stream's EOF marker was reached, feeding any
+    further bytes (from either concatenated streams or trailing
+    padding) raised. Yocto's parallel compression paths and the
+    bunzip2 CLI both produce/accept multi-stream bz2, so the agent
+    must too.
+    """
+    from station_agent.ota import install_to_slot
+
+    part_a = b"stream-a-payload" * 1024
+    part_b = b"stream-b-payload" * 2048
+    # bz2.compress() each half, concatenate the two compressed blobs
+    # — that's exactly what pbzip2 emits.
+    combined = bz2.compress(part_a) + bz2.compress(part_b)
+    src = tmp_path / "image.wic.bz2"
+    src.write_bytes(combined)
+
+    expected = part_a + part_b
+    target = tmp_path / "fake-slot.bin"
+    target.write_bytes(b"\x00" * len(expected))
+
+    install_to_slot(src, str(target))
+
+    assert target.read_bytes()[: len(expected)] == expected
+
+
 def test_download_rejects_mismatched_content_range(tmp_path):
     """If the server/proxy returns 206 but with a start offset that
     doesn't match our partial size, the partial must be discarded and

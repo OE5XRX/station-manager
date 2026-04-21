@@ -440,27 +440,37 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
     for making sure this is the inactive slot — typically derived via
     bootloader.get_inactive_slot() + a machine-specific slot→device map.
 
+    Uses ``bz2.open()`` rather than a manual ``BZ2Decompressor`` loop so
+    multi-stream bz2 files (e.g. produced by ``pbzip2`` or Yocto's
+    parallel compression paths) decompress correctly — the old manual
+    loop raised ``EOFError: End of stream already reached`` as soon as
+    it tried to feed more bytes into the decompressor after the first
+    stream ended. ``BZ2File`` handles both multi-stream and trailing
+    padding the same way the ``bunzip2`` CLI does.
+
     Raises OSError on I/O failure.
-    Raises ValueError if the bz2 stream is truncated (decompressor did
-    not reach EOF) — writing a partial image to a boot slot would
-    silently brick the next boot, so fail loud.
+    Raises ValueError if the bz2 stream is truncated or corrupt —
+    writing a partial image to a boot slot would silently brick the
+    next boot, so fail loud.
     """
-    decomp = bz2.BZ2Decompressor()
-    with open(str(wic_bz2_path), "rb") as src:
-        fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+    fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+    try:
         try:
-            while True:
-                chunk = _stream_read(src, _STREAM_CHUNK)
-                if not chunk:
-                    break
-                decompressed = decomp.decompress(chunk)
-                if decompressed:
-                    _write_all(fd, decompressed)
-            if not decomp.eof:
-                raise ValueError(
-                    f"bz2 stream in {wic_bz2_path} is truncated: "
-                    "decompressor did not reach end-of-stream"
-                )
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            with bz2.open(str(wic_bz2_path), "rb") as src:
+                while True:
+                    chunk = _stream_read(src, _STREAM_CHUNK)
+                    if not chunk:
+                        break
+                    _write_all(fd, chunk)
+        except (EOFError, OSError) as exc:
+            # BZ2File surfaces a truncated stream as EOFError ("Compressed
+            # file ended before the end-of-stream marker was reached") and
+            # a corrupt stream as OSError. Either way, the image on the
+            # slot is now partial and would brick the next trial boot —
+            # fail loud so apply_update refuses to arm the bootloader.
+            raise ValueError(
+                f"bz2 stream in {wic_bz2_path} is truncated or corrupt: {exc}"
+            ) from exc
+        os.fsync(fd)
+    finally:
+        os.close(fd)
