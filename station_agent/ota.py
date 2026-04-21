@@ -461,12 +461,12 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
                 # BZ2File signals truncation as EOFError and a corrupt
                 # data stream as OSError *without* errno (e.g. "Invalid
                 # data stream"). A real I/O error on the backing file
-                # (EIO / ENOSPC / ...) also surfaces as OSError, but
-                # *with* errno set — those must keep propagating as
-                # OSError so the documented "Raises OSError on I/O
-                # failure" contract still holds. Only the former two
-                # classes mean "bad firmware artifact" and get
-                # translated to ValueError.
+                # during read (EIO / ESTALE / EBADF / ...) also surfaces
+                # as OSError, but *with* errno set — those must keep
+                # propagating as OSError so the documented "Raises
+                # OSError on I/O failure" contract still holds. Only
+                # the former two classes mean "bad firmware artifact"
+                # and get translated to ValueError.
                 try:
                     chunk = _stream_read(src, _STREAM_CHUNK)
                 except EOFError as exc:

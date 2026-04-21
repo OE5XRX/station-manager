@@ -229,7 +229,7 @@ def test_install_to_slot_passes_through_real_io_errors(tmp_path, monkeypatch):
     target = tmp_path / "fake-slot.bin"
     target.write_bytes(b"\x00" * len(payload))
 
-    # Simulate EIO on the backing file midway through the read.
+    # Simulate EIO on the backing file on the first decompression read.
     def fake_read(fh, n):
         raise OSError(errno_mod.EIO, "Input/output error")
 
