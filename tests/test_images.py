@@ -458,6 +458,7 @@ class TestImageManagement:
             machine="qemux86-64",
             s3_key="images/v1-alpha/qemux86-64.wic.bz2",
             cosign_bundle_s3_key="images/v1-alpha/qemux86-64.wic.bz2.bundle",
+            rootfs_s3_key="images/v1-alpha/qemux86-64.rootfs.tar.zst",
             sha256="a" * 64,
             size_bytes=100,
         )
@@ -467,6 +468,7 @@ class TestImageManagement:
         assert ImageRelease.objects.count() == 0
         assert "images/v1-alpha/qemux86-64.wic.bz2" in deleted_keys
         assert "images/v1-alpha/qemux86-64.wic.bz2.bundle" in deleted_keys
+        assert "images/v1-alpha/qemux86-64.rootfs.tar.zst" in deleted_keys
 
     def test_operator_cannot_mark_latest_or_delete(self, client, operator_user):
         from django.urls import reverse
