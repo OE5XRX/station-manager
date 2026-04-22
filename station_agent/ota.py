@@ -411,7 +411,16 @@ def apply_update(config, firmware_path: str) -> bool:
         True if the update was applied successfully.
     """
     bl = get_bootloader(config)
-    target_slot = get_inactive_slot(bl)
+    try:
+        target_slot = get_inactive_slot(bl)
+    except RuntimeError as exc:
+        # get_active_slot fails closed when the running slot can't be
+        # identified. Propagating the RuntimeError would kill the
+        # worker loop — instead report FAILED via the normal False
+        # return so the caller (agent._handle_ota) reports it to the
+        # server.
+        logger.error("Cannot determine inactive slot: %s", exc)
+        return False
     target_dev = f"/dev/disk/by-partlabel/root_{target_slot}"
 
     if not os.path.exists(target_dev):

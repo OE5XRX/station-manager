@@ -1,0 +1,159 @@
+"""Unit tests for station_agent.bootloader slot detection.
+
+Slot detection is bootloader-agnostic: both oe5xrx-grub.cfg and
+boot.cmd (u-boot) emit `root=PARTLABEL=root_${boot_part}` to the
+kernel cmdline, so one regex handles both.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from station_agent import bootloader
+
+
+def _mock_proc_cmdline(monkeypatch, tmp_path, text: str) -> None:
+    """Redirect open('/proc/cmdline') to a tmp file with ``text``."""
+    fake = tmp_path / "cmdline"
+    fake.write_text(text)
+    original_open = open
+
+    def patched(path, *args, **kwargs):
+        if path == "/proc/cmdline":
+            return original_open(fake, *args, **kwargs)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", patched)
+
+
+class TestSlotFromCmdline:
+    def test_grub_cmdline_parses_slot_a(self, monkeypatch, tmp_path):
+        """Matches oe5xrx-grub.cfg:39 — `root=PARTLABEL=root_a`."""
+        cmdline = (
+            "/bzImage root=PARTLABEL=root_a ro rootwait console=ttyS0,115200 net.ifnames=0 panic=5"
+        )
+        _mock_proc_cmdline(monkeypatch, tmp_path, cmdline)
+        assert bootloader._slot_from_cmdline() == "a"
+
+    def test_uboot_cmdline_parses_slot_b(self, monkeypatch, tmp_path):
+        """Matches boot.cmd:57 — `root=PARTLABEL=root_b`."""
+        cmdline = (
+            "root=PARTLABEL=root_b ro rootwait console=serial0,115200 "
+            "console=tty1 fsck.repair=yes net.ifnames=0"
+        )
+        _mock_proc_cmdline(monkeypatch, tmp_path, cmdline)
+        assert bootloader._slot_from_cmdline() == "b"
+
+    def test_non_partlabel_cmdline_returns_none(self, monkeypatch, tmp_path):
+        """An older image may boot via `root=/dev/sda2` — the probe
+        returns None so the fallback can take over."""
+        cmdline = "root=/dev/sda2 ro rootwait"
+        _mock_proc_cmdline(monkeypatch, tmp_path, cmdline)
+        assert bootloader._slot_from_cmdline() is None
+
+    def test_unreadable_proc_returns_none(self, monkeypatch):
+        def raiser(*args, **kwargs):
+            raise OSError("no /proc")
+
+        monkeypatch.setattr("builtins.open", raiser)
+        assert bootloader._slot_from_cmdline() is None
+
+
+class TestSlotFromRootMount:
+    def test_matches_partlabel_root_a(self, monkeypatch):
+        """Compare the device backing / against the partlabel
+        symlinks. Handles the edge case where cmdline was
+        rewritten or doesn't carry root=."""
+
+        class _FakeStat:
+            def __init__(self, st_dev: int = 0, st_rdev: int = 0):
+                self.st_dev = st_dev
+                self.st_rdev = st_rdev
+
+        _root_dev = (8 << 8) | 1  # major 8, minor 1
+        _root_a_rdev = (8 << 8) | 1
+        _root_b_rdev = (8 << 8) | 2
+
+        def fake_stat(path):
+            if path == "/":
+                return _FakeStat(st_dev=_root_dev)
+            if path == "/dev/disk/by-partlabel/root_a":
+                return _FakeStat(st_rdev=_root_a_rdev)
+            if path == "/dev/disk/by-partlabel/root_b":
+                return _FakeStat(st_rdev=_root_b_rdev)
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("os.stat", fake_stat)
+        assert bootloader._slot_from_root_mount() == "a"
+
+    def test_partlabel_symlinks_missing_returns_none(self, monkeypatch):
+        def fake_stat(path):
+            if path == "/":
+
+                class _FakeStat:
+                    st_dev = 123
+
+                return _FakeStat()
+            raise FileNotFoundError(path)
+
+        monkeypatch.setattr("os.stat", fake_stat)
+        assert bootloader._slot_from_root_mount() is None
+
+    def test_root_stat_fails_returns_none(self, monkeypatch):
+        def fake_stat(path):
+            raise OSError("no /")
+
+        monkeypatch.setattr("os.stat", fake_stat)
+        assert bootloader._slot_from_root_mount() is None
+
+
+class TestGetActiveSlot:
+    def test_cmdline_wins_over_mount(self, monkeypatch):
+        """Primary probe's answer is authoritative."""
+        monkeypatch.setattr(bootloader, "_slot_from_cmdline", lambda: "b")
+        monkeypatch.setattr(bootloader, "_slot_from_root_mount", lambda: "a")
+        assert bootloader.get_active_slot() == "b"
+
+    def test_falls_back_to_mount(self, monkeypatch):
+        monkeypatch.setattr(bootloader, "_slot_from_cmdline", lambda: None)
+        monkeypatch.setattr(bootloader, "_slot_from_root_mount", lambda: "a")
+        assert bootloader.get_active_slot() == "a"
+
+    def test_raises_when_both_probes_fail(self, monkeypatch):
+        monkeypatch.setattr(bootloader, "_slot_from_cmdline", lambda: None)
+        monkeypatch.setattr(bootloader, "_slot_from_root_mount", lambda: None)
+        with pytest.raises(RuntimeError, match=r"refusing to guess"):
+            bootloader.get_active_slot()
+
+    def test_bootloader_arg_ignored(self, monkeypatch):
+        """API compatibility: the ``bootloader`` parameter is kept
+        for callers that still pass it, but detection is
+        bootloader-agnostic."""
+        monkeypatch.setattr(bootloader, "_slot_from_cmdline", lambda: "a")
+        assert bootloader.get_active_slot("grub") == "a"
+        assert bootloader.get_active_slot("uboot") == "a"
+        assert bootloader.get_active_slot() == "a"
+
+
+class TestApplyUpdateHandlesRuntimeError:
+    """If ``get_active_slot`` can't determine the slot, ``apply_update``
+    must report FAILED rather than propagate RuntimeError and crash
+    the worker loop."""
+
+    def test_apply_update_returns_false_when_slot_indeterminate(self, monkeypatch, tmp_path):
+        from station_agent import ota
+
+        def blow_up(_bl):
+            raise RuntimeError("cannot determine active slot")
+
+        # get_inactive_slot delegates to get_active_slot; patching
+        # the downstream one is enough.
+        monkeypatch.setattr("station_agent.ota.get_inactive_slot", blow_up)
+
+        class _FakeConfig:
+            pass
+
+        firmware = tmp_path / "firmware.rootfs.bz2"
+        firmware.write_bytes(b"")
+
+        assert ota.apply_update(_FakeConfig(), str(firmware)) is False
