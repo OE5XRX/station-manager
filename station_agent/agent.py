@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 import threading
 
@@ -144,13 +145,42 @@ class StationAgent:
             )
             return
 
-        # Report rebooting (in production, the device would reboot here)
+        # Report rebooting first so the server knows the station is
+        # going down intentionally; a failed report here must not
+        # block the reboot itself.
         report_status(config, http_client, result_pk, "rebooting")
-        logger.info("OTA update applied. In production, device would reboot now.")
 
-        # Since we are not actually rebooting, run verification immediately.
-        # In production, this would happen on the next boot.
-        self._verify_and_commit(config, http_client, result_pk, version)
+        # Real reboot. After this call succeeds the agent process is
+        # killed by systemd before the line below it runs;
+        # _verify_and_commit then fires on the next boot via the
+        # post-reboot-recovery path at the top of _handle_ota
+        # (deployment_result_status in {"rebooting", "verifying"}).
+        try:
+            subprocess.run(["systemctl", "reboot"], check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # No systemctl, permission denied, unit refused, etc. —
+            # slot_b is written and armed but the switch didn't
+            # happen. Tell the server so the operator sees FAILED.
+            logger.error("Reboot failed: %s", exc)
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "failed",
+                error_message=f"Reboot call failed: {exc}",
+            )
+            return
+
+        # Safety net: systemctl returned 0 without rebooting (unusual,
+        # but not impossible on non-standard init configurations).
+        logger.error("systemctl reboot returned without rebooting")
+        report_status(
+            config,
+            http_client,
+            result_pk,
+            "failed",
+            error_message="systemctl reboot returned without rebooting",
+        )
 
     def _verify_and_commit(self, config, http_client, result_pk, version):
         """Run health checks and commit or roll back the update."""

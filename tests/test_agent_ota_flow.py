@@ -114,3 +114,131 @@ class TestVerifyAndCommitTrialGuard:
         agent._verify_and_commit(_FakeConfig(), client, result_pk=7, version="v2")
 
         assert commit_boot_called == [True]
+
+
+class TestHandleOtaRebootTransition:
+    """After install succeeds, _handle_ota must report 'rebooting'
+    then invoke systemctl reboot. It must NOT call _verify_and_commit
+    inline — that used to be the dev-mode simulation and now lives
+    exclusively in the post-reboot-recovery path."""
+
+    def _wire_successful_install(self, monkeypatch, calls):
+        """Monkeypatch the network + install side of _handle_ota so
+        execution reaches the reboot transition without doing real
+        work. `calls` is a dict the test fills for assertions."""
+        monkeypatch.setattr(
+            "station_agent.agent.check_for_update",
+            lambda cfg, http: {
+                "deployment_result_id": 42,
+                "download_url": "/api/v1/deployments/99/download/",
+                "target_tag": "v2",
+                "checksum_sha256": "a" * 64,
+                "size_bytes": 1,
+                "deployment_result_status": "pending",
+            },
+        )
+        monkeypatch.setattr(
+            "station_agent.agent.report_status",
+            lambda cfg, http, pk, status, error_message="": calls.setdefault(
+                "status_updates", []
+            ).append((pk, status)),
+        )
+        monkeypatch.setattr(
+            "station_agent.agent.download_firmware_resumable",
+            lambda **kw: True,
+        )
+        monkeypatch.setattr("station_agent.agent.apply_update", lambda cfg, path: True)
+
+        # If _verify_and_commit got called inline, record it — the
+        # test asserts the list stays empty.
+        def _explode_on_inline_verify(self_, *a, **kw):
+            calls.setdefault("verify_calls", []).append(True)
+
+        monkeypatch.setattr(StationAgent, "_verify_and_commit", _explode_on_inline_verify)
+
+    def test_handle_ota_reboots_via_systemctl(self, monkeypatch):
+        calls = {}
+        self._wire_successful_install(monkeypatch, calls)
+
+        run_args = []
+
+        def fake_run(argv, **kwargs):
+            run_args.append((tuple(argv), kwargs))
+
+            class _CP:
+                returncode = 0
+
+            return _CP()
+
+        monkeypatch.setattr("station_agent.agent.subprocess.run", fake_run)
+
+        agent = StationAgent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        # Need a minimal http_client fake — _handle_ota just hands
+        # it to report_status/download_firmware_resumable, both
+        # monkeypatched above.
+        agent._handle_ota(_Cfg(), object())
+
+        # systemctl reboot was called exactly once.
+        assert run_args, "subprocess.run was never called"
+        assert run_args[0][0] == ("systemctl", "reboot")
+
+        # 'rebooting' was reported *before* the reboot call.
+        # After fake_run returns (simulating the unusual case where
+        # systemctl returns without rebooting), the safety-net path
+        # appends 'failed' — so "rebooting" is not the final status,
+        # but it must appear before "failed".
+        status_sequence = [s for _pk, s in calls["status_updates"]]
+        assert "rebooting" in status_sequence
+        reboot_idx = status_sequence.index("rebooting")
+        # Everything before "rebooting" must not be "rebooting" (it
+        # appears exactly once before the reboot call).
+        assert reboot_idx > 0, "rebooting must come after downloading/installing"
+        # The safety-net 'failed' fires after subprocess.run returns —
+        # confirm rebooting precedes it.
+        assert status_sequence.index("rebooting") < len(status_sequence) - 1
+        assert status_sequence[-1] == "failed"
+
+    def test_handle_ota_does_not_call_verify_inline(self, monkeypatch):
+        calls = {}
+        self._wire_successful_install(monkeypatch, calls)
+        monkeypatch.setattr(
+            "station_agent.agent.subprocess.run",
+            lambda argv, **kw: type("CP", (), {"returncode": 0})(),
+        )
+
+        agent = StationAgent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        agent._handle_ota(_Cfg(), object())
+
+        assert calls.get("verify_calls", []) == []
+
+    def test_handle_ota_reports_failed_when_reboot_errors(self, monkeypatch):
+        calls = {}
+        self._wire_successful_install(monkeypatch, calls)
+
+        def failing_run(argv, **kw):
+            raise FileNotFoundError("no systemctl")
+
+        monkeypatch.setattr("station_agent.agent.subprocess.run", failing_run)
+
+        agent = StationAgent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        agent._handle_ota(_Cfg(), object())
+
+        # Status sequence: rebooting (first, optimistic), then failed
+        # after the reboot call raised.
+        status_sequence = [s for _pk, s in calls["status_updates"]]
+        assert status_sequence[-1] == "failed"
