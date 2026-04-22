@@ -33,9 +33,7 @@ _ENV_TOOL_TIMEOUT = 10
 
 def _run(cmd: list[str]) -> bool:
     try:
-        subprocess.run(
-            cmd, check=True, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT
-        )
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT)
         return True
     except FileNotFoundError:
         logger.error("Command not found: %s", cmd[0])
@@ -127,9 +125,7 @@ def get_env(bootloader: str, key: str) -> str | None:
         return None
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT)
     except FileNotFoundError:
         logger.error("Command not found: %s", cmd[0])
         return None
