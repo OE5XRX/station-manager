@@ -14,6 +14,19 @@ class ImageRelease(models.Model):
     sha256 = models.CharField(_("SHA-256"), max_length=64)
     cosign_bundle_s3_key = models.CharField(max_length=512, blank=True)
     size_bytes = models.BigIntegerField(_("size in bytes"))
+    rootfs_s3_key = models.CharField(
+        _("rootfs S3 object key"),
+        max_length=512,
+        blank=True,
+        default="",
+        help_text=_(
+            "S3 key for the extracted root_a partition, bz2-compressed. "
+            "Empty means this release has not been processed for OTA yet "
+            "(re-import required)."
+        ),
+    )
+    rootfs_sha256 = models.CharField(_("rootfs SHA-256"), max_length=64, blank=True, default="")
+    rootfs_size_bytes = models.BigIntegerField(_("rootfs size in bytes"), null=True, blank=True)
     is_latest = models.BooleanField(_("latest for this machine"), default=False)
     imported_at = models.DateTimeField(auto_now_add=True)
     imported_by = models.ForeignKey(
@@ -39,6 +52,23 @@ class ImageRelease(models.Model):
 
     def __str__(self):
         return f"{self.tag} ({self.machine})"
+
+    @property
+    def is_ota_ready(self) -> bool:
+        """True iff the rootfs artifact and required OTA metadata exist.
+
+        OTA deployments against this release are only viable when the
+        extracted rootfs has been uploaded and its checksum and size are
+        available. Provisioning / bare-metal flash only need the full
+        wic (``s3_key``), so an ``is_ota_ready == False`` release is
+        still usable for those flows.
+        """
+        return bool(
+            self.rootfs_s3_key
+            and self.rootfs_sha256
+            and self.rootfs_size_bytes
+            and self.rootfs_size_bytes > 0
+        )
 
     def save(self, *args, **kwargs):
         # Single `is_latest=True` per machine is an application-level invariant;

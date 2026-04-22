@@ -111,6 +111,14 @@ class UpgradeStationView(AdminRequiredMixin, View):
             messages.info(request, _("Station is already on the latest release."))
             return redirect("stations:station_detail", pk=station.pk)
 
+        if not target.is_ota_ready:
+            messages.error(
+                request,
+                _("Release %(tag)s is not prepared for OTA — re-import it first.")
+                % {"tag": target.tag},
+            )
+            return redirect("stations:station_detail", pk=station.pk)
+
         try:
             with transaction.atomic():
                 dep = Deployment.objects.create(
@@ -199,6 +207,10 @@ class UpgradeGroupView(AdminRequiredMixin, View):
             for machine, machine_stations in by_machine.items():
                 target = ImageRelease.objects.filter(machine=machine, is_latest=True).first()
                 if target is None:
+                    skipped += len(machine_stations)
+                    continue
+
+                if not target.is_ota_ready:
                     skipped += len(machine_stations)
                     continue
 

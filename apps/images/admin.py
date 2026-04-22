@@ -15,6 +15,9 @@ class ImageReleaseAdmin(admin.ModelAdmin):
         "s3_key",
         "cosign_bundle_s3_key",
         "size_bytes",
+        "rootfs_sha256",
+        "rootfs_s3_key",
+        "rootfs_size_bytes",
     )
 
 

@@ -136,6 +136,9 @@ class TestUpgradeActions:
             s3_key="images/v2/qemu.wic.bz2",
             sha256="d" * 64,
             size_bytes=2000,
+            rootfs_s3_key="images/v2/qemu.rootfs.bz2",
+            rootfs_sha256="e" * 64,
+            rootfs_size_bytes=500,
             is_latest=True,
         )
 
@@ -147,6 +150,48 @@ class TestUpgradeActions:
         dep = Deployment.objects.get(target_station=station)
         assert dep.image_release == newer
         assert DeploymentResult.objects.filter(deployment=dep, station=station).exists()
+
+    def test_upgrade_station_refuses_release_without_rootfs(
+        self, client, admin_user, station, image_release
+    ):
+        """If the latest release hasn't been extracted for OTA yet,
+        UpgradeStationView must refuse at creation time instead of
+        creating a Deployment the station can never install."""
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment
+        from apps.images.models import ImageRelease
+
+        station.current_image_release = image_release
+        station.save(update_fields=["current_image_release"])
+
+        # Pretend a newer release exists, but hasn't been processed
+        # for OTA (rootfs_s3_key empty).
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        ImageRelease.objects.create(
+            tag="v2-unprocessed",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="z" * 64,
+            size_bytes=1,
+            is_latest=True,
+            # rootfs_* deliberately left empty.
+        )
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:upgrade_station", kwargs={"station_pk": station.pk}),
+            follow=True,
+        )
+        assert response.status_code == 200
+
+        # No Deployment / DeploymentResult row was created.
+        assert not Deployment.objects.filter(target_station=station).exists()
+
+        # A flash error message names the tag and asks the operator
+        # to re-import.
+        msgs = [str(m) for m in response.context["messages"]]
+        assert any("v2-unprocessed" in m and "re-import" in m.lower() for m in msgs)
 
     def test_operator_cannot_upgrade(self, client, operator_user, station):
         from django.urls import reverse
@@ -185,6 +230,9 @@ class TestUpgradeActions:
             s3_key="images/v2/qemu.wic.bz2",
             sha256="e" * 64,
             size_bytes=2000,
+            rootfs_s3_key="images/v2/qemu.rootfs.bz2",
+            rootfs_sha256="f" * 64,
+            rootfs_size_bytes=500,
             is_latest=True,
         )
 
@@ -231,6 +279,9 @@ class TestUpgradeActions:
             s3_key="images/v2/qemu.wic.bz2",
             sha256="f" * 64,
             size_bytes=2000,
+            rootfs_s3_key="images/v2/qemu.rootfs.bz2",
+            rootfs_sha256="g" * 64,
+            rootfs_size_bytes=500,
             is_latest=True,
         )
 
@@ -245,6 +296,92 @@ class TestUpgradeActions:
         response = client.post(reverse("rollouts:upgrade_group", args=["test"]))
         assert response.status_code == 302
         assert Deployment.objects.filter(target_tag=t_test).exists()
+
+    def test_upgrade_group_skips_releases_without_rootfs(
+        self, client, admin_user, make_station_tag, image_release
+    ):
+        """A group upgrade targeting two machines where one's latest
+        release is OTA-ready and the other's isn't must create a
+        Deployment for the ready one and tally the non-ready one into
+        the 'skipped' summary.
+
+        The qemu station is on `image_release` (older, OTA-ready via
+        the fixture updated in Task 4), upgrading to qemu_ready. The
+        rpi station is on rpi_not_ready, which is_latest but has
+        empty rootfs_* → must be skipped.
+        """
+        from django.urls import reverse
+
+        from apps.deployments.models import Deployment
+        from apps.images.models import ImageRelease
+        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+        from apps.stations.models import Station
+
+        tag = make_station_tag("group-a")
+        seq = current_sequence()
+        seq.entries.all().delete()
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        qemu_ready = ImageRelease.objects.create(
+            tag="qemu-ready",
+            machine="qemux86-64",
+            s3_key="wic",
+            sha256="a" * 64,
+            size_bytes=1,
+            rootfs_s3_key="rootfs",
+            rootfs_sha256="b" * 64,
+            rootfs_size_bytes=1,
+            is_latest=True,
+        )
+        # An older rpi release the station is currently on (not is_latest).
+        rpi_old = ImageRelease.objects.create(
+            tag="rpi-old",
+            machine="raspberrypi4-64",
+            s3_key="wic-old",
+            sha256="d" * 64,
+            size_bytes=1,
+            is_latest=False,
+        )
+        # The newest rpi release — is_latest, but missing rootfs_* → not OTA-ready.
+        ImageRelease.objects.create(
+            tag="rpi-not-ready",
+            machine="raspberrypi4-64",
+            s3_key="wic2",
+            sha256="c" * 64,
+            size_bytes=1,
+            is_latest=True,
+            # rootfs_* deliberately empty.
+        )
+
+        s_qemu = Station.objects.create(
+            name="qemu-station",
+            callsign="Q1TEST",
+            current_image_release=image_release,  # older qemu release
+        )
+        s_qemu.tags.add(tag)
+        s_rpi = Station.objects.create(
+            name="rpi-station",
+            callsign="R1TEST",
+            current_image_release=rpi_old,  # older rpi release, target is rpi-not-ready
+        )
+        s_rpi.tags.add(tag)
+
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("rollouts:upgrade_group", kwargs={"tag_slug": tag.slug}),
+            follow=True,
+        )
+        assert response.status_code == 200
+
+        # Exactly one Deployment — for qemu, because rpi's release isn't OTA-ready.
+        deployments = Deployment.objects.all()
+        assert deployments.count() == 1
+        assert deployments.first().image_release_id == qemu_ready.pk
+
+        # Summary message: "Queued 1 upgrades (1 skipped)".
+        msgs = [str(m) for m in response.context["messages"]]
+        assert any("Queued 1" in m and "1 skipped" in m for m in msgs), msgs
 
     def test_upgrade_group_skips_unprovisioned_stations(
         self, client, admin_user, image_release, make_station_tag
