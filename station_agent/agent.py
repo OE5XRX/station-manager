@@ -7,10 +7,12 @@ import signal
 import sys
 import threading
 
+from .bootloader import get_bootloader, get_env
 from .config import load_config
 from .health_check import run_health_checks
 from .heartbeat import send_heartbeat
 from .http_client import HttpClient
+from .inventory import get_current_version
 from .ota import (
     apply_update,
     check_for_update,
@@ -159,8 +161,6 @@ class StationAgent:
         # running may be the old slot. Health checks alone don't
         # distinguish the two, so confirm /etc/os-release matches the
         # target tag before accepting "committed".
-        from .inventory import get_current_version
-
         running_version = get_current_version()
         if not running_version:
             # /etc/os-release doesn't expose OE5XRX_RELEASE — we cannot
@@ -193,6 +193,35 @@ class StationAgent:
                 "Refusing to commit: running %s but deployment target is %s",
                 running_version,
                 version,
+            )
+            return
+
+        # Trial-flag guard: both oe5xrx-grub.cfg and boot.cmd clear
+        # upgrade_available to 0 when they roll back after
+        # bootcount > bootlimit. Reading it post-reboot catches the
+        # same-version-redeploy blind spot the version check above
+        # cannot see (both slots return the same /etc/os-release
+        # tag, so running_version == target is not a proof the
+        # bootloader didn't swap back). None also means rolled_back
+        # — env read failed and we refuse to commit blind.
+        bl = get_bootloader(config)
+        upgrade_available = get_env(bl, "upgrade_available")
+        if upgrade_available != "1":
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "rolled_back",
+                error_message=(
+                    f"Bootloader upgrade_available={upgrade_available!r} "
+                    "(expected '1') — trial boot was rolled back or env "
+                    "read failed; refusing to commit."
+                ),
+            )
+            logger.warning(
+                "Refusing to commit deployment %s: upgrade_available=%r",
+                result_pk,
+                upgrade_available,
             )
             return
 
