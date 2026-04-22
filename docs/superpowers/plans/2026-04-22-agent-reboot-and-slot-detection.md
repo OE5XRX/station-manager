@@ -875,9 +875,14 @@ In `station_agent/agent.py`, replace the existing lines 145-151 (the `# Report r
         # block the reboot itself.
         report_status(config, http_client, result_pk, "rebooting")
 
-        # Real reboot. After this call succeeds the agent process is
-        # killed by systemd before the line below it runs;
-        # _verify_and_commit then fires on the next boot via the
+        # Real reboot. systemctl queues the reboot with systemd and
+        # returns 0 immediately — we are not killed until systemd
+        # tears down services (typically a few seconds later). We
+        # must NOT return here: the heartbeat loop's next OTA check
+        # would hit the post-reboot-recovery path BEFORE the reboot
+        # actually happened and verify against the still-running-old
+        # rootfs. Block on the shutdown event until systemd signals
+        # us. _verify_and_commit then fires on the NEXT boot via the
         # post-reboot-recovery path at the top of _handle_ota
         # (deployment_result_status in {"rebooting", "verifying"}).
         try:
@@ -896,15 +901,24 @@ In `station_agent/agent.py`, replace the existing lines 145-151 (the `# Report r
             )
             return
 
-        # Safety net: systemctl returned 0 without rebooting (unusual,
-        # but not impossible on non-standard init configurations).
-        logger.error("systemctl reboot returned without rebooting")
+        logger.info("Reboot queued — waiting for systemd shutdown signal")
+        # Block up to 5 minutes. SIGTERM from systemd sets the
+        # shutdown event → wait returns True → return cleanly.
+        # Timeout with still-alive process → report FAILED
+        # (reboot was queued but inhibited).
+        if self._shutdown.wait(timeout=300):
+            return
+
+        logger.error("Reboot queued 5 minutes ago but shutdown signal never came")
         report_status(
             config,
             http_client,
             result_pk,
             "failed",
-            error_message="systemctl reboot returned without rebooting",
+            error_message=(
+                "Reboot queued via systemctl but shutdown signal never "
+                "arrived within 5 minutes — reboot was likely inhibited."
+            ),
         )
 ```
 

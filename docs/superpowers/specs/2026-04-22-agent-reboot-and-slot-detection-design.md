@@ -157,10 +157,15 @@ After the change:
 # a transient failure here must not block the reboot itself.
 report_status(config, http_client, result_pk, "rebooting")
 
-# Real reboot. After this call the agent process is killed by systemd;
-# we never reach the line after it. _verify_and_commit runs on the next
-# boot via the existing post-reboot-recovery path in check_for_update
-# (deployment_result_status in {"rebooting", "verifying"}).
+# Real reboot. systemctl queues the reboot with systemd and returns 0
+# immediately — we are not killed until systemd tears down services
+# (typically a few seconds later). We must not return here: the
+# heartbeat loop's next OTA check would hit the post-reboot-recovery
+# path BEFORE the reboot actually happened and verify against the
+# still-running-old rootfs. Block on the shutdown event until systemd
+# signals us. _verify_and_commit then fires on the NEXT boot via the
+# post-reboot-recovery path (deployment_result_status in
+# {"rebooting", "verifying"}).
 try:
     subprocess.run(["systemctl", "reboot"], check=True)
 except (OSError, subprocess.CalledProcessError) as exc:
@@ -168,10 +173,9 @@ except (OSError, subprocess.CalledProcessError) as exc:
     # PermissionError (wrong uid), and rarer low-level syscall
     # failures. CalledProcessError catches non-zero exit codes
     # from systemctl itself (unit refused, inhibitor blocking,
-    # etc.). All three mean: slot_b is written and armed but
-    # the switch didn't happen. Tell the server so the operator
-    # sees FAILED instead of a station stuck forever in
-    # "rebooting".
+    # etc.). Either means: slot_b is written and armed but the
+    # switch didn't happen. Tell the server so the operator sees
+    # FAILED instead of a station stuck forever in "rebooting".
     logger.error("Reboot failed: %s", exc)
     report_status(
         config, http_client, result_pk, "failed",
@@ -179,12 +183,22 @@ except (OSError, subprocess.CalledProcessError) as exc:
     )
     return
 
-# Unreachable in production; kept as a safety net in case systemctl
-# returns without rebooting for reasons we don't understand.
-logger.error("systemctl reboot returned without rebooting — reporting failed")
+# Block up to 5 minutes waiting for systemd to SIGTERM us. The
+# shutdown event is set by the signal handler in __init__. If we
+# reach the timeout still alive, the reboot was queued but never
+# happened (inhibitor, stuck service shutdown) — report FAILED so
+# the operator sees the station won't actually reboot.
+logger.info("Reboot queued — waiting for systemd shutdown signal")
+if self._shutdown.wait(timeout=300):
+    return
+
+logger.error("Reboot queued 5 minutes ago but shutdown signal never came")
 report_status(
     config, http_client, result_pk, "failed",
-    error_message="systemctl reboot returned without rebooting",
+    error_message=(
+        "Reboot queued via systemctl but shutdown signal never arrived "
+        "within 5 minutes — reboot was likely inhibited."
+    ),
 )
 ```
 
@@ -250,7 +264,7 @@ find no `*.wic.bz2` files and the glob is a no-op.
 | --- | --- | --- |
 | `apply_update` on a station where `get_active_slot` can't resolve | Would read bootloader env → potentially return wrong slot → overwrite live rootfs. | `RuntimeError` from `get_active_slot` → `apply_update` returns `False` → agent reports `failed`. |
 | Reboot call fails (no systemctl, permission denied) | N/A — no real reboot. | Report `failed` with the exception message; operator sees the station stuck at "installing-but-not-rebooting" and investigates. |
-| Reboot call returns without rebooting | N/A. | Same: report `failed`. Safety net for kernels / systemd versions we haven't tested against. |
+| Reboot queued but inhibited (5-minute shutdown wait times out) | N/A. | Report `failed` with "reboot was likely inhibited" message. Operator sees the station stuck on "rebooting" and can check for systemd inhibitors or failing service-shutdown ordering. |
 | Bootloader rolled back (same version in both slots) | Version check passes, commit succeeds — undetected. | `upgrade_available=0` guard triggers `rolled_back`, server records it, station stays in a known-safe state. |
 | Bootloader env unreadable during verify | Version check passes, commit succeeds — state drift unnoticed. | `upgrade_available=None` → `rolled_back` with "env read failed" message. Fail closed. |
 
