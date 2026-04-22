@@ -135,12 +135,17 @@ class TestGetActiveSlot:
         assert bootloader.get_active_slot() == "a"
 
 
-class TestApplyUpdateHandlesRuntimeError:
+class TestApplyUpdatePropagatesSlotError:
     """If ``get_active_slot`` can't determine the slot, ``apply_update``
-    must report FAILED rather than propagate RuntimeError and crash
-    the worker loop."""
+    lets the RuntimeError propagate so ``agent._handle_ota`` can
+    forward the specific reason into the server-visible
+    ``error_message``. A generic ``False`` return would have lumped
+    slot-detection failures in with write failures under the
+    misleading "Failed to write firmware..." message."""
 
-    def test_apply_update_returns_false_when_slot_indeterminate(self, monkeypatch, tmp_path):
+    def test_apply_update_propagates_runtime_error_on_indeterminate_slot(
+        self, monkeypatch, tmp_path
+    ):
         from station_agent import ota
 
         def blow_up(_bl):
@@ -156,4 +161,5 @@ class TestApplyUpdateHandlesRuntimeError:
         firmware = tmp_path / "firmware.rootfs.bz2"
         firmware.write_bytes(b"")
 
-        assert ota.apply_update(_FakeConfig(), str(firmware)) is False
+        with pytest.raises(RuntimeError, match="cannot determine active slot"):
+            ota.apply_update(_FakeConfig(), str(firmware))

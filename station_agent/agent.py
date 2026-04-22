@@ -151,7 +151,23 @@ class StationAgent:
         # Report installing
         report_status(config, http_client, result_pk, "installing")
 
-        if not apply_update(config, dest_path):
+        try:
+            install_ok = apply_update(config, dest_path)
+        except RuntimeError as exc:
+            # Slot-detection fail-closed path (both /proc/cmdline and
+            # root-mount probes unresolved). Forward the specific reason
+            # into the server-visible error_message so the operator can
+            # diagnose without needing local logs.
+            logger.error("Install aborted: %s", exc)
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "failed",
+                error_message=f"Install aborted: {exc}",
+            )
+            return
+        if not install_ok:
             report_status(
                 config,
                 http_client,

@@ -281,6 +281,55 @@ class TestHandleOtaRebootTransition:
         status_sequence = [s for _pk, s in calls["status_updates"]]
         assert status_sequence[-1] == "failed"
 
+    def test_handle_ota_forwards_apply_update_runtime_error_to_error_message(self, monkeypatch):
+        """When apply_update raises RuntimeError (slot detection
+        failed both runtime probes), _handle_ota must forward the
+        specific exception text into the server-visible
+        error_message — otherwise the operator sees only the
+        generic 'Failed to write firmware...' for what's really a
+        slot-detection failure."""
+        calls = {}
+
+        monkeypatch.setattr(
+            "station_agent.agent.check_for_update",
+            lambda cfg, http: {
+                "deployment_result_id": 42,
+                "download_url": "/api/v1/deployments/99/download/",
+                "target_tag": "v2",
+                "checksum_sha256": "a" * 64,
+                "size_bytes": 1,
+                "deployment_result_status": "pending",
+            },
+        )
+        monkeypatch.setattr(
+            "station_agent.agent.report_status",
+            lambda cfg, http, pk, status, error_message="": calls.setdefault(
+                "status_updates", []
+            ).append((pk, status, error_message)),
+        )
+        monkeypatch.setattr("station_agent.agent.download_firmware_resumable", lambda **kw: True)
+
+        def raising_apply(cfg, path):
+            raise RuntimeError("Cannot determine active A/B slot from /proc/cmdline or / mount.")
+
+        monkeypatch.setattr("station_agent.agent.apply_update", raising_apply)
+
+        agent = StationAgent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        agent._handle_ota(_Cfg(), object())
+
+        # Final status was failed with the actual RuntimeError text
+        # baked into error_message — not the generic write-failure
+        # string.
+        last_pk, last_status, last_msg = calls["status_updates"][-1]
+        assert last_status == "failed"
+        assert "active A/B slot" in last_msg
+        assert "Failed to write firmware" not in last_msg
+
 
 class TestDestPathAndLegacySweep:
     """The download artifact is the extracted rootfs (not the full

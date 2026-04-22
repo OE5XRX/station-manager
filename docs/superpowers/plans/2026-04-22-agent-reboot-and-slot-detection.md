@@ -6,7 +6,7 @@
 
 **Architecture:** Four agent-side fixes in `station_agent/bootloader.py` and `station_agent/agent.py`. `get_active_slot` becomes runtime-derived via `/proc/cmdline` + root-mount fallback; `apply_update` swallows the new `RuntimeError` as a `False` return. `_verify_and_commit` gains an `upgrade_available == "1"` guard from the existing `get_env` helper. `_handle_ota` issues a real `systemctl reboot` and drops its inline verify call (the existing post-reboot-recovery path in `agent.py:68-78` is the sole verify entrypoint). `dest_path` renamed to `.rootfs.bz2` with a one-time sweep of legacy `.wic.bz2` partials.
 
-**Tech Stack:** Python 3.13, stdlib `subprocess` / `os` / `re`, pytest + monkeypatch. No new deps, no server-side changes, no Yocto recipe changes.
+**Tech Stack:** Python >=3.10 (CI runs on 3.14), stdlib `subprocess` / `os` / `re`, pytest + monkeypatch. No new deps, no server-side changes, no Yocto recipe changes.
 
 **Design spec:** `docs/superpowers/specs/2026-04-22-agent-reboot-and-slot-detection-design.md`
 
