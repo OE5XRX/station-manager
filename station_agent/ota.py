@@ -409,7 +409,15 @@ def apply_update(config, firmware_path: str) -> bool:
             ext4 rootfs image).
 
     Returns:
-        True if the update was applied successfully.
+        True if the update was applied successfully; False on
+        survivable failures (inactive-partition device missing,
+        bz2 stream corrupt, bootloader set_upgrade_pending failed).
+
+    Raises:
+        RuntimeError: when slot detection fails (both /proc/cmdline
+            and root-mount probes unresolved). Callers are expected
+            to catch this and report FAILED with the exception text
+            — see agent._handle_ota.
     """
     bl = get_bootloader(config)
     # Let RuntimeError from get_active_slot/get_inactive_slot propagate.

@@ -198,7 +198,30 @@ class StationAgent:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
+        except subprocess.TimeoutExpired as exc:
+            # systemctl/dbus hung. The station would otherwise sit in
+            # "rebooting" state indefinitely.
+            stderr = getattr(exc, "stderr", None) or ""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            logger.error(
+                "Reboot command timed out after %ss%s",
+                exc.timeout,
+                f" — {stderr.strip()}" if stderr else "",
+            )
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "failed",
+                error_message=(
+                    f"Reboot call timed out after {exc.timeout}s"
+                    + (f" — {stderr.strip()}" if stderr else "")
+                ),
+            )
+            return
         except (OSError, subprocess.CalledProcessError) as exc:
             # No systemctl, permission denied, unit refused, etc. —
             # slot_b is written and armed but the switch didn't
@@ -298,35 +321,64 @@ class StationAgent:
         bl = get_bootloader(config)
         try:
             upgrade_available = get_env(bl, "upgrade_available")
+            bootcount = get_env(bl, "bootcount")
         except OSError as exc:
             # get_env can raise FileNotFoundError if the bootloader
             # tool (grub-editenv / fw_printenv) isn't installed, or
             # PermissionError if we can't read the env blob. Either
-            # way, we can't verify the trial is still armed — fail
-            # closed to None so the downstream check refuses to
-            # commit.
+            # way, we can't verify trial state — fail closed.
             logger.warning(
                 "Failed to read bootloader env for deployment %s: %s",
                 result_pk,
                 exc,
             )
             upgrade_available = None
-        if upgrade_available != "1":
+            bootcount = None
+
+        # Three cases, distinguished by the (upgrade_available, bootcount)
+        # pair that commit_boot_local and the bootloader's rollback path
+        # write:
+        #   "1", any      -> trial active, proceed to commit.
+        #   "0", "0"      -> local commit already ran on a prior
+        #                    _verify_and_commit pass (commit_boot_local
+        #                    sets both to "0") AND no reboot happened
+        #                    since (bootloader increments bootcount on
+        #                    every boot). Server POST must have failed
+        #                    transiently — retry commit_boot (idempotent
+        #                    at the local level).
+        #   "0", anything else -> bootloader rolled us back
+        #                         (boot.cmd / oe5xrx-grub.cfg set
+        #                         bootcount=1 on their rollback branch).
+        #   None, any     -> env unreadable; fail closed.
+        #
+        # Known limitation: a reboot between local commit and server-commit
+        # retry moves bootcount to >=1 and this guard would then misclassify
+        # as rolled_back. Persistent commit marker is tracked as a follow-up.
+        if upgrade_available == "1":
+            pass  # trial active, normal path
+        elif upgrade_available == "0" and bootcount == "0":
+            logger.info(
+                "Detected prior local commit for deployment %s "
+                "(upgrade_available=0, bootcount=0); retrying server commit",
+                result_pk,
+            )
+        else:
             report_status(
                 config,
                 http_client,
                 result_pk,
                 "rolled_back",
                 error_message=(
-                    f"Bootloader upgrade_available={upgrade_available!r} "
-                    "(expected '1') — trial boot was rolled back or env "
-                    "read failed; refusing to commit."
+                    f"Bootloader upgrade_available={upgrade_available!r}, "
+                    f"bootcount={bootcount!r} — trial boot was rolled back "
+                    "or env read failed; refusing to commit."
                 ),
             )
             logger.warning(
-                "Refusing to commit deployment %s: upgrade_available=%r",
+                "Refusing to commit deployment %s: upgrade_available=%r, bootcount=%r",
                 result_pk,
                 upgrade_available,
+                bootcount,
             )
             return
 

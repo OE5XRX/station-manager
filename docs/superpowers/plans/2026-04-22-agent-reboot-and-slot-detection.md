@@ -4,7 +4,7 @@
 
 **Goal:** Make `station_agent` actually reboot after install, detect the active A/B slot from the running rootfs (not the mutable bootloader env), and reject commit when the bootloader already rolled back the trial.
 
-**Architecture:** Four agent-side fixes in `station_agent/bootloader.py` and `station_agent/agent.py`. `get_active_slot` becomes runtime-derived via `/proc/cmdline` + root-mount fallback; `apply_update` swallows the new `RuntimeError` as a `False` return. `_verify_and_commit` gains an `upgrade_available == "1"` guard from the existing `get_env` helper. `_handle_ota` issues a real `systemctl reboot` and drops its inline verify call (the existing post-reboot-recovery path in `agent.py:68-78` is the sole verify entrypoint). `dest_path` renamed to `.rootfs.bz2` with a one-time sweep of legacy `.wic.bz2` partials.
+**Architecture:** Four agent-side fixes in `station_agent/bootloader.py` and `station_agent/agent.py`. `get_active_slot` becomes runtime-derived via `/proc/cmdline` + root-mount fallback; `apply_update` lets the `RuntimeError` propagate; `_handle_ota` catches it and forwards the message into the server-visible `error_message`. `_verify_and_commit` gains an `upgrade_available == "1"` guard from the existing `get_env` helper. `_handle_ota` issues a real `systemctl reboot` and drops its inline verify call (the existing post-reboot-recovery path in `agent.py:68-78` is the sole verify entrypoint). `dest_path` renamed to `.rootfs.bz2` with a one-time sweep of legacy `.wic.bz2` partials.
 
 **Tech Stack:** Python >=3.10 (CI runs on 3.14), stdlib `subprocess` / `os` / `re`, pytest + monkeypatch. No new deps, no server-side changes, no Yocto recipe changes.
 

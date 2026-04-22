@@ -129,11 +129,12 @@ def get_active_slot(bootloader: str = "") -> str:
 ```
 
 Existing `get_inactive_slot(bootloader)` is unchanged — it already
-delegates to `get_active_slot`. `apply_update()` currently logs and
-returns `False` when the inactive device doesn't exist; on
-`RuntimeError` from `get_active_slot` it now logs and returns
-`False` too (so the agent reports FAILED instead of crashing the
-worker loop).
+delegates to `get_active_slot`. `apply_update()` still logs and
+returns `False` for ordinary non-exception failures such as the
+inactive device not existing. By contrast, `RuntimeError` from
+`get_active_slot` now propagates out of `apply_update()` and is
+caught by `_handle_ota`, which reports `FAILED` with the specific
+reason instead of crashing the worker loop.
 
 ## `agent._handle_ota` — real reboot, remove inline verify
 
@@ -263,7 +264,7 @@ find no `*.wic.bz2` files and the glob is a no-op.
 
 | Scenario | Today | After |
 | --- | --- | --- |
-| `apply_update` on a station where `get_active_slot` can't resolve | Would read bootloader env → potentially return wrong slot → overwrite live rootfs. | `RuntimeError` from `get_active_slot` → `apply_update` returns `False` → agent reports `failed`. |
+| `apply_update` on a station where `get_active_slot` can't resolve | Would read bootloader env → potentially return wrong slot → overwrite live rootfs. | `RuntimeError` from `get_active_slot` propagates out of `apply_update`; `_handle_ota` catches it and reports `failed` with the specific exception text. |
 | Reboot call fails (no systemctl, permission denied) | N/A — no real reboot. | Report `failed` with the exception message; operator sees the station stuck at "installing-but-not-rebooting" and investigates. |
 | Reboot queued but inhibited (5-minute shutdown wait times out) | N/A. | Report `failed` with "reboot was likely inhibited" message. Operator sees the station stuck on "rebooting" and can check for systemd inhibitors or failing service-shutdown ordering. |
 | Bootloader rolled back (same version in both slots) | Version check passes, commit succeeds — undetected. | `upgrade_available=0` guard triggers `rolled_back`, server records it, station stays in a known-safe state. |

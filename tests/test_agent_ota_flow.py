@@ -39,12 +39,16 @@ class TestVerifyAndCommitTrialGuard:
         """The bootloader already rolled the trial back (e.g. grub-ab
         detected bootcount > bootlimit and swapped boot_part). The
         /etc/os-release version may match for a same-version redeploy,
-        so we need the trial-flag guard as a second signal."""
+        so we need the trial-flag guard as a second signal.
+
+        bootcount="1" simulates the bootloader rollback state: boot.cmd
+        and oe5xrx-grub.cfg set bootcount=1 on their rollback branch, so
+        (upgrade_available="0", bootcount="1") → rolled_back."""
         monkeypatch.setattr("station_agent.agent.get_current_version", lambda: "v2")
         monkeypatch.setattr("station_agent.agent.get_bootloader", lambda _cfg: "grub")
         monkeypatch.setattr(
             "station_agent.agent.get_env",
-            lambda _bl, key: "0" if key == "upgrade_available" else None,
+            lambda _bl, key: {"upgrade_available": "0", "bootcount": "1"}.get(key),
         )
         # Health checks would pass if we got that far — but we
         # should short-circuit before them.
@@ -66,6 +70,7 @@ class TestVerifyAndCommitTrialGuard:
         last = client.status_updates[-1]["json_data"]
         assert last["status"] == "rolled_back"
         assert "upgrade_available" in last["error_message"]
+        assert "bootcount" in last["error_message"]
         assert commit_boot_called == []
 
     def test_rolls_back_when_upgrade_available_is_missing(self, monkeypatch):
@@ -115,6 +120,37 @@ class TestVerifyAndCommitTrialGuard:
         agent = StationAgent()
         agent._verify_and_commit(_FakeConfig(), client, result_pk=7, version="v2")
 
+        assert commit_boot_called == [True]
+
+    def test_retries_server_commit_when_locally_committed(self, monkeypatch):
+        """After a successful commit_boot_local, the bootloader env
+        shows upgrade_available=0 AND bootcount=0. If the server POST
+        failed transiently and the deployment is still reported as
+        verifying, the next _verify_and_commit pass must retry the
+        server commit — not report rolled_back."""
+        monkeypatch.setattr("station_agent.agent.get_current_version", lambda: "v2")
+        monkeypatch.setattr("station_agent.agent.get_bootloader", lambda _cfg: "grub")
+        monkeypatch.setattr(
+            "station_agent.agent.get_env",
+            lambda _bl, key: {"upgrade_available": "0", "bootcount": "0"}.get(key),
+        )
+        monkeypatch.setattr(
+            "station_agent.agent.run_health_checks",
+            lambda **kw: (True, ["Network OK"]),
+        )
+        commit_boot_called = []
+        monkeypatch.setattr(
+            "station_agent.agent.commit_boot",
+            lambda *a, **kw: commit_boot_called.append(True) or True,
+        )
+
+        client = _FakeHttpClient()
+        agent = StationAgent()
+        agent._verify_and_commit(_FakeConfig(), client, result_pk=7, version="v2")
+
+        # No rolled_back status — went through to commit_boot.
+        status_sequence = [u["json_data"]["status"] for u in client.status_updates]
+        assert "rolled_back" not in status_sequence
         assert commit_boot_called == [True]
 
 
