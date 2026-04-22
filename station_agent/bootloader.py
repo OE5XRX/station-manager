@@ -28,15 +28,23 @@ GRUB_ENV_TOOL = "grub-editenv"
 _CMDLINE_PATTERN = re.compile(r"root=PARTLABEL=root_([ab])\b")
 
 
+_ENV_TOOL_TIMEOUT = 10
+
+
 def _run(cmd: list[str]) -> bool:
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(
+            cmd, check=True, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT
+        )
         return True
     except FileNotFoundError:
         logger.error("Command not found: %s", cmd[0])
         return False
     except subprocess.CalledProcessError as exc:
         logger.error("%s failed (rc=%d): %s", cmd[0], exc.returncode, exc.stderr.strip())
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("%s timed out after %ds", cmd[0], _ENV_TOOL_TIMEOUT)
         return False
 
 
@@ -103,33 +111,37 @@ def _slot_from_root_mount() -> str | None:
 
 
 def get_env(bootloader: str, key: str) -> str | None:
-    """Read a single bootloader env variable."""
+    """Read a single bootloader env variable.
+
+    Returns ``None`` if the env tool is missing, returns non-zero,
+    hangs past ``_ENV_TOOL_TIMEOUT``, or the key isn't set. A hang
+    here would block the verifying-state trial-flag guard in
+    ``_verify_and_commit`` and prevent the agent from ever reporting
+    ``rolled_back``/``failed``.
+    """
     if bootloader == "grub":
-        result = subprocess.run(
-            [GRUB_ENV_TOOL, GRUB_ENV_PATH, "list"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return None
-        for line in result.stdout.splitlines():
-            if line.startswith(f"{key}="):
-                return line.split("=", 1)[1]
-        return None
-
+        cmd = [GRUB_ENV_TOOL, GRUB_ENV_PATH, "list"]
     elif bootloader == "uboot":
-        result = subprocess.run(
-            [UBOOT_PRINT_TOOL, key],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return None
-        for line in result.stdout.splitlines():
-            if line.startswith(f"{key}="):
-                return line.split("=", 1)[1]
+        cmd = [UBOOT_PRINT_TOOL, key]
+    else:
         return None
 
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT
+        )
+    except FileNotFoundError:
+        logger.error("Command not found: %s", cmd[0])
+        return None
+    except subprocess.TimeoutExpired:
+        logger.error("%s timed out after %ds reading %s", cmd[0], _ENV_TOOL_TIMEOUT, key)
+        return None
+
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
     return None
 
 

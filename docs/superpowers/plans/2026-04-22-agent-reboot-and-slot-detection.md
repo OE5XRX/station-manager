@@ -697,7 +697,10 @@ and the health checks. Both oe5xrx-grub.cfg and boot.cmd clear
 upgrade_available to 0 when they swap back after bootcount >
 bootlimit, so reading it post-reboot is a reliable signal. None
 from get_env (unreadable env) also triggers rolled_back — fail
-closed on incomplete state is better than committing blind.
+closed on incomplete state is better than committing blind. The
+get_env + _run helpers cap each subprocess call at 10s (timeout
++ TimeoutExpired handling) so a wedged grub-editenv / fw_printenv
+can't strand the agent in VERIFYING forever.
 
 Three new tests cover: upgrade_available=0 rolls back,
 upgrade_available missing rolls back, upgrade_available=1 with

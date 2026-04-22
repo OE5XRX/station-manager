@@ -7,6 +7,8 @@ kernel cmdline, so one regex handles both.
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from station_agent import bootloader
@@ -163,3 +165,58 @@ class TestApplyUpdatePropagatesSlotError:
 
         with pytest.raises(RuntimeError, match="cannot determine active slot"):
             ota.apply_update(_FakeConfig(), str(firmware))
+
+
+class TestEnvToolTimeouts:
+    """A wedged grub-editenv / fw_printenv / fw_setenv must not hang
+    the agent. The trial-flag guard in ``_verify_and_commit`` calls
+    ``get_env`` synchronously, and ``_run`` is on the commit path —
+    either blocking indefinitely would leave the agent in VERIFYING
+    forever without ever reporting ``rolled_back``/``failed``.
+    """
+
+    def test_get_env_grub_timeout_returns_none(self, monkeypatch):
+        def timeout_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 10))
+
+        monkeypatch.setattr(bootloader.subprocess, "run", timeout_run)
+        assert bootloader.get_env("grub", "bootcount") is None
+
+    def test_get_env_uboot_timeout_returns_none(self, monkeypatch):
+        def timeout_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 10))
+
+        monkeypatch.setattr(bootloader.subprocess, "run", timeout_run)
+        assert bootloader.get_env("uboot", "upgrade_available") is None
+
+    def test_get_env_missing_tool_returns_none(self, monkeypatch):
+        def missing(cmd, **kwargs):
+            raise FileNotFoundError(cmd[0])
+
+        monkeypatch.setattr(bootloader.subprocess, "run", missing)
+        assert bootloader.get_env("grub", "bootcount") is None
+
+    def test_get_env_passes_timeout_kwarg(self, monkeypatch):
+        """Regression guard: if someone drops the ``timeout=`` kwarg
+        on the subprocess call, this test fails loudly rather than
+        silently reintroducing the hang."""
+        seen = {}
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+
+        def spy(cmd, **kwargs):
+            seen["kwargs"] = kwargs
+            return _Result()
+
+        monkeypatch.setattr(bootloader.subprocess, "run", spy)
+        bootloader.get_env("grub", "bootcount")
+        assert seen["kwargs"].get("timeout") == bootloader._ENV_TOOL_TIMEOUT
+
+    def test_run_timeout_returns_false(self, monkeypatch):
+        def timeout_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 10))
+
+        monkeypatch.setattr(bootloader.subprocess, "run", timeout_run)
+        assert bootloader._run(["grub-editenv", "/boot/x", "set", "a=b"]) is False

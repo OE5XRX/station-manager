@@ -269,6 +269,7 @@ find no `*.wic.bz2` files and the glob is a no-op.
 | Reboot queued but inhibited (5-minute shutdown wait times out) | N/A. | Report `failed` with "reboot was likely inhibited" message. Operator sees the station stuck on "rebooting" and can check for systemd inhibitors or failing service-shutdown ordering. |
 | Bootloader rolled back (same version in both slots) | Version check passes, commit succeeds — undetected. | `upgrade_available=0` guard triggers `rolled_back`, server records it, station stays in a known-safe state. |
 | Bootloader env unreadable during verify | Version check passes, commit succeeds — state drift unnoticed. | `upgrade_available=None` → `rolled_back` with "env read failed" message. Fail closed. |
+| Bootloader env tool hangs (wedged `grub-editenv` / `fw_printenv` / `fw_setenv`, stuck `/boot` I/O) | Agent blocks indefinitely in VERIFYING; server never sees a terminal status. | `get_env` and `_run` wrap `subprocess.run` with `timeout=10` + `TimeoutExpired` handling. `get_env` returns `None` on timeout (hits the `upgrade_available != "1"` guard → `rolled_back`); `_run` returns `False` (caller reports `failed`). |
 
 ## Tests
 
