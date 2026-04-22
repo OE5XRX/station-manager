@@ -87,11 +87,13 @@ class StationAgent:
         safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", version) or "image"
         dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.rootfs.bz2")
 
-        # One-time sweep: old agents used `.wic.bz2` as the suffix.
-        # After the server-side switch to rootfs artifacts (PR #28) any
-        # such partial left in download_dir is unreachable (the new
-        # filename can't match it) and would accumulate forever. Purge
-        # once; steady state has none.
+        # Legacy-partial sweep: old agents used `.wic.bz2` as the
+        # suffix. After the server-side switch to rootfs artifacts
+        # (PR #28) any such partial left in download_dir is
+        # unreachable (the new filename can't match it) and would
+        # accumulate forever. The glob runs on every _handle_ota
+        # call; steady state has nothing to remove and the readdir
+        # is free.
         import glob as _glob
 
         for stale in _glob.glob(os.path.join(config.download_dir, "firmware-*.wic.bz2")):
@@ -164,9 +166,14 @@ class StationAgent:
         # block the reboot itself.
         report_status(config, http_client, result_pk, "rebooting")
 
-        # Real reboot. After this call succeeds the agent process is
-        # killed by systemd before the line below it runs;
-        # _verify_and_commit then fires on the next boot via the
+        # Real reboot. systemctl queues the reboot with systemd and
+        # returns 0 immediately — we are not killed until systemd
+        # tears down services (typically a few seconds later). We
+        # must not return here: the heartbeat loop's next check would
+        # hit the post-reboot-recovery path BEFORE the reboot
+        # actually happened and verify against the still-running-old
+        # rootfs. Block on the shutdown event until systemd signals
+        # us. _verify_and_commit then fires on the NEXT boot via the
         # post-reboot-recovery path at the top of _handle_ota
         # (deployment_result_status in {"rebooting", "verifying"}).
         try:
@@ -185,15 +192,26 @@ class StationAgent:
             )
             return
 
-        # Safety net: systemctl returned 0 without rebooting (unusual,
-        # but not impossible on non-standard init configurations).
-        logger.error("systemctl reboot returned without rebooting")
+        logger.info("Reboot queued — waiting for systemd shutdown signal")
+        # Block for up to 5 minutes. SIGTERM from systemd sets the
+        # shutdown event → wait returns True → normal shutdown path.
+        # If 5 minutes pass with the process still alive, something
+        # went wrong (inhibitor, systemd stuck, ...) — report FAILED
+        # so the operator sees the station stuck on "rebooting"
+        # isn't actually going to reboot.
+        if self._shutdown.wait(timeout=300):
+            return
+
+        logger.error("Reboot queued 5 minutes ago but shutdown signal never came")
         report_status(
             config,
             http_client,
             result_pk,
             "failed",
-            error_message="systemctl reboot returned without rebooting",
+            error_message=(
+                "Reboot queued via systemctl but shutdown signal never "
+                "arrived within 5 minutes — reboot was likely inhibited."
+            ),
         )
 
     def _verify_and_commit(self, config, http_client, result_pk, version):
@@ -249,7 +267,21 @@ class StationAgent:
         # bootloader didn't swap back). None also means rolled_back
         # — env read failed and we refuse to commit blind.
         bl = get_bootloader(config)
-        upgrade_available = get_env(bl, "upgrade_available")
+        try:
+            upgrade_available = get_env(bl, "upgrade_available")
+        except OSError as exc:
+            # get_env can raise FileNotFoundError if the bootloader
+            # tool (grub-editenv / fw_printenv) isn't installed, or
+            # PermissionError if we can't read the env blob. Either
+            # way, we can't verify the trial is still armed — fail
+            # closed to None so the downstream check refuses to
+            # commit.
+            logger.warning(
+                "Failed to read bootloader env for deployment %s: %s",
+                result_pk,
+                exc,
+            )
+            upgrade_available = None
         if upgrade_available != "1":
             report_status(
                 config,

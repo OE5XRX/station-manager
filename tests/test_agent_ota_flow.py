@@ -1,9 +1,11 @@
 """Unit tests for the agent's OTA orchestration — _verify_and_commit's
 post-reboot guards and _handle_ota's reboot transition.
 
-_verify_and_commit is called both inline from a fresh install
-(pre-reboot code path, soon to go away) and from the post-reboot
-recovery path. The upgrade_available guard must work in both.
+_handle_ota no longer calls _verify_and_commit inline from the fresh
+install path; it reboots instead and verify-and-commit fires only via
+the post-reboot recovery path at the top of _handle_ota
+(deployment_result_status in {"rebooting", "verifying"}). The
+upgrade_available guard must enforce rolled_back there.
 """
 
 from __future__ import annotations
@@ -173,35 +175,27 @@ class TestHandleOtaRebootTransition:
         monkeypatch.setattr("station_agent.agent.subprocess.run", fake_run)
 
         agent = StationAgent()
+        # Pre-set the shutdown event so the post-reboot wait returns
+        # immediately — simulates systemd signalling shutdown promptly
+        # after systemctl reboot queued the restart.
+        agent._shutdown.set()
 
         class _Cfg:
             download_dir = "/tmp/station-agent"
             server_url = "http://localhost"
 
-        # Need a minimal http_client fake — _handle_ota just hands
-        # it to report_status/download_firmware_resumable, both
-        # monkeypatched above.
         agent._handle_ota(_Cfg(), object())
 
         # systemctl reboot was called exactly once.
         assert run_args, "subprocess.run was never called"
         assert run_args[0][0] == ("systemctl", "reboot")
 
-        # 'rebooting' was reported *before* the reboot call.
-        # After fake_run returns (simulating the unusual case where
-        # systemctl returns without rebooting), the safety-net path
-        # appends 'failed' — so "rebooting" is not the final status,
-        # but it must appear before "failed".
+        # 'rebooting' was reported. No 'failed' should follow on the
+        # happy path — the safety-net only fires if the shutdown event
+        # times out.
         status_sequence = [s for _pk, s in calls["status_updates"]]
-        assert "rebooting" in status_sequence
-        reboot_idx = status_sequence.index("rebooting")
-        # Everything before "rebooting" must not be "rebooting" (it
-        # appears exactly once before the reboot call).
-        assert reboot_idx > 0, "rebooting must come after downloading/installing"
-        # The safety-net 'failed' fires after subprocess.run returns —
-        # confirm rebooting precedes it.
-        assert status_sequence.index("rebooting") < len(status_sequence) - 1
-        assert status_sequence[-1] == "failed"
+        assert status_sequence[-1] == "rebooting"
+        assert "failed" not in status_sequence
 
     def test_handle_ota_does_not_call_verify_inline(self, monkeypatch):
         calls = {}
@@ -212,6 +206,9 @@ class TestHandleOtaRebootTransition:
         )
 
         agent = StationAgent()
+        # Pre-set shutdown so the post-reboot wait returns immediately
+        # instead of blocking the test suite for 5 minutes.
+        agent._shutdown.set()
 
         class _Cfg:
             download_dir = "/tmp/station-agent"
@@ -240,6 +237,47 @@ class TestHandleOtaRebootTransition:
 
         # Status sequence: rebooting (first, optimistic), then failed
         # after the reboot call raised.
+        status_sequence = [s for _pk, s in calls["status_updates"]]
+        assert status_sequence[-1] == "failed"
+
+    def test_handle_ota_reports_failed_when_reboot_times_out(self, monkeypatch):
+        """If systemctl returns 0 but systemd never signals shutdown
+        within the timeout, report FAILED so the operator sees the
+        station stuck on 'rebooting' isn't actually going to reboot."""
+        calls = {}
+        self._wire_successful_install(monkeypatch, calls)
+
+        monkeypatch.setattr(
+            "station_agent.agent.subprocess.run",
+            lambda argv, **kw: type("CP", (), {"returncode": 0})(),
+        )
+
+        class _TimeoutEvent:
+            """Emulates threading.Event.wait returning False (timeout).
+            We don't actually sleep 5 minutes — we just tell the wait
+            it hit the timeout."""
+
+            def set(self):
+                pass
+
+            def clear(self):
+                pass
+
+            def is_set(self):
+                return False
+
+            def wait(self, timeout=None):
+                return False
+
+        agent = StationAgent()
+        agent._shutdown = _TimeoutEvent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        agent._handle_ota(_Cfg(), object())
+
         status_sequence = [s for _pk, s in calls["status_updates"]]
         assert status_sequence[-1] == "failed"
 
@@ -291,6 +329,8 @@ class TestDestPathAndLegacySweep:
             server_url = "http://localhost"
 
         agent = StationAgent()
+        # Pre-set shutdown so the post-reboot wait returns immediately.
+        agent._shutdown.set()
         agent._handle_ota(_Cfg(), object())
 
         assert captured["dest_path"].endswith(".rootfs.bz2")
@@ -338,6 +378,8 @@ class TestDestPathAndLegacySweep:
             server_url = "http://localhost"
 
         agent = StationAgent()
+        # Pre-set shutdown so the post-reboot wait returns immediately.
+        agent._shutdown.set()
         agent._handle_ota(_Cfg(), object())
 
         assert not legacy.exists(), "legacy .wic.bz2 partial was not removed"
