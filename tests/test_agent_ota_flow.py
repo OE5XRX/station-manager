@@ -242,3 +242,103 @@ class TestHandleOtaRebootTransition:
         # after the reboot call raised.
         status_sequence = [s for _pk, s in calls["status_updates"]]
         assert status_sequence[-1] == "failed"
+
+
+class TestDestPathAndLegacySweep:
+    """The download artifact is the extracted rootfs (not the full
+    wic) since server-side PR #28. The local filename needs to match
+    what's actually there, and any legacy .wic.bz2 partials in the
+    download dir get purged once so they don't accumulate."""
+
+    def test_dest_path_uses_rootfs_suffix(self, monkeypatch, tmp_path):
+        download_dir = tmp_path / "station-agent"
+        download_dir.mkdir()
+        captured = {}
+
+        monkeypatch.setattr(
+            "station_agent.agent.check_for_update",
+            lambda cfg, http: {
+                "deployment_result_id": 42,
+                "download_url": "/api/v1/deployments/99/download/",
+                "target_tag": "v2",
+                "checksum_sha256": "a" * 64,
+                "size_bytes": 1,
+                "deployment_result_status": "pending",
+            },
+        )
+        monkeypatch.setattr("station_agent.agent.report_status", lambda *a, **kw: None)
+
+        def fake_download(**kw):
+            captured["dest_path"] = kw["dest_path"]
+            return True
+
+        monkeypatch.setattr("station_agent.agent.download_firmware_resumable", fake_download)
+        monkeypatch.setattr("station_agent.agent.apply_update", lambda cfg, path: True)
+        monkeypatch.setattr(
+            "station_agent.agent.subprocess.run",
+            lambda argv, **kw: type("CP", (), {"returncode": 0})(),
+        )
+        monkeypatch.setattr(
+            StationAgent,
+            "_verify_and_commit",
+            lambda *a, **kw: None,
+        )
+
+        _download_dir_str = str(download_dir)
+
+        class _Cfg:
+            download_dir = _download_dir_str
+            server_url = "http://localhost"
+
+        agent = StationAgent()
+        agent._handle_ota(_Cfg(), object())
+
+        assert captured["dest_path"].endswith(".rootfs.bz2")
+        assert "wic.bz2" not in captured["dest_path"]
+
+    def test_legacy_wic_partials_are_swept_before_download(self, monkeypatch, tmp_path):
+        download_dir = tmp_path / "station-agent"
+        download_dir.mkdir()
+        # Seed a legacy partial from the previous agent version.
+        legacy = download_dir / "firmware-v1.wic.bz2"
+        legacy.write_bytes(b"stale bytes")
+
+        # Any other unrelated file stays.
+        keep = download_dir / "other-file.txt"
+        keep.write_bytes(b"keep me")
+
+        monkeypatch.setattr(
+            "station_agent.agent.check_for_update",
+            lambda cfg, http: {
+                "deployment_result_id": 42,
+                "download_url": "/api/v1/deployments/99/download/",
+                "target_tag": "v2",
+                "checksum_sha256": "a" * 64,
+                "size_bytes": 1,
+                "deployment_result_status": "pending",
+            },
+        )
+        monkeypatch.setattr("station_agent.agent.report_status", lambda *a, **kw: None)
+        monkeypatch.setattr("station_agent.agent.download_firmware_resumable", lambda **kw: True)
+        monkeypatch.setattr("station_agent.agent.apply_update", lambda cfg, path: True)
+        monkeypatch.setattr(
+            "station_agent.agent.subprocess.run",
+            lambda argv, **kw: type("CP", (), {"returncode": 0})(),
+        )
+        monkeypatch.setattr(
+            StationAgent,
+            "_verify_and_commit",
+            lambda *a, **kw: None,
+        )
+
+        _download_dir_str = str(download_dir)
+
+        class _Cfg:
+            download_dir = _download_dir_str
+            server_url = "http://localhost"
+
+        agent = StationAgent()
+        agent._handle_ota(_Cfg(), object())
+
+        assert not legacy.exists(), "legacy .wic.bz2 partial was not removed"
+        assert keep.exists(), "unrelated file must stay"

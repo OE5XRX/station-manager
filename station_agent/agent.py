@@ -85,7 +85,21 @@ class StationAgent:
         # sloppy server could return a tag like "../" and turn dest_path
         # into a traversal outside download_dir.
         safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", version) or "image"
-        dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.wic.bz2")
+        dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.rootfs.bz2")
+
+        # One-time sweep: old agents used `.wic.bz2` as the suffix.
+        # After the server-side switch to rootfs artifacts (PR #28) any
+        # such partial left in download_dir is unreachable (the new
+        # filename can't match it) and would accumulate forever. Purge
+        # once; steady state has none.
+        import glob as _glob
+
+        for stale in _glob.glob(os.path.join(config.download_dir, "firmware-*.wic.bz2")):
+            try:
+                os.remove(stale)
+                logger.info("Removed legacy partial: %s", stale)
+            except OSError as exc:
+                logger.warning("Could not remove legacy partial %s: %s", stale, exc)
 
         if current_status != "installing":
             # Report downloading (idempotent — transitioning PENDING or
