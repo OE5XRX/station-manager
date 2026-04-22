@@ -177,18 +177,31 @@ class StationAgent:
         # post-reboot-recovery path at the top of _handle_ota
         # (deployment_result_status in {"rebooting", "verifying"}).
         try:
-            subprocess.run(["systemctl", "reboot"], check=True)
+            subprocess.run(
+                ["systemctl", "reboot"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         except (OSError, subprocess.CalledProcessError) as exc:
             # No systemctl, permission denied, unit refused, etc. —
             # slot_b is written and armed but the switch didn't
-            # happen. Tell the server so the operator sees FAILED.
-            logger.error("Reboot failed: %s", exc)
+            # happen. capture_output=True on the successful path
+            # costs nothing (systemctl reboot is silent on success)
+            # but on failure lets us forward systemd's actual
+            # refusal reason (inhibitor name, polkit denial, unit
+            # stuck) through to the server so the operator can
+            # diagnose without ssh'ing to a brick.
+            stderr = getattr(exc, "stderr", None) or ""
+            logger.error("Reboot failed: %s%s", exc, f" — {stderr.strip()}" if stderr else "")
             report_status(
                 config,
                 http_client,
                 result_pk,
                 "failed",
-                error_message=f"Reboot call failed: {exc}",
+                error_message=(
+                    f"Reboot call failed: {exc}" + (f" — {stderr.strip()}" if stderr else "")
+                ),
             )
             return
 

@@ -184,10 +184,11 @@ except (OSError, subprocess.CalledProcessError) as exc:
     return
 
 # Block up to 5 minutes waiting for systemd to SIGTERM us. The
-# shutdown event is set by the signal handler in __init__. If we
-# reach the timeout still alive, the reboot was queued but never
-# happened (inhibitor, stuck service shutdown) — report FAILED so
-# the operator sees the station won't actually reboot.
+# shutdown event is set by the signal handlers registered in
+# StationAgent.run(). If we reach the timeout still alive, the
+# reboot was queued but never happened (inhibitor, stuck service
+# shutdown) — report FAILED so the operator sees the station won't
+# actually reboot.
 logger.info("Reboot queued — waiting for systemd shutdown signal")
 if self._shutdown.wait(timeout=300):
     return
