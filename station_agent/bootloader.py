@@ -75,12 +75,27 @@ def _slot_from_root_mount() -> str | None:
     """
     try:
         root_dev = os.stat("/").st_dev
-    except OSError:
+    except OSError as exc:
+        # Catastrophic — can't stat root means something deeper is
+        # broken. Log and fall through to the caller's RuntimeError
+        # so the context survives to the deployment error_message.
+        logger.error("Failed to stat / while detecting active slot: %s", exc)
         return None
     for slot in ("a", "b"):
+        partlabel_path = f"/dev/disk/by-partlabel/root_{slot}"
         try:
-            part = os.stat(f"/dev/disk/by-partlabel/root_{slot}")
-        except OSError:
+            part = os.stat(partlabel_path)
+        except FileNotFoundError:
+            # Expected on an image without that partition labelled.
+            continue
+        except OSError as exc:
+            # Unexpected — permission / I/O error. Log so the
+            # operator has context, then skip this slot.
+            logger.error(
+                "Failed to stat %s while detecting active slot: %s",
+                partlabel_path,
+                exc,
+            )
             continue
         if part.st_rdev == root_dev:
             return slot
