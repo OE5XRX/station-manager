@@ -184,13 +184,16 @@ def get_inactive_slot(bootloader: str) -> str:
 
 
 def commit_boot_local(bootloader: str) -> bool:
-    """Mark the current boot as successful (reset bootcount, clear trial)."""
+    """Mark the current boot as successful (reset bootcount, clear trial).
+
+    Both env writes go in a single tool invocation so a crash or power
+    loss between them cannot leave the station in a half-committed
+    state (e.g. ``bootcount=0`` but ``upgrade_available=1`` still set).
+    """
     logger.info("Committing boot on %s bootloader", bootloader)
 
     if bootloader == "grub":
-        return _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "bootcount=0"]) and _run(
-            [GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "upgrade_available=0"]
-        )
+        return _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "bootcount=0", "upgrade_available=0"])
 
     elif bootloader == "uboot":
         return _run([UBOOT_ENV_TOOL, "bootcount", "0", "upgrade_available", "0"])
@@ -201,7 +204,16 @@ def commit_boot_local(bootloader: str) -> bool:
 
 
 def set_upgrade_pending(bootloader: str, target_slot: str) -> bool:
-    """Set the bootloader to boot from target_slot on next reboot (trial mode)."""
+    """Set the bootloader to boot from target_slot on next reboot (trial mode).
+
+    All three env writes (``boot_part``, ``upgrade_available``,
+    ``bootcount``) go in a single tool invocation so a crash or power
+    loss between them cannot leave the station in an inconsistent
+    state (e.g. ``boot_part`` flipped but trial flags unset — the
+    station would boot into the new slot with no verify/rollback
+    path). ``bootcount`` is reset explicitly because normal reboots
+    increment it with no path to decrement.
+    """
     logger.info("Setting upgrade pending: slot=%s on %s", target_slot, bootloader)
 
     if target_slot not in ("a", "b"):
@@ -209,10 +221,15 @@ def set_upgrade_pending(bootloader: str, target_slot: str) -> bool:
         return False
 
     if bootloader == "grub":
-        return (
-            _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", f"boot_part={target_slot}"])
-            and _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "upgrade_available=1"])
-            and _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "bootcount=0"])
+        return _run(
+            [
+                GRUB_ENV_TOOL,
+                GRUB_ENV_PATH,
+                "set",
+                f"boot_part={target_slot}",
+                "upgrade_available=1",
+                "bootcount=0",
+            ]
         )
 
     elif bootloader == "uboot":
