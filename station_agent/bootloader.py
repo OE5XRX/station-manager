@@ -193,9 +193,7 @@ def commit_boot_local(bootloader: str) -> bool:
     logger.info("Committing boot on %s bootloader", bootloader)
 
     if bootloader == "grub":
-        return _run(
-            [GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "bootcount=0", "upgrade_available=0"]
-        )
+        return _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", "bootcount=0", "upgrade_available=0"])
 
     elif bootloader == "uboot":
         return _run([UBOOT_ENV_TOOL, "bootcount", "0", "upgrade_available", "0"])
