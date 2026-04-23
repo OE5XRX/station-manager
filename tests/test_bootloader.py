@@ -295,7 +295,11 @@ class TestEnvWritesAreAtomic:
         assert len(calls) == 1
         cmd = calls[0]
         assert cmd[0] == bootloader.UBOOT_ENV_TOOL
-        # fw_setenv takes alternating KEY VALUE positional args.
+        # fw_setenv takes alternating KEY VALUE positional args. The
+        # even-count assertion catches a future regression that sneaks
+        # in an unpaired trailing arg — zip would silently drop it and
+        # the pairs-equality check below would still pass.
+        assert (len(cmd) - 1) % 2 == 0, f"uboot cmd has odd arg count: {cmd}"
         pairs = dict(zip(cmd[1::2], cmd[2::2]))
         assert pairs == {"boot_part": "a", "upgrade_available": "1", "bootcount": "0"}
 
@@ -305,5 +309,6 @@ class TestEnvWritesAreAtomic:
         assert len(calls) == 1
         cmd = calls[0]
         assert cmd[0] == bootloader.UBOOT_ENV_TOOL
+        assert (len(cmd) - 1) % 2 == 0, f"uboot cmd has odd arg count: {cmd}"
         pairs = dict(zip(cmd[1::2], cmd[2::2]))
         assert pairs == {"bootcount": "0", "upgrade_available": "0"}
