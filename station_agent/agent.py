@@ -322,13 +322,14 @@ class StationAgent:
         try:
             upgrade_available = get_env(bl, "upgrade_available")
             bootcount = get_env(bl, "bootcount")
-        except PermissionError as exc:
-            # get_env already swallows missing-tool (FileNotFoundError)
-            # and hung-tool (TimeoutExpired) by returning None. What
-            # can still propagate is a PermissionError reading the env
-            # blob itself (e.g. /boot/EFI/BOOT/grubenv owned by root
-            # on a mis-provisioned image). Fail closed so we don't
-            # commit blind on an unreadable trial state.
+        except OSError as exc:
+            # Belt-and-suspenders: get_env now catches OSError
+            # (missing tool, non-executable, other spawn failures)
+            # and TimeoutExpired internally and returns None. This
+            # outer guard exists so any unforeseen OS-level failure
+            # while reading the env still fails closed instead of
+            # crashing _verify_and_commit — committing blind on an
+            # unknown trial state is worse than reporting rolled_back.
             logger.warning(
                 "Failed to read bootloader env for deployment %s: %s",
                 result_pk,

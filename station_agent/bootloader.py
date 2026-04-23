@@ -35,14 +35,19 @@ def _run(cmd: list[str]) -> bool:
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT)
         return True
-    except FileNotFoundError:
-        logger.error("Command not found: %s", cmd[0])
-        return False
     except subprocess.CalledProcessError as exc:
         logger.error("%s failed (rc=%d): %s", cmd[0], exc.returncode, exc.stderr.strip())
         return False
     except subprocess.TimeoutExpired:
         logger.error("%s timed out after %ds", cmd[0], _ENV_TOOL_TIMEOUT)
+        return False
+    except OSError as exc:
+        # Covers FileNotFoundError (tool missing), PermissionError
+        # (not executable), and any other spawn-time OS error. All
+        # must return False — letting them propagate would crash
+        # set_upgrade_pending / commit_boot_local and prevent
+        # _handle_ota from reporting FAILED.
+        logger.error("Failed to spawn %s: %s", cmd[0], exc)
         return False
 
 
@@ -126,11 +131,15 @@ def get_env(bootloader: str, key: str) -> str | None:
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT)
-    except FileNotFoundError:
-        logger.error("Command not found: %s", cmd[0])
-        return None
     except subprocess.TimeoutExpired:
         logger.error("%s timed out after %ds reading %s", cmd[0], _ENV_TOOL_TIMEOUT, key)
+        return None
+    except OSError as exc:
+        # Tool missing (FileNotFoundError), not executable
+        # (PermissionError), or any other spawn-time OS error. Treat
+        # the env as unreadable so the _verify_and_commit guard fails
+        # closed rather than crashing.
+        logger.error("Failed to spawn %s reading %s: %s", cmd[0], key, exc)
         return None
 
     if result.returncode != 0:

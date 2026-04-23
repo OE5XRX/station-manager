@@ -220,3 +220,28 @@ class TestEnvToolTimeouts:
 
         monkeypatch.setattr(bootloader.subprocess, "run", timeout_run)
         assert bootloader._run(["grub-editenv", "/boot/x", "set", "a=b"]) is False
+
+    def test_run_permission_error_returns_false(self, monkeypatch):
+        """If the env tool is present but not executable (wrong
+        perms / noexec mount / SELinux denial), ``subprocess.run``
+        raises ``PermissionError`` before the process even starts.
+        ``_run`` must return False, not let it crash
+        ``set_upgrade_pending`` / ``commit_boot_local`` — otherwise
+        ``_handle_ota`` can't report FAILED."""
+
+        def denied(cmd, **kwargs):
+            raise PermissionError(13, "Permission denied", cmd[0])
+
+        monkeypatch.setattr(bootloader.subprocess, "run", denied)
+        assert bootloader._run(["grub-editenv", "/boot/x", "set", "a=b"]) is False
+
+    def test_get_env_permission_error_returns_none(self, monkeypatch):
+        """Same scenario for the read path. ``get_env`` returns None
+        so the ``_verify_and_commit`` guard treats it as unreadable
+        and fails closed to rolled_back."""
+
+        def denied(cmd, **kwargs):
+            raise PermissionError(13, "Permission denied", cmd[0])
+
+        monkeypatch.setattr(bootloader.subprocess, "run", denied)
+        assert bootloader.get_env("grub", "bootcount") is None
