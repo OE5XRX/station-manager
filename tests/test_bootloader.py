@@ -245,3 +245,65 @@ class TestEnvToolTimeouts:
 
         monkeypatch.setattr(bootloader.subprocess, "run", denied)
         assert bootloader.get_env("grub", "bootcount") is None
+
+
+class TestEnvWritesAreAtomic:
+    """``set_upgrade_pending`` and ``commit_boot_local`` must write
+    all their keys in a single tool invocation. A crash or power loss
+    between writes would otherwise leave the station in a half-staged
+    trial state (e.g. ``boot_part`` flipped but ``upgrade_available``
+    still 0 — the station would boot the new slot with no verify or
+    rollback path).
+    """
+
+    def _capture_calls(self, monkeypatch):
+        calls = []
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def record(cmd, **kwargs):
+            calls.append(list(cmd))
+            return _Result()
+
+        monkeypatch.setattr(bootloader.subprocess, "run", record)
+        return calls
+
+    def test_set_upgrade_pending_grub_uses_single_call(self, monkeypatch):
+        calls = self._capture_calls(monkeypatch)
+        assert bootloader.set_upgrade_pending("grub", "b") is True
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert cmd[:3] == [bootloader.GRUB_ENV_TOOL, bootloader.GRUB_ENV_PATH, "set"]
+        # Order-independent — grub-editenv accepts multiple KEY=VALUE
+        # pairs in one invocation.
+        assert set(cmd[3:]) == {"boot_part=b", "upgrade_available=1", "bootcount=0"}
+
+    def test_commit_boot_local_grub_uses_single_call(self, monkeypatch):
+        calls = self._capture_calls(monkeypatch)
+        assert bootloader.commit_boot_local("grub") is True
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert cmd[:3] == [bootloader.GRUB_ENV_TOOL, bootloader.GRUB_ENV_PATH, "set"]
+        assert set(cmd[3:]) == {"bootcount=0", "upgrade_available=0"}
+
+    def test_set_upgrade_pending_uboot_uses_single_call(self, monkeypatch):
+        calls = self._capture_calls(monkeypatch)
+        assert bootloader.set_upgrade_pending("uboot", "a") is True
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert cmd[0] == bootloader.UBOOT_ENV_TOOL
+        # fw_setenv takes alternating KEY VALUE positional args.
+        pairs = dict(zip(cmd[1::2], cmd[2::2]))
+        assert pairs == {"boot_part": "a", "upgrade_available": "1", "bootcount": "0"}
+
+    def test_commit_boot_local_uboot_uses_single_call(self, monkeypatch):
+        calls = self._capture_calls(monkeypatch)
+        assert bootloader.commit_boot_local("uboot") is True
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert cmd[0] == bootloader.UBOOT_ENV_TOOL
+        pairs = dict(zip(cmd[1::2], cmd[2::2]))
+        assert pairs == {"bootcount": "0", "upgrade_available": "0"}
