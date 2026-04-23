@@ -317,6 +317,89 @@ class TestHandleOtaRebootTransition:
         status_sequence = [s for _pk, s in calls["status_updates"]]
         assert status_sequence[-1] == "failed"
 
+    def test_handle_ota_reports_failed_when_reboot_call_itself_times_out(self, monkeypatch):
+        """subprocess.TimeoutExpired from the systemctl call itself
+        (dbus hung before systemctl returned) is distinct from the
+        later 'shutdown never arrived' wait timeout. Both paths must
+        report FAILED — this test covers the inner subprocess branch,
+        the existing timeout test covers the outer wait branch."""
+        import subprocess as _sp
+
+        calls = {}
+        self._wire_successful_install(monkeypatch, calls)
+        # Override report_status so we can assert on error_message;
+        # the default helper drops it.
+        monkeypatch.setattr(
+            "station_agent.agent.report_status",
+            lambda cfg, http, pk, status, error_message="": calls.setdefault(
+                "status_updates", []
+            ).append((pk, status, error_message)),
+        )
+
+        def hanging_run(argv, **kw):
+            raise _sp.TimeoutExpired(cmd=argv, timeout=kw.get("timeout", 30))
+
+        monkeypatch.setattr("station_agent.agent.subprocess.run", hanging_run)
+
+        agent = StationAgent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        agent._handle_ota(_Cfg(), object())
+
+        status_sequence = [s for _pk, s, _err in calls["status_updates"]]
+        assert status_sequence[-1] == "failed"
+        # Error message must mention the timeout so the operator can
+        # distinguish this from the 'reboot was inhibited' wait branch.
+        last_error = [err for _pk, status, err in calls["status_updates"] if status == "failed"][
+            -1
+        ]
+        assert "timed out" in last_error.lower()
+
+    def test_handle_ota_reports_failed_when_reboot_returns_nonzero(self, monkeypatch):
+        """systemctl returning non-zero (unit refused, polkit denial,
+        inhibitor blocked) raises CalledProcessError under check=True.
+        Must report FAILED with systemd's stderr forwarded so the
+        operator can diagnose without ssh."""
+        import subprocess as _sp
+
+        calls = {}
+        self._wire_successful_install(monkeypatch, calls)
+        monkeypatch.setattr(
+            "station_agent.agent.report_status",
+            lambda cfg, http, pk, status, error_message="": calls.setdefault(
+                "status_updates", []
+            ).append((pk, status, error_message)),
+        )
+
+        def rejecting_run(argv, **kw):
+            raise _sp.CalledProcessError(
+                returncode=1,
+                cmd=argv,
+                stderr="Failed to set wall message, ignoring: Access denied",
+            )
+
+        monkeypatch.setattr("station_agent.agent.subprocess.run", rejecting_run)
+
+        agent = StationAgent()
+
+        class _Cfg:
+            download_dir = "/tmp/station-agent"
+            server_url = "http://localhost"
+
+        agent._handle_ota(_Cfg(), object())
+
+        status_sequence = [s for _pk, s, _err in calls["status_updates"]]
+        assert status_sequence[-1] == "failed"
+        # The captured stderr from systemctl must land in error_message
+        # so the operator sees the actual refusal reason.
+        last_error = [err for _pk, status, err in calls["status_updates"] if status == "failed"][
+            -1
+        ]
+        assert "Access denied" in last_error
+
     def test_handle_ota_forwards_apply_update_runtime_error_to_error_message(self, monkeypatch):
         """When apply_update raises RuntimeError (slot detection
         failed both runtime probes), _handle_ota must forward the

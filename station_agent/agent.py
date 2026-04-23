@@ -322,11 +322,13 @@ class StationAgent:
         try:
             upgrade_available = get_env(bl, "upgrade_available")
             bootcount = get_env(bl, "bootcount")
-        except OSError as exc:
-            # get_env can raise FileNotFoundError if the bootloader
-            # tool (grub-editenv / fw_printenv) isn't installed, or
-            # PermissionError if we can't read the env blob. Either
-            # way, we can't verify trial state — fail closed.
+        except PermissionError as exc:
+            # get_env already swallows missing-tool (FileNotFoundError)
+            # and hung-tool (TimeoutExpired) by returning None. What
+            # can still propagate is a PermissionError reading the env
+            # blob itself (e.g. /boot/EFI/BOOT/grubenv owned by root
+            # on a mis-provisioned image). Fail closed so we don't
+            # commit blind on an unreadable trial state.
             logger.warning(
                 "Failed to read bootloader env for deployment %s: %s",
                 result_pk,
