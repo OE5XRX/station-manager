@@ -1,9 +1,9 @@
 """OTA update client for the Station Agent.
 
 Handles checking for updates, downloading firmware (resumable, opaque
-URL), reporting status, stream-decompressing the .wic.bz2 into the
-inactive rootfs partition (install_to_slot), arming the bootloader for
-a trial boot, and committing successful boots.
+URL), reporting status, stream-decompressing the bz2-compressed rootfs
+into the inactive rootfs partition (install_to_slot), arming the
+bootloader for a trial boot, and committing successful boots.
 """
 
 import bz2
@@ -400,17 +400,32 @@ def commit_boot(config, http_client: HttpClient, version: str) -> bool:
 def apply_update(config, firmware_path: str) -> bool:
     """Apply a firmware update to the inactive partition.
 
-    Stream-decompresses the downloaded `.wic.bz2` into the inactive
+    Stream-decompresses the downloaded `.rootfs.bz2` into the inactive
     root partition, then arms the bootloader for a trial boot.
 
     Args:
         config: AgentConfig instance.
-        firmware_path: Path to the downloaded .wic.bz2 file.
+        firmware_path: Path to the downloaded .rootfs.bz2 file (a bz2-compressed
+            ext4 rootfs image).
 
     Returns:
-        True if the update was applied successfully.
+        True if the update was applied successfully; False on
+        survivable failures (inactive-partition device missing,
+        bz2 stream corrupt, bootloader set_upgrade_pending failed).
+
+    Raises:
+        RuntimeError: when slot detection fails (both /proc/cmdline
+            and root-mount probes unresolved). Callers are expected
+            to catch this and report FAILED with the exception text
+            — see agent._handle_ota.
     """
     bl = get_bootloader(config)
+    # Let RuntimeError from get_active_slot/get_inactive_slot propagate.
+    # agent._handle_ota catches it and forwards the message into the
+    # server-visible error_message — otherwise the operator sees only
+    # the generic "Failed to write firmware..." for what's really a
+    # slot-detection failure, and has to ssh in to find the real
+    # reason in journalctl.
     target_slot = get_inactive_slot(bl)
     target_dev = f"/dev/disk/by-partlabel/root_{target_slot}"
 
@@ -434,7 +449,7 @@ def apply_update(config, firmware_path: str) -> bool:
 
 
 def install_to_slot(wic_bz2_path, partition_device: str) -> None:
-    """Stream-decompress a .wic.bz2 into a block device.
+    """Stream-decompress a .rootfs.bz2 into a block device.
 
     `partition_device` is e.g. "/dev/sda4". The caller is responsible
     for making sure this is the inactive slot — typically derived via
