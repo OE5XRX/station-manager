@@ -1,9 +1,9 @@
 """OTA update client for the Station Agent.
 
 Handles checking for updates, downloading firmware (resumable, opaque
-URL), reporting status, stream-decompressing the .wic.bz2 into the
-inactive rootfs partition (install_to_slot), arming the bootloader for
-a trial boot, and committing successful boots.
+URL), reporting status, stream-decompressing the bz2-compressed rootfs
+into the inactive rootfs partition (install_to_slot), arming the
+bootloader for a trial boot, and committing successful boots.
 """
 
 import bz2
@@ -400,17 +400,32 @@ def commit_boot(config, http_client: HttpClient, version: str) -> bool:
 def apply_update(config, firmware_path: str) -> bool:
     """Apply a firmware update to the inactive partition.
 
-    Stream-decompresses the downloaded `.wic.bz2` into the inactive
+    Stream-decompresses the downloaded `.rootfs.bz2` into the inactive
     root partition, then arms the bootloader for a trial boot.
 
     Args:
         config: AgentConfig instance.
-        firmware_path: Path to the downloaded .wic.bz2 file.
+        firmware_path: Path to the downloaded .rootfs.bz2 file (a bz2-compressed
+            ext4 rootfs image).
 
     Returns:
-        True if the update was applied successfully.
+        True if the update was applied successfully; False on
+        survivable failures (inactive-partition device missing,
+        bz2 stream corrupt, bootloader set_upgrade_pending failed).
+
+    Raises:
+        RuntimeError: when slot detection fails (both /proc/cmdline
+            and root-mount probes unresolved). Callers are expected
+            to catch this and report FAILED with the exception text
+            — see agent._handle_ota.
     """
     bl = get_bootloader(config)
+    # Let RuntimeError from get_active_slot/get_inactive_slot propagate.
+    # agent._handle_ota catches it and forwards the message into the
+    # server-visible error_message — otherwise the operator sees only
+    # the generic "Failed to write firmware..." for what's really a
+    # slot-detection failure, and has to ssh in to find the real
+    # reason in journalctl.
     target_slot = get_inactive_slot(bl)
     target_dev = f"/dev/disk/by-partlabel/root_{target_slot}"
 
@@ -434,33 +449,50 @@ def apply_update(config, firmware_path: str) -> bool:
 
 
 def install_to_slot(wic_bz2_path, partition_device: str) -> None:
-    """Stream-decompress a .wic.bz2 into a block device.
+    """Stream-decompress a .rootfs.bz2 into a block device.
 
     `partition_device` is e.g. "/dev/sda4". The caller is responsible
     for making sure this is the inactive slot — typically derived via
     bootloader.get_inactive_slot() + a machine-specific slot→device map.
 
+    Uses ``bz2.open()`` rather than a manual ``BZ2Decompressor`` loop so
+    multi-stream bz2 files (e.g. produced by ``pbzip2`` or Yocto's
+    parallel compression paths) decompress correctly — the old manual
+    loop raised ``EOFError: End of stream already reached`` as soon as
+    it tried to feed more bytes into the decompressor after the first
+    stream ended. ``BZ2File`` handles both multi-stream and trailing
+    padding the same way the ``bunzip2`` CLI does.
+
     Raises OSError on I/O failure.
-    Raises ValueError if the bz2 stream is truncated (decompressor did
-    not reach EOF) — writing a partial image to a boot slot would
-    silently brick the next boot, so fail loud.
+    Raises ValueError if the bz2 stream is truncated or corrupt —
+    writing a partial image to a boot slot would silently brick the
+    next boot, so fail loud.
     """
-    decomp = bz2.BZ2Decompressor()
-    with open(str(wic_bz2_path), "rb") as src:
-        fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
-        try:
+    fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+    try:
+        with bz2.open(str(wic_bz2_path), "rb") as src:
             while True:
-                chunk = _stream_read(src, _STREAM_CHUNK)
+                # Narrow the translation to the decompression read only.
+                # BZ2File signals truncation as EOFError and a corrupt
+                # data stream as OSError *without* errno (e.g. "Invalid
+                # data stream"). A real I/O error on the backing file
+                # during read (EIO / ESTALE / EBADF / ...) also surfaces
+                # as OSError, but *with* errno set — those must keep
+                # propagating as OSError so the documented "Raises
+                # OSError on I/O failure" contract still holds. Only
+                # the former two classes mean "bad firmware artifact"
+                # and get translated to ValueError.
+                try:
+                    chunk = _stream_read(src, _STREAM_CHUNK)
+                except EOFError as exc:
+                    raise ValueError(f"bz2 stream in {wic_bz2_path} is truncated: {exc}") from exc
+                except OSError as exc:
+                    if exc.errno is not None:
+                        raise
+                    raise ValueError(f"bz2 stream in {wic_bz2_path} is corrupt: {exc}") from exc
                 if not chunk:
                     break
-                decompressed = decomp.decompress(chunk)
-                if decompressed:
-                    _write_all(fd, decompressed)
-            if not decomp.eof:
-                raise ValueError(
-                    f"bz2 stream in {wic_bz2_path} is truncated: "
-                    "decompressor did not reach end-of-stream"
-                )
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+                _write_all(fd, chunk)
+        os.fsync(fd)
+    finally:
+        os.close(fd)

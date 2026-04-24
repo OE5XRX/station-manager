@@ -4,13 +4,16 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 import threading
 
+from .bootloader import get_bootloader, get_env
 from .config import load_config
 from .health_check import run_health_checks
 from .heartbeat import send_heartbeat
 from .http_client import HttpClient
+from .inventory import get_current_version
 from .ota import (
     apply_update,
     check_for_update,
@@ -82,7 +85,23 @@ class StationAgent:
         # sloppy server could return a tag like "../" and turn dest_path
         # into a traversal outside download_dir.
         safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", version) or "image"
-        dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.wic.bz2")
+        dest_path = os.path.join(config.download_dir, f"firmware-{safe_version}.rootfs.bz2")
+
+        # Legacy-partial sweep: old agents used `.wic.bz2` as the
+        # suffix. After the server-side switch to rootfs artifacts
+        # (PR #28) any such partial left in download_dir is
+        # unreachable (the new filename can't match it) and would
+        # accumulate forever. The glob runs on every _handle_ota
+        # call; steady state has nothing to remove and the readdir
+        # is free.
+        import glob as _glob
+
+        for stale in _glob.glob(os.path.join(config.download_dir, "firmware-*.wic.bz2")):
+            try:
+                os.remove(stale)
+                logger.info("Removed legacy partial: %s", stale)
+            except OSError as exc:
+                logger.warning("Could not remove legacy partial %s: %s", stale, exc)
 
         if current_status != "installing":
             # Report downloading (idempotent — transitioning PENDING or
@@ -132,7 +151,23 @@ class StationAgent:
         # Report installing
         report_status(config, http_client, result_pk, "installing")
 
-        if not apply_update(config, dest_path):
+        try:
+            install_ok = apply_update(config, dest_path)
+        except RuntimeError as exc:
+            # Slot-detection fail-closed path (both /proc/cmdline and
+            # root-mount probes unresolved). Forward the specific reason
+            # into the server-visible error_message so the operator can
+            # diagnose without needing local logs.
+            logger.error("Install aborted: %s", exc)
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "failed",
+                error_message=f"Install aborted: {exc}",
+            )
+            return
+        if not install_ok:
             report_status(
                 config,
                 http_client,
@@ -142,13 +177,94 @@ class StationAgent:
             )
             return
 
-        # Report rebooting (in production, the device would reboot here)
+        # Report rebooting first so the server knows the station is
+        # going down intentionally; a failed report here must not
+        # block the reboot itself.
         report_status(config, http_client, result_pk, "rebooting")
-        logger.info("OTA update applied. In production, device would reboot now.")
 
-        # Since we are not actually rebooting, run verification immediately.
-        # In production, this would happen on the next boot.
-        self._verify_and_commit(config, http_client, result_pk, version)
+        # Real reboot. systemctl queues the reboot with systemd and
+        # returns 0 immediately — we are not killed until systemd
+        # tears down services (typically a few seconds later). We
+        # must not return here: the heartbeat loop's next check would
+        # hit the post-reboot-recovery path BEFORE the reboot
+        # actually happened and verify against the still-running-old
+        # rootfs. Block on the shutdown event until systemd signals
+        # us. _verify_and_commit then fires on the NEXT boot via the
+        # post-reboot-recovery path at the top of _handle_ota
+        # (deployment_result_status in {"rebooting", "verifying"}).
+        try:
+            subprocess.run(
+                ["systemctl", "reboot"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # systemctl/dbus hung. The station would otherwise sit in
+            # "rebooting" state indefinitely.
+            stderr = getattr(exc, "stderr", None) or ""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            logger.error(
+                "Reboot command timed out after %ss%s",
+                exc.timeout,
+                f" — {stderr.strip()}" if stderr else "",
+            )
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "failed",
+                error_message=(
+                    f"Reboot call timed out after {exc.timeout}s"
+                    + (f" — {stderr.strip()}" if stderr else "")
+                ),
+            )
+            return
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # No systemctl, permission denied, unit refused, etc. —
+            # slot_b is written and armed but the switch didn't
+            # happen. capture_output=True on the successful path
+            # costs nothing (systemctl reboot is silent on success)
+            # but on failure lets us forward systemd's actual
+            # refusal reason (inhibitor name, polkit denial, unit
+            # stuck) through to the server so the operator can
+            # diagnose without ssh'ing to a brick.
+            stderr = getattr(exc, "stderr", None) or ""
+            logger.error("Reboot failed: %s%s", exc, f" — {stderr.strip()}" if stderr else "")
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "failed",
+                error_message=(
+                    f"Reboot call failed: {exc}" + (f" — {stderr.strip()}" if stderr else "")
+                ),
+            )
+            return
+
+        logger.info("Reboot queued — waiting for systemd shutdown signal")
+        # Block for up to 5 minutes. SIGTERM from systemd sets the
+        # shutdown event → wait returns True → normal shutdown path.
+        # If 5 minutes pass with the process still alive, something
+        # went wrong (inhibitor, systemd stuck, ...) — report FAILED
+        # so the operator sees the station stuck on "rebooting"
+        # isn't actually going to reboot.
+        if self._shutdown.wait(timeout=300):
+            return
+
+        logger.error("Reboot queued 5 minutes ago but shutdown signal never came")
+        report_status(
+            config,
+            http_client,
+            result_pk,
+            "failed",
+            error_message=(
+                "Reboot queued via systemctl but shutdown signal never "
+                "arrived within 5 minutes — reboot was likely inhibited."
+            ),
+        )
 
     def _verify_and_commit(self, config, http_client, result_pk, version):
         """Run health checks and commit or roll back the update."""
@@ -159,8 +275,6 @@ class StationAgent:
         # running may be the old slot. Health checks alone don't
         # distinguish the two, so confirm /etc/os-release matches the
         # target tag before accepting "committed".
-        from .inventory import get_current_version
-
         running_version = get_current_version()
         if not running_version:
             # /etc/os-release doesn't expose OE5XRX_RELEASE — we cannot
@@ -193,6 +307,81 @@ class StationAgent:
                 "Refusing to commit: running %s but deployment target is %s",
                 running_version,
                 version,
+            )
+            return
+
+        # Trial-flag guard: both oe5xrx-grub.cfg and boot.cmd clear
+        # upgrade_available to 0 when they roll back after
+        # bootcount > bootlimit. Reading it post-reboot catches the
+        # same-version-redeploy blind spot the version check above
+        # cannot see (both slots return the same /etc/os-release
+        # tag, so running_version == target is not a proof the
+        # bootloader didn't swap back). None also means rolled_back
+        # — env read failed and we refuse to commit blind.
+        bl = get_bootloader(config)
+        try:
+            upgrade_available = get_env(bl, "upgrade_available")
+            bootcount = get_env(bl, "bootcount")
+        except OSError as exc:
+            # Belt-and-suspenders: get_env now catches OSError
+            # (missing tool, non-executable, other spawn failures)
+            # and TimeoutExpired internally and returns None. This
+            # outer guard exists so any unforeseen OS-level failure
+            # while reading the env still fails closed instead of
+            # crashing _verify_and_commit — committing blind on an
+            # unknown trial state is worse than reporting rolled_back.
+            logger.warning(
+                "Failed to read bootloader env for deployment %s: %s",
+                result_pk,
+                exc,
+            )
+            upgrade_available = None
+            bootcount = None
+
+        # Three cases, distinguished by the (upgrade_available, bootcount)
+        # pair that commit_boot_local and the bootloader's rollback path
+        # write:
+        #   "1", any      -> trial active, proceed to commit.
+        #   "0", "0"      -> local commit already ran on a prior
+        #                    _verify_and_commit pass (commit_boot_local
+        #                    sets both to "0") AND no reboot happened
+        #                    since (bootloader increments bootcount on
+        #                    every boot). Server POST must have failed
+        #                    transiently — retry commit_boot (idempotent
+        #                    at the local level).
+        #   "0", anything else -> bootloader rolled us back
+        #                         (boot.cmd / oe5xrx-grub.cfg set
+        #                         bootcount=1 on their rollback branch).
+        #   None, any     -> env unreadable; fail closed.
+        #
+        # Known limitation: a reboot between local commit and server-commit
+        # retry moves bootcount to >=1 and this guard would then misclassify
+        # as rolled_back. Persistent commit marker is tracked as a follow-up.
+        if upgrade_available == "1":
+            pass  # trial active, normal path
+        elif upgrade_available == "0" and bootcount == "0":
+            logger.info(
+                "Detected prior local commit for deployment %s "
+                "(upgrade_available=0, bootcount=0); retrying server commit",
+                result_pk,
+            )
+        else:
+            report_status(
+                config,
+                http_client,
+                result_pk,
+                "rolled_back",
+                error_message=(
+                    f"Bootloader upgrade_available={upgrade_available!r}, "
+                    f"bootcount={bootcount!r} — trial boot was rolled back "
+                    "or env read failed; refusing to commit."
+                ),
+            )
+            logger.warning(
+                "Refusing to commit deployment %s: upgrade_available=%r, bootcount=%r",
+                result_pk,
+                upgrade_available,
+                bootcount,
             )
             return
 

@@ -12,6 +12,15 @@ def release_bundle_key(tag: str, machine: str) -> str:
     return f"{release_key(tag, machine)}.bundle"
 
 
+def release_rootfs_key(tag: str, machine: str) -> str:
+    """S3 key for the extracted root partition artifact.
+
+    Lives alongside the full wic under the same ``images/<tag>/``
+    prefix so cleanup of a given release can delete the whole folder.
+    """
+    return f"images/{tag}/{machine}.rootfs.bz2"
+
+
 def upload_bytes(key: str, data: bytes) -> None:
     """Upload bytes to S3 (or local media) under `key`, overwriting."""
     if default_storage.exists(key):

@@ -76,14 +76,30 @@ class DeploymentCheckView(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         image = result.deployment.image_release
+        if not image.is_ota_ready:
+            # Defense-in-depth: the creation-time guard in
+            # UpgradeStationView/UpgradeGroupView should prevent
+            # deployments from being created against non-OTA-ready
+            # releases. If one still reached us (admin deleted the
+            # field, data migration regression), refuse with 204
+            # instead of 200 so the agent does not retry-loop on a
+            # 409. The operator sees the Deployment row stuck in
+            # PENDING and can investigate.
+            logger.error(
+                "DeploymentCheck: release %s is not OTA-ready; Deployment %d cannot proceed",
+                image.tag,
+                result.deployment_id,
+            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
         data = DeploymentCheckResponseSerializer(
             {
                 "deployment_result_id": result.pk,
                 "deployment_id": result.deployment_id,
                 "deployment_result_status": result.status,
                 "target_tag": image.tag,
-                "checksum_sha256": image.sha256,
-                "size_bytes": image.size_bytes,
+                "checksum_sha256": image.rootfs_sha256,
+                "size_bytes": image.rootfs_size_bytes,
                 "download_url": f"/api/v1/deployments/{result.deployment_id}/download/",
             }
         ).data
@@ -366,17 +382,32 @@ class DeploymentDownloadView(APIView):
             )
 
         image = result.deployment.image_release
+        if not image.is_ota_ready:
+            # Defense-in-depth — the creation-time guard should keep
+            # us out of this branch, but we refuse rather than stream
+            # the full wic (which is 4× the target slot size) if
+            # something regressed.
+            logger.error(
+                "DeploymentDownload: release %s is not OTA-ready; deployment %d cannot be served",
+                image.tag,
+                result.deployment_id,
+            )
+            return Response(
+                {"detail": "Release not prepared for OTA."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
         # Fail loud but controlled on storage issues — a 500 without a
         # response body makes agents retry blindly and leaves operators
         # poking stack traces in sentry. Map missing-key / permission
         # errors to 502 Bad Gateway (server knows about the deployment,
         # the upstream object store doesn't have what we need).
         try:
-            stream = image_storage.open_stream(image.s3_key)
+            stream = image_storage.open_stream(image.rootfs_s3_key)
         except Exception as exc:
             logger.error(
-                "Failed to open image %s for deployment %s: %s",
-                image.s3_key,
+                "Failed to open rootfs %s for deployment %s: %s",
+                image.rootfs_s3_key,
                 result.deployment_id,
                 exc,
             )
@@ -384,12 +415,16 @@ class DeploymentDownloadView(APIView):
                 {"detail": "Image artifact unavailable from storage backend."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
-        # Treat missing / non-positive size_bytes as unknown. If we
+        # Treat missing / non-positive rootfs_size_bytes as unknown. If we
         # coerced it to 0, every response would advertise
         # Content-Length: 0 and the Range math would reject every
         # request as start >= 0, even though the stream actually has
         # bytes to serve.
-        total_size = image.size_bytes if image.size_bytes and image.size_bytes > 0 else None
+        total_size = (
+            image.rootfs_size_bytes
+            if image.rootfs_size_bytes and image.rootfs_size_bytes > 0
+            else None
+        )
 
         # Optional Range support - translate HTTP Range into a seek on the stream.
         range_header = request.META.get("HTTP_RANGE", "")
@@ -466,8 +501,8 @@ class DeploymentDownloadView(APIView):
             finally:
                 stream.close()
 
-        filename = f"oe5xrx-{image.machine}-{image.tag}.wic.bz2"
-        safe_name = re.sub(r'["\r\n]', "_", filename) or "image.wic.bz2"
+        filename = f"oe5xrx-{image.machine}-{image.tag}.rootfs.bz2"
+        safe_name = re.sub(r'["\r\n]', "_", filename) or "image.rootfs.bz2"
         response = StreamingHttpResponse(
             iterator(), status=http_status, content_type="application/x-bzip2"
         )

@@ -69,6 +69,8 @@ class ImageDeleteView(AdminRequiredMixin, View):
         storage.delete(release.s3_key)
         if release.cosign_bundle_s3_key:
             storage.delete(release.cosign_bundle_s3_key)
+        if release.rootfs_s3_key:
+            storage.delete(release.rootfs_s3_key)
         release.delete()
         messages.success(request, _("Release deleted."))
         return redirect("images:list")
