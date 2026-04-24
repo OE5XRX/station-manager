@@ -1,7 +1,9 @@
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import CreateView, DetailView, ListView
@@ -140,13 +142,28 @@ class DeploymentCancelView(AdminOrOperatorRequiredMixin, View):
             messages.warning(request, _("This deployment cannot be cancelled."))
             return redirect("deployments:deployment_detail", pk=pk)
 
-        deployment.status = Deployment.Status.CANCELLED
-        deployment.save(update_fields=["status", "updated_at"])
-
-        # Cancel all pending results
-        deployment.results.filter(status=DeploymentResult.Status.PENDING).update(
-            status=DeploymentResult.Status.CANCELLED
+        # Cascade the cancel onto every non-terminal child result, not
+        # just PENDING. An in-flight result (DOWNLOADING / INSTALLING /
+        # REBOOTING / VERIFYING) left at its old status stays in
+        # ``supersession.active_statuses`` and blocks every future
+        # upgrade for that station with ActiveDeploymentConflictError —
+        # even though the parent deployment was cancelled long ago. The
+        # orphan persists until manually reconciled.
+        non_terminal_statuses = (
+            DeploymentResult.Status.PENDING,
+            DeploymentResult.Status.DOWNLOADING,
+            DeploymentResult.Status.INSTALLING,
+            DeploymentResult.Status.REBOOTING,
+            DeploymentResult.Status.VERIFYING,
         )
+        with transaction.atomic():
+            deployment.status = Deployment.Status.CANCELLED
+            deployment.save(update_fields=["status", "updated_at"])
+            deployment.results.filter(status__in=non_terminal_statuses).update(
+                status=DeploymentResult.Status.CANCELLED,
+                completed_at=timezone.now(),
+                error_message="Parent deployment was cancelled.",
+            )
 
         # Broadcast update
         try:

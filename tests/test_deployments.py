@@ -303,6 +303,82 @@ class TestDeploymentWebViews:
         deployment_result.refresh_from_db()
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
 
+    def test_cancel_cascades_in_flight_results(
+        self, client, operator_user, deployment, deployment_result
+    ):
+        """Regression: a result that was already mid-deployment
+        (DOWNLOADING / INSTALLING / REBOOTING / VERIFYING) used to be
+        left at its old status when the parent was cancelled. That
+        orphan stayed in ``supersession.active_statuses`` and made
+        every future upgrade for the station blow up with
+        ``ActiveDeploymentConflictError``. Cancel must now flip every
+        non-terminal child to CANCELLED.
+        """
+        deployment_result.status = DeploymentResult.Status.INSTALLING
+        deployment_result.save(update_fields=["status"])
+
+        client.force_login(operator_user)
+        response = client.post(
+            reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
+        )
+        assert response.status_code == 302
+
+        deployment.refresh_from_db()
+        deployment_result.refresh_from_db()
+        assert deployment.status == Deployment.Status.CANCELLED
+        assert deployment_result.status == DeploymentResult.Status.CANCELLED
+        assert deployment_result.completed_at is not None
+        assert "cancelled" in deployment_result.error_message.lower()
+
+    def test_cancel_leaves_terminal_results_alone(
+        self, client, operator_user, deployment, station, image_release
+    ):
+        """Mixed-status cancel: non-terminal children flip to CANCELLED,
+        already-terminal children (SUCCESS / FAILED / ROLLED_BACK /
+        CANCELLED / SUPERSEDED) keep the status they earned.
+        """
+        from apps.stations.models import Station
+
+        s_pending = station
+        s_inflight = Station.objects.create(name="inflight", callsign="INFLIGHT")
+        s_success = Station.objects.create(name="success", callsign="SUCC")
+        s_failed = Station.objects.create(name="failed", callsign="FAIL")
+        s_rolled = Station.objects.create(name="rolled", callsign="RB")
+
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s_pending, status=DeploymentResult.Status.PENDING
+        )
+        r_inflight = DeploymentResult.objects.create(
+            deployment=deployment, station=s_inflight, status=DeploymentResult.Status.REBOOTING
+        )
+        r_success = DeploymentResult.objects.create(
+            deployment=deployment, station=s_success, status=DeploymentResult.Status.SUCCESS
+        )
+        r_failed = DeploymentResult.objects.create(
+            deployment=deployment, station=s_failed, status=DeploymentResult.Status.FAILED
+        )
+        r_rolled = DeploymentResult.objects.create(
+            deployment=deployment, station=s_rolled, status=DeploymentResult.Status.ROLLED_BACK
+        )
+
+        client.force_login(operator_user)
+        response = client.post(
+            reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
+        )
+        assert response.status_code == 302
+
+        for r in (r_inflight,):
+            r.refresh_from_db()
+            assert r.status == DeploymentResult.Status.CANCELLED
+
+        for r, expected in (
+            (r_success, DeploymentResult.Status.SUCCESS),
+            (r_failed, DeploymentResult.Status.FAILED),
+            (r_rolled, DeploymentResult.Status.ROLLED_BACK),
+        ):
+            r.refresh_from_db()
+            assert r.status == expected, f"terminal status {expected} was clobbered to {r.status}"
+
     def test_deployment_list_requires_operator(self, client, member_user):
         """Member should get 403 on deployment list."""
         client.force_login(member_user)
