@@ -31,23 +31,15 @@ def supersede_pending_for_station(
         # deployments.
         Station.objects.select_for_update().filter(pk=station.pk).first()
 
-        active_statuses = {
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        }
         # Only lock rows that could possibly matter: PENDING (will be
         # superseded) or active (will raise). Terminal statuses (SUCCESS,
         # FAILED, CANCELLED, ROLLED_BACK, SUPERSEDED) are irrelevant and
         # don't need to sit under SELECT FOR UPDATE — a station with a
         # year of deployment history otherwise pays for every one of
         # them on every new deployment.
-        relevant_statuses = active_statuses | {DeploymentResult.Status.PENDING}
-
         qs = (
             DeploymentResult.objects.select_for_update()
-            .filter(station=station, status__in=relevant_statuses)
+            .filter(station=station, status__in=DeploymentResult.NON_TERMINAL_STATUSES)
             .exclude(deployment=new_deployment)
         )
 
@@ -56,7 +48,8 @@ def supersede_pending_for_station(
             if r.status == DeploymentResult.Status.PENDING:
                 to_supersede.append(r.pk)
             else:
-                # status is in active_statuses by construction of the filter
+                # status is in DeploymentResult.ACTIVE_STATUSES by
+                # construction of the NON_TERMINAL_STATUSES filter.
                 raise ActiveDeploymentConflictError(
                     f"Station {station.pk} is mid-deployment "
                     f"({r.get_status_display()} on deployment #{r.deployment_id})"

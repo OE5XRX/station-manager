@@ -50,13 +50,6 @@ class DeploymentCheckView(APIView):
         # crashed mid-flight can rediscover its own deployment on restart
         # and resume (download) or re-run (install). Terminal states stay
         # excluded — nothing to do from the agent's side.
-        resumable_statuses = [
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        ]
         # Newest-wins: if somehow two active results coexist (partial
         # supersession, race, data fix-up), the station should pick the
         # latest deployment to match what the admin intended. Matches
@@ -64,7 +57,7 @@ class DeploymentCheckView(APIView):
         result = (
             DeploymentResult.objects.filter(
                 station=station,
-                status__in=resumable_statuses,
+                status__in=DeploymentResult.NON_TERMINAL_STATUSES,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
             .select_related("deployment__image_release")
@@ -120,35 +113,98 @@ class DeploymentStatusUpdateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        try:
-            result = DeploymentResult.objects.select_related("deployment__image_release").get(
-                pk=pk, station=station
-            )
-        except DeploymentResult.DoesNotExist:
-            return Response(
-                {"detail": "Deployment result not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
         serializer = DeploymentStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         new_status = serializer.validated_data["status"]
         error_message = serializer.validated_data.get("error_message", "")
 
-        result.status = new_status
-        update_fields = ["status"]
+        # Read, guard and write the result inside a single transaction
+        # with a row lock. Without the lock there is a TOCTOU window:
+        # this view reads ``result`` / ``result.deployment.status``,
+        # then later issues an unconditional UPDATE. A cancel cascade
+        # that commits between the read and the save would be silently
+        # overwritten — the very orphan-result bug the cascade is
+        # fixing. Locking the result row forces a concurrent
+        # ``DeploymentCancelView`` UPDATE to wait for us, then re-
+        # evaluate its WHERE on the post-commit row state, so the
+        # cancel still wins (or the row is already terminal and we
+        # bail with 409 before saving). Early returns inside the block
+        # are fine — we haven't written anything yet, so the empty
+        # commit is a no-op.
+        with transaction.atomic():
+            try:
+                result = (
+                    DeploymentResult.objects.select_for_update()
+                    .select_related("deployment__image_release")
+                    .get(pk=pk, station=station)
+                )
+            except DeploymentResult.DoesNotExist:
+                return Response(
+                    {"detail": "Deployment result not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        if result.started_at is None and new_status != DeploymentResult.Status.PENDING:
-            result.started_at = timezone.now()
-            update_fields.append("started_at")
+            if result.status in DeploymentResult.TERMINAL_STATUSES:
+                logger.info(
+                    "Rejecting status update for terminal result "
+                    "(station=%s, deployment=%s, current=%s, requested=%s)",
+                    station.pk,
+                    result.deployment_id,
+                    result.status,
+                    new_status,
+                )
+                return Response(
+                    {
+                        "detail": (
+                            f"Result is already {result.status}; "
+                            "no further status updates accepted."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if result.deployment.status not in (
+                Deployment.Status.PENDING,
+                Deployment.Status.IN_PROGRESS,
+            ):
+                logger.info(
+                    "Rejecting status update for terminal deployment "
+                    "(station=%s, deployment=%s, deployment_status=%s, requested=%s)",
+                    station.pk,
+                    result.deployment_id,
+                    result.deployment.status,
+                    new_status,
+                )
+                return Response(
+                    {
+                        "detail": (
+                            f"Parent deployment is {result.deployment.status}; "
+                            "status updates are no longer accepted."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        if new_status in (DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK):
-            result.completed_at = timezone.now()
-            result.error_message = error_message
-            update_fields.extend(["completed_at", "error_message"])
+            result.status = new_status
+            update_fields = ["status"]
 
-        result.save(update_fields=update_fields)
+            # Stamp ``started_at`` on the first status update we accept.
+            # ``DeploymentStatusUpdateSerializer`` rejects ``pending``,
+            # so any value reaching this line is by definition past
+            # PENDING — no need to re-check it here.
+            if result.started_at is None:
+                result.started_at = timezone.now()
+                update_fields.append("started_at")
+
+            if new_status in (
+                DeploymentResult.Status.FAILED,
+                DeploymentResult.Status.ROLLED_BACK,
+            ):
+                result.completed_at = timezone.now()
+                result.error_message = error_message
+                update_fields.extend(["completed_at", "error_message"])
+
+            result.save(update_fields=update_fields)
 
         # Audit log is best-effort — a transient DB hiccup here must
         # not 500 the endpoint after we've already persisted the status
@@ -363,16 +419,13 @@ class DeploymentDownloadView(APIView):
         # download endpoint again; the idempotent re-download is a
         # cheap way to unblock recovery compared with stuck deployments
         # that need admin intervention.
-        active_statuses = [
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        ]
         result = (
             DeploymentResult.objects.select_related("deployment__image_release")
-            .filter(deployment_id=pk, station=station, status__in=active_statuses)
+            .filter(
+                deployment_id=pk,
+                station=station,
+                status__in=DeploymentResult.NON_TERMINAL_STATUSES,
+            )
             .first()
         )
         if result is None:
@@ -522,22 +575,29 @@ class DeploymentDownloadView(APIView):
 
 
 def _check_deployment_complete(deployment):
-    """Check if all results are finished and update deployment status accordingly."""
+    """Roll up a Deployment to COMPLETED / FAILED once every child result
+    is terminal. A no-op if any child is still PENDING or in flight.
+
+    The parent-status flip is a **conditional UPDATE** scoped to
+    ``status=IN_PROGRESS``: an operator cancel that committed between
+    the agent's status POST and this helper running must not be
+    silently overwritten back to FAILED/COMPLETED. By filtering on
+    ``status=IN_PROGRESS`` in the WHERE clause we let the database
+    arbitrate — a CANCELLED/COMPLETED/FAILED parent stays untouched
+    even if all its children are now terminal, which matches the
+    operator's intent (the cancel was the authoritative event).
+    """
     pending_or_active = deployment.results.filter(
-        status__in=[
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        ]
+        status__in=DeploymentResult.NON_TERMINAL_STATUSES
     ).exists()
 
-    if not pending_or_active:
-        has_failures = deployment.results.filter(
-            status__in=[DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK]
-        ).exists()
-        deployment.status = (
-            Deployment.Status.FAILED if has_failures else Deployment.Status.COMPLETED
-        )
-        deployment.save(update_fields=["status", "updated_at"])
+    if pending_or_active:
+        return
+
+    has_failures = deployment.results.filter(
+        status__in=[DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK]
+    ).exists()
+    new_status = Deployment.Status.FAILED if has_failures else Deployment.Status.COMPLETED
+    Deployment.objects.filter(pk=deployment.pk, status=Deployment.Status.IN_PROGRESS).update(
+        status=new_status, updated_at=timezone.now()
+    )

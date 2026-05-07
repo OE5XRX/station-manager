@@ -199,6 +199,97 @@ class TestDeploymentStatusUpdate:
         assert deployment_result.completed_at is not None
         assert deployment_result.error_message == "Checksum mismatch"
 
+    def test_status_update_rejected_when_result_terminal(
+        self, client, station_with_key, deployment_result
+    ):
+        """Regression: an agent that keeps POSTing status updates after
+        an operator cancelled the deployment must not be able to flip
+        the row back into an active state. The result is already
+        CANCELLED — accepting an INSTALLING update would reintroduce
+        the orphan-result bug the cancel cascade is fixing.
+        """
+        station, private_key = station_with_key
+        deployment_result.status = DeploymentResult.Status.CANCELLED
+        deployment_result.save(update_fields=["status"])
+
+        body = json.dumps({"status": "installing"}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_status_update", kwargs={"pk": deployment_result.pk}),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 409
+        deployment_result.refresh_from_db()
+        # Status must NOT have moved off CANCELLED.
+        assert deployment_result.status == DeploymentResult.Status.CANCELLED
+
+    def test_check_deployment_complete_does_not_overwrite_cancelled(self, deployment, station):
+        """Race: an operator cancel commits while an agent's failure
+        report is in flight. The agent's status update guard now
+        rejects post-cancel writes to the result row, but
+        ``_check_deployment_complete`` used to unconditionally roll
+        the parent up to FAILED/COMPLETED based on child terminality
+        — silently undoing the operator's CANCELLED. The helper now
+        does a conditional UPDATE that only touches deployments
+        still in IN_PROGRESS, so a CANCELLED parent stays cancelled.
+        """
+        from apps.deployments.api_views import _check_deployment_complete
+        from apps.stations.models import Station
+
+        # Arrange: parent already CANCELLED, all children terminal
+        # (mix of CANCELLED and FAILED — what a partial cascade plus
+        # an in-flight FAILED report leaves behind).
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.save(update_fields=["status"])
+
+        s_failed = Station.objects.create(name="failed-child", callsign="FC")
+        DeploymentResult.objects.create(
+            deployment=deployment, station=station, status=DeploymentResult.Status.CANCELLED
+        )
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s_failed, status=DeploymentResult.Status.FAILED
+        )
+
+        # Act
+        _check_deployment_complete(deployment)
+
+        # Assert: parent stays CANCELLED (not flipped to FAILED).
+        deployment.refresh_from_db()
+        assert deployment.status == Deployment.Status.CANCELLED
+
+    def test_status_update_rejected_when_parent_cancelled(
+        self, client, station_with_key, deployment_result
+    ):
+        """Race: operator cancels the parent Deployment while the agent
+        is mid-flight. The cascade flips the result row to CANCELLED,
+        but if the agent's status POST lands a moment later it must
+        still be rejected — even if its own row was already terminal,
+        the same agent could later acquire a fresh non-terminal row
+        on the cancelled deployment via re-creation. Guard on the
+        parent's status as a second layer of defence.
+        """
+        station, private_key = station_with_key
+        # Force the deployment terminal but leave the result row in an
+        # in-flight state — simulates a partial cascade or a race
+        # between the cancel and the agent's status POST.
+        deployment_result.status = DeploymentResult.Status.INSTALLING
+        deployment_result.save(update_fields=["status"])
+        deployment = deployment_result.deployment
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.save(update_fields=["status"])
+
+        body = json.dumps({"status": "rebooting"}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_status_update", kwargs={"pk": deployment_result.pk}),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 409
+        deployment_result.refresh_from_db()
+        assert deployment_result.status == DeploymentResult.Status.INSTALLING
+
 
 @pytest.mark.django_db
 class TestDeploymentCommit:
@@ -302,6 +393,82 @@ class TestDeploymentWebViews:
         assert deployment.status == Deployment.Status.CANCELLED
         deployment_result.refresh_from_db()
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
+
+    def test_cancel_cascades_in_flight_results(
+        self, client, operator_user, deployment, deployment_result
+    ):
+        """Regression: a result that was already mid-deployment
+        (DOWNLOADING / INSTALLING / REBOOTING / VERIFYING) used to be
+        left at its old status when the parent was cancelled. That
+        orphan stayed in ``supersession.active_statuses`` and made
+        every future upgrade for the station blow up with
+        ``ActiveDeploymentConflictError``. Cancel must now flip every
+        non-terminal child to CANCELLED.
+        """
+        deployment_result.status = DeploymentResult.Status.INSTALLING
+        deployment_result.save(update_fields=["status"])
+
+        client.force_login(operator_user)
+        response = client.post(
+            reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
+        )
+        assert response.status_code == 302
+
+        deployment.refresh_from_db()
+        deployment_result.refresh_from_db()
+        assert deployment.status == Deployment.Status.CANCELLED
+        assert deployment_result.status == DeploymentResult.Status.CANCELLED
+        assert deployment_result.completed_at is not None
+        assert "cancelled" in deployment_result.error_message.lower()
+
+    def test_cancel_leaves_terminal_results_alone(
+        self, client, operator_user, deployment, station
+    ):
+        """Mixed-status cancel: non-terminal children flip to CANCELLED,
+        already-terminal children (SUCCESS / FAILED / ROLLED_BACK /
+        CANCELLED / SUPERSEDED) keep the status they earned.
+        """
+        from apps.stations.models import Station
+
+        s_pending = station
+        s_inflight = Station.objects.create(name="inflight", callsign="INFLIGHT")
+        s_success = Station.objects.create(name="success", callsign="SUCC")
+        s_failed = Station.objects.create(name="failed", callsign="FAIL")
+        s_rolled = Station.objects.create(name="rolled", callsign="RB")
+
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s_pending, status=DeploymentResult.Status.PENDING
+        )
+        r_inflight = DeploymentResult.objects.create(
+            deployment=deployment, station=s_inflight, status=DeploymentResult.Status.REBOOTING
+        )
+        r_success = DeploymentResult.objects.create(
+            deployment=deployment, station=s_success, status=DeploymentResult.Status.SUCCESS
+        )
+        r_failed = DeploymentResult.objects.create(
+            deployment=deployment, station=s_failed, status=DeploymentResult.Status.FAILED
+        )
+        r_rolled = DeploymentResult.objects.create(
+            deployment=deployment, station=s_rolled, status=DeploymentResult.Status.ROLLED_BACK
+        )
+
+        client.force_login(operator_user)
+        response = client.post(
+            reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
+        )
+        assert response.status_code == 302
+
+        for r in (r_inflight,):
+            r.refresh_from_db()
+            assert r.status == DeploymentResult.Status.CANCELLED
+
+        for r, expected in (
+            (r_success, DeploymentResult.Status.SUCCESS),
+            (r_failed, DeploymentResult.Status.FAILED),
+            (r_rolled, DeploymentResult.Status.ROLLED_BACK),
+        ):
+            r.refresh_from_db()
+            assert r.status == expected, f"terminal status {expected} was clobbered to {r.status}"
 
     def test_deployment_list_requires_operator(self, client, member_user):
         """Member should get 403 on deployment list."""
