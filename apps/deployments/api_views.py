@@ -575,16 +575,29 @@ class DeploymentDownloadView(APIView):
 
 
 def _check_deployment_complete(deployment):
-    """Check if all results are finished and update deployment status accordingly."""
+    """Roll up a Deployment to COMPLETED / FAILED once every child result
+    is terminal. A no-op if any child is still PENDING or in flight.
+
+    The parent-status flip is a **conditional UPDATE** scoped to
+    ``status=IN_PROGRESS``: an operator cancel that committed between
+    the agent's status POST and this helper running must not be
+    silently overwritten back to FAILED/COMPLETED. By filtering on
+    ``status=IN_PROGRESS`` in the WHERE clause we let the database
+    arbitrate — a CANCELLED/COMPLETED/FAILED parent stays untouched
+    even if all its children are now terminal, which matches the
+    operator's intent (the cancel was the authoritative event).
+    """
     pending_or_active = deployment.results.filter(
         status__in=DeploymentResult.NON_TERMINAL_STATUSES
     ).exists()
 
-    if not pending_or_active:
-        has_failures = deployment.results.filter(
-            status__in=[DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK]
-        ).exists()
-        deployment.status = (
-            Deployment.Status.FAILED if has_failures else Deployment.Status.COMPLETED
-        )
-        deployment.save(update_fields=["status", "updated_at"])
+    if pending_or_active:
+        return
+
+    has_failures = deployment.results.filter(
+        status__in=[DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK]
+    ).exists()
+    new_status = Deployment.Status.FAILED if has_failures else Deployment.Status.COMPLETED
+    Deployment.objects.filter(pk=deployment.pk, status=Deployment.Status.IN_PROGRESS).update(
+        status=new_status, updated_at=timezone.now()
+    )

@@ -224,6 +224,42 @@ class TestDeploymentStatusUpdate:
         # Status must NOT have moved off CANCELLED.
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
 
+    def test_check_deployment_complete_does_not_overwrite_cancelled(
+        self, deployment, station, image_release
+    ):
+        """Race: an operator cancel commits while an agent's failure
+        report is in flight. The agent's status update guard now
+        rejects post-cancel writes to the result row, but
+        ``_check_deployment_complete`` used to unconditionally roll
+        the parent up to FAILED/COMPLETED based on child terminality
+        — silently undoing the operator's CANCELLED. The helper now
+        does a conditional UPDATE that only touches deployments
+        still in IN_PROGRESS, so a CANCELLED parent stays cancelled.
+        """
+        from apps.deployments.api_views import _check_deployment_complete
+        from apps.stations.models import Station
+
+        # Arrange: parent already CANCELLED, all children terminal
+        # (mix of CANCELLED and FAILED — what a partial cascade plus
+        # an in-flight FAILED report leaves behind).
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.save(update_fields=["status"])
+
+        s_failed = Station.objects.create(name="failed-child", callsign="FC")
+        DeploymentResult.objects.create(
+            deployment=deployment, station=station, status=DeploymentResult.Status.CANCELLED
+        )
+        DeploymentResult.objects.create(
+            deployment=deployment, station=s_failed, status=DeploymentResult.Status.FAILED
+        )
+
+        # Act
+        _check_deployment_complete(deployment)
+
+        # Assert: parent stays CANCELLED (not flipped to FAILED).
+        deployment.refresh_from_db()
+        assert deployment.status == Deployment.Status.CANCELLED
+
     def test_status_update_rejected_when_parent_cancelled(
         self, client, station_with_key, deployment_result
     ):
