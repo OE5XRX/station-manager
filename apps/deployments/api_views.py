@@ -188,7 +188,11 @@ class DeploymentStatusUpdateView(APIView):
             result.status = new_status
             update_fields = ["status"]
 
-            if result.started_at is None and new_status != DeploymentResult.Status.PENDING:
+            # Stamp ``started_at`` on the first status update we accept.
+            # ``DeploymentStatusUpdateSerializer`` rejects ``pending``,
+            # so any value reaching this line is by definition past
+            # PENDING — no need to re-check it here.
+            if result.started_at is None:
                 result.started_at = timezone.now()
                 update_fields.append("started_at")
 

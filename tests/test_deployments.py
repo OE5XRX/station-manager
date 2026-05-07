@@ -202,7 +202,7 @@ class TestDeploymentStatusUpdate:
     def test_status_update_rejected_when_result_terminal(
         self, client, station_with_key, deployment_result
     ):
-        """Regression: an agent that keeps PUTing status updates after
+        """Regression: an agent that keeps POSTing status updates after
         an operator cancelled the deployment must not be able to flip
         the row back into an active state. The result is already
         CANCELLED — accepting an INSTALLING update would reintroduce
@@ -229,7 +229,7 @@ class TestDeploymentStatusUpdate:
     ):
         """Race: operator cancels the parent Deployment while the agent
         is mid-flight. The cascade flips the result row to CANCELLED,
-        but if the agent's status PUT lands a moment later it must
+        but if the agent's status POST lands a moment later it must
         still be rejected — even if its own row was already terminal,
         the same agent could later acquire a fresh non-terminal row
         on the cancelled deployment via re-creation. Guard on the
@@ -238,7 +238,7 @@ class TestDeploymentStatusUpdate:
         station, private_key = station_with_key
         # Force the deployment terminal but leave the result row in an
         # in-flight state — simulates a partial cascade or a race
-        # between the cancel and the agent's status PUT.
+        # between the cancel and the agent's status POST.
         deployment_result.status = DeploymentResult.Status.INSTALLING
         deployment_result.save(update_fields=["status"])
         deployment = deployment_result.deployment

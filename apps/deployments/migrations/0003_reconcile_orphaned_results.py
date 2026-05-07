@@ -4,9 +4,12 @@ failed before this fix landed.
 
 The cancel view used to flip only PENDING children. A child that was
 already DOWNLOADING / INSTALLING / REBOOTING / VERIFYING stayed at
-that status forever. Because supersession.active_statuses includes
-those, every future upgrade for the affected station blew up with
-ActiveDeploymentConflictError.
+that status forever. Because supersession's active-status check
+covers those in-flight states (see
+``DeploymentResult.ACTIVE_STATUSES`` in the current code base; the
+set was originally a local ``active_statuses`` constant inside
+``apps.deployments.supersession``), every future upgrade for the
+affected station blew up with ``ActiveDeploymentConflictError``.
 """
 
 from django.db import migrations
