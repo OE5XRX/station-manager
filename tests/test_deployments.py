@@ -388,7 +388,7 @@ class TestDeploymentWebViews:
         assert "cancelled" in deployment_result.error_message.lower()
 
     def test_cancel_leaves_terminal_results_alone(
-        self, client, operator_user, deployment, station, image_release
+        self, client, operator_user, deployment, station
     ):
         """Mixed-status cancel: non-terminal children flip to CANCELLED,
         already-terminal children (SUCCESS / FAILED / ROLLED_BACK /

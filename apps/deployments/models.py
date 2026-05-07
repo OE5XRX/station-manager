@@ -156,6 +156,8 @@ class DeploymentResult(models.Model):
     # own hard-coded tuple, and adding (or renaming) a status meant
     # hunting them all down. Use frozensets so accidental mutation
     # raises instead of silently drifting.
+
+    # In-flight statuses — the agent is actively working the result.
     ACTIVE_STATUSES = frozenset(
         {
             Status.DOWNLOADING,
@@ -164,12 +166,12 @@ class DeploymentResult(models.Model):
             Status.VERIFYING,
         }
     )
-    """In-flight statuses — the agent is actively working the result."""
 
+    # Statuses where the deployment is not yet finished. Either the
+    # agent hasn't started (PENDING) or it's mid-flight.
     NON_TERMINAL_STATUSES = frozenset({Status.PENDING}) | ACTIVE_STATUSES
-    """Statuses where the deployment is not yet finished. Either the
-    agent hasn't started (PENDING) or it's mid-flight."""
 
+    # Final statuses — no further transitions allowed.
     TERMINAL_STATUSES = frozenset(
         {
             Status.SUCCESS,
@@ -179,7 +181,6 @@ class DeploymentResult(models.Model):
             Status.SUPERSEDED,
         }
     )
-    """Final statuses — no further transitions allowed."""
 
     deployment = models.ForeignKey(
         Deployment,

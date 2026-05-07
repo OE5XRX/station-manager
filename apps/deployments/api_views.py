@@ -113,82 +113,94 @@ class DeploymentStatusUpdateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        try:
-            result = DeploymentResult.objects.select_related("deployment__image_release").get(
-                pk=pk, station=station
-            )
-        except DeploymentResult.DoesNotExist:
-            return Response(
-                {"detail": "Deployment result not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
         serializer = DeploymentStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         new_status = serializer.validated_data["status"]
         error_message = serializer.validated_data.get("error_message", "")
 
-        # Refuse status updates against a result whose lifecycle is
-        # already over — either the row itself is terminal or the
-        # parent deployment was cancelled / completed / failed while
-        # the agent was mid-flight. Without this guard the agent's
-        # next status PUT (e.g. INSTALLING → REBOOTING) silently
-        # overwrites a CANCELLED row and reintroduces an active
-        # result, recreating the same orphan-result bug the cancel
-        # cascade is fixing.
-        if result.status in DeploymentResult.TERMINAL_STATUSES:
-            logger.info(
-                "Rejecting status update for terminal result "
-                "(station=%s, deployment=%s, current=%s, requested=%s)",
-                station.pk,
-                result.deployment_id,
-                result.status,
-                new_status,
-            )
-            return Response(
-                {
-                    "detail": (
-                        f"Result is already {result.status}; no further status updates accepted."
-                    )
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        if result.deployment.status not in (
-            Deployment.Status.PENDING,
-            Deployment.Status.IN_PROGRESS,
-        ):
-            logger.info(
-                "Rejecting status update for terminal deployment "
-                "(station=%s, deployment=%s, deployment_status=%s, requested=%s)",
-                station.pk,
-                result.deployment_id,
-                result.deployment.status,
-                new_status,
-            )
-            return Response(
-                {
-                    "detail": (
-                        f"Parent deployment is {result.deployment.status}; "
-                        "status updates are no longer accepted."
-                    )
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+        # Read, guard and write the result inside a single transaction
+        # with a row lock. Without the lock there is a TOCTOU window:
+        # this view reads ``result`` / ``result.deployment.status``,
+        # then later issues an unconditional UPDATE. A cancel cascade
+        # that commits between the read and the save would be silently
+        # overwritten — the very orphan-result bug the cascade is
+        # fixing. Locking the result row forces a concurrent
+        # ``DeploymentCancelView`` UPDATE to wait for us, then re-
+        # evaluate its WHERE on the post-commit row state, so the
+        # cancel still wins (or the row is already terminal and we
+        # bail with 409 before saving). Early returns inside the block
+        # are fine — we haven't written anything yet, so the empty
+        # commit is a no-op.
+        with transaction.atomic():
+            try:
+                result = (
+                    DeploymentResult.objects.select_for_update()
+                    .select_related("deployment__image_release")
+                    .get(pk=pk, station=station)
+                )
+            except DeploymentResult.DoesNotExist:
+                return Response(
+                    {"detail": "Deployment result not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        result.status = new_status
-        update_fields = ["status"]
+            if result.status in DeploymentResult.TERMINAL_STATUSES:
+                logger.info(
+                    "Rejecting status update for terminal result "
+                    "(station=%s, deployment=%s, current=%s, requested=%s)",
+                    station.pk,
+                    result.deployment_id,
+                    result.status,
+                    new_status,
+                )
+                return Response(
+                    {
+                        "detail": (
+                            f"Result is already {result.status}; "
+                            "no further status updates accepted."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if result.deployment.status not in (
+                Deployment.Status.PENDING,
+                Deployment.Status.IN_PROGRESS,
+            ):
+                logger.info(
+                    "Rejecting status update for terminal deployment "
+                    "(station=%s, deployment=%s, deployment_status=%s, requested=%s)",
+                    station.pk,
+                    result.deployment_id,
+                    result.deployment.status,
+                    new_status,
+                )
+                return Response(
+                    {
+                        "detail": (
+                            f"Parent deployment is {result.deployment.status}; "
+                            "status updates are no longer accepted."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        if result.started_at is None and new_status != DeploymentResult.Status.PENDING:
-            result.started_at = timezone.now()
-            update_fields.append("started_at")
+            result.status = new_status
+            update_fields = ["status"]
 
-        if new_status in (DeploymentResult.Status.FAILED, DeploymentResult.Status.ROLLED_BACK):
-            result.completed_at = timezone.now()
-            result.error_message = error_message
-            update_fields.extend(["completed_at", "error_message"])
+            if result.started_at is None and new_status != DeploymentResult.Status.PENDING:
+                result.started_at = timezone.now()
+                update_fields.append("started_at")
 
-        result.save(update_fields=update_fields)
+            if new_status in (
+                DeploymentResult.Status.FAILED,
+                DeploymentResult.Status.ROLLED_BACK,
+            ):
+                result.completed_at = timezone.now()
+                result.error_message = error_message
+                update_fields.extend(["completed_at", "error_message"])
+
+            result.save(update_fields=update_fields)
 
         # Audit log is best-effort — a transient DB hiccup here must
         # not 500 the endpoint after we've already persisted the status
