@@ -50,13 +50,6 @@ class DeploymentCheckView(APIView):
         # crashed mid-flight can rediscover its own deployment on restart
         # and resume (download) or re-run (install). Terminal states stay
         # excluded — nothing to do from the agent's side.
-        resumable_statuses = [
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        ]
         # Newest-wins: if somehow two active results coexist (partial
         # supersession, race, data fix-up), the station should pick the
         # latest deployment to match what the admin intended. Matches
@@ -64,7 +57,7 @@ class DeploymentCheckView(APIView):
         result = (
             DeploymentResult.objects.filter(
                 station=station,
-                status__in=resumable_statuses,
+                status__in=DeploymentResult.NON_TERMINAL_STATUSES,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
             .select_related("deployment__image_release")
@@ -135,6 +128,53 @@ class DeploymentStatusUpdateView(APIView):
 
         new_status = serializer.validated_data["status"]
         error_message = serializer.validated_data.get("error_message", "")
+
+        # Refuse status updates against a result whose lifecycle is
+        # already over — either the row itself is terminal or the
+        # parent deployment was cancelled / completed / failed while
+        # the agent was mid-flight. Without this guard the agent's
+        # next status PUT (e.g. INSTALLING → REBOOTING) silently
+        # overwrites a CANCELLED row and reintroduces an active
+        # result, recreating the same orphan-result bug the cancel
+        # cascade is fixing.
+        if result.status in DeploymentResult.TERMINAL_STATUSES:
+            logger.info(
+                "Rejecting status update for terminal result "
+                "(station=%s, deployment=%s, current=%s, requested=%s)",
+                station.pk,
+                result.deployment_id,
+                result.status,
+                new_status,
+            )
+            return Response(
+                {
+                    "detail": (
+                        f"Result is already {result.status}; no further status updates accepted."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        if result.deployment.status not in (
+            Deployment.Status.PENDING,
+            Deployment.Status.IN_PROGRESS,
+        ):
+            logger.info(
+                "Rejecting status update for terminal deployment "
+                "(station=%s, deployment=%s, deployment_status=%s, requested=%s)",
+                station.pk,
+                result.deployment_id,
+                result.deployment.status,
+                new_status,
+            )
+            return Response(
+                {
+                    "detail": (
+                        f"Parent deployment is {result.deployment.status}; "
+                        "status updates are no longer accepted."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         result.status = new_status
         update_fields = ["status"]
@@ -363,16 +403,13 @@ class DeploymentDownloadView(APIView):
         # download endpoint again; the idempotent re-download is a
         # cheap way to unblock recovery compared with stuck deployments
         # that need admin intervention.
-        active_statuses = [
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        ]
         result = (
             DeploymentResult.objects.select_related("deployment__image_release")
-            .filter(deployment_id=pk, station=station, status__in=active_statuses)
+            .filter(
+                deployment_id=pk,
+                station=station,
+                status__in=DeploymentResult.NON_TERMINAL_STATUSES,
+            )
             .first()
         )
         if result is None:
@@ -524,13 +561,7 @@ class DeploymentDownloadView(APIView):
 def _check_deployment_complete(deployment):
     """Check if all results are finished and update deployment status accordingly."""
     pending_or_active = deployment.results.filter(
-        status__in=[
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        ]
+        status__in=DeploymentResult.NON_TERMINAL_STATUSES
     ).exists()
 
     if not pending_or_active:

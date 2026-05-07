@@ -145,21 +145,14 @@ class DeploymentCancelView(AdminOrOperatorRequiredMixin, View):
         # Cascade the cancel onto every non-terminal child result, not
         # just PENDING. An in-flight result (DOWNLOADING / INSTALLING /
         # REBOOTING / VERIFYING) left at its old status stays in
-        # ``supersession.active_statuses`` and blocks every future
+        # ``DeploymentResult.ACTIVE_STATUSES`` and blocks every future
         # upgrade for that station with ActiveDeploymentConflictError —
         # even though the parent deployment was cancelled long ago. The
         # orphan persists until manually reconciled.
-        non_terminal_statuses = (
-            DeploymentResult.Status.PENDING,
-            DeploymentResult.Status.DOWNLOADING,
-            DeploymentResult.Status.INSTALLING,
-            DeploymentResult.Status.REBOOTING,
-            DeploymentResult.Status.VERIFYING,
-        )
         with transaction.atomic():
             deployment.status = Deployment.Status.CANCELLED
             deployment.save(update_fields=["status", "updated_at"])
-            deployment.results.filter(status__in=non_terminal_statuses).update(
+            deployment.results.filter(status__in=DeploymentResult.NON_TERMINAL_STATUSES).update(
                 status=DeploymentResult.Status.CANCELLED,
                 completed_at=timezone.now(),
                 error_message="Parent deployment was cancelled.",

@@ -199,6 +199,63 @@ class TestDeploymentStatusUpdate:
         assert deployment_result.completed_at is not None
         assert deployment_result.error_message == "Checksum mismatch"
 
+    def test_status_update_rejected_when_result_terminal(
+        self, client, station_with_key, deployment_result
+    ):
+        """Regression: an agent that keeps PUTing status updates after
+        an operator cancelled the deployment must not be able to flip
+        the row back into an active state. The result is already
+        CANCELLED — accepting an INSTALLING update would reintroduce
+        the orphan-result bug the cancel cascade is fixing.
+        """
+        station, private_key = station_with_key
+        deployment_result.status = DeploymentResult.Status.CANCELLED
+        deployment_result.save(update_fields=["status"])
+
+        body = json.dumps({"status": "installing"}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_status_update", kwargs={"pk": deployment_result.pk}),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 409
+        deployment_result.refresh_from_db()
+        # Status must NOT have moved off CANCELLED.
+        assert deployment_result.status == DeploymentResult.Status.CANCELLED
+
+    def test_status_update_rejected_when_parent_cancelled(
+        self, client, station_with_key, deployment_result
+    ):
+        """Race: operator cancels the parent Deployment while the agent
+        is mid-flight. The cascade flips the result row to CANCELLED,
+        but if the agent's status PUT lands a moment later it must
+        still be rejected — even if its own row was already terminal,
+        the same agent could later acquire a fresh non-terminal row
+        on the cancelled deployment via re-creation. Guard on the
+        parent's status as a second layer of defence.
+        """
+        station, private_key = station_with_key
+        # Force the deployment terminal but leave the result row in an
+        # in-flight state — simulates a partial cascade or a race
+        # between the cancel and the agent's status PUT.
+        deployment_result.status = DeploymentResult.Status.INSTALLING
+        deployment_result.save(update_fields=["status"])
+        deployment = deployment_result.deployment
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.save(update_fields=["status"])
+
+        body = json.dumps({"status": "rebooting"}).encode("utf-8")
+        response = client.post(
+            reverse("api:deployment_status_update", kwargs={"pk": deployment_result.pk}),
+            data=body,
+            content_type="application/json",
+            **device_auth_headers(private_key, station.pk, body),
+        )
+        assert response.status_code == 409
+        deployment_result.refresh_from_db()
+        assert deployment_result.status == DeploymentResult.Status.INSTALLING
+
 
 @pytest.mark.django_db
 class TestDeploymentCommit:

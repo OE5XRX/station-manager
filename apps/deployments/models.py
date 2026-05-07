@@ -149,6 +149,38 @@ class DeploymentResult(models.Model):
         CANCELLED = "cancelled", _("Cancelled")
         SUPERSEDED = "superseded", _("Superseded")
 
+    # Status set classifications. Centralized here so the cancel view,
+    # supersession check, agent status-update guard, deployment-check
+    # API, download API, and ``_check_deployment_complete`` all agree
+    # on the same membership — historically each call site held its
+    # own hard-coded tuple, and adding (or renaming) a status meant
+    # hunting them all down. Use frozensets so accidental mutation
+    # raises instead of silently drifting.
+    ACTIVE_STATUSES = frozenset(
+        {
+            Status.DOWNLOADING,
+            Status.INSTALLING,
+            Status.REBOOTING,
+            Status.VERIFYING,
+        }
+    )
+    """In-flight statuses — the agent is actively working the result."""
+
+    NON_TERMINAL_STATUSES = frozenset({Status.PENDING}) | ACTIVE_STATUSES
+    """Statuses where the deployment is not yet finished. Either the
+    agent hasn't started (PENDING) or it's mid-flight."""
+
+    TERMINAL_STATUSES = frozenset(
+        {
+            Status.SUCCESS,
+            Status.FAILED,
+            Status.ROLLED_BACK,
+            Status.CANCELLED,
+            Status.SUPERSEDED,
+        }
+    )
+    """Final statuses — no further transitions allowed."""
+
     deployment = models.ForeignKey(
         Deployment,
         verbose_name=_("deployment"),
