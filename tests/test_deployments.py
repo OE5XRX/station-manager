@@ -225,7 +225,7 @@ class TestDeploymentStatusUpdate:
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
 
     def test_check_deployment_complete_does_not_overwrite_cancelled(
-        self, deployment, station, image_release
+        self, deployment, station
     ):
         """Race: an operator cancel commits while an agent's failure
         report is in flight. The agent's status update guard now
