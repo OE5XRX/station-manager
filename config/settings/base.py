@@ -234,10 +234,18 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # RSA private key path is resolved at runtime by the setup_oidc_keys
 # management command (Task 4); the file lives on a persistent volume
 # so token signatures survive container restarts.
+#
+# OIDC_ISS_ENDPOINT MUST be set explicitly in prod.py (or via env) to
+# the public base URL — e.g. "https://ham.oe5xrx.org/sso". Without it
+# DOT auto-derives the issuer from the request host, which drifts
+# behind nginx (SECURE_PROXY_SSL_HEADER masks the original scheme) and
+# breaks token validation on every RP. Empty default = DOT auto-derive,
+# which is fine for dev/test but not prod.
 OIDC_RSA_KEY_PATH = os.environ.get("OIDC_RSA_KEY_PATH", str(BASE_DIR / "oidc_keys" / "private.pem"))
 
 OAUTH2_PROVIDER = {
     "OIDC_ENABLED": True,
+    "OIDC_ISS_ENDPOINT": os.environ.get("OIDC_ISS_ENDPOINT", ""),
     # OIDC_RSA_PRIVATE_KEY is read lazily in prod.py / dev.py overrides
     # (it must exist at startup) — base.py only declares the path.
     "SCOPES": {
@@ -248,10 +256,10 @@ OAUTH2_PROVIDER = {
     },
     "DEFAULT_SCOPES": ["openid"],
     "PKCE_REQUIRED": True,
-    "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,            # 1 h
-    "ID_TOKEN_EXPIRE_SECONDS": 3600,                # 1 h
-    "REFRESH_TOKEN_EXPIRE_SECONDS": 14 * 24 * 3600, # 14 d
-    "AUTHORIZATION_CODE_EXPIRE_SECONDS": 60,
+    "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,             # 1 h
+    "ID_TOKEN_EXPIRE_SECONDS": 3600,                 # 1 h
+    "REFRESH_TOKEN_EXPIRE_SECONDS": 14 * 24 * 3600,  # 14 d
+    "AUTHORIZATION_CODE_EXPIRE_SECONDS": 60,         # 60 s
     "ROTATE_REFRESH_TOKEN": True,
     "OAUTH2_VALIDATOR_CLASS": "apps.sso.permissions.SsoOAuth2Validator",
     "OIDC_USERINFO_HOOK": "apps.sso.oidc_claims.add_claims",

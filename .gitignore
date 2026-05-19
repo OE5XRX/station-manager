@@ -36,3 +36,7 @@ htmlcov/
 
 # Locale compiled files
 *.mo
+
+# OIDC signing keys (managed by setup_oidc_keys, never commit)
+oidc_keys/
+*.pem
