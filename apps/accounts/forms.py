@@ -27,54 +27,23 @@ class LoginForm(AuthenticationForm):
     )
 
 
-class _RoleSyncMixin:
-    """Mirror the deprecated ``role`` form field into auth.Group
-    membership.
+class UserCreationForm(BaseUserCreationForm):
+    """Form for admins to create new users.
 
-    Without this, selecting "Admin" in the form widget writes
-    ``user.role='admin'`` but does NOT add the user to the admin group,
-    so ``is_admin`` returns False on the freshly-created user. This
-    mixin runs once per save and uses ``set()`` (not ``add()``) so that
-    *changing* the role on an existing user removes the previously-
-    assigned default-group membership.
-
-    Both writes happen here for one release — Task 6 drops the ``role``
-    column and turns the form's ``role`` widget into a direct group
-    picker, at which point this mixin goes away.
+    Group membership (admin / operator / member) is managed via Django
+    Admin's built-in UserAdmin (filter_horizontal widget on the Groups
+    M2M), not from this form. Keeping this form lean to the
+    bare-minimum identity fields.
     """
-
-    def save(self, commit=True):
-        user = super().save(commit=commit)
-        # Skip when caller uses commit=False (the user has no PK yet,
-        # so the M2M write would fail). Callers that defer commit must
-        # invoke save_m2m() themselves; the role-sync is folded into
-        # the standard commit path below.
-        if commit and getattr(user, "role", None):
-            from django.contrib.auth.models import Group
-
-            target_group, _ = Group.objects.get_or_create(name=user.role)
-            # set() not add() — switching a user's role must remove
-            # them from the previously-assigned group.
-            user.groups.set([target_group])
-            # Bust @cached_property entries so subsequent
-            # is_admin/is_operator/is_staff_member reads on this
-            # instance return the post-mutation truth.
-            User._invalidate_role_cache(user)
-        return user
-
-
-class UserCreationForm(_RoleSyncMixin, BaseUserCreationForm):
-    """Form for admins to create new users."""
 
     class Meta:
         model = User
-        fields = ("username", "email", "first_name", "last_name", "role", "language")
+        fields = ("username", "email", "first_name", "last_name", "language")
         widgets = {
             "username": forms.TextInput(attrs={"class": "form-control"}),
             "email": forms.EmailInput(attrs={"class": "form-control"}),
             "first_name": forms.TextInput(attrs={"class": "form-control"}),
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
-            "role": forms.Select(attrs={"class": "form-select"}),
             "language": forms.Select(attrs={"class": "form-select"}),
         }
 
@@ -84,8 +53,12 @@ class UserCreationForm(_RoleSyncMixin, BaseUserCreationForm):
         self.fields["password2"].widget.attrs["class"] = "form-control"
 
 
-class UserChangeForm(_RoleSyncMixin, BaseUserChangeForm):
-    """Form for admins to edit existing users."""
+class UserChangeForm(BaseUserChangeForm):
+    """Form for admins to edit existing users.
+
+    Group membership is managed via Django Admin (see UserCreationForm
+    docstring).
+    """
 
     password = None
 
@@ -96,7 +69,6 @@ class UserChangeForm(_RoleSyncMixin, BaseUserChangeForm):
             "email",
             "first_name",
             "last_name",
-            "role",
             "language",
             "is_active",
         )
@@ -105,7 +77,6 @@ class UserChangeForm(_RoleSyncMixin, BaseUserChangeForm):
             "email": forms.EmailInput(attrs={"class": "form-control"}),
             "first_name": forms.TextInput(attrs={"class": "form-control"}),
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
-            "role": forms.Select(attrs={"class": "form-select"}),
             "language": forms.Select(attrs={"class": "form-select"}),
             "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }

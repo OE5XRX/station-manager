@@ -99,26 +99,6 @@ def test_create_superuser_lands_in_admin_group():
 
 
 @pytest.mark.django_db
-def test_user_form_save_syncs_role_to_group():
-    """Selecting Admin in the form must add the new user to the admin
-    Group, not just write user.role."""
-    from apps.accounts.forms import UserCreationForm
-
-    form = UserCreationForm(data={
-        "username": "newadmin",
-        "password1": "complexPass!1234",
-        "password2": "complexPass!1234",
-        "email": "newadmin@example.test",
-        "role": "admin",
-        "language": "en",
-    })
-    assert form.is_valid(), form.errors
-    user = form.save()
-    assert user.is_admin is True
-    assert "admin" in list(user.groups.values_list("name", flat=True))
-
-
-@pytest.mark.django_db
 def test_audit_user_filter_finds_admins_via_group_not_role():
     """apps.audit.views.py admin-user-filter must work after Task 5;
     user added to admin group via Django admin (without setting .role)

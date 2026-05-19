@@ -22,7 +22,12 @@ class DeploymentStatusConsumer(AsyncWebsocketConsumer):
         # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
         # and the upgrade dashboard. Members stay excluded (4403) so their
         # auto-reconnect loop from static/js/app.js stops cleanly.
-        if getattr(user, "role", None) not in ("admin", "operator"):
+        # Group-backed check via the cached property — see User.is_staff_member.
+        # Wrap in sync_to_async because the property hits the DB.
+        from asgiref.sync import sync_to_async
+
+        is_staff_member = await sync_to_async(lambda: user.is_staff_member)()
+        if not is_staff_member:
             await self.close(code=4403)
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)

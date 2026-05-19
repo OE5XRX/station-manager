@@ -12,6 +12,8 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from django.core.files.uploadedfile import SimpleUploadedFile
 
+from django.contrib.auth.models import Group
+
 from apps.accounts.models import User
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment, DeploymentResult
@@ -67,31 +69,33 @@ def device_auth_headers(private_key: Ed25519PrivateKey, station_id: int, body_by
     }
 
 
+def _user_in_group(username, password, group_name):
+    """Create a user and add them to the named auth.Group.
+
+    Replaces the pre-T6 ``role="..."`` shorthand. The group is created
+    on demand because the test DB may not have run the bootstrap
+    fixtures from migration 0002.
+    """
+    user = User.objects.create_user(username=username, password=password)
+    group, _ = Group.objects.get_or_create(name=group_name)
+    user.groups.add(group)
+    User._invalidate_role_cache(user)
+    return user
+
+
 @pytest.fixture
 def admin_user(db):
-    return User.objects.create_user(
-        username="admin",
-        password="testpass123",
-        role="admin",
-    )
+    return _user_in_group("admin", "testpass123", "admin")
 
 
 @pytest.fixture
 def operator_user(db):
-    return User.objects.create_user(
-        username="operator",
-        password="testpass123",
-        role="operator",
-    )
+    return _user_in_group("operator", "testpass123", "operator")
 
 
 @pytest.fixture
 def member_user(db):
-    return User.objects.create_user(
-        username="member",
-        password="testpass123",
-        role="member",
-    )
+    return _user_in_group("member", "testpass123", "member")
 
 
 @pytest.fixture

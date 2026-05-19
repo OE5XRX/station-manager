@@ -7,16 +7,16 @@ from .managers import UserManager
 
 
 class User(AbstractUser):
-    """Custom user model with role and language preferences.
+    """Custom user model with group-backed role membership and language preference.
 
-    Group membership replaces the old single-valued `role` field. The
+    Group membership replaces the old single-valued ``role`` field. The
     three default groups (admin / operator / member) are created by
     apps.accounts.migrations.0002_role_to_groups; new groups can be
     added freely via Django Admin without code changes.
 
-    Cached properties below mirror the pre-refactor `is_admin` /
-    `is_operator` API so call sites need not learn about Groups. A new
-    `is_staff_member` covers the common admin-OR-operator gate.
+    Cached properties below mirror the pre-refactor ``is_admin`` /
+    ``is_operator`` API so call sites need not learn about Groups. A new
+    ``is_staff_member`` covers the common admin-OR-operator gate.
 
     Staleness caveat: the three properties are @cached_property — once
     read, the value is memoized on the instance. If you mutate
@@ -30,24 +30,6 @@ class User(AbstractUser):
         ENGLISH = "en", _("English")
         GERMAN = "de", _("German")
 
-    # `role` is intentionally retained for one release so the data migration
-    # in 0002 and any pre-deploy code keep working. Task 6 (next commit)
-    # drops the column once nothing reads it.
-    class Role(models.TextChoices):
-        ADMIN = "admin", _("Admin")
-        OPERATOR = "operator", _("Operator")
-        MEMBER = "member", _("Member")
-
-    role = models.CharField(
-        _("role"),
-        max_length=10,
-        choices=Role.choices,
-        default=Role.MEMBER,
-        help_text=_(
-            "DEPRECATED — superseded by Django Groups in migration 0002. "
-            "This column is dropped in the next release."
-        ),
-    )
     language = models.CharField(
         _("language"),
         max_length=2,
