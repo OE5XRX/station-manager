@@ -127,7 +127,7 @@ class StationInventoryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, station_id):
-        if request.user.role not in ("admin", "operator"):
+        if not request.user.is_staff_member:
             return Response(
                 {"detail": "Admin or operator role required."},
                 status=status.HTTP_403_FORBIDDEN,

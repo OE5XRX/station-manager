@@ -27,7 +27,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        if user.role not in ("admin", "operator"):
+        if not user.is_staff_member:
             await self.close(code=4403)
             return
 

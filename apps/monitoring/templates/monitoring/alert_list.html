@@ -17,7 +17,7 @@
     <p class="page-sub">{% trans "Real-time issue feed across the fleet. Acknowledge or resolve from the card." %}</p>
   </div>
   <div class="page-head-actions">
-    {% if user.role == 'admin' %}
+    {% if user.is_admin %}
     <a href="{% url 'monitoring:alert_settings' %}" class="btn btn-ghost">{% trans "Rule settings" %}</a>
     {% endif %}
   </div>

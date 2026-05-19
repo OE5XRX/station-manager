@@ -16,14 +16,14 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Mixin that restricts access to users with admin role."""
 
     def test_func(self):
-        return self.request.user.role == "admin"
+        return self.request.user.is_admin
 
 
 class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Restrict access to users with admin or operator role."""
 
     def test_func(self):
-        return self.request.user.role in ("admin", "operator")
+        return self.request.user.is_staff_member
 
 
 class AlertListView(AdminRequiredMixin, ListView):

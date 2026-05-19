@@ -19,7 +19,7 @@
       <p class="page-sub">{% trans "Search, filter, and manage every station in the OE5XRX network." %}</p>
     </div>
     <div class="page-head-actions">
-      {% if user.role == 'admin' or user.role == 'operator' %}
+      {% if user.is_staff_member %}
       <a href="{% url 'stations:tag_list' %}" class="btn btn-ghost">{% trans "Tags" %}</a>
       <a href="{% url 'stations:station_create' %}" class="btn btn-primary">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>

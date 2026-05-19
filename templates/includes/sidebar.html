@@ -63,7 +63,7 @@
       </svg>
       <span class="label">{% trans "Builder" %}</span>
     </a>
-    {% if user.role == 'admin' %}
+    {% if user.is_admin %}
     <a href="{% url 'rollouts:upgrade_dashboard' %}"
        class="nav-item{% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %}aria-current="page"{% endif %}>
@@ -83,7 +83,7 @@
     {% endif %}
   </div>
 
-  {% if user.role == 'admin' %}
+  {% if user.is_admin %}
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Admin" %}</div>
     <a href="{% url 'accounts:user_list' %}"

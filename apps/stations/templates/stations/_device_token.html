@@ -9,7 +9,7 @@
           <div class="t-label">{% trans "Ed25519 device key" %} · {% trans "active" %}</div>
           <div class="t-mono t-dim" style="font-size:12px;">{{ station.device_key.current_public_key|truncatechars:36 }}</div>
         </div>
-        {% if request.user.role == "admin" or request.user.role == "operator" %}
+        {% if request.user.is_staff_member %}
         <form method="post" action="{% url 'stations:station_revoke_key' station.pk %}" data-confirm="{% trans 'Revoke this Ed25519 key? The station will lose access.' %}">
           {% csrf_token %}
           <button type="submit" class="btn btn-sm btn-danger">{% trans "Revoke key" %}</button>
@@ -36,7 +36,7 @@
           <div class="t-label">{% trans "No Ed25519 key configured" %}</div>
           <div class="t-muted" style="font-size:12.5px;margin-top:4px;">{% trans "Generate a key so the station agent can connect." %}</div>
         </div>
-        {% if request.user.role == "admin" or request.user.role == "operator" %}
+        {% if request.user.is_staff_member %}
         <form method="post" action="{% url 'stations:station_generate_key' station.pk %}" style="margin:0;">
           {% csrf_token %}
           <button type="submit" class="btn btn-primary btn-sm">{% trans "Generate Ed25519 key" %}</button>

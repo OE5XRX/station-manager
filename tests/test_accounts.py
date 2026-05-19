@@ -1,4 +1,5 @@
 import pytest
+from django.contrib.auth.models import Group
 from django.urls import reverse
 
 from apps.accounts.models import User
@@ -8,23 +9,47 @@ from apps.accounts.models import User
 class TestUserModel:
     def test_create_user(self):
         user = User.objects.create_user(username="test", password="pass123")
-        assert user.role == "member"
         assert user.language == "en"
 
     def test_create_superuser(self):
         user = User.objects.create_superuser(username="super", password="pass123")
-        assert user.role == "admin"
         assert user.is_superuser
 
-    def test_is_admin_property(self):
-        user = User(role="admin")
-        assert user.is_admin is True
-        assert user.is_operator is False
 
-    def test_is_operator_property(self):
-        user = User(role="operator")
-        assert user.is_admin is False
-        assert user.is_operator is True
+@pytest.mark.django_db
+def test_is_admin_true_when_user_in_admin_group():
+    from apps.accounts.models import User
+
+    admin_group, _ = Group.objects.get_or_create(name="admin")
+    user = User.objects.create_user(username="a", password="x", email="a@x")
+    user.groups.add(admin_group)
+    assert user.is_admin is True
+    assert user.is_operator is False
+    assert user.is_staff_member is True
+
+
+@pytest.mark.django_db
+def test_is_operator_true_when_user_in_operator_group():
+    from apps.accounts.models import User
+
+    op_group, _ = Group.objects.get_or_create(name="operator")
+    user = User.objects.create_user(username="o", password="x", email="o@x")
+    user.groups.add(op_group)
+    assert user.is_admin is False
+    assert user.is_operator is True
+    assert user.is_staff_member is True
+
+
+@pytest.mark.django_db
+def test_member_user_is_neither_admin_nor_operator():
+    from apps.accounts.models import User
+
+    member_group, _ = Group.objects.get_or_create(name="member")
+    user = User.objects.create_user(username="m", password="x", email="m@x")
+    user.groups.add(member_group)
+    assert user.is_admin is False
+    assert user.is_operator is False
+    assert user.is_staff_member is False
 
 
 @pytest.mark.django_db

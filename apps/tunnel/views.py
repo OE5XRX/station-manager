@@ -22,7 +22,7 @@ class TerminalStatusView(LoginRequiredMixin, View):
             status__in=("connecting", "active"),
         ).count()
         can_connect = (
-            is_online and active_sessions < 2 and request.user.role in ("admin", "operator")
+            is_online and active_sessions < 2 and request.user.is_staff_member
         )
 
         return JsonResponse(

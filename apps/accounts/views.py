@@ -16,7 +16,7 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Mixin that restricts access to users with admin role."""
 
     def test_func(self):
-        return self.request.user.role == "admin"
+        return self.request.user.is_admin
 
 
 class LoginView(auth_views.LoginView):
