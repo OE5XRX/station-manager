@@ -34,4 +34,8 @@
     </div>
   </section>
 </form>
+
+{% if request.user.is_admin and object %}
+  {% include "sso/_app_grants_card.html" with target_user=object applications=app_grants_list %}
+{% endif %}
 {% endblock %}

@@ -14,6 +14,7 @@ urlpatterns = [
 urlpatterns += i18n_patterns(
     path("admin/", admin.site.urls),
     path("accounts/", include("apps.accounts.urls")),
+    path("sso-admin/", include("apps.sso.urls")),
     path("stations/", include("apps.stations.urls")),
     path("firmware/", include("apps.firmware.urls")),
     path("deployments/", include("apps.deployments.urls")),

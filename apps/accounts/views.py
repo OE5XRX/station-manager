@@ -80,6 +80,10 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["form_title"] = _("Edit User")
+        # Local import: avoids loading apps.sso at module-load time
+        # (defensive against import-cycle surprises).
+        from apps.sso.views import _build_grants_for_user
+        context["app_grants_list"] = _build_grants_for_user(self.object)
         return context
 
 
