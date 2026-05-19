@@ -25,3 +25,9 @@ AUTH_PASSWORD_VALIDATORS = []
 
 # Email to console
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+from pathlib import Path
+
+_oidc_key_path = Path(OIDC_RSA_KEY_PATH)
+if _oidc_key_path.exists():
+    OAUTH2_PROVIDER["OIDC_RSA_PRIVATE_KEY"] = _oidc_key_path.read_text()

@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.images",
     "apps.provisioning",
     "apps.rollouts",
+    "apps.sso",
 ]
 
 MIDDLEWARE = [
