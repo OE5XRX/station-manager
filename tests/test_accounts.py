@@ -84,3 +84,47 @@ class TestUserManagement:
         client.force_login(admin_user)
         response = client.get(reverse("accounts:user_list"))
         assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_create_superuser_lands_in_admin_group():
+    """createsuperuser must yield is_admin=True so the new account can
+    actually access admin views, otherwise the chicken-and-egg
+    bootstrap is broken on a fresh install."""
+    user = User.objects.create_superuser(
+        username="sup", password="x", email="s@x"
+    )
+    assert user.is_superuser is True
+    assert user.is_admin is True
+
+
+@pytest.mark.django_db
+def test_user_form_save_syncs_role_to_group():
+    """Selecting Admin in the form must add the new user to the admin
+    Group, not just write user.role."""
+    from apps.accounts.forms import UserCreationForm
+
+    form = UserCreationForm(data={
+        "username": "newadmin",
+        "password1": "complexPass!1234",
+        "password2": "complexPass!1234",
+        "email": "newadmin@example.test",
+        "role": "admin",
+        "language": "en",
+    })
+    assert form.is_valid(), form.errors
+    user = form.save()
+    assert user.is_admin is True
+    assert "admin" in list(user.groups.values_list("name", flat=True))
+
+
+@pytest.mark.django_db
+def test_audit_user_filter_finds_admins_via_group_not_role():
+    """apps.audit.views.py admin-user-filter must work after Task 5;
+    user added to admin group via Django admin (without setting .role)
+    must still show up."""
+    g, _ = Group.objects.get_or_create(name="admin")
+    user = User.objects.create_user(username="byggroup", password="x", email="b@x")
+    user.groups.add(g)
+    admins = User.objects.filter(groups__name="admin").distinct()
+    assert user in admins

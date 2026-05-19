@@ -46,6 +46,9 @@ class UserListView(AdminRequiredMixin, ListView):
     template_name = "accounts/user_list.html"
     context_object_name = "users"
     paginate_by = 25
+    # user_list.html iterates ``u.groups.all`` per row — without the
+    # prefetch each row triggers a separate auth_user_groups join.
+    queryset = User.objects.prefetch_related("groups").order_by("username")
 
 
 class UserCreateView(AdminRequiredMixin, CreateView):

@@ -17,6 +17,13 @@ class User(AbstractUser):
     Cached properties below mirror the pre-refactor `is_admin` /
     `is_operator` API so call sites need not learn about Groups. A new
     `is_staff_member` covers the common admin-OR-operator gate.
+
+    Staleness caveat: the three properties are @cached_property — once
+    read, the value is memoized on the instance. If you mutate
+    ``user.groups`` in the same request and then re-check
+    ``is_admin`` / etc., you'll see the pre-mutation value. After
+    mutating, bust the cache with ``User._invalidate_role_cache(user)``
+    (helper below). The Task 13 grant-toggle view will need this.
     """
 
     class Language(models.TextChoices):
@@ -58,6 +65,12 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+    # NOTE: the three properties below are @cached_property. Once a
+    # caller reads e.g. ``user.is_admin``, the value is memoized on the
+    # instance and stays stale through subsequent ``user.groups``
+    # mutations on the same instance. Bust with
+    # ``User._invalidate_role_cache(user)`` after mutating groups in
+    # the same request.
     @cached_property
     def is_admin(self):
         return self.groups.filter(name="admin").exists()
@@ -70,3 +83,13 @@ class User(AbstractUser):
     def is_staff_member(self):
         """True iff user is in admin OR operator group."""
         return self.groups.filter(name__in=["admin", "operator"]).exists()
+
+    @staticmethod
+    def _invalidate_role_cache(user):
+        """Delete cached is_admin / is_operator / is_staff_member entries
+        on a User instance after ``user.groups`` has been mutated in the
+        same request. Idempotent — safe to call when the properties
+        have not yet been read.
+        """
+        for attr in ("is_admin", "is_operator", "is_staff_member"):
+            user.__dict__.pop(attr, None)

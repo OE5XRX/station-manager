@@ -27,7 +27,43 @@ class LoginForm(AuthenticationForm):
     )
 
 
-class UserCreationForm(BaseUserCreationForm):
+class _RoleSyncMixin:
+    """Mirror the deprecated ``role`` form field into auth.Group
+    membership.
+
+    Without this, selecting "Admin" in the form widget writes
+    ``user.role='admin'`` but does NOT add the user to the admin group,
+    so ``is_admin`` returns False on the freshly-created user. This
+    mixin runs once per save and uses ``set()`` (not ``add()``) so that
+    *changing* the role on an existing user removes the previously-
+    assigned default-group membership.
+
+    Both writes happen here for one release — Task 6 drops the ``role``
+    column and turns the form's ``role`` widget into a direct group
+    picker, at which point this mixin goes away.
+    """
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        # Skip when caller uses commit=False (the user has no PK yet,
+        # so the M2M write would fail). Callers that defer commit must
+        # invoke save_m2m() themselves; the role-sync is folded into
+        # the standard commit path below.
+        if commit and getattr(user, "role", None):
+            from django.contrib.auth.models import Group
+
+            target_group, _ = Group.objects.get_or_create(name=user.role)
+            # set() not add() — switching a user's role must remove
+            # them from the previously-assigned group.
+            user.groups.set([target_group])
+            # Bust @cached_property entries so subsequent
+            # is_admin/is_operator/is_staff_member reads on this
+            # instance return the post-mutation truth.
+            User._invalidate_role_cache(user)
+        return user
+
+
+class UserCreationForm(_RoleSyncMixin, BaseUserCreationForm):
     """Form for admins to create new users."""
 
     class Meta:
@@ -48,7 +84,7 @@ class UserCreationForm(BaseUserCreationForm):
         self.fields["password2"].widget.attrs["class"] = "form-control"
 
 
-class UserChangeForm(BaseUserChangeForm):
+class UserChangeForm(_RoleSyncMixin, BaseUserChangeForm):
     """Form for admins to edit existing users."""
 
     password = None
