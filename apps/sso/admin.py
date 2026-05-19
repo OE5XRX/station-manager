@@ -45,3 +45,6 @@ class SsoAuditLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False  # audit log is append-only
+
+    def has_delete_permission(self, request, obj=None):
+        return False  # append-only: even superusers must not delete

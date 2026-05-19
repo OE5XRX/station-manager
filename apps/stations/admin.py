@@ -138,3 +138,12 @@ class StationAuditLogAdmin(admin.ModelAdmin):
         "ip_address",
         "created_at",
     )
+
+    def has_add_permission(self, request):
+        return False  # audit log entries only created programmatically
+
+    def has_change_permission(self, request, obj=None):
+        return False  # audit log is append-only
+
+    def has_delete_permission(self, request, obj=None):
+        return False  # append-only: even superusers must not delete

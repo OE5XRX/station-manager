@@ -78,15 +78,32 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         params = self.request.GET
         category = params.get("category", "")
 
+        # When the user has set station-specific filters but left
+        # category=="" (All), treat that as an implicit "only Station feed".
+        # Otherwise filtering by station X still surfaces every recent SSO
+        # event in the merge, which is confusing UX. Date filters are
+        # shared across feeds and don't trigger this narrowing.
+        station_only_filters_active = any(
+            [
+                params.get("station"),
+                params.get("event_type"),
+                params.get("user"),
+            ]
+        )
+        include_station = category in ("", "station")
+        include_sso = category in ("", "sso") and not (
+            category == "" and station_only_filters_active
+        )
+
         station_entries = []
         sso_entries = []
 
-        if category in ("", "station"):
+        if include_station:
             station_qs = StationAuditLog.objects.select_related("station", "user")
             station_qs = self.apply_filters(station_qs, params)
             station_entries = list(station_qs.order_by("-created_at")[:MERGE_FEED_CAP])
 
-        if category in ("", "sso"):
+        if include_sso:
             sso_qs = SsoAuditLog.objects.select_related(
                 "actor", "target_user", "application"
             )
