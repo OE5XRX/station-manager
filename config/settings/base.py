@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     # Third party
+    "oauth2_provider",
     "rest_framework",
     "django_htmx",
     "storages",
@@ -227,3 +228,31 @@ DEFAULT_FROM_EMAIL = os.environ.get("EMAIL_FROM", "alerts@oe5xrx.org")
 ALERT_TELEGRAM_ENABLED = os.environ.get("ALERT_TELEGRAM_ENABLED", "false").lower() == "true"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# Django OAuth Toolkit — OIDC provider configuration.
+# Issuer must match the public URL prefix (see /sso/ in config/urls.py).
+# RSA private key path is resolved at runtime by the setup_oidc_keys
+# management command (Task 4); the file lives on a persistent volume
+# so token signatures survive container restarts.
+OIDC_RSA_KEY_PATH = os.environ.get("OIDC_RSA_KEY_PATH", str(BASE_DIR / "oidc_keys" / "private.pem"))
+
+OAUTH2_PROVIDER = {
+    "OIDC_ENABLED": True,
+    # OIDC_RSA_PRIVATE_KEY is read lazily in prod.py / dev.py overrides
+    # (it must exist at startup) — base.py only declares the path.
+    "SCOPES": {
+        "openid": "OpenID Connect",
+        "profile": "User profile",
+        "email": "Email address",
+        "groups": "Group memberships",
+    },
+    "DEFAULT_SCOPES": ["openid"],
+    "PKCE_REQUIRED": True,
+    "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,            # 1 h
+    "ID_TOKEN_EXPIRE_SECONDS": 3600,                # 1 h
+    "REFRESH_TOKEN_EXPIRE_SECONDS": 14 * 24 * 3600, # 14 d
+    "AUTHORIZATION_CODE_EXPIRE_SECONDS": 60,
+    "ROTATE_REFRESH_TOKEN": True,
+    "OAUTH2_VALIDATOR_CLASS": "apps.sso.permissions.SsoOAuth2Validator",
+    "OIDC_USERINFO_HOOK": "apps.sso.oidc_claims.add_claims",
+}

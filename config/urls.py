@@ -6,6 +6,9 @@ from django.urls import include, path
 urlpatterns = [
     path("api/", include("apps.api.urls")),
     path("i18n/", include("django.conf.urls.i18n")),
+    # OIDC endpoints — kept out of i18n_patterns so well-known URLs
+    # don't carry a locale prefix that breaks RP discovery.
+    path("sso/", include("oauth2_provider.urls", namespace="oauth2_provider")),
 ]
 
 urlpatterns += i18n_patterns(
