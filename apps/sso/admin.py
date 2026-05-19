@@ -2,7 +2,7 @@ from django.contrib import admin, messages
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from .models import AppGrant
+from .models import AppGrant, SsoAuditLog
 
 
 @admin.action(description=_("Revoke selected grants"))
@@ -27,3 +27,21 @@ class AppGrantAdmin(admin.ModelAdmin):
     raw_id_fields = ("user", "granted_by")
     readonly_fields = ("granted_at", "revoked_at")
     actions = [revoke_selected]
+
+
+@admin.register(SsoAuditLog)
+class SsoAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "event_type", "actor", "target_user", "application")
+    list_filter = ("event_type", "application")
+    search_fields = ("actor__username", "target_user__username", "message")
+    readonly_fields = (
+        "created_at", "event_type", "actor", "target_user", "application",
+        "message", "ip_address",
+    )
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request):
+        return False  # audit log entries only created programmatically
+
+    def has_change_permission(self, request, obj=None):
+        return False  # audit log is append-only

@@ -1,14 +1,22 @@
 import csv
 
 from django.contrib.auth import get_user_model
+from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.views.generic import ListView
 
 from apps.accounts.views import AdminRequiredMixin
+from apps.sso.models import SsoAuditLog
 from apps.stations.models import Station, StationAuditLog
 
 User = get_user_model()
+
+# Per-source fetch cap before merging. The merged list is built in
+# Python (sorted in-memory), so the upper bound on memory is
+# O(STATION_FEED_CAP + SSO_FEED_CAP). Plenty of headroom at OE5XRX
+# scale; tune if a single page of audit traffic ever exceeds this.
+MERGE_FEED_CAP = 500
 
 
 class AuditLogFilterMixin:
@@ -37,9 +45,26 @@ class AuditLogFilterMixin:
 
         return queryset
 
+    def apply_sso_date_filters(self, queryset, params):
+        """SSO logs share date filters with station logs but have no
+        station/event/user equivalents in the existing filter sidebar."""
+        date_from = params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        return queryset
+
 
 class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
-    model = StationAuditLog
+    """Merged audit feed: StationAuditLog + SsoAuditLog.
+
+    The template iterates ``page_obj`` as a list of ``(category, entry)``
+    tuples and renders each row variant accordingly — see
+    apps/audit/templates/audit/_audit_table.html.
+    """
+
     template_name = "audit/audit_list.html"
     context_object_name = "audit_logs"
     paginate_by = 50
@@ -50,8 +75,41 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         return [self.template_name]
 
     def get_queryset(self):
-        qs = super().get_queryset().select_related("station", "user")
-        return self.apply_filters(qs, self.request.GET)
+        params = self.request.GET
+        category = params.get("category", "")
+
+        station_entries = []
+        sso_entries = []
+
+        if category in ("", "station"):
+            station_qs = StationAuditLog.objects.select_related("station", "user")
+            station_qs = self.apply_filters(station_qs, params)
+            station_entries = list(station_qs.order_by("-created_at")[:MERGE_FEED_CAP])
+
+        if category in ("", "sso"):
+            sso_qs = SsoAuditLog.objects.select_related(
+                "actor", "target_user", "application"
+            )
+            sso_qs = self.apply_sso_date_filters(sso_qs, params)
+            sso_entries = list(sso_qs.order_by("-created_at")[:MERGE_FEED_CAP])
+
+        # Merge into a single chronological list of (category, entry)
+        # tuples. The template unpacks the tuple to pick the right row
+        # variant. O(N + M) memory; capped by MERGE_FEED_CAP per source.
+        merged = [("station", e) for e in station_entries] + [
+            ("sso", e) for e in sso_entries
+        ]
+        merged.sort(key=lambda pair: pair[1].created_at, reverse=True)
+        return merged
+
+    def paginate_queryset(self, queryset, page_size):
+        # Override: the base ListView uses queryset.count() which doesn't
+        # work on a Python list of tuples — Paginator handles lists fine,
+        # so do the pagination manually and return the expected 4-tuple.
+        paginator = Paginator(queryset, page_size)
+        page_number = self.request.GET.get(self.page_kwarg, 1)
+        page = paginator.get_page(page_number)
+        return (paginator, page, page.object_list, page.has_other_pages())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -65,6 +123,7 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
             User.objects.filter(groups__name="admin").distinct().order_by("username")
         )
         # Preserve current filter values for the template
+        context["category"] = self.request.GET.get("category", "")
         context["current_station"] = self.request.GET.get("station", "")
         context["current_event_type"] = self.request.GET.get("event_type", "")
         context["current_user"] = self.request.GET.get("user", "")

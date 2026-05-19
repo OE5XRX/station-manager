@@ -5,7 +5,8 @@
     <thead>
       <tr>
         <th>{% trans "Timestamp" %}</th>
-        <th>{% trans "Station" %}</th>
+        <th>{% trans "Category" %}</th>
+        <th>{% trans "Subject" %}</th>
         <th>{% trans "Event" %}</th>
         <th>{% trans "Message" %}</th>
         <th>{% trans "User" %}</th>
@@ -13,18 +14,32 @@
       </tr>
     </thead>
     <tbody>
-      {% for audit in audit_logs %}
+      {% for row_category, entry in audit_logs %}
       <tr>
-        <td class="t-mono-sm" style="white-space:nowrap;" data-primary>{{ audit.created_at|date:"Y-m-d H:i:s" }}</td>
-        <td data-label="{% trans 'Station' %}">
-          {% if audit.station %}
-            <a href="{% url 'stations:station_detail' audit.station.pk %}" class="callsign">{{ audit.station.callsign|default:audit.station.name }}</a>
-          {% else %}<span class="t-muted">—</span>{% endif %}
-        </td>
-        <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ audit.get_event_type_display|upper }}</span></td>
-        <td data-label="{% trans 'Message' %}">{{ audit.message }}</td>
-        <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ audit.user.username|default:"—" }}</td>
-        <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ audit.ip_address|default:"—" }}</td>
+        <td class="t-mono-sm" style="white-space:nowrap;" data-primary>{{ entry.created_at|date:"Y-m-d H:i:s" }}</td>
+        {% if row_category == "station" %}
+          <td data-label="{% trans 'Category' %}"><span class="pill pill-muted">{% trans "Station" %}</span></td>
+          <td data-label="{% trans 'Subject' %}">
+            {% if entry.station %}
+              <a href="{% url 'stations:station_detail' entry.station.pk %}" class="callsign">{{ entry.station.callsign|default:entry.station.name }}</a>
+            {% else %}<span class="t-muted">—</span>{% endif %}
+          </td>
+          <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>
+          <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
+          <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.user.username|default:"—" }}</td>
+          <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
+        {% else %}
+          <td data-label="{% trans 'Category' %}"><span class="pill pill-info">SSO</span></td>
+          <td data-label="{% trans 'Subject' %}">
+            {% if entry.application %}{{ entry.application.name }}
+            {% elif entry.target_user %}{{ entry.target_user.username }}
+            {% else %}<span class="t-muted">—</span>{% endif %}
+          </td>
+          <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>
+          <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
+          <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.actor.username|default:"—" }}</td>
+          <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>

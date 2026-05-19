@@ -60,3 +60,83 @@ class AppGrant(models.Model):
             f"{self.user} → {self.application} "
             f"({'active' if self.revoked_at is None else 'revoked'})"
         )
+
+
+class SsoAuditLog(models.Model):
+    """System-wide audit trail for SSO/OIDC events.
+
+    Parallel to StationAuditLog (which is per-station). The
+    apps/audit/ listing view merges both into a single feed —
+    see apps/audit/views.py.
+    """
+
+    class EventType(models.TextChoices):
+        APP_REGISTERED = "app_registered", _("App Registered")
+        APP_DELETED = "app_deleted", _("App Deleted")
+        GRANT_GIVEN = "grant_given", _("Grant Given")
+        GRANT_REVOKED = "grant_revoked", _("Grant Revoked")
+        LOGIN_SUCCESS = "login_success", _("Login Success")
+        LOGIN_DENIED_NO_GRANT = "login_denied_no_grant", _("Login Denied — No Grant")
+        LOGIN_DENIED_INACTIVE = "login_denied_inactive", _("Login Denied — Inactive User")
+        TOKEN_REVOKED = "token_revoked", _("Token Revoked")
+
+    event_type = models.CharField(
+        _("event type"),
+        max_length=32,
+        choices=EventType.choices,
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sso_audit_logs_as_actor",
+        verbose_name=_("actor"),
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sso_audit_logs_as_target",
+        verbose_name=_("target user"),
+    )
+    application = models.ForeignKey(
+        "oauth2_provider.Application",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("application"),
+    )
+    message = models.TextField(_("message"), blank=True)
+    ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("SSO audit log")
+        verbose_name_plural = _("SSO audit logs")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["-created_at"]),
+            models.Index(fields=["event_type", "-created_at"]),
+            models.Index(fields=["target_user", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.get_event_type_display()} @ {self.created_at}"
+
+    @classmethod
+    def log(cls, *, event_type, actor=None, target_user=None, application=None,
+            message="", ip_address=None):
+        """Convenience constructor. Mirrors StationAuditLog.log signature.
+
+        Keyword-only so call sites can't accidentally swap positional args.
+        """
+        return cls.objects.create(
+            event_type=event_type,
+            actor=actor,
+            target_user=target_user,
+            application=application,
+            message=message,
+            ip_address=ip_address,
+        )
