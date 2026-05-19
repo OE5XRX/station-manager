@@ -43,6 +43,7 @@ class AppGrant(models.Model):
     class Meta:
         verbose_name = _("app grant")
         verbose_name_plural = _("app grants")
+        ordering = ("-granted_at",)
         constraints = [
             models.UniqueConstraint(
                 fields=["user", "application"],

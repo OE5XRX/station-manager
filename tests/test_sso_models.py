@@ -1,7 +1,10 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
+from django.utils import timezone
 from oauth2_provider.models import Application
+
+from apps.sso.models import AppGrant
 
 User = get_user_model()
 
@@ -23,8 +26,6 @@ def alice(db):
 
 @pytest.mark.django_db
 def test_appgrant_is_active_by_default(alice, application):
-    from apps.sso.models import AppGrant
-
     grant = AppGrant.objects.create(user=alice, application=application)
     assert grant.revoked_at is None
 
@@ -32,8 +33,6 @@ def test_appgrant_is_active_by_default(alice, application):
 @pytest.mark.django_db
 def test_appgrant_unique_per_user_per_app_while_active(alice, application):
     """Cannot create two active grants for the same (user, app)."""
-    from apps.sso.models import AppGrant
-
     AppGrant.objects.create(user=alice, application=application)
     with pytest.raises(IntegrityError):
         AppGrant.objects.create(user=alice, application=application)
@@ -42,9 +41,6 @@ def test_appgrant_unique_per_user_per_app_while_active(alice, application):
 @pytest.mark.django_db
 def test_appgrant_can_be_regranted_after_revoke(alice, application):
     """Once revoked, a new grant for the same (user, app) is allowed."""
-    from django.utils import timezone
-    from apps.sso.models import AppGrant
-
     g1 = AppGrant.objects.create(user=alice, application=application)
     g1.revoked_at = timezone.now()
     g1.save()
