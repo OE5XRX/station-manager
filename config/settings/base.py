@@ -265,3 +265,15 @@ OAUTH2_PROVIDER = {
     "OAUTH2_VALIDATOR_CLASS": "apps.sso.permissions.SsoOAuth2Validator",
     "OIDC_USERINFO_HOOK": "apps.sso.oidc_claims.add_claims",
 }
+
+# Swappable-model bindings for django-oauth-toolkit. These are the
+# DOT defaults but MUST be defined at the top level (not inside
+# OAUTH2_PROVIDER) so Django's migration autodetector can resolve
+# string-form FKs like ForeignKey("oauth2_provider.Application", …)
+# in our own apps (e.g. AppGrant in apps.sso). Without them,
+# makemigrations crashes with AttributeError on the swappable lookup.
+OAUTH2_PROVIDER_APPLICATION_MODEL = "oauth2_provider.Application"
+OAUTH2_PROVIDER_ACCESS_TOKEN_MODEL = "oauth2_provider.AccessToken"
+OAUTH2_PROVIDER_ID_TOKEN_MODEL = "oauth2_provider.IDToken"
+OAUTH2_PROVIDER_GRANT_MODEL = "oauth2_provider.Grant"
+OAUTH2_PROVIDER_REFRESH_TOKEN_MODEL = "oauth2_provider.RefreshToken"
