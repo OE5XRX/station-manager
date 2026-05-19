@@ -2,7 +2,9 @@
 
 import os
 
-from .base import *  # noqa: F401, F403
+from django.core.exceptions import ImproperlyConfigured
+
+from .base import *  # noqa: E402, F401, F403
 
 DEBUG = False
 
@@ -40,13 +42,10 @@ CHANNEL_LAYERS = {
     },
 }
 
-from pathlib import Path
-
 _oidc_key_path = Path(OIDC_RSA_KEY_PATH)
 try:
     OAUTH2_PROVIDER["OIDC_RSA_PRIVATE_KEY"] = _oidc_key_path.read_text()
 except FileNotFoundError as exc:
-    from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured(
         f"OIDC_RSA_KEY_PATH={_oidc_key_path} missing — "
         "run `python manage.py setup_oidc_keys` once on the host."
