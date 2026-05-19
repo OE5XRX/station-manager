@@ -2,8 +2,6 @@
 
 import os
 
-from django.core.exceptions import ImproperlyConfigured
-
 from .base import *  # noqa: E402, F401, F403
 
 DEBUG = False
@@ -42,11 +40,27 @@ CHANNEL_LAYERS = {
     },
 }
 
+# OIDC ID-token signing key.
+#
+# Read lazily-ish: if the file is missing we log a CRITICAL warning
+# and leave OIDC_RSA_PRIVATE_KEY unset. Django itself can still boot
+# (so `collectstatic` during image build, `migrate` at deploy, etc.
+# all work). DOT will then fail with a clear error on the FIRST
+# request to any OIDC endpoint — exactly when an operator can see
+# the problem.
+#
+# We intentionally do NOT auto-bootstrap an ephemeral key here the
+# way dev.py does — in prod, a missing key is an operational error
+# that must be fixed, not papered over.
 _oidc_key_path = Path(OIDC_RSA_KEY_PATH)
 try:
     OAUTH2_PROVIDER["OIDC_RSA_PRIVATE_KEY"] = _oidc_key_path.read_text()
-except FileNotFoundError as exc:
-    raise ImproperlyConfigured(
-        f"OIDC_RSA_KEY_PATH={_oidc_key_path} missing — "
-        "run `python manage.py setup_oidc_keys` once on the host."
-    ) from exc
+except FileNotFoundError:
+    import logging
+
+    logging.getLogger("apps.sso").critical(
+        "OIDC_RSA_KEY_PATH=%s missing. OIDC endpoints will return 500 "
+        "on the next request. Run `python manage.py setup_oidc_keys` "
+        "on the host to fix.",
+        _oidc_key_path,
+    )
