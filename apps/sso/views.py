@@ -14,7 +14,9 @@ import logging
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -112,6 +114,18 @@ class GrantToggleView(AdminOnlyMixin, View):
             message=f"{verb} via toggle UI",
             ip_address=_client_ip(request),
         )
+
+        # If the toggle was triggered from the application-detail page
+        # (signalled via HX-Trigger-Name=from-app-detail), respond with
+        # HX-Redirect so the whole page refreshes — partial swap can't
+        # update both the "users_with_grant" and "users_without_grant"
+        # columns at once from a single button click.
+        if request.headers.get("HX-Trigger-Name") == "from-app-detail":
+            resp = HttpResponse(status=200)
+            resp["HX-Redirect"] = reverse(
+                "sso:application_detail", kwargs={"pk": application.pk}
+            )
+            return resp
 
         return render(
             request,

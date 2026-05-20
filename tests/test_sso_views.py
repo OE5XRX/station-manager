@@ -148,3 +148,62 @@ def test_dashboard_redirects_anonymous(client):
     resp = client.get(reverse("sso:dashboard"))
     assert resp.status_code == 302
     assert "/accounts/login/" in resp["Location"]
+
+
+@pytest.mark.django_db
+def test_application_detail_lists_granted_and_not_granted_users(client, admin_user, alice, app):
+    from django.urls import reverse
+
+    bob = User.objects.create_user(username="bob", password="x", email="b@x.test")
+    AppGrant.objects.create(user=alice, application=app)
+    # bob has no grant.
+
+    client.force_login(admin_user)
+    resp = client.get(reverse("sso:application_detail", kwargs={"pk": app.pk}))
+    assert resp.status_code == 200
+    assert b"alice" in resp.content
+    assert b"bob" in resp.content
+    assert b"InvenTree" in resp.content  # app name in heading
+
+
+@pytest.mark.django_db
+def test_application_detail_requires_admin(client, alice, app):
+    from django.urls import reverse
+
+    client.force_login(alice)
+    resp = client.get(reverse("sso:application_detail", kwargs={"pk": app.pk}))
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_toggle_from_app_detail_returns_hx_redirect(client, admin_user, alice, app):
+    """When the toggle is invoked from the app-detail page (signalled via
+    HX-Trigger-Name=from-app-detail), the response is an HX-Redirect back
+    to the same page so both 'with grant' and 'without grant' columns
+    refresh consistently."""
+    from django.urls import reverse
+
+    client.force_login(admin_user)
+    resp = client.post(
+        reverse("sso:grant_toggle", kwargs={"user_id": alice.pk, "application_id": app.pk}),
+        HTTP_HX_TRIGGER_NAME="from-app-detail",
+    )
+    assert resp.status_code == 200
+    assert "HX-Redirect" in resp.headers
+    assert f"/sso-admin/applications/{app.pk}/" in resp.headers["HX-Redirect"]
+
+
+@pytest.mark.django_db
+def test_toggle_without_hx_trigger_returns_partial_as_before(client, admin_user, alice, app):
+    """T13 toggle from the user-form page still gets the partial swap."""
+    from django.urls import reverse
+
+    client.force_login(admin_user)
+    resp = client.post(
+        reverse("sso:grant_toggle", kwargs={"user_id": alice.pk, "application_id": app.pk}),
+    )
+    assert resp.status_code == 200
+    # The partial does not include the "HX-Redirect" header.
+    assert "HX-Redirect" not in resp.headers
+    # And it renders the app-grants-card div.
+    assert b"sso-grants-card" in resp.content
