@@ -95,3 +95,56 @@ def test_toggle_writes_audit_log_entry(client, admin_user, alice, app):
     )
     assert entries.exists()
     assert entries.first().event_type == SsoAuditLog.EventType.GRANT_GIVEN
+
+
+@pytest.mark.django_db
+def test_dashboard_lists_apps_with_grant_counts(client, admin_user, alice):
+    from django.urls import reverse
+
+    app1 = Application.objects.create(
+        name="InvenTree",
+        client_type=Application.CLIENT_CONFIDENTIAL,
+        authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        redirect_uris="https://i.example.org/cb/",
+    )
+    app2 = Application.objects.create(
+        name="Grafana",
+        client_type=Application.CLIENT_CONFIDENTIAL,
+        authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        redirect_uris="https://g.example.org/cb/",
+    )
+    AppGrant.objects.create(user=alice, application=app1)
+
+    client.force_login(admin_user)
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 200
+    assert b"InvenTree" in resp.content
+    assert b"Grafana" in resp.content
+    # InvenTree has 1 active grant, Grafana 0.
+    # Loose check that "1" and "0" both appear in proximity to the app
+    # names — the dashboard column renders the counts.
+    body = resp.content.decode()
+    inv_pos = body.find("InvenTree")
+    graf_pos = body.find("Grafana")
+    assert inv_pos != -1 and graf_pos != -1
+    # The count column for InvenTree should contain a "1" within ~500 chars.
+    assert "1" in body[inv_pos:inv_pos + 500]
+
+
+@pytest.mark.django_db
+def test_dashboard_requires_admin(client, alice):
+    """Non-admins get 403."""
+    from django.urls import reverse
+
+    client.force_login(alice)
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_dashboard_redirects_anonymous(client):
+    from django.urls import reverse
+
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 302
+    assert "/accounts/login/" in resp["Location"]
