@@ -13,6 +13,7 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -27,10 +28,24 @@ logger = logging.getLogger(__name__)
 
 
 class AdminOnlyMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Only admins may access SSO management views."""
+    """Only admins may access SSO management views.
+
+    Anonymous callers get the standard LoginRequiredMixin redirect to
+    ``LOGIN_URL`` (302). Authenticated-but-not-authorized callers get
+    a PermissionDenied (403) — re-auth wouldn't help them, they need
+    different permissions. We can't just set ``raise_exception=True``
+    because AccessMixin applies it for *both* failure modes, which
+    would 403 anonymous users instead of redirecting them. So we
+    override ``handle_no_permission`` and branch on auth state.
+    """
 
     def test_func(self):
         return getattr(self.request.user, "is_admin", False)
+
+    def handle_no_permission(self):
+        if self.request.user.is_authenticated:
+            raise PermissionDenied(self.get_permission_denied_message())
+        return super().handle_no_permission()
 
 
 def _client_ip(request):
