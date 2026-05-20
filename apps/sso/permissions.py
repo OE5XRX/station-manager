@@ -35,6 +35,16 @@ from oauth2_provider.oauth2_validators import OAuth2Validator
 
 logger = logging.getLogger(__name__)
 
+# Map our custom claim names to the OIDC scopes that gate them.
+# DOT filters claims through ``oidc_claim_scope``: a claim only ends
+# up in the ID token if the request includes the gating scope. The
+# default mapping covers the IANA-registered claims (sub, name,
+# email, ...) but not our custom ``groups`` claim, so we extend the
+# mapping here. ``preferred_username``/``email``/``name`` are already
+# present in DOT's default map and don't need to be repeated.
+SSO_CLAIM_SCOPE = dict(OAuth2Validator.oidc_claim_scope or {})
+SSO_CLAIM_SCOPE["groups"] = "groups"
+
 
 def user_can_access(user, application) -> bool:
     """Return True iff user is active AND holds an active AppGrant for app.
@@ -69,6 +79,11 @@ class SsoOAuth2Validator(OAuth2Validator):
     ``OAUTH2_PROVIDER["PKCE_REQUIRED"]`` off cannot disable PKCE.
     """
 
+    # Extend DOT's claim<->scope map so the custom ``groups`` claim
+    # actually makes it through ``get_oidc_claims`` and into the ID
+    # token when the RP requests ``scope=... groups``.
+    oidc_claim_scope = SSO_CLAIM_SCOPE
+
     def validate_user(self, username, password, client, request, *args, **kwargs):
         # Default auth (username/password) first.
         ok = super().validate_user(username, password, client, request, *args, **kwargs)
@@ -99,3 +114,19 @@ class SsoOAuth2Validator(OAuth2Validator):
         # Defense-in-depth: PKCE is mandatory for every client
         # regardless of OAUTH2_PROVIDER settings.
         return True
+
+    def get_additional_claims(self, request):
+        """Inject our custom OIDC claims into ID tokens.
+
+        ``OIDC_USERINFO_HOOK`` only feeds the /userinfo/ endpoint;
+        ID-token claims have to be plumbed through this validator
+        hook instead. Both paths reuse ``apps.sso.oidc_claims.add_claims``
+        so RPs see identical data regardless of which endpoint they
+        prefer (InvenTree reads the ID token, Grafana hits userinfo).
+        """
+        from .oidc_claims import add_claims
+
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return {}
+        return add_claims({}, user, request)
