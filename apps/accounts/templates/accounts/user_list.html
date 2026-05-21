@@ -51,9 +51,11 @@
         </td>
         <td class="t-mono" data-label="{% trans 'Email' %}">{{ u.email|default:"—" }}</td>
         <td data-label="{% trans 'Role' %}">
-          {% if u.role == "admin" %}<span class="pill pill-accent">{{ u.get_role_display|upper }}</span>
-          {% elif u.role == "operator" %}<span class="pill pill-violet">{{ u.get_role_display|upper }}</span>
-          {% else %}<span class="pill pill-muted">{{ u.get_role_display|upper }}</span>{% endif %}
+          {% for g in u.groups.all %}
+            {% if g.name == "admin" %}<span class="pill pill-accent">ADMIN</span>
+            {% elif g.name == "operator" %}<span class="pill pill-violet">OPERATOR</span>
+            {% else %}<span class="pill">{{ g.name|upper }}</span>{% endif %}
+          {% empty %}<span class="t-muted">—</span>{% endfor %}
         </td>
         <td class="t-mono" data-label="{% trans 'Language' %}">{{ u.get_language_display }}</td>
         <td data-label="{% trans 'Active' %}">

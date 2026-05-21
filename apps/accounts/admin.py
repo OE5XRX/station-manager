@@ -7,14 +7,12 @@ from .models import User
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ("username", "email", "role", "language", "is_active")
-    list_filter = ("role", "language", "is_active", "is_staff")
+    list_display = ("username", "email", "language", "is_active")
+    list_filter = ("language", "is_active", "is_staff", "groups")
     search_fields = ("username", "email", "first_name", "last_name")
 
-    fieldsets = BaseUserAdmin.fieldsets + (
-        (_("Station Manager"), {"fields": ("role", "language")}),
-    )
+    fieldsets = BaseUserAdmin.fieldsets + ((_("Station Manager"), {"fields": ("language",)}),)
 
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
-        (_("Station Manager"), {"fields": ("role", "language")}),
+        (_("Station Manager"), {"fields": ("language",)}),
     )

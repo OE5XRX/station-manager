@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Authorize" %} — {{ application.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-center" style="min-height: 60vh;">
+  <div class="card shadow-sm" style="max-width: 480px; width: 100%;">
+    <div class="card-body p-4">
+      <h4 class="mb-3">{% trans "Authorize" %} {{ application.name }}</h4>
+
+      {% if not error %}
+        <p>
+          {% blocktrans with app=application.name %}
+            <strong>{{ app }}</strong> is requesting access to your OE5XRX account.
+          {% endblocktrans %}
+        </p>
+
+        <p class="text-muted small mb-1">{% trans "It will receive:" %}</p>
+        <ul class="small">
+          {% for scope in scopes_descriptions %}
+            <li>{{ scope }}</li>
+          {% endfor %}
+        </ul>
+
+        <form id="authorizationForm" method="post" class="mt-4">
+          {% csrf_token %}
+
+          {# Render all hidden fields generically so we stay version-agnostic
+             across django-oauth-toolkit releases (response_mode, claims,
+             code_challenge, nonce, etc. all flow through here). #}
+          {% for field in form %}
+            {% if field.is_hidden %}{{ field }}{% endif %}
+          {% endfor %}
+
+          {{ form.errors }}
+          {{ form.non_field_errors }}
+
+          <div class="d-flex gap-2">
+            {# No name="allow" -> DOT treats this as deny and redirects with
+               error=access_denied. Do NOT add name="deny". #}
+            <button type="submit"
+                    class="btn btn-outline-secondary">
+              {% trans "Cancel" %}
+            </button>
+            <button type="submit"
+                    name="allow"
+                    value="Authorize"
+                    class="btn btn-primary flex-grow-1">
+              {% trans "Authorize" %}
+            </button>
+          </div>
+        </form>
+      {% else %}
+        <div class="alert alert-danger mb-0">
+          <strong>{{ error.error }}</strong>
+          {% if error.description %}
+            <p class="mb-0 mt-1 small">{{ error.description }}</p>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

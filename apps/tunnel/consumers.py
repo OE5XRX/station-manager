@@ -27,7 +27,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        if user.role not in ("admin", "operator"):
+        # user.is_staff_member is @cached_property that hits the ORM —
+        # wrap so it's async-safe. database_sync_to_async (vs the more
+        # generic asgiref.sync.sync_to_async) is the Channels-recommended
+        # primitive for ORM access: it correctly closes any DB connection
+        # opened in the worker thread after the call returns.
+        is_staff = await database_sync_to_async(lambda: user.is_staff_member)()
+        if not is_staff:
             await self.close(code=4403)
             return
 

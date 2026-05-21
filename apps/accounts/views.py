@@ -16,7 +16,7 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Mixin that restricts access to users with admin role."""
 
     def test_func(self):
-        return self.request.user.role == "admin"
+        return self.request.user.is_admin
 
 
 class LoginView(auth_views.LoginView):
@@ -46,6 +46,9 @@ class UserListView(AdminRequiredMixin, ListView):
     template_name = "accounts/user_list.html"
     context_object_name = "users"
     paginate_by = 25
+    # user_list.html iterates ``u.groups.all`` per row — without the
+    # prefetch each row triggers a separate auth_user_groups join.
+    queryset = User.objects.prefetch_related("groups").order_by("username")
 
 
 class UserCreateView(AdminRequiredMixin, CreateView):
@@ -77,6 +80,11 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["form_title"] = _("Edit User")
+        # Local import: avoids loading apps.sso at module-load time
+        # (defensive against import-cycle surprises).
+        from apps.sso.views import _build_grants_for_user
+
+        context["app_grants_list"] = _build_grants_for_user(self.object)
         return context
 
 

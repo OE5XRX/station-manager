@@ -12,3 +12,4 @@ websockets>=14.0,<17.0
 # pulling it into dev so the OTA install tests actually run in CI
 # instead of being skipped via pytest.importorskip.
 requests>=2.32,<3.0
+django-test-migrations>=1.4,<2.0

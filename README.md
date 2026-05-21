@@ -134,6 +134,69 @@ docker compose exec web ruff format --check .
 
 ---
 
+## SSO / OIDC Provider
+
+The station-manager doubles as an OpenID Connect identity provider for
+other OE5XRX apps (InvenTree, Grafana, Nextcloud, …). Design doc:
+[`docs/superpowers/specs/2026-05-18-sso-oidc-provider-design.md`](docs/superpowers/specs/2026-05-18-sso-oidc-provider-design.md).
+
+### One-time setup on a fresh host
+
+```bash
+# Generate the RSA-2048 signing key (persists in the oidc_keys volume).
+docker compose run --rm web python manage.py setup_oidc_keys
+
+# Then start / restart the web service so it picks up the new key.
+docker compose up -d --force-recreate web
+```
+
+`setup_oidc_keys` is idempotent — re-running on a host that already has
+a key is a no-op. Pass `--force` only to deliberately rotate, which
+invalidates every currently-signed ID token.
+
+### Registering a new RP application
+
+1. Log into the station-manager as an admin.
+2. Visit `/admin/oauth2_provider/application/add/`.
+3. Set:
+   - **Name** — human-readable (e.g. "InvenTree (prod)")
+   - **Client type** — Confidential
+   - **Authorization grant type** — Authorization code
+   - **Redirect URIs** — one per line, exact-match enforced
+   - **Post logout redirect URIs** — one per line if RP needs RP-initiated logout
+4. Save and **copy the `client_secret`** from the success page — it's only shown once.
+5. Hand `client_id`, `client_secret`, and the discovery URL
+   `https://ham.oe5xrx.org/sso/.well-known/openid-configuration`
+   to the RP operator.
+
+### Granting users access to an app
+
+Visit a user's detail page in the station-manager admin UI → "App-Zugriffe"
+card → click **Gewähren** next to the desired app. Audit log entry is
+written automatically.
+
+Alternatively, manage grants per-app from the SSO dashboard at `/sso-admin/`.
+
+### Rotating a client secret
+
+No in-place rotation today. If you need to rotate (suspected leak,
+operator change, etc.):
+
+1. Re-register the application under a new client_id.
+2. Hand the new credentials to the RP operator.
+3. Have RP-side users re-grant access (`AppGrant`-Toggle in the
+   admin UI) against the new application row.
+4. Once you've confirmed the new credentials work end-to-end,
+   delete the OLD application — **WARNING**: this hard-deletes
+   every AppGrant referencing that application (CASCADE on the FK),
+   losing the revocation history for those grants. The SsoAuditLog
+   entries survive because their application FK is SET_NULL.
+
+Improvement tracked as a follow-up to add an in-place
+rotate_client_secret admin action.
+
+---
+
 ## Production deploy
 
 Pushing to `main` triggers [`deploy.yml`](.github/workflows/deploy.yml):

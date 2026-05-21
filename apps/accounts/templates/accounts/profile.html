@@ -39,7 +39,13 @@
     <div class="panel-body">
       <dl class="dlist">
         <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ user.username }}</dd>
-        <dt>{% trans "Role" %}</dt><dd><span class="pill pill-accent">{{ user.get_role_display|upper }}</span></dd>
+        <dt>{% trans "Role" %}</dt><dd>
+          {% for g in user.groups.all %}
+            {% if g.name == "admin" %}<span class="pill pill-accent">ADMIN</span>
+            {% elif g.name == "operator" %}<span class="pill pill-violet">OPERATOR</span>
+            {% else %}<span class="pill">{{ g.name|upper }}</span>{% endif %}
+          {% empty %}<span class="pill">—</span>{% endfor %}
+        </dd>
         <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ user.last_login|date:"Y-m-d H:i" }}</dd>
         <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ user.date_joined|date:"Y-m-d" }}</dd>
       </dl>

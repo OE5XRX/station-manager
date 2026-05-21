@@ -2,6 +2,7 @@ import json
 import logging
 
 from asgiref.sync import async_to_sync
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.layers import get_channel_layer
 
@@ -22,7 +23,13 @@ class DeploymentStatusConsumer(AsyncWebsocketConsumer):
         # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
         # and the upgrade dashboard. Members stay excluded (4403) so their
         # auto-reconnect loop from static/js/app.js stops cleanly.
-        if getattr(user, "role", None) not in ("admin", "operator"):
+        # Group-backed check via the cached property — see User.is_staff_member.
+        # Use database_sync_to_async (vs the more generic
+        # asgiref.sync.sync_to_async) because the property hits the ORM:
+        # Channels' wrapper closes any DB connection opened in the worker
+        # thread after the call returns.
+        is_staff_member = await database_sync_to_async(lambda: user.is_staff_member)()
+        if not is_staff_member:
             await self.close(code=4403)
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)

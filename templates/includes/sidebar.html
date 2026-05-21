@@ -63,7 +63,7 @@
       </svg>
       <span class="label">{% trans "Builder" %}</span>
     </a>
-    {% if user.role == 'admin' %}
+    {% if user.is_admin %}
     <a href="{% url 'rollouts:upgrade_dashboard' %}"
        class="nav-item{% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %}aria-current="page"{% endif %}>
@@ -83,7 +83,7 @@
     {% endif %}
   </div>
 
-  {% if user.role == 'admin' %}
+  {% if user.is_admin %}
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Admin" %}</div>
     <a href="{% url 'accounts:user_list' %}"
@@ -93,6 +93,14 @@
         <circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><circle cx="17" cy="10" r="3"/><path d="M15 21a5 5 0 0 1 7 0"/>
       </svg>
       <span class="label">{% trans "Users" %}</span>
+    </a>
+    <a href="{% url 'sso:dashboard' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'sso' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'sso' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1.2"/>
+      </svg>
+      <span class="label">{% trans "SSO" %}</span>
     </a>
     <a href="{% url 'audit:audit_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'audit' %} active{% endif %}"
@@ -132,7 +140,7 @@
     <div class="sb-avatar" aria-hidden="true">{{ user.username|slice:":1"|upper }}</div>
     <a href="{% url 'accounts:profile' %}" class="sb-user" style="color:inherit;text-decoration:none;">
       <div class="sb-user-name">{{ user.username }}</div>
-      <div class="sb-user-role">{{ user.get_role_display|default:"" }}</div>
+      <div class="sb-user-role">{% for name in user.group_names %}{{ name|upper }}{% if not forloop.last %} · {% endif %}{% empty %}—{% endfor %}</div>
     </a>
     <form method="post" action="{% url 'accounts:logout' %}" style="margin:0;">
       {% csrf_token %}

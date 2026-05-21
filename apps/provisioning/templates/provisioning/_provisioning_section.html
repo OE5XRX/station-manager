@@ -1,5 +1,5 @@
 {% load i18n %}
-{% if user.role == 'admin' %}
+{% if user.is_admin %}
 <section class="panel mt-20">
   <div class="panel-head">
     <div class="panel-title"><span class="dot"></span>{% trans "Provisioning" %}</div>

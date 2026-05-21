@@ -1,8 +1,10 @@
 """Production settings."""
 
 import os
+from pathlib import Path
 
-from .base import *  # noqa: F401, F403
+from .base import *  # noqa: E402, F401, F403
+from .base import OAUTH2_PROVIDER, OIDC_RSA_KEY_PATH
 
 DEBUG = False
 
@@ -39,3 +41,47 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+# OIDC ID-token signing key.
+#
+# Read lazily-ish: if the file is missing we log a CRITICAL warning
+# and leave OIDC_RSA_PRIVATE_KEY unset. Django itself can still boot
+# (so `collectstatic` during image build, `migrate` at deploy, etc.
+# all work). DOT will then fail with a clear error on the FIRST
+# request to any OIDC endpoint — exactly when an operator can see
+# the problem.
+#
+# We intentionally do NOT auto-bootstrap an ephemeral key here the
+# way dev.py does — in prod, a missing key is an operational error
+# that must be fixed, not papered over.
+_oidc_key_path = Path(OIDC_RSA_KEY_PATH)
+try:
+    OAUTH2_PROVIDER["OIDC_RSA_PRIVATE_KEY"] = _oidc_key_path.read_text()
+except OSError as exc:
+    # Catch the full OSError hierarchy (FileNotFoundError, PermissionError,
+    # IsADirectoryError, broken-mount EIO, ...) so any file-read failure
+    # gets the same boot-tolerant treatment: log CRITICAL, leave
+    # OIDC_RSA_PRIVATE_KEY unset, let Django still boot (collectstatic /
+    # migrate / check work) and DOT fail loudly on the first OIDC request.
+    # UnicodeDecodeError is also possible if the file is corrupted; include
+    # it too.
+    import logging
+
+    logging.getLogger("apps.sso").critical(
+        "OIDC_RSA_KEY_PATH=%s unreadable (%s: %s). OIDC endpoints will "
+        "return 500 on the next request. Run `python manage.py "
+        "setup_oidc_keys` on the host to fix.",
+        _oidc_key_path,
+        type(exc).__name__,
+        exc,
+    )
+except UnicodeDecodeError as exc:
+    import logging
+
+    logging.getLogger("apps.sso").critical(
+        "OIDC_RSA_KEY_PATH=%s contains non-UTF-8 data (%s); key file is "
+        "corrupted. Regenerate with `python manage.py setup_oidc_keys "
+        "--force`.",
+        _oidc_key_path,
+        exc,
+    )

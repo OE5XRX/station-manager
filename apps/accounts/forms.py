@@ -28,17 +28,22 @@ class LoginForm(AuthenticationForm):
 
 
 class UserCreationForm(BaseUserCreationForm):
-    """Form for admins to create new users."""
+    """Form for admins to create new users.
+
+    Group membership (admin / operator / member) is managed via Django
+    Admin's built-in UserAdmin (filter_horizontal widget on the Groups
+    M2M), not from this form. Keeping this form lean to the
+    bare-minimum identity fields.
+    """
 
     class Meta:
         model = User
-        fields = ("username", "email", "first_name", "last_name", "role", "language")
+        fields = ("username", "email", "first_name", "last_name", "language")
         widgets = {
             "username": forms.TextInput(attrs={"class": "form-control"}),
             "email": forms.EmailInput(attrs={"class": "form-control"}),
             "first_name": forms.TextInput(attrs={"class": "form-control"}),
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
-            "role": forms.Select(attrs={"class": "form-select"}),
             "language": forms.Select(attrs={"class": "form-select"}),
         }
 
@@ -49,7 +54,11 @@ class UserCreationForm(BaseUserCreationForm):
 
 
 class UserChangeForm(BaseUserChangeForm):
-    """Form for admins to edit existing users."""
+    """Form for admins to edit existing users.
+
+    Group membership is managed via Django Admin (see UserCreationForm
+    docstring).
+    """
 
     password = None
 
@@ -60,7 +69,6 @@ class UserChangeForm(BaseUserChangeForm):
             "email",
             "first_name",
             "last_name",
-            "role",
             "language",
             "is_active",
         )
@@ -69,7 +77,6 @@ class UserChangeForm(BaseUserChangeForm):
             "email": forms.EmailInput(attrs={"class": "form-control"}),
             "first_name": forms.TextInput(attrs={"class": "form-control"}),
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
-            "role": forms.Select(attrs={"class": "form-select"}),
             "language": forms.Select(attrs={"class": "form-select"}),
             "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }

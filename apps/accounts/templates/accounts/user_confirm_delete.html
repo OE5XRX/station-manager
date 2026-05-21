@@ -22,7 +22,9 @@
     <dl class="dlist">
       <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ target_user.username }}</dd>
       <dt>{% trans "Email" %}</dt><dd class="t-mono">{{ target_user.email|default:"—" }}</dd>
-      <dt>{% trans "Role" %}</dt><dd>{{ target_user.get_role_display }}</dd>
+      <dt>{% trans "Role" %}</dt><dd>
+        {% for g in target_user.groups.all %}{{ g.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+      </dd>
     </dl>
   </div>
   <div class="panel-foot row-gap-8">

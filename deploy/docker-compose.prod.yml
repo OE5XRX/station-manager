@@ -6,6 +6,8 @@ services:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.prod
+    volumes:
+      - oidc_keys:/app/oidc_keys
     depends_on:
       db:
         condition: service_healthy
@@ -110,3 +112,4 @@ volumes:
   postgres_data:
   certbot_certs:
   certbot_www:
+  oidc_keys:

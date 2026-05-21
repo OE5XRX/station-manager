@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}SSO — {% trans "Registered Apps" %}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">SSO — {% trans "Registered Apps" %}</h2>
+  <a class="btn btn-outline-primary btn-sm" href="{% url 'admin:oauth2_provider_application_add' %}">
+    + {% trans "Neue App registrieren" %}
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-striped mb-0">
+      <thead>
+        <tr>
+          <th>{% trans "Application" %}</th>
+          <th class="text-end">{% trans "Active Grants" %}</th>
+          <th>{% trans "Client ID" %}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for app in applications %}
+        <tr>
+          <td>
+            <a href="{% url 'sso:application_detail' pk=app.pk %}">{{ app.name }}</a>
+          </td>
+          <td class="text-end">
+            <span class="badge {% if app.active_grant_count %}bg-success{% else %}bg-secondary{% endif %}">
+              {{ app.active_grant_count }}
+            </span>
+          </td>
+          <td><code class="small">{{ app.client_id }}</code></td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{% url 'sso:application_detail' pk=app.pk %}">
+              {% trans "Details" %}
+            </a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="4" class="text-muted text-center py-5">
+            {% trans "Noch keine Apps registriert." %}
+            <a href="{% url 'admin:oauth2_provider_application_add' %}">
+              {% trans "Eine anlegen →" %}
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

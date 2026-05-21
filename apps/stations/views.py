@@ -42,7 +42,7 @@ class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Restrict access to users with admin or operator role."""
 
     def test_func(self):
-        return self.request.user.role in ("admin", "operator")
+        return self.request.user.is_staff_member
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
             context["show_raw_private_key"] = True
             context["raw_private_key"] = raw_private_key
         # Provisioning section (admin only)
-        if self.request.user.role == "admin":
+        if self.request.user.is_admin:
             context["image_releases"] = ImageRelease.objects.order_by(
                 "machine", "-is_latest", "-imported_at"
             )
