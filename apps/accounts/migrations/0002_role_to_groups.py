@@ -60,11 +60,17 @@ def reverse_remove_users_from_groups(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # accounts/0001_initial already depends on a concrete auth
+    # migration (auth.0012_alter_user_first_name_max_length), and
+    # Group has existed since auth.0001 — so we transitively have
+    # Group's historical schema via the single dep below. Earlier
+    # revisions pinned ("auth", "__latest__") explicitly here, which
+    # would cause InconsistentMigrationHistory on Django upgrades:
+    # if this migration is already applied on disk but Django ships
+    # a new auth migration, the recorded dependency now points at a
+    # migration that hasn't been applied yet.
     dependencies = [
         ("accounts", "0001_initial"),
-        # Pin to whatever auth ships with our Django line; we only
-        # need Group's historical schema, not a specific auth migration.
-        ("auth", "__latest__"),
     ]
 
     operations = [

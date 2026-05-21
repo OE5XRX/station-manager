@@ -48,8 +48,14 @@ def _pkce_pair():
 def _decode_jwt_payload(jwt: str) -> dict:
     """Decode a JWT payload WITHOUT verifying the signature.
 
-    Signature verification has its own dedicated test (test_sso_keys);
-    here we just care that DOT emitted the expected claims structure.
+    This helper is intentionally unsigned: the tests in this file
+    care about claim *shape* (preferred_username, email, groups, etc.).
+    They do NOT verify that the JWT signature matches the JWKS-served
+    public key — that's a separate concern not covered by any test in
+    this branch (test_sso_keys only validates key generation + file
+    permissions, not end-to-end signing). Tracked as a follow-up:
+    add a JWKS-roundtrip test that fetches /sso/.well-known/jwks.json
+    and asserts the issued ID token verifies against it.
     """
     payload_b64 = jwt.split(".")[1]
     # Re-pad before base64-decoding.

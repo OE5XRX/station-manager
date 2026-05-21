@@ -45,7 +45,7 @@
         <tr>
           <td colspan="4" class="text-muted text-center py-5">
             {% trans "Noch keine Apps registriert." %}
-            <a href="/admin/oauth2_provider/application/add/">
+            <a href="{% url 'admin:oauth2_provider_application_add' %}">
               {% trans "Eine anlegen →" %}
             </a>
           </td>
