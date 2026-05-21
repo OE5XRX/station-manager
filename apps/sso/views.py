@@ -15,6 +15,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
+from django.db import IntegrityError, transaction
+from django.db.models import Count, Q
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -91,23 +93,40 @@ class GrantToggleView(AdminOnlyMixin, View):
         target = get_object_or_404(User, pk=user_id)
         application = get_object_or_404(Application, pk=application_id)
 
-        active = AppGrant.objects.filter(
-            user=target, application=application, revoked_at__isnull=True
-        ).first()
-
-        if active is not None:
-            active.revoked_at = timezone.now()
-            active.save(update_fields=["revoked_at"])
-            event_type = SsoAuditLog.EventType.GRANT_REVOKED
-            verb = _("revoked")
-        else:
-            AppGrant.objects.create(
-                user=target,
-                application=application,
-                granted_by=request.user,
+        # Atomic toggle: serialize against double-submit/concurrent
+        # clicks. Without this, two requests can both find no active
+        # grant and both call .create() — the partial unique index
+        # then 500s the loser. Wrap the read+write in a single
+        # transaction with row locking on existing rows; if the
+        # create still races (different worker, no lock yet), catch
+        # IntegrityError and treat it as "the other request already
+        # created the grant" → idempotent no-op.
+        with transaction.atomic():
+            active = (
+                AppGrant.objects.select_for_update()
+                .filter(user=target, application=application, revoked_at__isnull=True)
+                .first()
             )
-            event_type = SsoAuditLog.EventType.GRANT_GIVEN
-            verb = _("granted")
+
+            if active is not None:
+                active.revoked_at = timezone.now()
+                active.save(update_fields=["revoked_at"])
+                event_type = SsoAuditLog.EventType.GRANT_REVOKED
+                verb = _("revoked")
+            else:
+                try:
+                    AppGrant.objects.create(
+                        user=target,
+                        application=application,
+                        granted_by=request.user,
+                    )
+                except IntegrityError:
+                    # Lost the race — another request just created
+                    # the grant. Idempotent outcome: pretend we won
+                    # too and report the grant exists.
+                    pass
+                event_type = SsoAuditLog.EventType.GRANT_GIVEN
+                verb = _("granted")
 
         SsoAuditLog.log(
             event_type=event_type,
@@ -150,15 +169,14 @@ class SsoDashboardView(AdminOnlyMixin, ListView):
     context_object_name = "applications"
 
     def get_queryset(self):
-        return Application.objects.order_by("name")
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        for app in ctx["applications"]:
-            app.active_grant_count = AppGrant.objects.filter(
-                application=app, revoked_at__isnull=True
-            ).count()
-        return ctx
+        # Annotate the grant count in a single query instead of doing
+        # one COUNT per Application in a Python loop (N+1).
+        return Application.objects.annotate(
+            active_grant_count=Count(
+                "grants",
+                filter=Q(grants__revoked_at__isnull=True),
+            ),
+        ).order_by("name")
 
 
 class ApplicationDetailView(AdminOnlyMixin, DetailView):

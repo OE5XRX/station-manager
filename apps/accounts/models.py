@@ -18,12 +18,16 @@ class User(AbstractUser):
     ``is_operator`` API so call sites need not learn about Groups. A new
     ``is_staff_member`` covers the common admin-OR-operator gate.
 
-    Staleness caveat: the three properties are @cached_property — once
-    read, the value is memoized on the instance. If you mutate
-    ``user.groups`` in the same request and then re-check
-    ``is_admin`` / etc., you'll see the pre-mutation value. After
-    mutating, bust the cache with ``User._invalidate_role_cache(user)``
-    (helper below). The Task 13 grant-toggle view will need this.
+    Staleness caveat: the four properties (``is_admin``,
+    ``is_operator``, ``is_staff_member``, ``group_names``) are
+    @cached_property — once read, the value is memoized on the
+    instance. If you mutate ``user.groups`` in the same request and
+    then re-check one of them, you'll see the pre-mutation value.
+    After mutating, bust the cache with
+    ``User._invalidate_role_cache(user)`` (helper below). The
+    ``UserCreationForm`` / ``UserChangeForm`` paths in
+    ``apps.accounts.forms`` and ``UserManager.create_superuser``
+    do exactly this when assigning groups.
     """
 
     class Language(models.TextChoices):
@@ -66,12 +70,22 @@ class User(AbstractUser):
         """True iff user is in admin OR operator group."""
         return self.groups.filter(name__in=["admin", "operator"]).exists()
 
+    @cached_property
+    def group_names(self):
+        """Sorted list of group names the user is a member of.
+
+        Cached on the User instance so templates that render the user's
+        group memberships (e.g. the sidebar role-badge block) don't fire
+        a fresh ORM query on every page load.
+        """
+        return list(self.groups.order_by("name").values_list("name", flat=True))
+
     @staticmethod
     def _invalidate_role_cache(user):
-        """Delete cached is_admin / is_operator / is_staff_member entries
-        on a User instance after ``user.groups`` has been mutated in the
-        same request. Idempotent — safe to call when the properties
-        have not yet been read.
+        """Delete cached is_admin / is_operator / is_staff_member /
+        group_names entries on a User instance after ``user.groups`` has
+        been mutated in the same request. Idempotent — safe to call when
+        the properties have not yet been read.
         """
-        for attr in ("is_admin", "is_operator", "is_staff_member"):
+        for attr in ("is_admin", "is_operator", "is_staff_member", "group_names"):
             user.__dict__.pop(attr, None)

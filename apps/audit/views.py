@@ -14,9 +14,16 @@ User = get_user_model()
 
 # Per-source fetch cap before merging. The merged list is built in
 # Python (sorted in-memory), so the upper bound on memory is
-# O(STATION_FEED_CAP + SSO_FEED_CAP). Plenty of headroom at OE5XRX
-# scale; tune if a single page of audit traffic ever exceeds this.
-MERGE_FEED_CAP = 500
+# O(STATION_FEED_CAP + SSO_FEED_CAP). Only applies to the "All"
+# category — when the user filters to a single source we let
+# pagination work over the full queryset (no cap).
+#
+# At OE5XRX scale (~100 stations, ~hundreds of audit events/year per
+# source) this never bites. If a single deployment ever crosses 5000
+# entries per source per category=All view, the correct fix is a
+# UNION-based queryset that supports DB-level pagination — tracked
+# as a follow-up to keep this commit minimal.
+MERGE_FEED_CAP = 5000
 
 
 class AuditLogFilterMixin:
@@ -98,17 +105,25 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         station_entries = []
         sso_entries = []
 
+        # When only one source is active, return its queryset
+        # unsliced so Django's Paginator can walk the full history.
+        # The cap only applies to the merge view where we have to
+        # materialize both sources in Python to merge by created_at.
+        merging = include_station and include_sso
+
         if include_station:
             station_qs = StationAuditLog.objects.select_related("station", "user")
             station_qs = self.apply_filters(station_qs, params)
-            station_entries = list(station_qs.order_by("-created_at")[:MERGE_FEED_CAP])
+            ordered = station_qs.order_by("-created_at")
+            station_entries = list(ordered[:MERGE_FEED_CAP] if merging else ordered)
 
         if include_sso:
             sso_qs = SsoAuditLog.objects.select_related(
                 "actor", "target_user", "application"
             )
             sso_qs = self.apply_sso_date_filters(sso_qs, params)
-            sso_entries = list(sso_qs.order_by("-created_at")[:MERGE_FEED_CAP])
+            ordered = sso_qs.order_by("-created_at")
+            sso_entries = list(ordered[:MERGE_FEED_CAP] if merging else ordered)
 
         # Merge into a single chronological list of (category, entry)
         # tuples. The template unpacks the tuple to pick the right row
