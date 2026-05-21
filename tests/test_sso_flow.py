@@ -271,3 +271,150 @@ def test_refresh_token_flow_yields_new_access_token(
     assert new_data["access_token"] != first_access, (
         "Refresh must produce a new access_token, not echo the old one"
     )
+
+
+@pytest.mark.django_db
+def test_authorize_without_appgrant_redirects_with_access_denied(client, application):
+    """User logged in but no AppGrant -> no auth code issued.
+
+    Either DOT redirects to RP with ?error=access_denied (RFC-conformant)
+    or short-circuits with a 4xx. Whatever the surface behavior, what we
+    MUST NOT see is an authorization code in the response.
+
+    NOTE (Task 19 finding): As of this commit, the authorization-code
+    path is NOT wired through ``user_can_access`` — ``apps.sso.permissions``
+    only gates the password-grant path via ``validate_user``. The project
+    URL conf mounts ``oauth2_provider.urls`` directly with no
+    project-level wrapper around DOT's ``AuthorizationView``. This test
+    therefore currently fails: DOT issues a code for any logged-in user.
+
+    The test is intentionally left in its load-bearing form rather than
+    being weakened to pass — it codifies the security invariant the
+    project committed to in the design spec ("Authorize without an
+    active AppGrant -> no token"). Fix lives in a follow-up that wires
+    AppGrant into the authorize POST handler (T13/T15 leftovers).
+    """
+    verifier, challenge = _pkce_pair()
+    g, _g_created = Group.objects.get_or_create(name="member")
+    u = User.objects.create_user(
+        username="ungrant", password="x", email="u@x.test"
+    )
+    u.groups.add(g)
+    client.force_login(u)
+    # NB: no AppGrant created for u + application.
+
+    resp = client.post(
+        "/sso/authorize/",
+        {
+            "client_id": application.client_id,
+            "redirect_uri": REDIRECT_URI,
+            "response_type": "code",
+            "scope": "openid",
+            "state": "deny",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "allow": "Authorize",
+        },
+    )
+
+    if resp.status_code == 302:
+        q = parse_qs(urlparse(resp["Location"]).query)
+        assert "code" not in q, (
+            "DOT must NOT issue an auth code for a user without an AppGrant. "
+            f"Got Location={resp['Location']!r}"
+        )
+        # access_denied is the RFC-conformant error; some configurations may
+        # bounce back with a different error code, but the key invariant is
+        # "no code".
+    else:
+        assert resp.status_code in (400, 401, 403)
+
+
+@pytest.mark.django_db
+def test_token_exchange_with_wrong_code_verifier_fails(client, application, authorized_user):
+    """Hand the token endpoint a code_verifier that does NOT match the
+    code_challenge sent during authorize -> expect invalid_grant.
+    """
+    verifier, challenge = _pkce_pair()
+    client.force_login(authorized_user)
+
+    resp = client.post(
+        "/sso/authorize/",
+        {
+            "client_id": application.client_id,
+            "redirect_uri": REDIRECT_URI,
+            "response_type": "code",
+            "scope": "openid",
+            "state": "x",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "allow": "Authorize",
+        },
+    )
+    assert resp.status_code == 302, (
+        f"authorize POST did not redirect; got {resp.status_code}, "
+        f"body={resp.content[:200]!r}"
+    )
+    code = parse_qs(urlparse(resp["Location"]).query)["code"][0]
+
+    basic = base64.b64encode(
+        f"{application.client_id}:{application.client_secret}".encode()
+    ).decode()
+    resp = client.post(
+        "/sso/token/",
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "code_verifier": "this-is-not-the-real-verifier-12345678901234567890",
+        },
+        HTTP_AUTHORIZATION=f"Basic {basic}",
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_grant"
+
+
+@pytest.mark.django_db
+def test_token_exchange_with_unknown_redirect_uri_fails(client, application, authorized_user):
+    """Authorize was issued for the registered redirect_uri; token exchange
+    claiming a DIFFERENT redirect_uri must be rejected.
+
+    Different DOT/oauthlib versions return invalid_grant vs invalid_request
+    - we just assert 4xx and no token.
+    """
+    verifier, challenge = _pkce_pair()
+    client.force_login(authorized_user)
+
+    resp = client.post(
+        "/sso/authorize/",
+        {
+            "client_id": application.client_id,
+            "redirect_uri": REDIRECT_URI,
+            "response_type": "code",
+            "scope": "openid",
+            "state": "x",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "allow": "Authorize",
+        },
+    )
+    assert resp.status_code == 302
+    code = parse_qs(urlparse(resp["Location"]).query)["code"][0]
+
+    basic = base64.b64encode(
+        f"{application.client_id}:{application.client_secret}".encode()
+    ).decode()
+    resp = client.post(
+        "/sso/token/",
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "https://elsewhere.example.org/cb/",
+            "code_verifier": verifier,
+        },
+        HTTP_AUTHORIZATION=f"Basic {basic}",
+    )
+    assert resp.status_code == 400, (
+        f"expected 4xx; got {resp.status_code} {resp.content[:200]!r}"
+    )
+    assert "access_token" not in (resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {})
