@@ -110,9 +110,15 @@ class SsoOAuth2Validator(OAuth2Validator):
             )
         return allowed
 
-    def is_pkce_required(self, client_id, request):
+    def is_pkce_required(self, client_id, request=None):
         # Defense-in-depth: PKCE is mandatory for every client
         # regardless of OAUTH2_PROVIDER settings.
+        #
+        # `request=None` keeps the signature tolerant across DOT 3.x:
+        # older 3.x releases called this with one positional arg
+        # (just client_id); 3.2+ passes both. Accepting the kwarg with
+        # a default works for both call shapes without forcing a
+        # tighter requirements pin than what we've tested against.
         return True
 
     def get_additional_claims(self, request):
