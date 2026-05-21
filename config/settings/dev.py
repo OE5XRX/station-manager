@@ -1,10 +1,12 @@
 """Development settings."""
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("DJANGO_SECRET_KEY", "insecure-dev-key-do-not-use-in-production")
 
 from .base import *  # noqa: E402, F401, F403
+from .base import OAUTH2_PROVIDER, OIDC_RSA_KEY_PATH  # noqa: E402
 
 DEBUG = True
 

@@ -257,11 +257,17 @@ class AppGrantAuthorizationView(DotAuthorizationView):
 
         # --- Denied path -----------------------------------------------------
 
-        # Decide the audit event: inactive user vs. missing grant.
+        # Decide the audit event and error_description: inactive user
+        # vs. missing grant. We intentionally surface the distinction
+        # in the RFC error_description so RP-side logs name the right
+        # cause; both denials are operationally-meaningful so leaking
+        # the policy difference is acceptable for an internal IdP.
         if not getattr(request.user, "is_active", False):
             event_type = SsoAuditLog.EventType.LOGIN_DENIED_INACTIVE
+            error_description = "User account is inactive."
         else:
             event_type = SsoAuditLog.EventType.LOGIN_DENIED_NO_GRANT
+            error_description = "User has no active grant for this application."
 
         try:
             SsoAuditLog.log(
@@ -293,7 +299,7 @@ class AppGrantAuthorizationView(DotAuthorizationView):
         parsed = urlparse(redirect_uri)
         existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
         existing["error"] = "access_denied"
-        existing["error_description"] = "User has no active grant for this application."
+        existing["error_description"] = error_description
         if state:
             existing["state"] = state
         new_query = urlencode(existing)

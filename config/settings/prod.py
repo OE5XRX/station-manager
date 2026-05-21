@@ -1,8 +1,10 @@
 """Production settings."""
 
 import os
+from pathlib import Path
 
 from .base import *  # noqa: E402, F401, F403
+from .base import OAUTH2_PROVIDER, OIDC_RSA_KEY_PATH
 
 DEBUG = False
 

@@ -2,9 +2,13 @@
 
 import os
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-secret-key-not-for-production")
 
 from .base import *  # noqa: E402, F401, F403
+from .base import OAUTH2_PROVIDER  # noqa: E402
 
 DEBUG = True
 
@@ -40,10 +44,8 @@ PASSWORD_HASHERS = [
 
 # In-memory RSA key for tests — no filesystem dependency, so the
 # suite runs in any environment without setup_oidc_keys having been
-# called first.
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-
+# called first. Imports are hoisted to the module top so ruff E402
+# (module-level imports not at top of file) stays clean.
 _test_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 OAUTH2_PROVIDER["OIDC_RSA_PRIVATE_KEY"] = _test_key.private_bytes(
     encoding=serialization.Encoding.PEM,

@@ -242,7 +242,10 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # behind nginx (SECURE_PROXY_SSL_HEADER masks the original scheme) and
 # breaks token validation on every RP. Empty default = DOT auto-derive,
 # which is fine for dev/test but not prod.
-OIDC_RSA_KEY_PATH = os.environ.get("OIDC_RSA_KEY_PATH", str(BASE_DIR / "oidc_keys" / "private.pem"))
+OIDC_RSA_KEY_PATH = os.environ.get(
+    "OIDC_RSA_KEY_PATH",
+    str(BASE_DIR / "oidc_keys" / "private.pem"),
+)
 
 OAUTH2_PROVIDER = {
     "OIDC_ENABLED": True,
