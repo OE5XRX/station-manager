@@ -38,6 +38,18 @@ RUN DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY} \
 # Run as non-root user. Home dir is required because cosign writes its
 # TUF trust-root cache under $HOME/.sigstore/root at first verify call.
 RUN adduser --disabled-password --gecos '' appuser
+
+# Pre-create /app/oidc_keys and hand it to appuser BEFORE the USER
+# switch. The directory is a Docker named volume mount in production;
+# Docker's first-mount logic copies the image's existing path (and its
+# ownership) into the fresh volume, so this is the only place we get
+# to set the right uid/gid. Without this, the volume comes up as
+# root:root and setup_oidc_keys (running as appuser) hits
+# PermissionError when writing the private key.
+RUN mkdir -p /app/oidc_keys \
+    && chown -R appuser:appuser /app/oidc_keys \
+    && chmod 0700 /app/oidc_keys
+
 USER appuser
 
 EXPOSE 8000

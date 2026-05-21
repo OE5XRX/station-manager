@@ -154,6 +154,19 @@ docker compose up -d --force-recreate web
 a key is a no-op. Pass `--force` only to deliberately rotate, which
 invalidates every currently-signed ID token.
 
+**Upgrading from an image built before this fix:** if `setup_oidc_keys`
+fails with `PermissionError: ... /app/oidc_keys/...`, the named volume
+was created by the Docker daemon as `root:root` before the image
+pre-created the directory under `appuser`. Fix once:
+
+```bash
+docker compose run --rm --user root web chown -R appuser:appuser /app/oidc_keys
+docker compose run --rm web python manage.py setup_oidc_keys
+```
+
+Fresh installs (images built from this commit onward) inherit the
+correct ownership on first mount and don't need the manual chown.
+
 ### Registering a new RP application
 
 1. Log into the station-manager as an admin.
