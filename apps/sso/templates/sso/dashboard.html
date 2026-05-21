@@ -6,7 +6,7 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2 class="mb-0">SSO — {% trans "Registered Apps" %}</h2>
-  <a class="btn btn-outline-primary btn-sm" href="/admin/oauth2_provider/application/add/">
+  <a class="btn btn-outline-primary btn-sm" href="{% url 'admin:oauth2_provider_application_add' %}">
     + {% trans "Neue App registrieren" %}
   </a>
 </div>

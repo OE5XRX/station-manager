@@ -92,7 +92,17 @@ def test_application_admin_only_counts_active_grants(client, superadmin):
     g2.revoked_at = timezone.now()
     g2.save()
 
-    # Active count should be 1, not 2.
+    # Active count should be 1, not 2. The admin's `active_grants`
+    # column reads from the `_active_grants` annotation populated by
+    # `CustomApplicationAdmin.get_queryset`; fetch the row through
+    # that queryset rather than the raw `app` we kept above.
+    from django.test import RequestFactory
+
     from apps.sso.admin import CustomApplicationAdmin
+
     admin_obj = CustomApplicationAdmin(Application, None)
-    assert admin_obj.active_grants(app) == 1
+    rf = RequestFactory()
+    fake_request = rf.get("/admin/oauth2_provider/application/")
+    fake_request.user = superadmin
+    annotated_app = admin_obj.get_queryset(fake_request).get(pk=app.pk)
+    assert admin_obj.active_grants(annotated_app) == 1

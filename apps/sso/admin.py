@@ -1,4 +1,5 @@
 from django.contrib import admin, messages
+from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from oauth2_provider.admin import ApplicationAdmin as DefaultApplicationAdmin
@@ -12,8 +13,18 @@ def revoke_selected(modeladmin, request, queryset):
     """Bulk-revoke action: sets revoked_at=now() on active grants only.
 
     No-op on rows that are already revoked, so a re-run is idempotent.
+    Iterates and calls ``.save()`` so the AppGrant pre_save/post_save
+    handlers in ``apps.sso.signals`` fire — those cascade token
+    revocation and write SsoAuditLog TOKEN_REVOKED entries. Switching
+    to ``.update()`` here would silently leave tokens valid until
+    their natural expiry, defeating the whole point of revoking.
     """
-    n = queryset.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+    now = timezone.now()
+    n = 0
+    for grant in queryset.filter(revoked_at__isnull=True):
+        grant.revoked_at = now
+        grant.save(update_fields=["revoked_at"])
+        n += 1
     modeladmin.message_user(
         request,
         _("Revoked %(n)d grant(s).") % {"n": n},
@@ -71,9 +82,24 @@ class CustomApplicationAdmin(DefaultApplicationAdmin):
 
     list_display = ("name", "client_id", "client_type", "active_grants", "created")
 
+    def get_queryset(self, request):
+        # Annotate the active-grant count once via a JOIN + GROUP BY
+        # instead of doing one COUNT query per row in the changelist
+        # (N+1 as the number of registered applications grows).
+        return (
+            super()
+            .get_queryset(request)
+            .annotate(
+                _active_grants=Count(
+                    "grants",
+                    filter=Q(grants__revoked_at__isnull=True),
+                ),
+            )
+        )
+
+    @admin.display(description="Active grants", ordering="_active_grants")
     def active_grants(self, obj):
-        return AppGrant.objects.filter(application=obj, revoked_at__isnull=True).count()
-    active_grants.short_description = "Active grants"
+        return obj._active_grants
 
     def get_readonly_fields(self, request, obj=None):
         ro = list(super().get_readonly_fields(request, obj))

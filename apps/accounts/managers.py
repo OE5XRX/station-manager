@@ -14,7 +14,10 @@ class UserManager(BaseUserManager):
 
     Regular create_user does NOT auto-assign any group; admins manage
     group membership via Django Admin's UserAdmin (filter_horizontal
-    on the Groups M2M).
+    on the Groups M2M) or via the project's UserCreationForm. This
+    mirrors Django's stock ``auth.User`` behaviour: stock create_user
+    also doesn't pre-populate group memberships, leaving that decision
+    to the caller.
     """
 
     def create_superuser(self, username, email=None, password=None, **extra_fields):

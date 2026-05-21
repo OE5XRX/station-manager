@@ -101,6 +101,13 @@ class GrantToggleView(AdminOnlyMixin, View):
         # create still races (different worker, no lock yet), catch
         # IntegrityError and treat it as "the other request already
         # created the grant" → idempotent no-op.
+        #
+        # `audit_event` is set only when this request actually changed
+        # state. If we lost the create race, the other request will
+        # write its own audit row; ours stays silent to avoid double-
+        # logging a no-op as a real grant transition.
+        audit_event = None
+        audit_verb = None
         with transaction.atomic():
             active = (
                 AppGrant.objects.select_for_update()
@@ -111,8 +118,8 @@ class GrantToggleView(AdminOnlyMixin, View):
             if active is not None:
                 active.revoked_at = timezone.now()
                 active.save(update_fields=["revoked_at"])
-                event_type = SsoAuditLog.EventType.GRANT_REVOKED
-                verb = _("revoked")
+                audit_event = SsoAuditLog.EventType.GRANT_REVOKED
+                audit_verb = _("revoked")
             else:
                 try:
                     AppGrant.objects.create(
@@ -122,20 +129,29 @@ class GrantToggleView(AdminOnlyMixin, View):
                     )
                 except IntegrityError:
                     # Lost the race — another request just created
-                    # the grant. Idempotent outcome: pretend we won
-                    # too and report the grant exists.
-                    pass
-                event_type = SsoAuditLog.EventType.GRANT_GIVEN
-                verb = _("granted")
+                    # the grant. State is now identical to the
+                    # winning request's; skip the audit write so the
+                    # log doesn't claim two GRANT_GIVEN events for
+                    # one transition.
+                    logger.info(
+                        "GrantToggleView lost create race for user=%s app=%s; "
+                        "no audit row written (winner already logged it)",
+                        target.username,
+                        application.client_id,
+                    )
+                else:
+                    audit_event = SsoAuditLog.EventType.GRANT_GIVEN
+                    audit_verb = _("granted")
 
-        SsoAuditLog.log(
-            event_type=event_type,
-            actor=request.user,
-            target_user=target,
-            application=application,
-            message=f"{verb} via toggle UI",
-            ip_address=_client_ip(request),
-        )
+        if audit_event is not None:
+            SsoAuditLog.log(
+                event_type=audit_event,
+                actor=request.user,
+                target_user=target,
+                application=application,
+                message=f"{audit_verb} via toggle UI",
+                ip_address=_client_ip(request),
+            )
 
         # If the toggle was triggered from the application-detail page
         # (signalled via HX-Trigger-Name=from-app-detail), respond with
@@ -308,17 +324,21 @@ class AppGrantAuthorizationView(DotAuthorizationView):
 
 
 def _is_registered_redirect(application, candidate_uri: str) -> bool:
-    """Exact-string match against application.redirect_uris.
+    """Delegate to DOT's own redirect-URI matcher.
 
-    Whitespace-separated list; `candidate_uri` must match one element
-    character-for-character. NO normalization (trailing slash, host
-    casing, percent-encoding) — operators registering URIs must use
-    the canonical form they want clients to send. Strict by design,
-    mirrors DOT's own validator: any divergence would create an
-    open-redirect surface (an RP sending an unexpected form gets
-    bounced to whatever the partial match resolves to).
+    Earlier revisions of this code did an exact-string compare against
+    the whitespace-split list; that diverged from DOT's happy-path
+    validator (which normalizes via oauthlib's
+    ``redirect_to_uri_allowed`` and tolerates extra query-string
+    parameters per the RFC). Behavioural drift between the deny path
+    and the happy path caused spurious 400s on URIs DOT itself would
+    have accepted on success. Reuse the library function so both
+    paths agree.
 
     Returns False for any miss; the caller falls back to 400.
     """
-    registered = (application.redirect_uris or "").split()
-    return candidate_uri in registered
+    if application is None or not candidate_uri:
+        return False
+    return application.redirect_uri_allowed(candidate_uri)
+
+

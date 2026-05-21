@@ -102,32 +102,40 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
             category == "" and station_only_filters_active
         )
 
-        station_entries = []
-        sso_entries = []
-
-        # When only one source is active, return its queryset
-        # unsliced so Django's Paginator can walk the full history.
-        # The cap only applies to the merge view where we have to
-        # materialize both sources in Python to merge by created_at.
+        # Single-source mode (only station or only sso) returns the
+        # raw queryset so Paginator can LIMIT/OFFSET at the DB level.
+        # Merge mode (both sources) materializes a sorted list of
+        # (category, entry) tuples, capped at MERGE_FEED_CAP per source.
         merging = include_station and include_sso
 
-        if include_station:
+        if not merging and include_station:
             station_qs = StationAuditLog.objects.select_related("station", "user")
             station_qs = self.apply_filters(station_qs, params)
-            ordered = station_qs.order_by("-created_at")
-            station_entries = list(ordered[:MERGE_FEED_CAP] if merging else ordered)
+            self._single_source = "station"
+            return station_qs.order_by("-created_at")
 
-        if include_sso:
+        if not merging and include_sso:
             sso_qs = SsoAuditLog.objects.select_related(
                 "actor", "target_user", "application"
             )
             sso_qs = self.apply_sso_date_filters(sso_qs, params)
-            ordered = sso_qs.order_by("-created_at")
-            sso_entries = list(ordered[:MERGE_FEED_CAP] if merging else ordered)
+            self._single_source = "sso"
+            return sso_qs.order_by("-created_at")
 
-        # Merge into a single chronological list of (category, entry)
-        # tuples. The template unpacks the tuple to pick the right row
-        # variant. O(N + M) memory; capped by MERGE_FEED_CAP per source.
+        # Merge mode.
+        self._single_source = None
+        station_qs = StationAuditLog.objects.select_related("station", "user")
+        station_qs = self.apply_filters(station_qs, params)
+        station_entries = list(
+            station_qs.order_by("-created_at")[:MERGE_FEED_CAP]
+        )
+
+        sso_qs = SsoAuditLog.objects.select_related(
+            "actor", "target_user", "application"
+        )
+        sso_qs = self.apply_sso_date_filters(sso_qs, params)
+        sso_entries = list(sso_qs.order_by("-created_at")[:MERGE_FEED_CAP])
+
         merged = [("station", e) for e in station_entries] + [
             ("sso", e) for e in sso_entries
         ]
@@ -135,12 +143,18 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         return merged
 
     def paginate_queryset(self, queryset, page_size):
-        # Override: the base ListView uses queryset.count() which doesn't
-        # work on a Python list of tuples — Paginator handles lists fine,
-        # so do the pagination manually and return the expected 4-tuple.
+        # Two shapes coming in from get_queryset:
+        # - Single-source mode: a real QuerySet → Paginator does DB-level
+        #   LIMIT/OFFSET; we wrap each result row as (category, entry) to
+        #   keep the template's tuple-unpack iteration uniform.
+        # - Merge mode: a Python list of (category, entry) tuples →
+        #   Paginator handles lists natively; pass through.
         paginator = Paginator(queryset, page_size)
         page_number = self.request.GET.get(self.page_kwarg, 1)
         page = paginator.get_page(page_number)
+        if self._single_source is not None:
+            cat = self._single_source
+            page.object_list = [(cat, entry) for entry in page.object_list]
         return (paginator, page, page.object_list, page.has_other_pages())
 
     def get_context_data(self, **kwargs):
