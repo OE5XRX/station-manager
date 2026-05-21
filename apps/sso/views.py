@@ -10,11 +10,12 @@ template files land in subsequent tasks.
 """
 
 import logging
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
@@ -22,8 +23,10 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import DetailView, ListView
 from oauth2_provider.models import Application
+from oauth2_provider.views import AuthorizationView as DotAuthorizationView
 
 from .models import AppGrant, SsoAuditLog
+from .permissions import user_can_access
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -179,3 +182,112 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
             pk__in=active_user_ids
         ).order_by("username")
         return ctx
+
+
+# ---------------------------------------------------------------------------
+# AppGrant gate on the authorization endpoint
+# ---------------------------------------------------------------------------
+
+
+class AppGrantAuthorizationView(DotAuthorizationView):
+    """DOT AuthorizationView wrapped with the AppGrant access gate.
+
+    Two-line summary:
+    - Pre-flight: resolve client_id -> Application, check user_can_access.
+    - On deny: redirect back to RP with ?error=access_denied&state=...
+      WITHOUT calling super().dispatch(), so no code/token is ever issued.
+
+    The check must happen BEFORE DOT renders the consent screen — otherwise
+    a denied user sees a "Authorize InvenTree" page that does nothing on
+    submit, which is confusing UX. By short-circuiting in dispatch(), the
+    denied user is bounced straight back to the RP.
+
+    Audit log:
+    - LOGIN_DENIED_NO_GRANT: authenticated, no active AppGrant.
+    - LOGIN_DENIED_INACTIVE: user.is_active is False.
+    Both events are written best-effort; an audit failure must NOT alter
+    the security outcome (still deny).
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        # Only gate the actual flow, not anonymous GET/POST that DOT will
+        # reject anyway. If the user isn't authenticated, fall through so
+        # DOT redirects to the login page via the LoginRequiredMixin it
+        # already wraps the view in.
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+
+        # client_id arrives either as a GET param (initial visit + consent
+        # POST) or implicitly via session for some DOT versions. Read both.
+        client_id = (
+            request.GET.get("client_id")
+            or request.POST.get("client_id")
+        )
+        if not client_id:
+            # No client_id means the request is malformed; let DOT handle
+            # the 400.
+            return super().dispatch(request, *args, **kwargs)
+
+        application = Application.objects.filter(client_id=client_id).first()
+        if application is None:
+            # Unknown application — let DOT handle the error (does NOT
+            # redirect since redirect_uri may also be untrusted).
+            return super().dispatch(request, *args, **kwargs)
+
+        if user_can_access(request.user, application):
+            return super().dispatch(request, *args, **kwargs)
+
+        # --- Denied path -----------------------------------------------------
+
+        # Decide the audit event: inactive user vs. missing grant.
+        if not getattr(request.user, "is_active", False):
+            event_type = SsoAuditLog.EventType.LOGIN_DENIED_INACTIVE
+        else:
+            event_type = SsoAuditLog.EventType.LOGIN_DENIED_NO_GRANT
+
+        try:
+            SsoAuditLog.log(
+                event_type=event_type,
+                actor=request.user,
+                target_user=request.user,
+                application=application,
+                message=(
+                    f"OIDC authorize denied: {event_type.label}. "
+                    f"User={request.user.username} App={application.client_id}"
+                ),
+                ip_address=_client_ip(request),
+            )
+        except Exception:
+            logger.exception("Audit log write failed during authorize deny")
+
+        # Pull the requested redirect_uri + state for the RP-bounce. The
+        # redirect_uri MUST be one the Application has registered — else
+        # we have an open-redirect; fall back to a 400 in that case.
+        redirect_uri = request.GET.get("redirect_uri") or request.POST.get("redirect_uri")
+        state = request.GET.get("state") or request.POST.get("state") or ""
+
+        if not redirect_uri or not _is_registered_redirect(application, redirect_uri):
+            # Cannot safely bounce back. Return 400 without echoing the
+            # untrusted URI back to the user.
+            return HttpResponseBadRequest("access_denied")
+
+        # Append the error params to the redirect URI's query string.
+        parsed = urlparse(redirect_uri)
+        existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        existing["error"] = "access_denied"
+        existing["error_description"] = "User has no active grant for this application."
+        if state:
+            existing["state"] = state
+        new_query = urlencode(existing)
+        target = urlunparse(parsed._replace(query=new_query))
+        return HttpResponseRedirect(target)
+
+
+def _is_registered_redirect(application, candidate_uri: str) -> bool:
+    """Exact-match candidate against the Application's allowed redirect URIs.
+
+    `Application.redirect_uris` is whitespace-separated. We strip and
+    do string equality — same posture as DOT's own validator.
+    """
+    registered = (application.redirect_uris or "").split()
+    return candidate_uri in registered
