@@ -1,6 +1,7 @@
 import json
 import logging
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
@@ -27,7 +28,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        if not user.is_staff_member:
+        # user.is_staff_member is @cached_property that hits the ORM —
+        # wrap so it's async-safe. Matches apps/deployments/consumers.py.
+        is_staff = await sync_to_async(lambda: user.is_staff_member)()
+        if not is_staff:
             await self.close(code=4403)
             return
 
