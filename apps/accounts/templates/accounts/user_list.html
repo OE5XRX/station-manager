@@ -55,7 +55,7 @@
             {% if g.name == "admin" %}<span class="pill pill-accent">ADMIN</span>
             {% elif g.name == "operator" %}<span class="pill pill-violet">OPERATOR</span>
             {% else %}<span class="pill">{{ g.name|upper }}</span>{% endif %}
-          {% endfor %}
+          {% empty %}<span class="t-muted">—</span>{% endfor %}
         </td>
         <td class="t-mono" data-label="{% trans 'Language' %}">{{ u.get_language_display }}</td>
         <td data-label="{% trans 'Active' %}">

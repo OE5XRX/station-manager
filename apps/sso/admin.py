@@ -109,5 +109,14 @@ class CustomApplicationAdmin(DefaultApplicationAdmin):
 
 
 # Re-register so our subclass replaces the default.
-admin.site.unregister(Application)
+#
+# Wrap the unregister in try/except admin.sites.NotRegistered so a
+# future DOT release that ships without auto-registering Application
+# (or another app that unregistered it first via INSTALLED_APPS
+# ordering) doesn't crash Django startup. The register() call below
+# is still required either way.
+try:
+    admin.site.unregister(Application)
+except admin.sites.NotRegistered:
+    pass
 admin.site.register(Application, CustomApplicationAdmin)

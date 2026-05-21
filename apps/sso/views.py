@@ -312,13 +312,18 @@ class AppGrantAuthorizationView(DotAuthorizationView):
             return HttpResponseBadRequest("access_denied")
 
         # Append the error params to the redirect URI's query string.
+        # Keep parse_qsl's list-of-pairs form (don't collapse via dict()):
+        # the original redirect_uri may legitimately repeat a query key,
+        # and the RFC error-redirect should preserve that structure
+        # rather than silently drop duplicates. urlencode(..., doseq=True)
+        # round-trips the list back into a query string.
         parsed = urlparse(redirect_uri)
-        existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        existing["error"] = "access_denied"
-        existing["error_description"] = error_description
+        pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        pairs.append(("error", "access_denied"))
+        pairs.append(("error_description", error_description))
         if state:
-            existing["state"] = state
-        new_query = urlencode(existing)
+            pairs.append(("state", state))
+        new_query = urlencode(pairs, doseq=True)
         target = urlunparse(parsed._replace(query=new_query))
         return HttpResponseRedirect(target)
 
