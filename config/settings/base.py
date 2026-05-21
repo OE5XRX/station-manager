@@ -260,10 +260,10 @@ OAUTH2_PROVIDER = {
     },
     "DEFAULT_SCOPES": ["openid"],
     "PKCE_REQUIRED": True,
-    "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,             # 1 h
-    "ID_TOKEN_EXPIRE_SECONDS": 3600,                 # 1 h
+    "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,  # 1 h
+    "ID_TOKEN_EXPIRE_SECONDS": 3600,  # 1 h
     "REFRESH_TOKEN_EXPIRE_SECONDS": 14 * 24 * 3600,  # 14 d
-    "AUTHORIZATION_CODE_EXPIRE_SECONDS": 60,         # 60 s
+    "AUTHORIZATION_CODE_EXPIRE_SECONDS": 60,  # 60 s
     "ROTATE_REFRESH_TOKEN": True,
     "OAUTH2_VALIDATOR_CLASS": "apps.sso.permissions.SsoOAuth2Validator",
     "OIDC_USERINFO_HOOK": "apps.sso.oidc_claims.add_claims",

@@ -57,15 +57,17 @@ def _revoke_tokens_on_user_deactivation(sender, instance, created, **kwargs):
         from oauth2_provider.models import AccessToken, RefreshToken
 
         past = timezone.now() - timedelta(seconds=1)
-        n_at = AccessToken.objects.filter(
-            user=instance, expires__gt=timezone.now()
-        ).update(expires=past)
-        n_rt = RefreshToken.objects.filter(
-            user=instance, revoked__isnull=True
-        ).update(revoked=timezone.now())
+        n_at = AccessToken.objects.filter(user=instance, expires__gt=timezone.now()).update(
+            expires=past
+        )
+        n_rt = RefreshToken.objects.filter(user=instance, revoked__isnull=True).update(
+            revoked=timezone.now()
+        )
         logger.info(
             "User %s deactivated → revoked %d access + %d refresh tokens",
-            instance.username, n_at, n_rt,
+            instance.username,
+            n_at,
+            n_rt,
         )
 
         # Audit log is best-effort: a transient DB error on the audit
@@ -77,14 +79,11 @@ def _revoke_tokens_on_user_deactivation(sender, instance, created, **kwargs):
                 event_type=SsoAuditLog.EventType.TOKEN_REVOKED,
                 target_user=instance,
                 message=(
-                    f"User deactivated; {n_at} access tokens + "
-                    f"{n_rt} refresh tokens revoked."
+                    f"User deactivated; {n_at} access tokens + {n_rt} refresh tokens revoked."
                 ),
             )
         except Exception:
-            logger.exception(
-                "Audit log write failed during user deactivation cascade"
-            )
+            logger.exception("Audit log write failed during user deactivation cascade")
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +104,10 @@ def _revoke_tokens_for_user_and_app(user, application):
     ).update(revoked=timezone.now())
     logger.info(
         "AppGrant revoked user=%s app=%s → %d access + %d refresh revoked",
-        user.username, application.client_id, n_at, n_rt,
+        user.username,
+        application.client_id,
+        n_at,
+        n_rt,
     )
 
     try:
@@ -115,9 +117,7 @@ def _revoke_tokens_for_user_and_app(user, application):
             event_type=SsoAuditLog.EventType.TOKEN_REVOKED,
             target_user=user,
             application=application,
-            message=(
-                f"AppGrant revoked; {n_at} access + {n_rt} refresh tokens revoked."
-            ),
+            message=(f"AppGrant revoked; {n_at} access + {n_rt} refresh tokens revoked."),
         )
     except Exception:
         logger.exception("Audit log write failed during grant revoke cascade")

@@ -136,6 +136,5 @@ def test_creating_an_active_user_does_not_revoke_anything(app):
     User.objects.create_user(username="brand_new", password="x", email="n@x.test")
     # No exception, no audit log entry for token revoke.
     from apps.sso.models import SsoAuditLog
-    assert not SsoAuditLog.objects.filter(
-        event_type=SsoAuditLog.EventType.TOKEN_REVOKED
-    ).exists()
+
+    assert not SsoAuditLog.objects.filter(event_type=SsoAuditLog.EventType.TOKEN_REVOKED).exists()

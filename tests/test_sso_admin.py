@@ -61,9 +61,7 @@ def test_application_admin_change_form_marks_client_secret_readonly(client, supe
         redirect_uris="https://y.example.org/cb/",
     )
 
-    resp = client.get(
-        f"/admin/oauth2_provider/application/{app.pk}/change/", follow=True
-    )
+    resp = client.get(f"/admin/oauth2_provider/application/{app.pk}/change/", follow=True)
     assert resp.status_code == 200
     # Read-only fields in Django admin render as a <div class="readonly">.
     # We don't need to assert the exact widget; sufficient to assert that

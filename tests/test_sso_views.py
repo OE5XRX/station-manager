@@ -48,9 +48,7 @@ def test_toggle_creates_grant_when_none_exists(client, admin_user, alice, app):
     client.force_login(admin_user)
     resp = client.post(_toggle_url(alice, app))
     assert resp.status_code == 200
-    assert AppGrant.objects.filter(
-        user=alice, application=app, revoked_at__isnull=True
-    ).exists()
+    assert AppGrant.objects.filter(user=alice, application=app, revoked_at__isnull=True).exists()
 
 
 @pytest.mark.django_db
@@ -90,9 +88,7 @@ def test_anonymous_cannot_toggle_grants(client, alice, app):
 def test_toggle_writes_audit_log_entry(client, admin_user, alice, app):
     client.force_login(admin_user)
     client.post(_toggle_url(alice, app))
-    entries = SsoAuditLog.objects.filter(
-        actor=admin_user, target_user=alice, application=app
-    )
+    entries = SsoAuditLog.objects.filter(actor=admin_user, target_user=alice, application=app)
     assert entries.exists()
     assert entries.first().event_type == SsoAuditLog.EventType.GRANT_GIVEN
 
@@ -107,7 +103,7 @@ def test_dashboard_lists_apps_with_grant_counts(client, admin_user, alice):
         authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
         redirect_uris="https://i.example.org/cb/",
     )
-    app2 = Application.objects.create(
+    Application.objects.create(
         name="Grafana",
         client_type=Application.CLIENT_CONFIDENTIAL,
         authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
@@ -128,7 +124,7 @@ def test_dashboard_lists_apps_with_grant_counts(client, admin_user, alice):
     graf_pos = body.find("Grafana")
     assert inv_pos != -1 and graf_pos != -1
     # The count column for InvenTree should contain a "1" within ~500 chars.
-    assert "1" in body[inv_pos:inv_pos + 500]
+    assert "1" in body[inv_pos : inv_pos + 500]
 
 
 @pytest.mark.django_db
@@ -154,9 +150,10 @@ def test_dashboard_redirects_anonymous(client):
 def test_application_detail_lists_granted_and_not_granted_users(client, admin_user, alice, app):
     from django.urls import reverse
 
-    bob = User.objects.create_user(username="bob", password="x", email="b@x.test")
+    # bob has no grant — created here as a fixture so the application
+    # detail page can list him in the "without grant" column.
+    User.objects.create_user(username="bob", password="x", email="b@x.test")
     AppGrant.objects.create(user=alice, application=app)
-    # bob has no grant.
 
     client.force_login(admin_user)
     resp = client.get(reverse("sso:application_detail", kwargs={"pk": app.pk}))

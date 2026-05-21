@@ -68,14 +68,11 @@ def _build_grants_for_user(user):
     """
     active_grants = {
         g.application_id: g
-        for g in AppGrant.objects.filter(
-            user=user, revoked_at__isnull=True
-        ).select_related("application")
+        for g in AppGrant.objects.filter(user=user, revoked_at__isnull=True).select_related(
+            "application"
+        )
     }
-    return [
-        (app, active_grants.get(app.pk))
-        for app in Application.objects.order_by("name")
-    ]
+    return [(app, active_grants.get(app.pk)) for app in Application.objects.order_by("name")]
 
 
 class GrantToggleView(AdminOnlyMixin, View):
@@ -160,9 +157,7 @@ class GrantToggleView(AdminOnlyMixin, View):
         # columns at once from a single button click.
         if request.headers.get("HX-Trigger-Name") == "from-app-detail":
             resp = HttpResponse(status=200)
-            resp["HX-Redirect"] = reverse(
-                "sso:application_detail", kwargs={"pk": application.pk}
-            )
+            resp["HX-Redirect"] = reverse("sso:application_detail", kwargs={"pk": application.pk})
             return resp
 
         return render(
@@ -207,14 +202,13 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         active_user_ids = AppGrant.objects.filter(
-            application=self.object, revoked_at__isnull=True,
+            application=self.object,
+            revoked_at__isnull=True,
         ).values_list("user_id", flat=True)
-        ctx["users_with_grant"] = User.objects.filter(
-            pk__in=active_user_ids
-        ).order_by("username")
-        ctx["users_without_grant"] = User.objects.exclude(
-            pk__in=active_user_ids
-        ).order_by("username")
+        ctx["users_with_grant"] = User.objects.filter(pk__in=active_user_ids).order_by("username")
+        ctx["users_without_grant"] = User.objects.exclude(pk__in=active_user_ids).order_by(
+            "username"
+        )
         return ctx
 
 
@@ -253,10 +247,7 @@ class AppGrantAuthorizationView(DotAuthorizationView):
 
         # client_id arrives either as a GET param (initial visit + consent
         # POST) or implicitly via session for some DOT versions. Read both.
-        client_id = (
-            request.GET.get("client_id")
-            or request.POST.get("client_id")
-        )
+        client_id = request.GET.get("client_id") or request.POST.get("client_id")
         if not client_id:
             # No client_id means the request is malformed; let DOT handle
             # the 400.
@@ -345,5 +336,3 @@ def _is_registered_redirect(application, candidate_uri: str) -> bool:
     if application is None or not candidate_uri:
         return False
     return application.redirect_uri_allowed(candidate_uri)
-
-

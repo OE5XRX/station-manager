@@ -91,9 +91,7 @@ def test_create_superuser_lands_in_admin_group():
     """createsuperuser must yield is_admin=True so the new account can
     actually access admin views, otherwise the chicken-and-egg
     bootstrap is broken on a fresh install."""
-    user = User.objects.create_superuser(
-        username="sup", password="x", email="s@x"
-    )
+    user = User.objects.create_superuser(username="sup", password="x", email="s@x")
     assert user.is_superuser is True
     assert user.is_admin is True
 

@@ -115,9 +115,7 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
             return station_qs.order_by("-created_at")
 
         if not merging and include_sso:
-            sso_qs = SsoAuditLog.objects.select_related(
-                "actor", "target_user", "application"
-            )
+            sso_qs = SsoAuditLog.objects.select_related("actor", "target_user", "application")
             sso_qs = self.apply_sso_date_filters(sso_qs, params)
             self._single_source = "sso"
             return sso_qs.order_by("-created_at")
@@ -126,19 +124,13 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         self._single_source = None
         station_qs = StationAuditLog.objects.select_related("station", "user")
         station_qs = self.apply_filters(station_qs, params)
-        station_entries = list(
-            station_qs.order_by("-created_at")[:MERGE_FEED_CAP]
-        )
+        station_entries = list(station_qs.order_by("-created_at")[:MERGE_FEED_CAP])
 
-        sso_qs = SsoAuditLog.objects.select_related(
-            "actor", "target_user", "application"
-        )
+        sso_qs = SsoAuditLog.objects.select_related("actor", "target_user", "application")
         sso_qs = self.apply_sso_date_filters(sso_qs, params)
         sso_entries = list(sso_qs.order_by("-created_at")[:MERGE_FEED_CAP])
 
-        merged = [("station", e) for e in station_entries] + [
-            ("sso", e) for e in sso_entries
-        ]
+        merged = [("station", e) for e in station_entries] + [("sso", e) for e in sso_entries]
         merged.sort(key=lambda pair: pair[1].created_at, reverse=True)
         return merged
 

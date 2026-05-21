@@ -126,8 +126,16 @@ class SsoAuditLog(models.Model):
         return f"{self.get_event_type_display()} @ {self.created_at}"
 
     @classmethod
-    def log(cls, *, event_type, actor=None, target_user=None, application=None,
-            message="", ip_address=None):
+    def log(
+        cls,
+        *,
+        event_type,
+        actor=None,
+        target_user=None,
+        application=None,
+        message="",
+        ip_address=None,
+    ):
         """Convenience constructor. Mirrors StationAuditLog.log signature.
 
         Keyword-only so call sites can't accidentally swap positional args.

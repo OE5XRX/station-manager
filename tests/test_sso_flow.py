@@ -38,9 +38,7 @@ def _pkce_pair():
     """
     verifier = secrets.token_urlsafe(64)[:64]
     challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-        .decode()
-        .rstrip("=")
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     )
     return verifier, challenge
 
@@ -150,7 +148,9 @@ def _basic_auth_header(application, raw_secret="test-secret-do-not-hash"):
 
 @pytest.mark.django_db
 def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
-    client, application, authorized_user,
+    client,
+    application,
+    authorized_user,
 ):
     verifier, challenge = _pkce_pair()
     client.force_login(authorized_user)
@@ -158,15 +158,13 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
     # --- Step 1: GET authorize -> consent page renders -------------------
     resp = _authorize_get(client, application, challenge)
     assert resp.status_code == 200, (
-        f"Expected 200 (consent page), got {resp.status_code}: "
-        f"{resp.content[:500]}"
+        f"Expected 200 (consent page), got {resp.status_code}: {resp.content[:500]}"
     )
 
     # --- Step 2: POST consent -> 302 to RP with ?code= --------------------
     resp = _consent_post(client, application, challenge)
     assert resp.status_code == 302, (
-        f"Expected 302 redirect, got {resp.status_code}: "
-        f"{resp.content[:500]}"
+        f"Expected 302 redirect, got {resp.status_code}: {resp.content[:500]}"
     )
     assert resp["Location"].startswith(REDIRECT_URI), (
         f"Expected redirect to RP, got: {resp['Location']}"
@@ -174,8 +172,7 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
 
     qs = parse_qs(urlparse(resp["Location"]).query)
     assert "error" not in qs, (
-        f"Authorize returned an error: {qs.get('error')} "
-        f"({qs.get('error_description')})"
+        f"Authorize returned an error: {qs.get('error')} ({qs.get('error_description')})"
     )
     assert qs["state"] == ["xyz"], "state parameter must round-trip unchanged"
     code = qs["code"][0]
@@ -226,7 +223,9 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
 
 @pytest.mark.django_db
 def test_refresh_token_flow_yields_new_access_token(
-    client, application, authorized_user,
+    client,
+    application,
+    authorized_user,
 ):
     """After token exchange, the refresh_token grant gives us a fresh
     access_token. Verifies ROTATE_REFRESH_TOKEN doesn't break the
@@ -238,9 +237,7 @@ def test_refresh_token_flow_yields_new_access_token(
     # in the session before consent POST).
     _authorize_get(client, application, challenge)
     resp = _consent_post(client, application, challenge)
-    assert resp.status_code == 302, (
-        f"Consent POST failed: {resp.status_code} {resp.content[:300]}"
-    )
+    assert resp.status_code == 302, f"Consent POST failed: {resp.status_code} {resp.content[:300]}"
     qs = parse_qs(urlparse(resp["Location"]).query)
     assert "code" in qs, f"No code in redirect: {resp['Location']}"
     code = qs["code"][0]
@@ -293,9 +290,7 @@ def test_authorize_without_appgrant_redirects_with_access_denied(client, applica
     """
     verifier, challenge = _pkce_pair()
     g, _g_created = Group.objects.get_or_create(name="member")
-    u = User.objects.create_user(
-        username="ungrant", password="x", email="u@x.test"
-    )
+    u = User.objects.create_user(username="ungrant", password="x", email="u@x.test")
     u.groups.add(g)
     client.force_login(u)
     # NB: no AppGrant created for u + application.
@@ -318,8 +313,8 @@ def test_authorize_without_appgrant_redirects_with_access_denied(client, applica
     parsed = urlparse(resp["Location"])
     qs = parse_qs(parsed.query)
     assert qs.get("error") == ["access_denied"]
-    assert qs.get("state") == ["deny"]   # state echoed from request
-    assert "code" not in qs              # never issue a code on deny
+    assert qs.get("state") == ["deny"]  # state echoed from request
+    assert "code" not in qs  # never issue a code on deny
 
 
 @pytest.mark.django_db
@@ -344,8 +339,7 @@ def test_token_exchange_with_wrong_code_verifier_fails(client, application, auth
         },
     )
     assert resp.status_code == 302, (
-        f"authorize POST did not redirect; got {resp.status_code}, "
-        f"body={resp.content[:200]!r}"
+        f"authorize POST did not redirect; got {resp.status_code}, body={resp.content[:200]!r}"
     )
     code = parse_qs(urlparse(resp["Location"]).query)["code"][0]
 
@@ -406,7 +400,7 @@ def test_token_exchange_with_unknown_redirect_uri_fails(client, application, aut
         },
         HTTP_AUTHORIZATION=f"Basic {basic}",
     )
-    assert resp.status_code == 400, (
-        f"expected 4xx; got {resp.status_code} {resp.content[:200]!r}"
+    assert resp.status_code == 400, f"expected 4xx; got {resp.status_code} {resp.content[:200]!r}"
+    assert "access_token" not in (
+        resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
     )
-    assert "access_token" not in (resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {})

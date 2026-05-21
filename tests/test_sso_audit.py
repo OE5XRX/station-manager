@@ -2,7 +2,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from oauth2_provider.models import Application
 
-from apps.sso.models import AppGrant, SsoAuditLog
+from apps.sso.models import SsoAuditLog
 
 User = get_user_model()
 

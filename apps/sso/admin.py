@@ -48,8 +48,13 @@ class SsoAuditLogAdmin(admin.ModelAdmin):
     list_filter = ("event_type", "application")
     search_fields = ("actor__username", "target_user__username", "message")
     readonly_fields = (
-        "created_at", "event_type", "actor", "target_user", "application",
-        "message", "ip_address",
+        "created_at",
+        "event_type",
+        "actor",
+        "target_user",
+        "application",
+        "message",
+        "ip_address",
     )
     date_hierarchy = "created_at"
 
