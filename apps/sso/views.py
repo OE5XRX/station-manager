@@ -284,10 +284,17 @@ class AppGrantAuthorizationView(DotAuthorizationView):
 
 
 def _is_registered_redirect(application, candidate_uri: str) -> bool:
-    """Exact-match candidate against the Application's allowed redirect URIs.
+    """Exact-string match against application.redirect_uris.
 
-    `Application.redirect_uris` is whitespace-separated. We strip and
-    do string equality — same posture as DOT's own validator.
+    Whitespace-separated list; `candidate_uri` must match one element
+    character-for-character. NO normalization (trailing slash, host
+    casing, percent-encoding) — operators registering URIs must use
+    the canonical form they want clients to send. Strict by design,
+    mirrors DOT's own validator: any divergence would create an
+    open-redirect surface (an RP sending an unexpected form gets
+    bounced to whatever the partial match resolves to).
+
+    Returns False for any miss; the caller falls back to 400.
     """
     registered = (application.redirect_uris or "").split()
     return candidate_uri in registered

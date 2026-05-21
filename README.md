@@ -179,9 +179,21 @@ Alternatively, manage grants per-app from the SSO dashboard at `/sso-admin/`.
 
 ### Rotating a client secret
 
-Currently no in-place rotation. Delete the Application and re-register
-it; existing AppGrants for that app must be re-created. (Improvement
-tracked as a follow-up.)
+No in-place rotation today. If you need to rotate (suspected leak,
+operator change, etc.):
+
+1. Re-register the application under a new client_id.
+2. Hand the new credentials to the RP operator.
+3. Have RP-side users re-grant access (`AppGrant`-Toggle in the
+   admin UI) against the new application row.
+4. Once you've confirmed the new credentials work end-to-end,
+   delete the OLD application — **WARNING**: this hard-deletes
+   every AppGrant referencing that application (CASCADE on the FK),
+   losing the revocation history for those grants. The SsoAuditLog
+   entries survive because their application FK is SET_NULL.
+
+Improvement tracked as a follow-up to add an in-place
+rotate_client_secret admin action.
 
 ---
 

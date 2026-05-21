@@ -275,24 +275,15 @@ def test_refresh_token_flow_yields_new_access_token(
 
 @pytest.mark.django_db
 def test_authorize_without_appgrant_redirects_with_access_denied(client, application):
-    """User logged in but no AppGrant -> no auth code issued.
+    """Invariant: a logged-in user without an active AppGrant for the
+    target Application must NOT receive an authorization code.
 
-    Either DOT redirects to RP with ?error=access_denied (RFC-conformant)
-    or short-circuits with a 4xx. Whatever the surface behavior, what we
-    MUST NOT see is an authorization code in the response.
-
-    NOTE (Task 19 finding): As of this commit, the authorization-code
-    path is NOT wired through ``user_can_access`` — ``apps.sso.permissions``
-    only gates the password-grant path via ``validate_user``. The project
-    URL conf mounts ``oauth2_provider.urls`` directly with no
-    project-level wrapper around DOT's ``AuthorizationView``. This test
-    therefore currently fails: DOT issues a code for any logged-in user.
-
-    The test is intentionally left in its load-bearing form rather than
-    being weakened to pass — it codifies the security invariant the
-    project committed to in the design spec ("Authorize without an
-    active AppGrant -> no token"). Fix lives in a follow-up that wires
-    AppGrant into the authorize POST handler (T13/T15 leftovers).
+    AppGrantAuthorizationView (wired in commit 3bfac0a) intercepts the
+    authorize POST, denies users with no grant, audits the deny event,
+    and bounces back to the RP with ``?error=access_denied`` plus the
+    original ``state`` echoed unchanged. The redirect_uri is validated
+    against the Application's registered URIs before bouncing — an
+    unregistered URI yields a 400 instead (open-redirect guard).
     """
     verifier, challenge = _pkce_pair()
     g, _g_created = Group.objects.get_or_create(name="member")
@@ -317,17 +308,12 @@ def test_authorize_without_appgrant_redirects_with_access_denied(client, applica
         },
     )
 
-    if resp.status_code == 302:
-        q = parse_qs(urlparse(resp["Location"]).query)
-        assert "code" not in q, (
-            "DOT must NOT issue an auth code for a user without an AppGrant. "
-            f"Got Location={resp['Location']!r}"
-        )
-        # access_denied is the RFC-conformant error; some configurations may
-        # bounce back with a different error code, but the key invariant is
-        # "no code".
-    else:
-        assert resp.status_code in (400, 401, 403)
+    assert resp.status_code == 302
+    parsed = urlparse(resp["Location"])
+    qs = parse_qs(parsed.query)
+    assert qs.get("error") == ["access_denied"]
+    assert qs.get("state") == ["deny"]   # state echoed from request
+    assert "code" not in qs              # never issue a code on deny
 
 
 @pytest.mark.django_db
