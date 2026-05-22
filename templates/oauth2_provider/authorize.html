@@ -26,9 +26,11 @@
         <form id="authorizationForm" method="post" class="mt-4">
           {% csrf_token %}
 
-          {# Render all hidden fields generically so we stay version-agnostic
-             across django-oauth-toolkit releases (response_mode, claims,
-             code_challenge, nonce, etc. all flow through here). #}
+          {% comment %}
+            Render all hidden fields generically so we stay version-agnostic
+            across django-oauth-toolkit releases (response_mode, claims,
+            code_challenge, nonce, etc. all flow through here).
+          {% endcomment %}
           {% for field in form %}
             {% if field.is_hidden %}{{ field }}{% endif %}
           {% endfor %}
@@ -37,8 +39,10 @@
           {{ form.non_field_errors }}
 
           <div class="d-flex gap-2">
-            {# No name="allow" -> DOT treats this as deny and redirects with
-               error=access_denied. Do NOT add name="deny". #}
+            {% comment %}
+              No name="allow" -> DOT treats this as deny and redirects
+              with error=access_denied. Do NOT add name="deny".
+            {% endcomment %}
             <button type="submit"
                     class="btn btn-outline-secondary">
               {% trans "Cancel" %}
