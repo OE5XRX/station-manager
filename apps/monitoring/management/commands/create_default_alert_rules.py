@@ -1,4 +1,15 @@
-"""Management command to create default alert rules."""
+"""Management command to create default alert rules.
+
+The canonical seed runs in apps/monitoring/migrations/0002_seed_default_rules.py
+on every `migrate`. This command remains as an operator escape-hatch for the
+rare case where a rule was manually deleted via Django Admin and the operator
+wants to re-seed without rolling back the migration.
+
+Idempotent via get_or_create on the unique alert_type field, same semantics as
+the migration. If you change DEFAULT_RULES here, mirror the change in the
+migration so the two stay in lockstep. Future maintenance plan: delete this
+command once Django Admin grows a "restore default rules" button.
+"""
 
 from django.core.management.base import BaseCommand
 

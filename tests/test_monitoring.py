@@ -87,10 +87,16 @@ class TestCheckCpuTemperature:
 @pytest.mark.django_db
 class TestCheckDiskUsage:
     def test_disk_usage_alert(self, station, disk_warning_alert_rule):
-        """Disk > 90% triggers warning."""
+        """Disk > 90% triggers warning.
+
+        Uses 92% to test the warning threshold without crossing the
+        seeded critical threshold (95%) — otherwise the engine would
+        emit both Warning and Critical alerts. See
+        apps/monitoring/migrations/0002_seed_default_rules.py.
+        """
         StationInventory.objects.create(
             station=station,
-            data={"disk": [{"mount": "/", "usage_percent": 95.0}]},
+            data={"disk": [{"mount": "/", "usage_percent": 92.0}]},
         )
         alerts = _check_disk_usage()
         assert len(alerts) == 1
