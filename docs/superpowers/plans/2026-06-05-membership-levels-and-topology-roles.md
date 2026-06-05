@@ -12,6 +12,29 @@
 
 ---
 
+## PR Strategy (Hybrid Split)
+
+To keep individual PRs review-able, this plan ships in **two PRs**:
+
+### PR-1 (this plan, Tasks 1-10 + Task 23 + Task 24)
+**Scope:** Phase 1 (Foundation Models) + Phase 2 (Permission Helpers) + Phase 3 (Refactor existing helpers + call-site sweep).
+
+After PR-1 merge:
+- Schemas for `membership_level`, `Region`, `StationAssignment`, `RegionAssignment`, `AccountAuditLog` all exist.
+- All call sites are refactored to use `is_internal` / `is_admin` / topology helpers.
+- Notification routing still uses `membership_level=ADMIN` (functionally equivalent to today's `groups__name="admin"`) — the new `recipients_for_station_alert` helper is NOT wired yet.
+- New schemas (Region etc.) have no UI to populate them — admin via Django-Admin only.
+- Legacy Django Groups `admin`/`operator`/`member` are STILL present (migration 0009 deferred to PR-2).
+
+Net effect on production: zero user-visible change, behavior identical to today's group-based check. Foundation is in place.
+
+### PR-2 (separate plan, to be written after PR-1 merge)
+**Scope:** Phase 4 (Notification Routing) + Phase 5 (Audit-Log Signals) + Phase 6-8 (UI: User-Detail, Station-Detail, Region-CRUD) + Phase 9 (drop legacy Groups, migration 0009).
+
+This plan deliberately defers writing PR-2 details until PR-1 is merged — the actual function/template names from PR-1 are then ground truth, not a forecast. Phase 4-9 of THIS document is kept as reference (the "what" and "why"), but the executor for PR-1 stops after Task 24.
+
+---
+
 ## File Structure
 
 ### New files
@@ -1666,7 +1689,13 @@ group_names removed (no Django-group role-model anymore)."
 
 ---
 
-# Phase 4: Notification Routing
+# Phase 4-9 — Deferred to PR-2
+
+> **Stop here for PR-1 execution.** The phases below are kept in this document as reference for the architecture — the PR-2 plan will be written after PR-1 merges, when the actual signatures and template paths from PR-1 are in-tree and can be cited exactly instead of forecast. Do NOT execute Tasks 11-22 in this session.
+
+---
+
+# Phase 4: Notification Routing (PR-2)
 
 ## Task 11: recipients_for_station_alert helper
 
@@ -4032,49 +4061,59 @@ git push -u origin feat/membership-levels-and-topology-roles
 - [ ] **Step 2: Open PR**
 
 ```bash
-gh pr create --title "feat(accounts+stations): membership levels + topology roles + notification routing" --body "$(cat <<'EOF'
+gh pr create --title "feat(accounts+stations): membership-level + topology foundation (PR-1)" --body "$(cat <<'EOF'
 ## Summary
 
-Two-axis authorization model:
+**PR-1 of 2** — Foundation only. Behavior-preserving refactor that introduces the data model + permission helpers for the new two-axis authorization (Membership-Level + Topology). Routing, audit-log emission, UI, and legacy-group cleanup all come in PR-2.
 
-- **Membership-Level** (User-global, sequential): applicant → member → staff → admin. Replaces the legacy `admin`/`operator`/`member` Django-Groups. Renamed away from \"operator\" because the term collides with the amateur-radio meaning (Funker).
-- **Topology**: new \`Region\`, \`StationAssignment\` (admin/maintainer), \`RegionAssignment\` (manager) models. Permission helpers compose the axes: \`can_administer_station\`, \`can_maintain_station\`, \`can_use_station\` (reserved for future Funk-Stack).
+## What this PR does
 
-Notification routing is re-built: alert emails now go to Station-Admin + Station-Maintainer + Region-Manager + Vereins-Admin of the alert's station, replacing the hardcoded admin-group query. \`staff\` users do NOT receive alerts by default. Applicants never receive alerts.
+- New \`User.membership_level\` field (CharField TextChoices: applicant/member/staff/admin), default APPLICANT.
+- Data migration 0005 maps existing Django-Groups → membership_level (admin → ADMIN, operator → STAFF, member → MEMBER).
+- New \`Region\` model + nullable \`Station.region\` FK (no UI yet, only Django-Admin / ORM-level access).
+- New \`StationAssignment\` (admin/maintainer with uniqueness constraints) + \`RegionAssignment\` (manager) models. Applicant invariant enforced via clean()/save().
+- New \`AccountAuditLog\` model (no signals emitting yet — that's PR-2).
+- New permission helpers on \`User\`: \`is_internal\`, \`is_station_admin(s)\`, \`is_station_maintainer(s)\`, \`is_region_manager(r)\`, \`can_administer_station(s)\`, \`can_maintain_station(s)\`, \`can_use_station(s)\`.
+- Refactor: \`User.is_admin\` now reads \`membership_level\` instead of group membership. \`is_operator\`, \`is_staff_member\`, \`group_names\` removed.
+- ~13 call-sites refactored across \`apps/{stations,firmware,monitoring,audit,deployments,tunnel,api,accounts,sso}\` to use the new helpers.
+- conftest fixtures (\`admin_user\`, \`operator_user\`, \`member_user\`) switched from Django-Group assignment to membership_level setting.
 
-New \`AccountAuditLog\` model parallel to \`StationAuditLog\` and \`SsoAuditLog\`. \`apps/audit/\` view merges all three sources.
+## What this PR does NOT do (deferred to PR-2)
 
-## Spec + Plan
-
-- Spec: \`docs/superpowers/specs/2026-06-05-membership-levels-and-topology-roles-design.md\`
-- Plan: \`docs/superpowers/plans/2026-06-05-membership-levels-and-topology-roles.md\`
+- Notification routing rewrite (\`recipients_for_station_alert\` helper + dispatch wiring + test-email-to-self).
+- Audit-log emission signals.
+- Any new UI (User-Detail rollen-section, Station-Detail topology widgets, Region-CRUD admin page).
+- Deletion of the legacy \`admin\`/\`operator\`/\`member\` Django-Groups (migration 0009).
 
 ## Migrations
 
 | # | Migration | What |
 |---|---|---|
-| 0004 | accounts: add_membership_level | new CharField, default APPLICANT |
+| 0004 | accounts: add_membership_level | CharField TextChoices, default APPLICANT |
 | 0005 | accounts: seed_membership_levels | data: Group → membership_level mapping |
-| 0006 | stations: add_region_and_station_fk | Region model + Station.region FK |
+| 0006 | stations: add_region_and_station_fk | Region model + Station.region FK (nullable, SET_NULL) |
 | 0007 | stations: add_assignments | StationAssignment + RegionAssignment + constraints |
-| 0008 | accounts: add_account_audit_log | AccountAuditLog model |
-| 0009 | accounts: drop_legacy_role_groups | delete admin/operator/member Groups |
+| 0008 | accounts: add_account_audit_log | AccountAuditLog model (no consumers yet) |
 
-All idempotent; data migrations have safe reverses (noop for 0005, get_or_create for 0009 rollback safety in the 30-day backup window).
+All data migrations have safe reverses (noop for 0005).
+
+## Spec + Plan
+
+- Spec: \`docs/superpowers/specs/2026-06-05-membership-levels-and-topology-roles-design.md\`
+- Plan: \`docs/superpowers/plans/2026-06-05-membership-levels-and-topology-roles.md\` (Phase 1-3 covered here; Phase 4-9 documented for context, executed in PR-2)
 
 ## Pre-merge
 
-- [x] Full test suite green (~XYZ tests passing)
+- [x] Full test suite green
 - [x] ruff format/check clean
 - [ ] Copilot review run
 
 ## Post-merge
 
-- [ ] Run \`gh workflow run main.yml --repo OE5XRX/servers\` to deploy
-- [ ] Verify \`/de/monitoring/settings/\` still shows thresholds (regression-guard for the previous PR)
-- [ ] Configure first Region via /regions/ + assign at least one station to it
-- [ ] Configure at least one Station-Admin + Region-Manager
-- [ ] Trigger synthetic alert (e.g. stop a station's heartbeat > 5min) → verify the new recipient set lands the email
+- [ ] \`gh workflow run main.yml --repo OE5XRX/servers\` to deploy — the new migrations land in the init container; no user-visible behavior change expected.
+- [ ] Verify \`/de/monitoring/settings/\` thresholds still display (regression-guard).
+- [ ] Trigger synthetic offline alert — verify the existing admin-group recipient set still receives the email (the new recipient helper is NOT wired yet; PR-2 brings that).
+- [ ] Begin PR-2 plan after merge.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
