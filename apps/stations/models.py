@@ -10,6 +10,28 @@ from django.utils.translation import gettext_lazy as _
 RESERVED_TAG_SLUGS = frozenset({"__unassigned__"})
 
 
+class Region(models.Model):
+    """A geographic / organizational grouping of stations.
+
+    Freely manageable via /regions/ admin UI. Provides the scope for
+    RegionAssignment (a Region-Manager has operative authority over
+    all stations of the region). Station.region is the FK.
+    """
+
+    name = models.CharField(_("name"), max_length=80, unique=True)
+    slug = models.SlugField(_("slug"), unique=True)
+    description = models.TextField(_("description"), blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("region")
+        verbose_name_plural = _("regions")
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class StationTag(models.Model):
     """Tags for categorizing stations (e.g., 'testbetrieb', 'hamnet', 'lte', 'hw-rev-v2').
 
@@ -107,6 +129,14 @@ class Station(models.Model):
 
     # Hardware
     hardware_revision = models.CharField(_("hardware revision"), max_length=50, blank=True)
+    region = models.ForeignKey(
+        Region,
+        verbose_name=_("region"),
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="stations",
+    )
     tags = models.ManyToManyField(
         StationTag,
         verbose_name=_("tags"),
