@@ -270,3 +270,37 @@ class TestAlertSettingsEmptyState:
         assert response.status_code == 200
         content = response.content.decode()
         assert "init container" not in content.lower()
+
+
+@pytest.mark.django_db
+class TestAlertSettingsThresholdLocalization:
+    """Threshold inputs must render with `.` decimal separator regardless
+    of active locale.
+
+    `<input type="number">` only accepts `.` as the decimal mark in its
+    `value=` attribute (W3C spec). Django's default float-to-string
+    rendering is locale-aware (USE_L10N is always True since 5.0), so on
+    `/de/monitoring/settings/` a threshold of 80.0 would render as
+    `value="80,0"` — the browser then treats the value as invalid and
+    displays an empty input. The template must use `|unlocalize` to
+    pin a dot.
+    """
+
+    def test_threshold_input_uses_dot_decimal_in_german_locale(self, client, admin_user):
+        from django.utils import translation
+
+        client.force_login(admin_user)
+        with translation.override("de"):
+            response = client.get(reverse("monitoring:alert_settings"))
+
+        assert response.status_code == 200
+        content = response.content.decode()
+        # The seeded CPU rule has threshold=80.0 — locale-aware rendering
+        # in `de` would produce `80,0` which `<input type="number">`
+        # rejects. The fix forces `.` via `|unlocalize`.
+        assert 'value="80.0"' in content, (
+            "Threshold input not rendered with dot decimal separator — "
+            "the <input type=number> browser parser will reject this and "
+            "show the field as empty. Add `|unlocalize` to the template."
+        )
+        assert 'value="80,0"' not in content
