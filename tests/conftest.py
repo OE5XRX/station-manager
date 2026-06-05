@@ -68,33 +68,62 @@ def device_auth_headers(private_key: Ed25519PrivateKey, station_id: int, body_by
     }
 
 
-def _user_in_group(username, password, group_name):
-    """Create a user and add them to the named auth.Group.
+def _user_with_level(username, password, level):
+    """Create a user with the given membership_level + matching legacy group.
 
-    Replaces the pre-T6 ``role="..."`` shorthand. The group is created
-    on demand because the test DB may not have run the bootstrap
-    fixtures from migration 0002.
+    The membership_level field is the new source of truth (PR-1 Task 9).
+    Legacy Django Groups (admin/operator/member) are still consulted by
+    ``is_operator`` / ``is_staff_member`` / ``group_names`` properties
+    until Task 10. To keep both worlds happy without forcing every
+    individual test to wire both, this helper dual-writes: it sets
+    membership_level AND adds the user to the matching legacy group.
+
+    Once Task 10 retires the group-based properties + migration 0009
+    drops the groups themselves, the dual-write block here disappears
+    and the helper becomes a thin membership_level wrapper.
+
+    WARNING for transition-period tests: if you bypass this helper and
+    set ``user.groups.add(some_group)`` directly, ``is_admin`` will NOT
+    reflect the assignment (it now reads membership_level only). Set
+    ``user.membership_level`` explicitly in that case, or use this
+    helper.
     """
     user = User.objects.create_user(username=username, password=password)
-    group, _ = Group.objects.get_or_create(name=group_name)
-    user.groups.add(group)
+    user.membership_level = level
+    user.save(update_fields=["membership_level"])
+    legacy_group = {
+        User.MembershipLevel.ADMIN: "admin",
+        User.MembershipLevel.STAFF: "operator",
+        User.MembershipLevel.MEMBER: "member",
+    }.get(level)
+    if legacy_group:
+        group, _ = Group.objects.get_or_create(name=legacy_group)
+        user.groups.add(group)
     User._invalidate_role_cache(user)
     return user
 
 
 @pytest.fixture
 def admin_user(db):
-    return _user_in_group("admin", "testpass123", "admin")
+    return _user_with_level("admin", "testpass123", User.MembershipLevel.ADMIN)
 
 
 @pytest.fixture
 def operator_user(db):
-    return _user_in_group("operator", "testpass123", "operator")
+    """Kept fixture name for test-suite continuity. The membership
+    level is STAFF (formerly the 'operator' group).
+    """
+    return _user_with_level("operator", "testpass123", User.MembershipLevel.STAFF)
 
 
 @pytest.fixture
 def member_user(db):
-    return _user_in_group("member", "testpass123", "member")
+    return _user_with_level("member", "testpass123", User.MembershipLevel.MEMBER)
+
+
+@pytest.fixture
+def applicant_user(db):
+    return _user_with_level("applicant", "testpass123", User.MembershipLevel.APPLICANT)
 
 
 @pytest.fixture

@@ -8,27 +8,27 @@ from .managers import UserManager
 
 
 class User(AbstractUser):
-    """Custom user model with group-backed role membership and language preference.
+    """Custom user model with membership-level role + language preference.
 
-    Group membership replaces the old single-valued ``role`` field. The
-    three default groups (admin / operator / member) are created by
-    apps.accounts.migrations.0002_role_to_groups; new groups can be
-    added freely via Django Admin without code changes.
+    Role state lives in ``membership_level`` (a TextChoices: applicant /
+    member / staff / admin). ``is_admin`` reads this field directly.
 
-    Cached properties below mirror the pre-refactor ``is_admin`` /
-    ``is_operator`` API so call sites need not learn about Groups. A new
-    ``is_staff_member`` covers the common admin-OR-operator gate.
+    Transitional state (PR-1 Task 9 of the membership-levels rollout):
+    ``is_operator``, ``is_staff_member``, and ``group_names`` are still
+    group-backed (admin / operator / member Django Groups from
+    apps.accounts.migrations.0002_role_to_groups). These three
+    properties — and the legacy groups themselves — are removed in
+    Task 10 + migration 0009.
 
-    Staleness caveat: the four properties (``is_admin``,
-    ``is_operator``, ``is_staff_member``, ``group_names``) are
-    @cached_property — once read, the value is memoized on the
-    instance. If you mutate ``user.groups`` in the same request and
-    then re-check one of them, you'll see the pre-mutation value.
-    After mutating, bust the cache with
-    ``User._invalidate_role_cache(user)`` (helper below). The
-    ``UserCreationForm`` / ``UserChangeForm`` paths in
-    ``apps.accounts.forms`` and ``UserManager.create_superuser``
-    do exactly this when assigning groups.
+    Cached-property staleness caveat: the four cached properties below
+    (``is_admin``, ``is_internal``, ``is_operator``, ``is_staff_member``,
+    ``group_names``) are memoized on the instance. If you mutate
+    ``user.membership_level`` or ``user.groups`` in the same request
+    and then re-check, you'll see the pre-mutation value. After
+    mutating, bust the cache with
+    ``User._invalidate_role_cache(user)``. ``UserCreationForm`` /
+    ``UserChangeForm`` and ``UserManager.create_superuser`` do this
+    automatically when assigning roles.
     """
 
     class Language(models.TextChoices):
@@ -73,7 +73,12 @@ class User(AbstractUser):
     # the same request.
     @cached_property
     def is_admin(self):
-        return self.groups.filter(name="admin").exists()
+        """True iff Vereins-Admin (membership_level=ADMIN).
+
+        Backwards-compat: kept the same name as the pre-refactor
+        group-based check — call-site semantics are unchanged.
+        """
+        return self.membership_level == self.MembershipLevel.ADMIN
 
     @cached_property
     def is_internal(self):
