@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -424,3 +425,110 @@ class StationInventory(models.Model):
 
     def __str__(self):
         return f"{self.station.name} - inventory"
+
+
+class StationAssignment(models.Model):
+    """Per-user, per-station role assignment.
+
+    Two roles: ADMIN (max 1 per station, the local "owner") and
+    MAINTAINER (N per station, co-helpers). Applicant users cannot
+    hold an assignment — enforced via clean()/save() in Task 5.
+    """
+
+    class Role(models.TextChoices):
+        ADMIN = "admin", _("Station-Admin")
+        MAINTAINER = "maintainer", _("Station-Maintainer")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="station_assignments",
+        verbose_name=_("user"),
+    )
+    station = models.ForeignKey(
+        Station,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+        verbose_name=_("station"),
+    )
+    role = models.CharField(_("role"), max_length=12, choices=Role.choices)
+    assigned_at = models.DateTimeField(_("assigned at"), auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_station_assignments",
+        verbose_name=_("assigned by"),
+    )
+
+    class Meta:
+        verbose_name = _("station assignment")
+        verbose_name_plural = _("station assignments")
+        ordering = ["station", "role", "user"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "station"],
+                name="uniq_user_per_station_assignment",
+            ),
+            models.UniqueConstraint(
+                fields=["station"],
+                condition=Q(role="admin"),
+                name="uniq_admin_per_station",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["station", "role"]),
+            models.Index(fields=["user"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user} → {self.station} ({self.get_role_display()})"
+
+
+class RegionAssignment(models.Model):
+    """Per-user, per-region role assignment. One role only: MANAGER."""
+
+    class Role(models.TextChoices):
+        MANAGER = "manager", _("Region-Manager")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="region_assignments",
+        verbose_name=_("user"),
+    )
+    region = models.ForeignKey(
+        Region,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+        verbose_name=_("region"),
+    )
+    role = models.CharField(_("role"), max_length=10, choices=Role.choices)
+    assigned_at = models.DateTimeField(_("assigned at"), auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_region_assignments",
+        verbose_name=_("assigned by"),
+    )
+
+    class Meta:
+        verbose_name = _("region assignment")
+        verbose_name_plural = _("region assignments")
+        ordering = ["region", "user"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "region", "role"],
+                name="uniq_user_role_per_region",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["region", "role"]),
+            models.Index(fields=["user"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user} → {self.region} ({self.get_role_display()})"
