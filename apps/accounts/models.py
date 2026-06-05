@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.functional import cached_property
@@ -102,3 +103,86 @@ class User(AbstractUser):
         """
         for attr in ("is_admin", "is_operator", "is_staff_member", "group_names"):
             user.__dict__.pop(attr, None)
+
+
+class AccountAuditLog(models.Model):
+    """System-wide audit trail for account-management and topology events.
+
+    Parallel to StationAuditLog (per-station) and SsoAuditLog (SSO/OIDC).
+    The apps/audit/ listing view merges all three into a single feed.
+    """
+
+    class EventType(models.TextChoices):
+        MEMBERSHIP_PROMOTED = "membership_promoted", _("Membership Promoted")
+        MEMBERSHIP_DEMOTED = "membership_demoted", _("Membership Demoted")
+        REGION_ASSIGNMENT_CREATED = "region_assignment_created", _("Region Assignment Created")
+        REGION_ASSIGNMENT_REVOKED = "region_assignment_revoked", _("Region Assignment Revoked")
+        REGION_CREATED = "region_created", _("Region Created")
+        REGION_UPDATED = "region_updated", _("Region Updated")
+        REGION_DELETED = "region_deleted", _("Region Deleted")
+
+    event_type = models.CharField(
+        _("event type"),
+        max_length=32,
+        choices=EventType.choices,
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="account_audit_logs_as_actor",
+        verbose_name=_("actor"),
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="account_audit_logs_as_target",
+        verbose_name=_("target user"),
+    )
+    region = models.ForeignKey(
+        "stations.Region",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="audit_logs",
+        verbose_name=_("region"),
+    )
+    message = models.TextField(_("message"), blank=True)
+    ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("account audit log")
+        verbose_name_plural = _("account audit logs")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["-created_at"]),
+            models.Index(fields=["event_type", "-created_at"]),
+            models.Index(fields=["target_user", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.get_event_type_display()} @ {self.created_at}"
+
+    @classmethod
+    def log(
+        cls,
+        *,
+        event_type,
+        actor=None,
+        target_user=None,
+        region=None,
+        message="",
+        ip_address=None,
+    ):
+        return cls.objects.create(
+            event_type=event_type,
+            actor=actor,
+            target_user=target_user,
+            region=region,
+            message=message,
+            ip_address=ip_address,
+        )
