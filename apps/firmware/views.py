@@ -23,9 +23,7 @@ class AdminOrOperatorMixin(UserPassesTestMixin):
     """Restrict access to admin or operator roles."""
 
     def test_func(self):
-        return self.request.user.is_authenticated and (
-            self.request.user.is_admin or self.request.user.is_operator
-        )
+        return self.request.user.is_authenticated and self.request.user.is_internal
 
 
 class FirmwareListView(LoginRequiredMixin, ListView):

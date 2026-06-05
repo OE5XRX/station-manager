@@ -153,13 +153,11 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         context = super().get_context_data(**kwargs)
         context["stations"] = Station.objects.all().order_by("name")
         context["event_type_choices"] = StationAuditLog.EventType.choices
-        # Group-backed filter: matches users added via Django Admin
-        # without the deprecated `role` column being touched. distinct()
-        # because a user could land in multiple matching groups in the
-        # future (defensive).
-        context["users"] = (
-            User.objects.filter(groups__name="admin").distinct().order_by("username")
-        )
+        # Membership-level filter: matches Vereins-Admins. Replaces the
+        # pre-Task-10 group-backed query (groups__name="admin").
+        context["users"] = User.objects.filter(
+            membership_level=User.MembershipLevel.ADMIN
+        ).order_by("username")
         # Preserve current filter values for the template
         context["category"] = self.request.GET.get("category", "")
         context["current_station"] = self.request.GET.get("station", "")

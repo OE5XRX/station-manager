@@ -27,13 +27,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        # user.is_staff_member is @cached_property that hits the ORM —
-        # wrap so it's async-safe. database_sync_to_async (vs the more
+        # ``user.is_internal`` is @cached_property reading
+        # ``membership_level`` (no ORM hit today), but we wrap with
+        # database_sync_to_async for symmetry with other consumers and
+        # to remain safe if the property's implementation grows ORM
+        # access in the future. database_sync_to_async (vs the more
         # generic asgiref.sync.sync_to_async) is the Channels-recommended
-        # primitive for ORM access: it correctly closes any DB connection
-        # opened in the worker thread after the call returns.
-        is_staff = await database_sync_to_async(lambda: user.is_staff_member)()
-        if not is_staff:
+        # primitive for ORM access.
+        is_internal = await database_sync_to_async(lambda: user.is_internal)()
+        if not is_internal:
             await self.close(code=4403)
             return
 

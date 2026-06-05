@@ -17,7 +17,7 @@
     <p class="page-sub">{% trans "Uploaded binaries with SHA-256 checksums, used by deployments across the fleet." %}</p>
   </div>
   <div class="page-head-actions">
-    {% if user.is_staff_member %}
+    {% if user.is_internal %}
     <a href="{% url 'firmware:firmware_upload' %}" class="btn btn-primary">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       {% trans "Upload artifact" %}

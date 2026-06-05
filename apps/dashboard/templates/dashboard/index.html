@@ -19,7 +19,7 @@
       <p class="page-sub">{% blocktrans with online=stations_online total=station_count %}{{ online }} of {{ total }} stations are transmitting right now. Deployments and alerts are below.{% endblocktrans %}</p>
     </div>
     <div class="page-head-actions">
-      {% if user.is_staff_member %}
+      {% if user.is_internal %}
       <a href="{% url 'stations:station_create' %}" class="btn">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         {% trans "New station" %}
@@ -152,7 +152,7 @@
           </div>
           <div class="empty-title">{% trans "No stations yet" %}</div>
           <div>{% trans "Add your first remote station to start managing the fleet." %}</div>
-          {% if user.is_staff_member %}
+          {% if user.is_internal %}
           <a href="{% url 'stations:station_create' %}" class="btn btn-primary mt-10">{% trans "Add station" %}</a>
           {% endif %}
         </div>

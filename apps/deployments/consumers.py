@@ -23,13 +23,13 @@ class DeploymentStatusConsumer(AsyncWebsocketConsumer):
         # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
         # and the upgrade dashboard. Members stay excluded (4403) so their
         # auto-reconnect loop from static/js/app.js stops cleanly.
-        # Group-backed check via the cached property — see User.is_staff_member.
-        # Use database_sync_to_async (vs the more generic
-        # asgiref.sync.sync_to_async) because the property hits the ORM:
-        # Channels' wrapper closes any DB connection opened in the worker
-        # thread after the call returns.
-        is_staff_member = await database_sync_to_async(lambda: user.is_staff_member)()
-        if not is_staff_member:
+        # ``is_internal`` is a @cached_property that reads
+        # ``membership_level`` (no ORM hit), but we keep
+        # database_sync_to_async for symmetry with other consumers and
+        # to remain safe if the property's implementation grows ORM
+        # access in the future.
+        is_internal = await database_sync_to_async(lambda: user.is_internal)()
+        if not is_internal:
             await self.close(code=4403)
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)

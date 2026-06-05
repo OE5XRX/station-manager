@@ -11,24 +11,17 @@ class User(AbstractUser):
     """Custom user model with membership-level role + language preference.
 
     Role state lives in ``membership_level`` (a TextChoices: applicant /
-    member / staff / admin). ``is_admin`` reads this field directly.
+    member / staff / admin). ``is_admin`` and ``is_internal`` read this
+    field directly.
 
-    Transitional state (PR-1 Task 9 of the membership-levels rollout):
-    ``is_operator``, ``is_staff_member``, and ``group_names`` are still
-    group-backed (admin / operator / member Django Groups from
-    apps.accounts.migrations.0002_role_to_groups). These three
-    properties — and the legacy groups themselves — are removed in
-    Task 10 + migration 0009.
-
-    Cached-property staleness caveat: the four cached properties below
-    (``is_admin``, ``is_internal``, ``is_operator``, ``is_staff_member``,
-    ``group_names``) are memoized on the instance. If you mutate
-    ``user.membership_level`` or ``user.groups`` in the same request
-    and then re-check, you'll see the pre-mutation value. After
-    mutating, bust the cache with
-    ``User._invalidate_role_cache(user)``. ``UserCreationForm`` /
-    ``UserChangeForm`` and ``UserManager.create_superuser`` do this
-    automatically when assigning roles.
+    Cached-property staleness caveat: the two cached properties below
+    (``is_admin``, ``is_internal``) are memoized on the instance. If
+    you mutate ``user.membership_level`` in the same request and then
+    re-check, you'll see the pre-mutation value. After mutating, bust
+    the cache with ``User._invalidate_role_cache(user)``.
+    ``UserCreationForm`` / ``UserChangeForm`` and
+    ``UserManager.create_superuser`` do this automatically when
+    assigning roles.
     """
 
     class Language(models.TextChoices):
@@ -65,12 +58,12 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
-    # NOTE: the three properties below are @cached_property. Once a
+    # NOTE: the two properties below are @cached_property. Once a
     # caller reads e.g. ``user.is_admin``, the value is memoized on the
-    # instance and stays stale through subsequent ``user.groups``
+    # instance and stays stale through subsequent ``membership_level``
     # mutations on the same instance. Bust with
-    # ``User._invalidate_role_cache(user)`` after mutating groups in
-    # the same request.
+    # ``User._invalidate_role_cache(user)`` after mutating
+    # ``membership_level`` in the same request.
     @cached_property
     def is_admin(self):
         """True iff Vereins-Admin (membership_level=ADMIN).
@@ -149,39 +142,14 @@ class User(AbstractUser):
         """
         return self.membership_level != self.MembershipLevel.APPLICANT
 
-    @cached_property
-    def is_operator(self):
-        return self.groups.filter(name="operator").exists()
-
-    @cached_property
-    def is_staff_member(self):
-        """True iff user is in admin OR operator group."""
-        return self.groups.filter(name__in=["admin", "operator"]).exists()
-
-    @cached_property
-    def group_names(self):
-        """Sorted list of group names the user is a member of.
-
-        Cached on the User instance so templates that render the user's
-        group memberships (e.g. the sidebar role-badge block) don't fire
-        a fresh ORM query on every page load.
-        """
-        return list(self.groups.order_by("name").values_list("name", flat=True))
-
     @staticmethod
     def _invalidate_role_cache(user):
-        """Delete cached is_admin / is_operator / is_staff_member /
-        group_names entries on a User instance after ``user.groups`` has
-        been mutated in the same request. Idempotent — safe to call when
-        the properties have not yet been read.
+        """Delete cached ``is_admin`` / ``is_internal`` entries on a User
+        instance after ``membership_level`` has been mutated in the same
+        request. Idempotent — safe to call when the properties have not
+        yet been read.
         """
-        for attr in (
-            "is_admin",
-            "is_internal",
-            "is_operator",
-            "is_staff_member",
-            "group_names",
-        ):
+        for attr in ("is_admin", "is_internal"):
             user.__dict__.pop(attr, None)
 
 

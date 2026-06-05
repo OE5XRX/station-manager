@@ -17,7 +17,7 @@
     </div>
     <div class="stack-gap-6">
       {% if not alert.is_resolved %}
-        {% if user.is_staff_member %}
+        {% if user.is_internal %}
           {% if not alert.is_acknowledged %}
           <button class="btn btn-sm" hx-post="{% url 'monitoring:alert_acknowledge' alert.pk %}">{% trans "Ack" %}</button>
           {% endif %}

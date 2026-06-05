@@ -42,7 +42,7 @@ class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Restrict access to users with admin or operator role."""
 
     def test_func(self):
-        return self.request.user.is_staff_member
+        return self.request.user.is_internal
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,4 @@
 import pytest
-from django.contrib.auth.models import Group
 from django.urls import reverse
 
 from apps.accounts.models import User
@@ -17,45 +16,35 @@ class TestUserModel:
 
 
 @pytest.mark.django_db
-def test_is_admin_true_when_user_in_admin_group():
-    """After the membership-level refactor, ``is_admin`` is driven by
-    ``membership_level=ADMIN``. Pre-PR this was a Django-group check;
-    the legacy ``is_operator`` / ``is_staff_member`` properties still
-    read groups until Task 10 retires them."""
-    from apps.accounts.models import User
-
-    admin_group, _ = Group.objects.get_or_create(name="admin")
+def test_is_admin_true_when_membership_level_admin():
+    """``is_admin`` is driven by ``membership_level=ADMIN`` (Task 9)."""
     user = User.objects.create_user(username="a", password="x", email="a@x")
-    user.groups.add(admin_group)
     user.membership_level = User.MembershipLevel.ADMIN
     user.save(update_fields=["membership_level"])
+    User._invalidate_role_cache(user)
     assert user.is_admin is True
-    assert user.is_operator is False
-    assert user.is_staff_member is True
+    assert user.is_internal is True
 
 
 @pytest.mark.django_db
-def test_is_operator_true_when_user_in_operator_group():
-    from apps.accounts.models import User
-
-    op_group, _ = Group.objects.get_or_create(name="operator")
+def test_is_internal_true_when_membership_level_staff():
+    """``is_internal`` covers STAFF and ADMIN; STAFF must not be admin."""
     user = User.objects.create_user(username="o", password="x", email="o@x")
-    user.groups.add(op_group)
+    user.membership_level = User.MembershipLevel.STAFF
+    user.save(update_fields=["membership_level"])
+    User._invalidate_role_cache(user)
     assert user.is_admin is False
-    assert user.is_operator is True
-    assert user.is_staff_member is True
+    assert user.is_internal is True
 
 
 @pytest.mark.django_db
-def test_member_user_is_neither_admin_nor_operator():
-    from apps.accounts.models import User
-
-    member_group, _ = Group.objects.get_or_create(name="member")
+def test_member_user_is_neither_admin_nor_internal():
     user = User.objects.create_user(username="m", password="x", email="m@x")
-    user.groups.add(member_group)
+    user.membership_level = User.MembershipLevel.MEMBER
+    user.save(update_fields=["membership_level"])
+    User._invalidate_role_cache(user)
     assert user.is_admin is False
-    assert user.is_operator is False
-    assert user.is_staff_member is False
+    assert user.is_internal is False
 
 
 @pytest.mark.django_db
@@ -92,33 +81,25 @@ class TestUserManagement:
         assert response.status_code == 200
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Transitional: after Task 9, is_admin reads membership_level. "
-        "UserManager.create_superuser still only adds the legacy 'admin' "
-        "Group and does not set membership_level=ADMIN. Task 10 will "
-        "refactor the manager to set membership_level — at which point "
-        "this xfail flips back to a pass."
-    ),
-    strict=True,
-)
 @pytest.mark.django_db
-def test_create_superuser_lands_in_admin_group():
+def test_create_superuser_sets_admin_membership_level():
     """createsuperuser must yield is_admin=True so the new account can
     actually access admin views, otherwise the chicken-and-egg
-    bootstrap is broken on a fresh install."""
+    bootstrap is broken on a fresh install. After Task 10, the manager
+    sets ``membership_level=ADMIN`` directly (formerly: added user to
+    the legacy ``admin`` Django Group)."""
     user = User.objects.create_superuser(username="sup", password="x", email="s@x")
     assert user.is_superuser is True
+    assert user.membership_level == User.MembershipLevel.ADMIN
     assert user.is_admin is True
 
 
 @pytest.mark.django_db
-def test_audit_user_filter_finds_admins_via_group_not_role():
-    """apps.audit.views.py admin-user-filter must work after Task 5;
-    user added to admin group via Django admin (without setting .role)
-    must still show up."""
-    g, _ = Group.objects.get_or_create(name="admin")
-    user = User.objects.create_user(username="byggroup", password="x", email="b@x")
-    user.groups.add(g)
-    admins = User.objects.filter(groups__name="admin").distinct()
+def test_audit_user_filter_finds_admins_by_membership_level():
+    """apps.audit.views admin-user-filter (Task 10) selects on
+    ``membership_level=ADMIN``."""
+    user = User.objects.create_user(username="byglvl", password="x", email="b@x")
+    user.membership_level = User.MembershipLevel.ADMIN
+    user.save(update_fields=["membership_level"])
+    admins = User.objects.filter(membership_level=User.MembershipLevel.ADMIN)
     assert user in admins
