@@ -87,10 +87,16 @@ class TestCheckCpuTemperature:
 @pytest.mark.django_db
 class TestCheckDiskUsage:
     def test_disk_usage_alert(self, station, disk_warning_alert_rule):
-        """Disk > 90% triggers warning."""
+        """Disk > 90% triggers warning.
+
+        Uses 92% to test the warning threshold without crossing the
+        seeded critical threshold (95%) — otherwise the engine would
+        emit both Warning and Critical alerts. See
+        apps/monitoring/migrations/0002_seed_default_rules.py.
+        """
         StationInventory.objects.create(
             station=station,
-            data={"disk": [{"mount": "/", "usage_percent": 95.0}]},
+            data={"disk": [{"mount": "/", "usage_percent": 92.0}]},
         )
         alerts = _check_disk_usage()
         assert len(alerts) == 1
@@ -230,3 +236,37 @@ class TestAlertViews:
         client.force_login(admin_user)
         response = client.get(reverse("monitoring:alert_settings"))
         assert response.status_code == 200
+
+
+@pytest.mark.django_db
+class TestAlertSettingsEmptyState:
+    """The settings page shows a diagnostic banner when no rules exist.
+
+    Production should never hit this state (migration 0002 seeds 6 rows),
+    but Django Admin allows manual deletion. The empty-state is the
+    operator's signal that the seed migration didn't run or was undone.
+    """
+
+    def test_empty_table_shows_diagnostic_banner(self, client, admin_user):
+        """No AlertRule rows -> banner with 'init container' diagnostic."""
+        from apps.monitoring.models import AlertRule
+
+        client.force_login(admin_user)
+        AlertRule.objects.all().delete()
+        response = client.get(reverse("monitoring:alert_settings"))
+
+        assert response.status_code == 200
+        content = response.content.decode()
+        assert "init container" in content.lower(), (
+            "Empty-state banner missing diagnostic hint — "
+            "operators need a pointer to the init container logs."
+        )
+
+    def test_seeded_table_does_not_show_banner(self, client, admin_user):
+        """When rules exist (default state), the banner is absent."""
+        client.force_login(admin_user)
+        response = client.get(reverse("monitoring:alert_settings"))
+
+        assert response.status_code == 200
+        content = response.content.decode()
+        assert "init container" not in content.lower()

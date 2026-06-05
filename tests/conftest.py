@@ -196,62 +196,85 @@ def deployment_result(deployment, station):
 
 @pytest.fixture
 def offline_alert_rule(db):
-    """An active AlertRule for station_offline."""
-    return AlertRule.objects.create(
+    """An active AlertRule for station_offline.
+
+    Uses update_or_create so it coexists with the seed migration
+    (apps/monitoring/migrations/0002_seed_default_rules.py) that creates
+    this row at session start. defaults= forces the fixture's documented
+    values regardless of any per-test mutation from earlier tests in the
+    same session — pytest-django's auto-rollback only undoes the test's
+    own writes, not migration data.
+    """
+    rule, _ = AlertRule.objects.update_or_create(
         alert_type=AlertRule.AlertType.STATION_OFFLINE,
-        threshold=0,
-        severity=AlertRule.Severity.CRITICAL,
-        is_active=True,
-        description="Station offline check",
+        defaults={
+            "threshold": 0,
+            "severity": AlertRule.Severity.CRITICAL,
+            "is_active": True,
+            "description": "Station offline check",
+        },
     )
+    return rule
 
 
 @pytest.fixture
 def cpu_temp_alert_rule(db):
     """An active AlertRule for cpu_temperature with threshold 80."""
-    return AlertRule.objects.create(
+    rule, _ = AlertRule.objects.update_or_create(
         alert_type=AlertRule.AlertType.CPU_TEMPERATURE,
-        threshold=80.0,
-        severity=AlertRule.Severity.WARNING,
-        is_active=True,
-        description="CPU temperature check",
+        defaults={
+            "threshold": 80.0,
+            "severity": AlertRule.Severity.WARNING,
+            "is_active": True,
+            "description": "CPU temperature check",
+        },
     )
+    return rule
 
 
 @pytest.fixture
 def disk_warning_alert_rule(db):
     """An active AlertRule for disk_warning with threshold 90."""
-    return AlertRule.objects.create(
+    rule, _ = AlertRule.objects.update_or_create(
         alert_type=AlertRule.AlertType.DISK_WARNING,
-        threshold=90.0,
-        severity=AlertRule.Severity.WARNING,
-        is_active=True,
-        description="Disk warning check",
+        defaults={
+            "threshold": 90.0,
+            "severity": AlertRule.Severity.WARNING,
+            "is_active": True,
+            "description": "Disk warning check",
+        },
     )
+    return rule
 
 
 @pytest.fixture
 def ram_critical_alert_rule(db):
     """An active AlertRule for ram_critical with threshold 90."""
-    return AlertRule.objects.create(
+    rule, _ = AlertRule.objects.update_or_create(
         alert_type=AlertRule.AlertType.RAM_CRITICAL,
-        threshold=90.0,
-        severity=AlertRule.Severity.CRITICAL,
-        is_active=True,
-        description="RAM critical check",
+        defaults={
+            "threshold": 90.0,
+            "severity": AlertRule.Severity.CRITICAL,
+            "is_active": True,
+            "description": "RAM critical check",
+        },
     )
+    return rule
 
 
 @pytest.fixture
 def ota_failed_alert_rule(db):
     """An active AlertRule for ota_failed."""
-    return AlertRule.objects.create(
+    rule, _ = AlertRule.objects.update_or_create(
         alert_type=AlertRule.AlertType.OTA_FAILED,
-        threshold=0,
-        severity=AlertRule.Severity.CRITICAL,
-        is_active=True,
-        description="OTA failure check",
+        defaults={
+            "threshold": 0,
+            "severity": AlertRule.Severity.CRITICAL,
+            "is_active": True,
+            "description": "OTA failure check",
+        },
     )
+    return rule
 
 
 @pytest.fixture

@@ -63,6 +63,19 @@
           </td>
           <td></td>
         </tr>
+        {% empty %}
+        <tr>
+          <td colspan="5" style="padding:24px;">
+            <div class="stack-gap-2">
+              <span style="font-weight:600;color:var(--ink-0);">
+                {% trans "No alert rules configured." %}
+              </span>
+              <span class="t-muted">
+                {% blocktrans %}The 6 default rules are created by a data migration on the first deploy. If this message persists after a successful deploy, check the init container logs — the seed migration did not run or was rolled back.{% endblocktrans %}
+              </span>
+            </div>
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
