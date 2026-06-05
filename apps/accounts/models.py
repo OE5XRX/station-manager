@@ -41,6 +41,19 @@ class User(AbstractUser):
         default=Language.ENGLISH,
     )
 
+    class MembershipLevel(models.TextChoices):
+        APPLICANT = "applicant", _("Vereins-Bewerber")
+        MEMBER = "member", _("Vereins-Mitglied")
+        STAFF = "staff", _("Vereins-Staff")
+        ADMIN = "admin", _("Vereins-Admin")
+
+    membership_level = models.CharField(
+        _("membership level"),
+        max_length=10,
+        choices=MembershipLevel.choices,
+        default=MembershipLevel.APPLICANT,
+    )
+
     objects = UserManager()
 
     class Meta:
