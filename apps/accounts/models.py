@@ -76,6 +76,41 @@ class User(AbstractUser):
         return self.groups.filter(name="admin").exists()
 
     @cached_property
+    def is_internal(self):
+        """True iff Vereins-Staff or Vereins-Admin.
+
+        Replaces the pre-refactor ``is_staff_member``. Renamed because
+        Django's built-in ``is_staff`` (admin-backend access) is a
+        related but distinct concept — keeping both names increases
+        confusion. ``is_internal`` reads cleanly at call sites:
+        "is this user a member of the internal operations team?"
+        """
+        return self.membership_level in (
+            self.MembershipLevel.STAFF,
+            self.MembershipLevel.ADMIN,
+        )
+
+    def is_station_admin(self, station):
+        return self.station_assignments.filter(
+            station=station,
+            role="admin",
+        ).exists()
+
+    def is_station_maintainer(self, station):
+        return self.station_assignments.filter(
+            station=station,
+            role="maintainer",
+        ).exists()
+
+    def is_region_manager(self, region):
+        if region is None:
+            return False
+        return self.region_assignments.filter(
+            region=region,
+            role="manager",
+        ).exists()
+
+    @cached_property
     def is_operator(self):
         return self.groups.filter(name="operator").exists()
 
@@ -101,7 +136,13 @@ class User(AbstractUser):
         been mutated in the same request. Idempotent — safe to call when
         the properties have not yet been read.
         """
-        for attr in ("is_admin", "is_operator", "is_staff_member", "group_names"):
+        for attr in (
+            "is_admin",
+            "is_internal",
+            "is_operator",
+            "is_staff_member",
+            "group_names",
+        ):
             user.__dict__.pop(attr, None)
 
 
