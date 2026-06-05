@@ -1,6 +1,7 @@
 """Tests for the new topology models: Region, StationAssignment, RegionAssignment."""
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from apps.accounts.models import User
@@ -194,3 +195,63 @@ class TestRegionAssignment:
             role=RegionAssignment.Role.MANAGER,
         )
         assert r.assignments.count() == 2
+
+
+@pytest.mark.django_db
+class TestApplicantInvariant:
+    def _applicant(self):
+        u = User.objects.create_user(username="newbie", password="x")
+        # Default level is APPLICANT — no need to set explicitly
+        return u
+
+    def test_applicant_cannot_be_station_admin(self):
+        from apps.stations.models import StationAssignment
+
+        s = Station.objects.create(name="OE5A", callsign="OE5A")
+        a = StationAssignment(
+            user=self._applicant(),
+            station=s,
+            role=StationAssignment.Role.ADMIN,
+        )
+        with pytest.raises(ValidationError) as exc:
+            a.save()
+        assert "Vereins-Bewerber" in str(exc.value)
+
+    def test_applicant_cannot_be_station_maintainer(self):
+        from apps.stations.models import StationAssignment
+
+        s = Station.objects.create(name="OE5A", callsign="OE5A")
+        a = StationAssignment(
+            user=self._applicant(),
+            station=s,
+            role=StationAssignment.Role.MAINTAINER,
+        )
+        with pytest.raises(ValidationError):
+            a.save()
+
+    def test_applicant_cannot_be_region_manager(self):
+        from apps.stations.models import RegionAssignment
+
+        r = Region.objects.create(name="Tirol", slug="tirol")
+        a = RegionAssignment(
+            user=self._applicant(),
+            region=r,
+            role=RegionAssignment.Role.MANAGER,
+        )
+        with pytest.raises(ValidationError):
+            a.save()
+
+    def test_member_can_be_assigned(self):
+        """Sanity: the invariant blocks Applicants only, not Members."""
+        from apps.stations.models import StationAssignment
+
+        u = self._applicant()
+        u.membership_level = User.MembershipLevel.MEMBER
+        u.save(update_fields=["membership_level"])
+        s = Station.objects.create(name="OE5A", callsign="OE5A")
+        # Should not raise
+        StationAssignment.objects.create(
+            user=u,
+            station=s,
+            role=StationAssignment.Role.MAINTAINER,
+        )

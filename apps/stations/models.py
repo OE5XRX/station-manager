@@ -5,6 +5,8 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from apps.accounts.models import User
+
 # Slugs reserved by the rollout machinery (apps.rollouts.grouping) —
 # creating a StationTag with one of these slugs would let a real tag
 # shadow the sentinel bucket used for "stations outside the sequence".
@@ -427,7 +429,42 @@ class StationInventory(models.Model):
         return f"{self.station.name} - inventory"
 
 
-class StationAssignment(models.Model):
+class _ApplicantForbiddenMixin:
+    """Mixin: refuses save() if self.user is a Vereins-Bewerber (APPLICANT).
+
+    Enforces the spec invariant that topology assignments require at
+    least Vereins-Mitglied level. Mixed into StationAssignment and
+    RegionAssignment so the rule lives in one place.
+
+    save() calls self.clean() (NOT self.full_clean()) deliberately:
+    full_clean() runs validate_unique(), which would pre-empt the
+    DB-level UniqueConstraint violations as ValidationError. Task 4's
+    tests (tests/test_topology_models.py::TestStationAssignment::
+    test_uniq_user_per_station, test_uniq_admin_per_station, and
+    TestRegionAssignment::test_uniq_user_role_per_region) explicitly
+    assert IntegrityError from those constraints. The Applicant rule
+    is a cross-table business rule that DB CHECK can't express, so
+    Python-side validation via clean() is the correct layer.
+    """
+
+    def clean(self):
+        super().clean()
+        if self.user.membership_level == User.MembershipLevel.APPLICANT:
+            raise ValidationError(
+                {
+                    "user": _(
+                        "Vereins-Bewerber können keine Topology-Rolle haben. "
+                        "Den User erst zu Vereins-Mitglied promoten."
+                    ),
+                }
+            )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+
+class StationAssignment(_ApplicantForbiddenMixin, models.Model):
     """Per-user, per-station role assignment.
 
     Two roles: ADMIN (max 1 per station, the local "owner") and
@@ -486,7 +523,7 @@ class StationAssignment(models.Model):
         return f"{self.user} → {self.station} ({self.get_role_display()})"
 
 
-class RegionAssignment(models.Model):
+class RegionAssignment(_ApplicantForbiddenMixin, models.Model):
     """Per-user, per-region role assignment. One role only: MANAGER."""
 
     class Role(models.TextChoices):
