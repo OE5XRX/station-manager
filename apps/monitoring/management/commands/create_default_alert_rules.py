@@ -50,7 +50,7 @@ DEFAULT_RULES = [
         "alert_type": AlertRule.AlertType.OTA_FAILED,
         "threshold": 0.0,
         "severity": AlertRule.Severity.CRITICAL,
-        "description": "OTA deployment failed or was rolled back.",
+        "description": "An OTA deployment failed or was rolled back.",
     },
 ]
 
