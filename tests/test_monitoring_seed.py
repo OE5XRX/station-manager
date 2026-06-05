@@ -44,9 +44,7 @@ def test_all_default_rules_exist():
     """Every alert_type in EXPECTED_RULES has a row in the DB."""
     actual_types = set(AlertRule.objects.values_list("alert_type", flat=True))
     expected_types = set(EXPECTED_RULES.keys())
-    assert actual_types >= expected_types, (
-        f"Missing seeded rules: {expected_types - actual_types}"
-    )
+    assert actual_types >= expected_types, f"Missing seeded rules: {expected_types - actual_types}"
 
 
 @pytest.mark.django_db
