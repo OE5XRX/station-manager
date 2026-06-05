@@ -110,6 +110,40 @@ class User(AbstractUser):
             role="manager",
         ).exists()
 
+    def can_administer_station(self, station):
+        """Full operative authority on `station`:
+        Vereins-Admin OR Vereins-Staff OR Station-Admin of `station`
+        OR Region-Manager of station.region.
+        """
+        if self.is_internal:
+            return True
+        if self.is_station_admin(station):
+            return True
+        if self.is_region_manager(station.region):
+            return True
+        return False
+
+    def can_maintain_station(self, station):
+        """can_administer_station OR Station-Maintainer of `station`.
+
+        Lower bar than administer: maintenance + operational acks,
+        but not structural changes (image release, station rename).
+        """
+        if self.can_administer_station(station):
+            return True
+        return self.is_station_maintainer(station)
+
+    def can_use_station(self, station):
+        """Future hook for radio operation (Funken über die Station).
+
+        Today: every non-Applicant user passes. The Funk-Stack does not
+        yet exist; the permission is defined now so its consumers can
+        be written against a stable contract. Per-station restriction
+        (e.g., only Region-Members may funken on Region-Stations) can
+        be added later without changing the signature.
+        """
+        return self.membership_level != self.MembershipLevel.APPLICANT
+
     @cached_property
     def is_operator(self):
         return self.groups.filter(name="operator").exists()
