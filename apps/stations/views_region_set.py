@@ -6,7 +6,7 @@ STATION_REGION_CHANGED on StationAuditLog. No view-level emission
 needed.
 """
 
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views import View
 
@@ -17,7 +17,12 @@ from apps.stations.models import Region, Station
 class StationSetRegionView(AdminRequiredMixin, View):
     def post(self, request, pk):
         station = get_object_or_404(Station, pk=pk)
-        region_pk = request.POST.get("region", "").strip()
+        # Distinguish "explicit clear" (empty string) from "field
+        # missing" (400). A client that omits the field is almost
+        # certainly buggy — refuse rather than silently clearing.
+        if "region" not in request.POST:
+            return HttpResponseBadRequest("Missing 'region' field.")
+        region_pk = request.POST["region"].strip()
         if region_pk:
             # Validate the POSTed value is integer-shaped before
             # handing it to the ORM. Without this guard a malformed

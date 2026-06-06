@@ -70,6 +70,23 @@ class TestStationSetRegionView:
         )
         assert response.status_code == 404
 
+    def test_missing_region_field_returns_400(self, client):
+        # Omitting the field entirely must be a 400, not a silent
+        # clear. Explicit empty string (region="") is the documented
+        # way to clear — that's covered by test_admin_can_clear_region.
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        r = Region.objects.create(name="Tirol", slug="tirol")
+        s = Station.objects.create(name="OE5A", callsign="OE5A", region=r)
+        client.force_login(admin)
+        response = client.post(
+            reverse("stations:station_set_region", args=[s.pk]),
+            {},  # no region key
+        )
+        assert response.status_code == 400
+        s.refresh_from_db()
+        # Region must NOT have been silently cleared.
+        assert s.region == r
+
     def test_malformed_region_returns_404(self, client):
         # Non-integer region values must 404, not 500. Without the
         # explicit int() guard in the view this raised ValueError
