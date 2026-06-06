@@ -6,6 +6,10 @@ from .views_region_assignments import (
     RegionAssignmentCreateView,
     RegionAssignmentRevokeView,
 )
+from .views_station_assignments import (
+    StationAssignmentCreateView,
+    StationAssignmentRevokeView,
+)
 
 app_name = "accounts"
 
@@ -31,5 +35,15 @@ urlpatterns = [
         "region_assignments/<int:pk>/revoke/",
         RegionAssignmentRevokeView.as_view(),
         name="region_assignment_revoke",
+    ),
+    path(
+        "users/<int:user_pk>/station_assignments/",
+        StationAssignmentCreateView.as_view(),
+        name="station_assignment_create",
+    ),
+    path(
+        "station_assignments/<int:pk>/revoke/",
+        StationAssignmentRevokeView.as_view(),
+        name="station_assignment_revoke",
     ),
 ]
