@@ -58,7 +58,7 @@
     <div class="consent-fact-stack">
       <div class="consent-fact">
         <span class="consent-fact-key">{% trans "Issuer" %}</span>
-        <span class="consent-fact-val">{{ request.get_host }}</span>
+        <span class="consent-fact-val">{{ request.scheme }}://{{ request.get_host }}</span>
       </div>
       <div class="consent-fact">
         <span class="consent-fact-key">{% trans "Protocol" %}</span>
@@ -127,7 +127,9 @@
     <div class="consent-section">
       <div class="consent-section-label">
         <span class="t-label">{% trans "Requested scopes" %}</span>
-        <span class="t-mono-sm t-muted">{{ scopes_descriptions|length }} {% trans "permission" %}{{ scopes_descriptions|length|pluralize }}</span>
+        <span class="t-mono-sm t-muted">
+          {% blocktrans count n=scopes_descriptions|length %}{{ n }} permission{% plural %}{{ n }} permissions{% endblocktrans %}
+        </span>
       </div>
 
       <ul class="scope-list">
