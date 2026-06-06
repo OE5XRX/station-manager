@@ -8,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
@@ -215,9 +216,19 @@ def process_pending_provisioning_jobs() -> None:
 
 
 def _run_provisioning_job(job: ProvisioningJob) -> None:
-    server_url = getattr(settings, "SERVER_PUBLIC_URL", "https://ham.oe5xrx.org")
-
     try:
+        server_url = settings.SERVER_PUBLIC_URL
+        if not server_url:
+            # Fail loud rather than silently baking a placeholder/stale
+            # URL into the agent config inside the rootfs. The existing
+            # outer except clause turns this into a FAILED job with the
+            # message visible in the operator UI.
+            raise ImproperlyConfigured(
+                "SERVER_PUBLIC_URL must be set — provisioning bakes it "
+                "into the station-agent config inside the rootfs. Empty "
+                "value would silently produce non-functional images."
+            )
+
         # Generate the keypair in memory; we will only persist the new
         # public half to DeviceKey after the bundle is successfully uploaded
         # so a failure in between does not invalidate the station's live key.

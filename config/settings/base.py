@@ -232,6 +232,14 @@ AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
 
 # Alert notifications — Email
 ALERT_EMAIL_ENABLED = os.environ.get("ALERT_EMAIL_ENABLED", "false").lower() == "true"
+
+# Public base URL for stations to reach this server. Baked into the
+# station-agent's config.yml at provisioning time — see
+# apps/provisioning/management/commands/run_background_jobs.py and
+# apps/provisioning/config_render.py. Empty = provisioning fails loud
+# rather than poisoning new images with a stale URL.
+SERVER_PUBLIC_URL = os.environ.get("SERVER_PUBLIC_URL", "")
+
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
 EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
