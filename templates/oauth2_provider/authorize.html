@@ -58,7 +58,11 @@
     <div class="consent-fact-stack">
       <div class="consent-fact">
         <span class="consent-fact-key">{% trans "Issuer" %}</span>
-        <span class="consent-fact-val">{{ request.scheme }}://{{ request.get_host }}</span>
+        {# oauth2_provider URLs are mounted at /sso/ (config/urls.py),
+           so the OIDC issuer includes that prefix — show the full
+           prefix to avoid misleading the user about what they're
+           consenting against. #}
+        <span class="consent-fact-val">{{ request.scheme }}://{{ request.get_host }}/sso</span>
       </div>
       <div class="consent-fact">
         <span class="consent-fact-key">{% trans "Protocol" %}</span>

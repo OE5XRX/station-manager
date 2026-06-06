@@ -168,7 +168,7 @@
   {% if applications %}
   <div class="panel-foot row-split">
     <span class="t-mono" style="font-size:11px;letter-spacing:0.08em;color:var(--ink-3);">
-      OE5XRX-IDP / {% now "Y" %} · {% trans "issuer" %} {{ request.scheme }}://{{ request.get_host }}
+      OE5XRX-IDP / {% now "Y" %} · {% trans "issuer" %} {{ request.scheme }}://{{ request.get_host }}/sso
     </span>
     <a class="btn btn-sm btn-ghost" href="{% url 'admin:oauth2_provider_application_changelist' %}">
       {% trans "Django admin" %} ↗

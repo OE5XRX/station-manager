@@ -236,7 +236,7 @@
           {% trans "Queue import" %}
         </button>
         <span class="t-mono-sm t-muted">
-          {% trans "Asynchronous — a worker pulls the release from GitHub Releases and uploads to S3." %}
+          {% blocktrans with backend=storage_backend_label %}Asynchronous — a worker pulls the release from GitHub Releases and uploads it to the configured artifact store ({{ backend }}).{% endblocktrans %}
         </span>
       </div>
     </form>
