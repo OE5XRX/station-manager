@@ -38,7 +38,8 @@
                 style="display:inline;">
             {% csrf_token %}
             <button type="submit" class="btn btn-ghost btn-sm"
-                    title="{% trans 'Revoke' %}">✕</button>
+                    title="{% trans 'Revoke' %}"
+                    aria-label="{% trans 'Revoke' %}"><span aria-hidden="true">✕</span></button>
           </form>
         </div>
       {% else %}
@@ -58,7 +59,9 @@
                     hx-on::after-request="if (event.detail.successful) window.location.reload()"
                     style="display:inline;">
                 {% csrf_token %}
-                <button type="submit" class="btn btn-ghost btn-sm" title="{% trans 'Revoke' %}">✕</button>
+                <button type="submit" class="btn btn-ghost btn-sm"
+                        title="{% trans 'Revoke' %}"
+                        aria-label="{% trans 'Revoke' %}"><span aria-hidden="true">✕</span></button>
               </form>
             </li>
           {% endfor %}

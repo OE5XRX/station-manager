@@ -10,6 +10,7 @@ REGION_CREATED on post_save, REGION_UPDATED on post_save with
 created=False, REGION_DELETED on post_delete.
 """
 
+from django.db.models import Count
 from django.urls import reverse_lazy
 from django.views.generic import (
     CreateView,
@@ -29,7 +30,8 @@ class RegionListView(AdminRequiredMixin, ListView):
     context_object_name = "regions"
 
     def get_queryset(self):
-        return super().get_queryset().order_by("name")
+        # annotate stations_count to avoid N+1 in the template.
+        return super().get_queryset().annotate(stations_count=Count("stations")).order_by("name")
 
 
 class RegionCreateView(AdminRequiredMixin, CreateView):

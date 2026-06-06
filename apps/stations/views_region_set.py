@@ -19,8 +19,17 @@ class StationSetRegionView(AdminRequiredMixin, View):
         station = get_object_or_404(Station, pk=pk)
         region_pk = request.POST.get("region", "").strip()
         if region_pk:
-            station.region = get_object_or_404(Region, pk=region_pk)
+            new_region = get_object_or_404(Region, pk=region_pk)
+            new_region_id = new_region.pk
         else:
-            station.region = None
-        station.save(update_fields=["region"])
+            new_region = None
+            new_region_id = None
+        # Short-circuit on no-op: avoids a wasted UPDATE and an
+        # `updated_at` bump that doesn't reflect any actual change.
+        if station.region_id == new_region_id:
+            return JsonResponse({"success": True})
+        station.region = new_region
+        # Include `updated_at` so the auto_now bump fires under
+        # update_fields (matches the heartbeat pattern on Station).
+        station.save(update_fields=["region", "updated_at"])
         return JsonResponse({"success": True})

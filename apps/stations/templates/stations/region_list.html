@@ -41,7 +41,7 @@
           <span style="font-weight:600;color:var(--ink-0);">{{ r.name }}</span>
         </td>
         <td class="t-mono-sm" data-label="{% trans 'Slug' %}">{{ r.slug }}</td>
-        <td data-label="{% trans 'Stations' %}">{{ r.stations.count }}</td>
+        <td data-label="{% trans 'Stations' %}">{{ r.stations_count }}</td>
         <td data-label="{% trans 'Description' %}" class="t-muted">{{ r.description|default:"—"|truncatewords:8 }}</td>
         <td class="actions">
           <a href="{% url 'stations:region_update' r.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
