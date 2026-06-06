@@ -142,9 +142,14 @@ class StationDetailView(LoginRequiredMixin, DetailView):
             )
             # Topology card.
             context["all_regions"] = Region.objects.order_by("name")
-            context["all_users"] = User.objects.exclude(
-                membership_level=User.MembershipLevel.APPLICANT
-            ).order_by("username")
+            # Only the columns the topology card actually renders are
+            # needed; defer the rest to keep this list lean on installs
+            # with many users.
+            context["all_users"] = (
+                User.objects.exclude(membership_level=User.MembershipLevel.APPLICANT)
+                .only("id", "username", "membership_level")
+                .order_by("username")
+            )
             topology_assignments = list(
                 self.object.assignments.select_related("user").order_by("role", "user__username")
             )
