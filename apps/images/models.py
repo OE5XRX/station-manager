@@ -36,6 +36,17 @@ class ImageRelease(models.Model):
         blank=True,
         related_name="imported_images",
     )
+    archived_at = models.DateTimeField(
+        _("archived at"),
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_(
+            "Soft-delete timestamp. Archived releases are hidden from "
+            "the default UI list but remain available for any "
+            "Deployment or ProvisioningJob that still references them."
+        ),
+    )
 
     class Meta:
         verbose_name = _("image release")
