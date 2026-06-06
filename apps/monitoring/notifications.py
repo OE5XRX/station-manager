@@ -21,9 +21,11 @@ def _send_email_notification(alert, recipients_qs=None):
     """Send the alert email via the topology-based recipient set.
 
     `recipients_qs` is optional, defaults to recipients_for_station_alert
-    for the alert's station. The override exists for the test-email
-    path (which scopes to a single user) and for future per-channel
-    overrides.
+    for the alert's station. The override seam exists for future
+    per-channel overrides (e.g., a future "alerts to my secondary
+    address" preference). The test-email path does NOT route through
+    here — see ``_test_email`` below, which builds its own recipient
+    list and calls send_mail directly.
     """
     if recipients_qs is None:
         from apps.monitoring.recipients import recipients_for_station_alert

@@ -7,8 +7,12 @@ The spec (§4.7) says recipients are:
   - Station-Admin of this station
   - Station-Maintainer of this station
 
-Excludes Vereins-Staff (operative role, not escalation inbox),
-Applicants (defense-in-depth), inactive users, no-email users.
+Excludes Applicants (defense-in-depth), inactive users, no-email users.
+
+Vereins-Staff is NOT routed by membership_level alone (the spec calls
+this "operative role, not escalation inbox"), but a Staff user who
+holds a Station-Admin/Maintainer or Region-Manager assignment IS routed
+— see test_staff_with_station_assignment_is_recipient below.
 """
 
 import pytest
@@ -76,6 +80,27 @@ class TestRecipientsForStationAlert:
         staff = _user(User.MembershipLevel.STAFF)
         s = Station.objects.create(name="OE5A", callsign="OE5A")
         assert staff not in list(recipients_for_station_alert(s))
+
+    def test_staff_with_station_assignment_is_recipient(self):
+        """The four Q clauses are OR-ed: a Staff user who holds a
+        Station-Admin/Maintainer (or Region-Manager) assignment IS
+        routed. Pins the spec nuance that 'staff not routed by default'
+        means by-membership-level only, not by-membership-level-AND-by-
+        assignment."""
+        staff = _user(User.MembershipLevel.STAFF)
+        s = Station.objects.create(name="OE5A", callsign="OE5A")
+        StationAssignment.objects.create(
+            user=staff, station=s, role=StationAssignment.Role.MAINTAINER
+        )
+        assert staff in list(recipients_for_station_alert(s))
+
+    def test_staff_with_region_assignment_is_recipient(self):
+        """Same nuance via the Region-Manager assignment path."""
+        staff = _user(User.MembershipLevel.STAFF)
+        r = Region.objects.create(name="Tirol", slug="tirol")
+        RegionAssignment.objects.create(user=staff, region=r, role=RegionAssignment.Role.MANAGER)
+        s = Station.objects.create(name="OE5A", callsign="OE5A", region=r)
+        assert staff in list(recipients_for_station_alert(s))
 
     def test_member_without_assignments_not_recipient(self):
         m = _user(User.MembershipLevel.MEMBER)

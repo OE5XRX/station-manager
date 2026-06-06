@@ -68,6 +68,14 @@ def _on_station_pre_save(sender, instance, **kwargs):
 
     if not instance.pk:
         return
+
+    # Hot path: heartbeat updates pass update_fields=["last_seen", ...]
+    # which never touches region. Skip the DB read entirely in that
+    # case. (None means "all fields" — fall through and check.)
+    update_fields = kwargs.get("update_fields")
+    if update_fields is not None and "region" not in update_fields:
+        return
+
     try:
         old = Station.objects.only("region_id").get(pk=instance.pk)
     except Station.DoesNotExist:
