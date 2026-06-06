@@ -322,6 +322,9 @@ class StationAuditLog(models.Model):
         PROVISIONING_DOWNLOADED = "provisioning_downloaded", _("Provisioning Downloaded")
         PROVISIONING_FAILED = "provisioning_failed", _("Provisioning Failed")
         PROVISIONING_EXPIRED = "provisioning_expired", _("Provisioning Expired")
+        STATION_ASSIGNMENT_CREATED = "station_assignment_created", _("Station Assignment Created")
+        STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked", _("Station Assignment Revoked")
+        STATION_REGION_CHANGED = "station_region_changed", _("Station Region Changed")
 
     station = models.ForeignKey(
         Station,
