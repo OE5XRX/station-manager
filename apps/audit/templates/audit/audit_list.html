@@ -25,8 +25,9 @@
 <form class="filter-bar" method="get" hx-get="{% url 'audit:audit_list' %}" hx-target="#audit-table" hx-trigger="change, keyup changed delay:300ms from:input[type=date]" hx-push-url="true">
   <select name="category" class="form-select" style="width:auto;min-width:140px;">
     <option value="" {% if not category %}selected{% endif %}>{% trans "All categories" %}</option>
-    <option value="station" {% if category == "station" %}selected{% endif %}>{% trans "Stations" %}</option>
+    <option value="account" {% if category == "account" %}selected{% endif %}>{% trans "Account" %}</option>
     <option value="sso" {% if category == "sso" %}selected{% endif %}>SSO</option>
+    <option value="station" {% if category == "station" %}selected{% endif %}>{% trans "Stations" %}</option>
   </select>
   <select name="station" class="form-select" style="width:auto;min-width:180px;">
     <option value="">{% trans "All stations" %}</option>

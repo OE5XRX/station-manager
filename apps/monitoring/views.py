@@ -133,7 +133,7 @@ class AlertRuleUpdateView(AdminRequiredMixin, View):
 
 class TestNotificationView(AdminRequiredMixin, View):
     def post(self, request, channel):
-        success, error_message = send_test_notification(channel)
+        success, error_message = send_test_notification(channel, requesting_user=request.user)
         return JsonResponse(
             {
                 "success": success,

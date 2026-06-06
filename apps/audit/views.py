@@ -6,6 +6,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.views.generic import ListView
 
+from apps.accounts.models import AccountAuditLog
 from apps.accounts.views import AdminRequiredMixin
 from apps.sso.models import SsoAuditLog
 from apps.stations.models import Station, StationAuditLog
@@ -52,9 +53,13 @@ class AuditLogFilterMixin:
 
         return queryset
 
-    def apply_sso_date_filters(self, queryset, params):
-        """SSO logs share date filters with station logs but have no
-        station/event/user equivalents in the existing filter sidebar."""
+    def apply_shared_date_filters(self, queryset, params):
+        """Shared date-filter helper used by all feeds except ``station``.
+
+        The ``station`` feed has its own broader ``apply_filters`` (date +
+        station/event/user). SSO and Account logs only expose the date
+        range from the filter sidebar, so they share this narrower helper.
+        """
         date_from = params.get("date_from")
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
@@ -65,7 +70,7 @@ class AuditLogFilterMixin:
 
 
 class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
-    """Merged audit feed: StationAuditLog + SsoAuditLog.
+    """Merged audit feed: StationAuditLog + SsoAuditLog + AccountAuditLog.
 
     The template iterates ``page_obj`` as a list of ``(category, entry)``
     tuples and renders each row variant accordingly — see
@@ -101,12 +106,16 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         include_sso = category in ("", "sso") and not (
             category == "" and station_only_filters_active
         )
+        include_account = category in ("", "account") and not (
+            category == "" and station_only_filters_active
+        )
 
-        # Single-source mode (only station or only sso) returns the
-        # raw queryset so Paginator can LIMIT/OFFSET at the DB level.
-        # Merge mode (both sources) materializes a sorted list of
+        # Single-source mode (only one feed active) returns the raw
+        # queryset so Paginator can LIMIT/OFFSET at the DB level.
+        # Merge mode (2+ sources) materializes a sorted list of
         # (category, entry) tuples, capped at MERGE_FEED_CAP per source.
-        merging = include_station and include_sso
+        active_count = sum([include_station, include_sso, include_account])
+        merging = active_count > 1
 
         if not merging and include_station:
             station_qs = StationAuditLog.objects.select_related("station", "user")
@@ -116,9 +125,15 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
 
         if not merging and include_sso:
             sso_qs = SsoAuditLog.objects.select_related("actor", "target_user", "application")
-            sso_qs = self.apply_sso_date_filters(sso_qs, params)
+            sso_qs = self.apply_shared_date_filters(sso_qs, params)
             self._single_source = "sso"
             return sso_qs.order_by("-created_at")
+
+        if not merging and include_account:
+            account_qs = AccountAuditLog.objects.select_related("actor", "target_user", "region")
+            account_qs = self.apply_shared_date_filters(account_qs, params)
+            self._single_source = "account"
+            return account_qs.order_by("-created_at")
 
         # Merge mode.
         self._single_source = None
@@ -127,10 +142,18 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         station_entries = list(station_qs.order_by("-created_at")[:MERGE_FEED_CAP])
 
         sso_qs = SsoAuditLog.objects.select_related("actor", "target_user", "application")
-        sso_qs = self.apply_sso_date_filters(sso_qs, params)
+        sso_qs = self.apply_shared_date_filters(sso_qs, params)
         sso_entries = list(sso_qs.order_by("-created_at")[:MERGE_FEED_CAP])
 
-        merged = [("station", e) for e in station_entries] + [("sso", e) for e in sso_entries]
+        account_qs = AccountAuditLog.objects.select_related("actor", "target_user", "region")
+        account_qs = self.apply_shared_date_filters(account_qs, params)
+        account_entries = list(account_qs.order_by("-created_at")[:MERGE_FEED_CAP])
+
+        merged = (
+            [("station", e) for e in station_entries]
+            + [("sso", e) for e in sso_entries]
+            + [("account", e) for e in account_entries]
+        )
         merged.sort(key=lambda pair: pair[1].created_at, reverse=True)
         return merged
 
