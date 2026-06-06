@@ -6,27 +6,43 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
 
-from apps.accounts.models import User
-
 logger = logging.getLogger(__name__)
 
 
 def send_alert_notifications(alert):
-    """Send notifications for a new alert to all admin users."""
-    admins = User.objects.filter(membership_level=User.MembershipLevel.ADMIN)
-    if not admins.exists():
-        logger.warning("No admin users found for alert notifications.")
-        return
-
+    """Dispatch alert via configured channels."""
     if getattr(settings, "ALERT_EMAIL_ENABLED", False):
-        _send_email_notification(alert, admins)
-
+        _send_email_notification(alert)
     if getattr(settings, "ALERT_TELEGRAM_ENABLED", False):
         _send_telegram_notification(alert)
 
 
-def _send_email_notification(alert, admins):
-    """Send alert email to all admin users."""
+def _send_email_notification(alert, recipients_qs=None):
+    """Send the alert email via the topology-based recipient set.
+
+    `recipients_qs` is optional, defaults to recipients_for_station_alert
+    for the alert's station. The override exists for the test-email
+    path (which scopes to a single user) and for future per-channel
+    overrides.
+    """
+    if recipients_qs is None:
+        from apps.monitoring.recipients import recipients_for_station_alert
+
+        recipients_qs = recipients_for_station_alert(alert.station)
+
+    recipient_list = list(recipients_qs.values_list("email", flat=True))
+    if not recipient_list:
+        region = alert.station.region.name if alert.station.region else None
+        logger.warning(
+            "Alert %s on station %s (region=%s) has no recipients. "
+            "Configure Station-Admin, Region-Manager, or ensure a "
+            "Vereins-Admin has an email set.",
+            alert.pk,
+            alert.station.name,
+            region,
+        )
+        return
+
     subject = f"[OE5XRX] {alert.get_severity_display()}: {alert.title}"
     body = (
         f"Station: {alert.station.name}\n"
@@ -35,12 +51,6 @@ def _send_email_notification(alert, admins):
         f"{alert.message}\n\n"
         f"Time: {alert.created_at}\n"
     )
-
-    recipient_list = [admin.email for admin in admins if admin.email]
-    if not recipient_list:
-        logger.warning("No admin users have email addresses configured.")
-        return
-
     try:
         send_mail(
             subject=subject,
@@ -84,31 +94,49 @@ def _send_telegram_notification(alert):
         logger.exception("Failed to send Telegram notification.")
 
 
-def send_test_notification(channel):
+def send_test_notification(channel, requesting_user=None):
     """Send a test notification via the specified channel.
 
     Args:
         channel: "email" or "telegram"
+        requesting_user: the admin who triggered the test (email path
+            scopes the mail to this user's address)
 
     Returns:
         Tuple of (success: bool, error_message: str)
     """
     if channel == "email":
-        return _test_email()
+        return _test_email(requesting_user=requesting_user)
     elif channel == "telegram":
         return _test_telegram()
     return False, f"Unknown channel: {channel}"
 
 
-def _test_email():
-    """Send a test email to all admin users."""
+def _test_email(requesting_user=None):
+    """Send a test email to verify SMTP wiring.
+
+    If `requesting_user` is given (the admin who clicked the button),
+    the mail goes only to that user's email. This avoids cross-
+    notification noise when several admins are configured.
+    """
     if not getattr(settings, "ALERT_EMAIL_ENABLED", False):
         return False, "Email notifications are not enabled (ALERT_EMAIL_ENABLED)."
 
-    admins = User.objects.filter(membership_level=User.MembershipLevel.ADMIN)
-    recipient_list = [admin.email for admin in admins if admin.email]
+    if requesting_user is not None and requesting_user.email:
+        recipient_list = [requesting_user.email]
+    else:
+        from apps.accounts.models import User as UserModel
+
+        recipient_list = list(
+            UserModel.objects.filter(membership_level=UserModel.MembershipLevel.ADMIN)
+            .exclude(email="")
+            .values_list("email", flat=True)
+        )
+
     if not recipient_list:
-        return False, "No admin users have email addresses configured."
+        return False, (
+            "No recipient — set your user's email or configure a Vereins-Admin with email."
+        )
 
     try:
         send_mail(
