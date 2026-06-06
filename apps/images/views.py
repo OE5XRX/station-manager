@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib import messages
+from django.db.models import ProtectedError
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -91,11 +92,74 @@ class ImageMarkLatestView(AdminRequiredMixin, View):
 class ImageDeleteView(AdminRequiredMixin, View):
     def post(self, request, pk):
         release = get_object_or_404(ImageRelease, pk=pk)
-        storage.delete(release.s3_key)
-        if release.cosign_bundle_s3_key:
-            storage.delete(release.cosign_bundle_s3_key)
-        if release.rootfs_s3_key:
-            storage.delete(release.rootfs_s3_key)
-        release.delete()
+
+        # Probe DB-level deletability BEFORE touching S3. Deployment and
+        # ProvisioningJob hold PROTECT FKs to ImageRelease because they
+        # are an audit trail — we must not silently destroy that history,
+        # and we must not orphan the DB row by deleting the S3 objects
+        # first and then failing the DB delete (rolling back release.delete
+        # doesn't un-delete S3).
+        blockers = _delete_blockers(release)
+        if blockers:
+            messages.error(
+                request,
+                _(
+                    "Cannot delete release %(tag)s (%(machine)s): "
+                    "still referenced by %(blockers)s. "
+                    "Remove the referencing records first."
+                )
+                % {
+                    "tag": release.tag,
+                    "machine": release.machine,
+                    "blockers": ", ".join(blockers),
+                },
+            )
+            return redirect("images:list")
+
+        try:
+            storage.delete(release.s3_key)
+            if release.cosign_bundle_s3_key:
+                storage.delete(release.cosign_bundle_s3_key)
+            if release.rootfs_s3_key:
+                storage.delete(release.rootfs_s3_key)
+            release.delete()
+        except ProtectedError as exc:
+            # Defensive — a race could land a Deployment between our probe
+            # and the delete. Surface it the same way; S3 objects MAY have
+            # been removed by now, but the audit row is preserved.
+            messages.error(
+                request,
+                _("Cannot delete release %(tag)s (%(machine)s): %(detail)s")
+                % {
+                    "tag": release.tag,
+                    "machine": release.machine,
+                    "detail": str(exc),
+                },
+            )
+            return redirect("images:list")
+
         messages.success(request, _("Release deleted."))
         return redirect("images:list")
+
+
+def _delete_blockers(release: ImageRelease) -> list[str]:
+    """Return human-readable labels for objects that PROTECT this release.
+
+    Kept in sync with the on_delete=PROTECT FKs declared on
+    ``apps.deployments.models.Deployment.image_release`` and
+    ``apps.provisioning.models.ProvisioningJob.image_release``. The
+    ``stations.Station.current_image_release`` FK is SET_NULL and
+    therefore does NOT block deletion.
+    """
+    parts: list[str] = []
+    deployments = release.deployments.count()
+    if deployments:
+        parts.append(
+            _("%(n)d deployment(s)") % {"n": deployments},
+        )
+    provisioning = release.provisioning_jobs.count()
+    if provisioning:
+        parts.append(
+            _("%(n)d provisioning job(s)") % {"n": provisioning},
+        )
+    return [str(p) for p in parts]
