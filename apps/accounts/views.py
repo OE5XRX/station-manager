@@ -83,6 +83,8 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         from apps.sso.views import _build_grants_for_user
 
         context["app_grants_list"] = _build_grants_for_user(self.object)
+        # Membership-level picker uses the model's TextChoices.
+        context["membership_level_choices"] = User.MembershipLevel.choices
         return context
 
 

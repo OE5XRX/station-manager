@@ -133,3 +133,36 @@ class TestMembershipSetView:
             {"level": "godlike"},
         )
         assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_user_form_renders_membership_card_for_admin(client, admin_user):
+    """Admin viewing another user sees the membership picker."""
+    target = User.objects.create_user(username="hans", password="x", email="hans@x")
+    target.membership_level = User.MembershipLevel.MEMBER
+    target.save(update_fields=["membership_level"])
+
+    client.force_login(admin_user)
+    response = client.get(reverse("accounts:user_edit", args=[target.pk]))
+    assert response.status_code == 200
+    body = response.content.decode()
+    # Section header + the dropdown
+    assert "Vereins-Rolle" in body or "Vereinsrolle" in body
+    assert "<select" in body
+    # All four membership-level options should appear by display label
+    assert "Vereins-Bewerber" in body
+    assert "Vereins-Mitglied" in body
+    assert "Vereins-Staff" in body
+    assert "Vereins-Admin" in body
+
+
+@pytest.mark.django_db
+def test_user_form_does_not_render_membership_card_on_self(client, admin_user):
+    """Admin viewing their own edit page sees no membership picker
+    (self-promote/demote is forbidden)."""
+    client.force_login(admin_user)
+    response = client.get(reverse("accounts:user_edit", args=[admin_user.pk]))
+    body = response.content.decode()
+    # Section is hidden on self-view
+    assert "Vereins-Rolle" not in body
+    assert "Vereinsrolle" not in body
