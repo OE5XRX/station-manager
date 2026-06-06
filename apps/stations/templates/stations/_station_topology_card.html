@@ -13,7 +13,7 @@
         {% csrf_token %}
         <div class="row-gap-8" style="align-items:flex-end;">
           <select name="region" class="form-select" style="max-width:280px;">
-            <option value="" {% if not station.region %}selected{% endif %}>
+            <option value="" {% if not station.region_id %}selected{% endif %}>
               {% trans "— None —" %}
             </option>
             {% for r in all_regions %}

@@ -70,6 +70,19 @@ class TestStationSetRegionView:
         )
         assert response.status_code == 404
 
+    def test_malformed_region_returns_404(self, client):
+        # Non-integer region values must 404, not 500. Without the
+        # explicit int() guard in the view this raised ValueError
+        # during ORM PK coercion.
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        s = Station.objects.create(name="OE5A", callsign="OE5A")
+        client.force_login(admin)
+        response = client.post(
+            reverse("stations:station_set_region", args=[s.pk]),
+            {"region": "abc"},
+        )
+        assert response.status_code == 404
+
     def test_no_change_does_not_emit(self, client):
         admin = _user(User.MembershipLevel.ADMIN, "admin")
         r = Region.objects.create(name="Tirol", slug="tirol")
