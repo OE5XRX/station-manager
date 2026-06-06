@@ -208,7 +208,18 @@ SECURE_CSP = {
 }
 
 # Session security
-SESSION_COOKIE_AGE = 28800  # 8 hours
+#
+# 7-day rolling session: COOKIE_AGE is the absolute max-age sent on each
+# Set-Cookie, and SAVE_EVERY_REQUEST=True makes Django re-send the cookie
+# on every response — even when the view did not touch request.session.
+# Together: as long as the operator hits the UI at least once per week,
+# their session never expires. After 7 days of true inactivity it's gone.
+#
+# Tradeoff: SAVE_EVERY_REQUEST writes the session row on every request,
+# which is fine for an internal fleet tool with ~handful of operators.
+# Re-evaluate if user count grows by 2+ orders of magnitude.
+SESSION_COOKIE_AGE = 7 * 24 * 60 * 60  # 7 days
+SESSION_SAVE_EVERY_REQUEST = True
 SESSION_COOKIE_SAMESITE = "Lax"
 
 # django-axes (brute force protection)
