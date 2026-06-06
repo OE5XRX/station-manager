@@ -8,7 +8,7 @@ Mapping (highest precedence wins):
 
 Reverse is a noop. Re-running forward is idempotent because the mapping
 overrides the APPLICANT default; once set, it stays. The legacy Django
-groups are NOT touched here — migration 0009 deletes them after the
+groups are NOT touched here — migration 0007 deletes them after the
 call-site refactor has landed.
 """
 
