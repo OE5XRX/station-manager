@@ -127,7 +127,7 @@ def _run_import_job(job: ImageImportJob) -> None:
             uploaded_keys.append(rootfs_key)
 
         with transaction.atomic():
-            release, _created = ImageRelease.objects.update_or_create(
+            release, _created = ImageRelease.all_objects.update_or_create(
                 tag=job.tag,
                 machine=job.machine,
                 defaults={
@@ -140,6 +140,12 @@ def _run_import_job(job: ImageImportJob) -> None:
                     "rootfs_size_bytes": rootfs_size,
                     "is_latest": job.mark_as_latest,
                     "imported_by": job.requested_by,
+                    # Re-importing a previously-archived release auto-
+                    # restores it — keeps audit trail intact while
+                    # giving the operator the natural "I want this
+                    # back" path. Active-row updates are a no-op
+                    # (the field was already NULL).
+                    "archived_at": None,
                 },
             )
             job.image_release = release

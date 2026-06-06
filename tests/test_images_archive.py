@@ -3,11 +3,13 @@
 Mirrors the AppGrant.revoked_at soft-delete pattern in apps/sso/models.py.
 """
 
+from unittest.mock import patch
+
 import pytest
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.images.models import ImageRelease
+from apps.images.models import ImageImportJob, ImageRelease
 
 
 def _make_release(tag="v1-alpha", machine="qemux86-64", is_latest=False, archived=False):
@@ -214,3 +216,73 @@ def test_restore_view_404_on_unknown_pk(client, admin_user):
     resp = client.post(reverse("images:restore", kwargs={"pk": 99999}))
 
     assert resp.status_code == 404
+
+
+@pytest.fixture
+def import_stubs():
+    """Stub the heavy paths in _run_import_job so we exercise only
+    the DB write — no GitHub fetch, no cosign, no S3, no rootfs
+    extraction. Each fake return is just enough for the worker to
+    reach update_or_create."""
+    fake_asset = type(
+        "FakeAsset",
+        (),
+        {
+            "wic_bytes": b"",
+            "bundle_bytes": b"",
+            "sha256": "b" * 64,
+        },
+    )()
+
+    def _fake_extract(_decompressed, rootfs_out):
+        # The real extract_rootfs writes the rootfs archive to
+        # ``rootfs_out`` — the worker then reads it back to hand the
+        # bytes to image_storage.upload_bytes. Mirror that side effect
+        # so the read_bytes() call after extract doesn't FileNotFound.
+        rootfs_out.write_bytes(b"")
+        return (0, "c" * 64)
+
+    with (
+        patch(
+            "apps.provisioning.management.commands.run_background_jobs.github.fetch_release_asset",
+            return_value=fake_asset,
+        ),
+        patch(
+            "apps.provisioning.management.commands.run_background_jobs.cosign.verify_blob"
+        ),
+        patch(
+            "apps.provisioning.management.commands.run_background_jobs.image_storage.upload_bytes"
+        ),
+        patch(
+            "apps.provisioning.management.commands.run_background_jobs._decompress_to"
+        ),
+        patch(
+            "apps.provisioning.management.commands.run_background_jobs.extraction.extract_rootfs",
+            side_effect=_fake_extract,
+        ),
+    ):
+        yield
+
+
+@pytest.mark.django_db
+def test_reimport_auto_restores_archived_release(import_stubs, admin_user):
+    from apps.provisioning.management.commands.run_background_jobs import (
+        _run_import_job,
+    )
+
+    archived = _make_release(tag="v1-alpha", archived=True)
+    archived_pk = archived.pk
+
+    job = ImageImportJob.objects.create(
+        tag="v1-alpha",
+        machine="qemux86-64",
+        mark_as_latest=False,
+        requested_by=admin_user,
+    )
+    _run_import_job(job)
+
+    # update_or_create returned the SAME row (full-unique on
+    # tag/machine guarantees that), with archived_at cleared.
+    archived.refresh_from_db()
+    assert archived.pk == archived_pk  # not a brand-new row
+    assert archived.archived_at is None
