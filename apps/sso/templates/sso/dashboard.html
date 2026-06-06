@@ -108,7 +108,7 @@
         </thead>
         <tbody>
           {% for app in applications %}
-          <tr class="is-clickable" onclick="window.location='{% url 'sso:application_detail' pk=app.pk %}'">
+          <tr>
             <td class="t-mono" style="color:var(--ink-3);" data-label="#">
               {{ forloop.counter|stringformat:"02d" }}
             </td>
@@ -138,7 +138,6 @@
             <td class="actions">
               <a class="btn btn-sm btn-ghost"
                  href="{% url 'sso:application_detail' pk=app.pk %}"
-                 onclick="event.stopPropagation()"
                  aria-label="{% trans 'Open application' %}">
                 <span>{% trans "Manage" %}</span>
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">

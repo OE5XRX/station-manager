@@ -12,6 +12,11 @@
 {% endblock %}
 
 {% block content %}
+{# CSRF token in DOM so static/js/app.js can attach X-CSRFToken to HTMX
+   POSTs from the Grant/Revoke buttons below — there is no <form> on this
+   page to inject the token automatically. #}
+<form style="display:none;">{% csrf_token %}</form>
+
 <div class="page-head">
   <div class="page-head-main">
     <div class="page-eyebrow">{% trans "Relying party" %} · OIDC</div>
@@ -52,7 +57,9 @@
     <span class="summary-key">{% trans "Grant type" %}</span>
     <span class="summary-val" style="font-size:14px;">{{ application.get_authorization_grant_type_display }}</span>
   </div>
-  {% with active_n=users_with_grant.count without_n=users_without_grant.count %}
+  {# |length re-uses the querysets already iterated by the panels below, so
+     it doesn't issue extra COUNT queries the way .count would. #}
+  {% with active_n=users_with_grant|length without_n=users_without_grant|length %}
   <div class="summary-item">
     <span class="summary-key">{% trans "Active grants" %}</span>
     <span class="summary-val">

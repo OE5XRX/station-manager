@@ -163,7 +163,7 @@
             <form method="post"
                   action="{% url 'images:delete' rel.pk %}"
                   style="display:inline;margin:0;"
-                  onsubmit="return confirm('{% trans 'Delete this release from S3 and DB? This cannot be undone.' %}');">
+                  data-confirm="{% trans 'Delete this release from S3 and DB? This cannot be undone.' %}">
               {% csrf_token %}
               <button type="submit" class="btn btn-sm btn-danger" title="{% trans 'Delete release' %}">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
