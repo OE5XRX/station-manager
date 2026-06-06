@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Delete Region" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:region_list' %}">{% trans "Regions" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ object.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow">{% trans "Administration" %}</div>
+  <h1 class="page-title">{% trans "Delete Region" %}: {{ object.name }}</h1>
+</div></div>
+
+<form method="post" style="max-width:640px;">
+  {% csrf_token %}
+  <section class="panel">
+    <div class="panel-body">
+      <p>{% blocktrans %}Are you sure you want to delete this region?{% endblocktrans %}</p>
+      {% if affected_stations_count %}
+        <p class="t-mono-sm" style="color:var(--warn);">
+          {% blocktrans count counter=affected_stations_count %}
+            {{ counter }} station will have its region cleared (FK set to NULL).
+          {% plural %}
+            {{ counter }} stations will have their region cleared (FK set to NULL).
+          {% endblocktrans %}
+        </p>
+      {% else %}
+        <p class="t-muted t-mono-sm">{% trans "No stations are currently assigned to this region." %}</p>
+      {% endif %}
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-danger">{% trans "Delete region" %}</button>
+      <a href="{% url 'stations:region_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    </div>
+  </section>
+</form>
+{% endblock %}

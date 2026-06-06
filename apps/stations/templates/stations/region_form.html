@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% if object %}{% trans "Edit Region" %}{% else %}{% trans "New Region" %}{% endif %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:region_list' %}">{% trans "Regions" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% if object %}{{ object.name }}{% else %}{% trans "New" %}{% endif %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow">{% trans "Administration" %}</div>
+  <h1 class="page-title">{% if object %}{% trans "Edit Region" %}{% else %}{% trans "New Region" %}{% endif %}</h1>
+</div></div>
+
+<form method="post" style="max-width:640px;">
+  {% csrf_token %}
+  <section class="panel">
+    <div class="panel-body">
+      {% for field in form %}
+      <div class="form-group">
+        <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<div class="form-help">{{ field.help_text|safe }}</div>{% endif %}
+        {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-primary">{% trans "Save region" %}</button>
+      <a href="{% url 'stations:region_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    </div>
+  </section>
+</form>
+{% endblock %}

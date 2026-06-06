@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Regions" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Regions" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Administration" %} · {% trans "Topology" %}</div>
+    <h1 class="page-title">{% trans "Regions" %}</h1>
+    <p class="page-sub">{% trans "Geographic / organizational groupings of stations." %}</p>
+  </div>
+  <div class="page-head-actions">
+    <a href="{% url 'stations:region_create' %}" class="btn btn-primary">
+      {% trans "New region" %}
+    </a>
+  </div>
+</div>
+
+<div class="table-wrap" data-mobile-cards>
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Name" %}</th>
+        <th>{% trans "Slug" %}</th>
+        <th>{% trans "Stations" %}</th>
+        <th>{% trans "Description" %}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in regions %}
+      <tr>
+        <td data-primary>
+          <span style="font-weight:600;color:var(--ink-0);">{{ r.name }}</span>
+        </td>
+        <td class="t-mono-sm" data-label="{% trans 'Slug' %}">{{ r.slug }}</td>
+        <td data-label="{% trans 'Stations' %}">{{ r.stations_count }}</td>
+        <td data-label="{% trans 'Description' %}" class="t-muted">{{ r.description|default:"—"|truncatewords:8 }}</td>
+        <td class="actions">
+          <a href="{% url 'stations:region_update' r.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+          <a href="{% url 'stations:region_delete' r.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="5">
+          <div class="empty">
+            <div class="empty-title">{% trans "No regions yet." %}</div>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

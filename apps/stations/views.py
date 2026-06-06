@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect
@@ -19,7 +20,9 @@ from apps.images.models import ImageRelease
 from apps.provisioning.models import ProvisioningJob
 
 from .forms import StationForm, StationLogEntryForm, StationPhotoForm, StationTagForm
-from .models import Station, StationAuditLog, StationTag
+from .models import Region, Station, StationAssignment, StationAuditLog, StationTag
+
+User = get_user_model()
 
 
 def _get_client_ip(request):
@@ -137,6 +140,26 @@ class StationDetailView(LoginRequiredMixin, DetailView):
                 .select_related("deployment__image_release")
                 .order_by("-pk")[:5]
             )
+            # Topology card.
+            context["all_regions"] = Region.objects.order_by("name")
+            # Only the columns the topology card actually renders are
+            # needed; defer the rest to keep this list lean on installs
+            # with many users.
+            context["all_users"] = (
+                User.objects.exclude(membership_level=User.MembershipLevel.APPLICANT)
+                .only("id", "username", "membership_level")
+                .order_by("username")
+            )
+            topology_assignments = list(
+                self.object.assignments.select_related("user").order_by("role", "user__username")
+            )
+            context["station_admin"] = next(
+                (a for a in topology_assignments if a.role == StationAssignment.Role.ADMIN),
+                None,
+            )
+            context["station_maintainers"] = [
+                a for a in topology_assignments if a.role == StationAssignment.Role.MAINTAINER
+            ]
         return context
 
 

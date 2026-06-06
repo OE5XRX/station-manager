@@ -1,6 +1,13 @@
 from django.urls import path
 
 from . import views
+from .views_region_crud import (
+    RegionCreateView,
+    RegionDeleteView,
+    RegionListView,
+    RegionUpdateView,
+)
+from .views_region_set import StationSetRegionView
 
 app_name = "stations"
 
@@ -31,9 +38,31 @@ urlpatterns = [
         views.StationLogEntryCreateView.as_view(),
         name="station_log_add",
     ),
+    path(
+        "<int:pk>/region/",
+        StationSetRegionView.as_view(),
+        name="station_set_region",
+    ),
     # Tags
     path("tags/", views.StationTagListView.as_view(), name="tag_list"),
     path("tags/create/", views.StationTagCreateView.as_view(), name="tag_create"),
     path("tags/<int:pk>/edit/", views.StationTagUpdateView.as_view(), name="tag_edit"),
     path("tags/<int:pk>/delete/", views.StationTagDeleteView.as_view(), name="tag_delete"),
+    # Region CRUD
+    path("regions/", RegionListView.as_view(), name="region_list"),
+    path(
+        "regions/create/",
+        RegionCreateView.as_view(),
+        name="region_create",
+    ),
+    path(
+        "regions/<int:pk>/edit/",
+        RegionUpdateView.as_view(),
+        name="region_update",
+    ),
+    path(
+        "regions/<int:pk>/delete/",
+        RegionDeleteView.as_view(),
+        name="region_delete",
+    ),
 ]
