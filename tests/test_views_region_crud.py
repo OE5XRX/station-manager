@@ -4,7 +4,7 @@ import pytest
 from django.urls import reverse
 
 from apps.accounts.models import AccountAuditLog, User
-from apps.stations.models import Region
+from apps.stations.models import Region, Station
 
 
 def _user(level, username):
@@ -87,4 +87,35 @@ class TestRegionUpdateView:
         # REGION_UPDATED signal
         assert AccountAuditLog.objects.filter(
             event_type=AccountAuditLog.EventType.REGION_UPDATED
+        ).exists()
+
+
+@pytest.mark.django_db
+class TestRegionDeleteView:
+    def test_admin_sees_confirmation_page(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        r = Region.objects.create(name="Tirol", slug="tirol")
+        Station.objects.create(name="OE5A", callsign="OE5A", region=r)
+        Station.objects.create(name="OE5B", callsign="OE5B", region=r)
+        client.force_login(admin)
+        response = client.get(reverse("stations:region_delete", args=[r.pk]))
+        assert response.status_code == 200
+        body = response.content.decode()
+        # Confirmation shows the station count that will lose region
+        assert "2" in body
+
+    def test_admin_can_delete(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        r = Region.objects.create(name="Tirol", slug="tirol")
+        s = Station.objects.create(name="OE5A", callsign="OE5A", region=r)
+        client.force_login(admin)
+        response = client.post(reverse("stations:region_delete", args=[r.pk]))
+        assert response.status_code in (200, 302)
+        assert not Region.objects.filter(pk=r.pk).exists()
+        # Station's region FK is now NULL (SET_NULL)
+        s.refresh_from_db()
+        assert s.region is None
+        # REGION_DELETED signal fired
+        assert AccountAuditLog.objects.filter(
+            event_type=AccountAuditLog.EventType.REGION_DELETED
         ).exists()
