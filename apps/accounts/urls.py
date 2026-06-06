@@ -2,6 +2,10 @@ from django.urls import path
 
 from . import views
 from .views_membership import MembershipSetView
+from .views_region_assignments import (
+    RegionAssignmentCreateView,
+    RegionAssignmentRevokeView,
+)
 
 app_name = "accounts"
 
@@ -17,5 +21,15 @@ urlpatterns = [
         "users/<int:pk>/membership/",
         MembershipSetView.as_view(),
         name="membership_set",
+    ),
+    path(
+        "users/<int:user_pk>/region_assignments/",
+        RegionAssignmentCreateView.as_view(),
+        name="region_assignment_create",
+    ),
+    path(
+        "region_assignments/<int:pk>/revoke/",
+        RegionAssignmentRevokeView.as_view(),
+        name="region_assignment_revoke",
     ),
 ]
