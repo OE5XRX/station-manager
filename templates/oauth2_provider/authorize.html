@@ -191,7 +191,10 @@
 
       <div class="consent-footer">
         <span class="consent-footer-key">{% trans "Redirect" %}</span>
-        <code class="consent-footer-val">{{ redirect_uri|truncatechars:64 }}</code>
+        {# Full URI in the DOM (security-relevant: users + AT must be able
+           to inspect/copy the actual redirect target). CSS does the visual
+           ellipsis; the title exposes the full value on hover. #}
+        <code class="consent-footer-val" title="{{ redirect_uri }}">{{ redirect_uri }}</code>
       </div>
     </form>
 
