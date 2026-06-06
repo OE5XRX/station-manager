@@ -1,7 +1,7 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from .models import Station, StationLogEntry, StationPhoto, StationTag
+from .models import Region, Station, StationLogEntry, StationPhoto, StationTag
 
 
 class StationForm(forms.ModelForm):
@@ -81,5 +81,16 @@ class StationTagForm(forms.ModelForm):
             "color": forms.TextInput(
                 attrs={"class": "form-control form-control-color", "type": "color"}
             ),
+            "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
+        }
+
+
+class RegionForm(forms.ModelForm):
+    class Meta:
+        model = Region
+        fields = ("name", "slug", "description")
+        widgets = {
+            "name": forms.TextInput(attrs={"class": "form-control"}),
+            "slug": forms.TextInput(attrs={"class": "form-control"}),
             "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
