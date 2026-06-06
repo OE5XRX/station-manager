@@ -28,6 +28,17 @@
           <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
           <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.user.username|default:"—" }}</td>
           <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
+        {% elif row_category == "account" %}
+          <td data-label="{% trans 'Category' %}"><span class="pill pill-info">{% trans "Account" %}</span></td>
+          <td data-label="{% trans 'Subject' %}">
+            {% if entry.target_user %}{{ entry.target_user.username }}
+            {% elif entry.region %}{{ entry.region.name }}
+            {% else %}<span class="t-muted">—</span>{% endif %}
+          </td>
+          <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>
+          <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
+          <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.actor.username|default:"—" }}</td>
+          <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
         {% else %}
           <td data-label="{% trans 'Category' %}"><span class="pill pill-info">SSO</span></td>
           <td data-label="{% trans 'Subject' %}">

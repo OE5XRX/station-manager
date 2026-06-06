@@ -164,3 +164,29 @@ def test_region_create_update_delete_emits_audit_log():
     assert AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.REGION_DELETED,
     ).exists()
+
+
+@pytest.mark.django_db
+def test_audit_events_visible_in_merged_feed(client):
+    admin = _admin()
+    # Generate one event in each of the 3 sources
+    Region.objects.create(
+        name="Tirol", slug="tirol"
+    )  # AccountAuditLog REGION_CREATED via Task 4 signal
+    s = Station.objects.create(name="OE5A", callsign="OE5A")
+    # Force a station audit entry — the easiest: emit via the log helper
+    StationAuditLog.log(
+        station=s,
+        event_type=StationAuditLog.EventType.UPDATED,
+        message="manual log for merged-feed test",
+        user=admin,
+    )
+
+    client.force_login(admin)
+    response = client.get("/audit/", follow=True)
+    assert response.status_code == 200
+    body = response.content.decode()
+    # REGION_CREATED entry should surface (AccountAuditLog source)
+    assert "Tirol" in body
+    # UPDATED entry should surface (StationAuditLog source)
+    assert "manual log for merged-feed test" in body
