@@ -215,9 +215,12 @@ SECURE_CSP = {
 # Together: as long as the operator hits the UI at least once per week,
 # their session never expires. After 7 days of true inactivity it's gone.
 #
-# Tradeoff: SAVE_EVERY_REQUEST writes the session row on every request,
-# which is fine for an internal fleet tool with ~handful of operators.
-# Re-evaluate if user count grows by 2+ orders of magnitude.
+# Tradeoff: SAVE_EVERY_REQUEST writes the session row on every
+# Django-handled request. Static assets short-circuit through
+# WhiteNoiseMiddleware before SessionMiddleware runs (see MIDDLEWARE
+# order above) so they cost nothing here. For an internal fleet tool
+# with a handful of operators the per-request write is negligible;
+# re-evaluate if user count grows by 2+ orders of magnitude.
 SESSION_COOKIE_AGE = 7 * 24 * 60 * 60  # 7 days
 SESSION_SAVE_EVERY_REQUEST = True
 SESSION_COOKIE_SAMESITE = "Lax"
