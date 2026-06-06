@@ -24,8 +24,8 @@ def _storage_backend_label() -> str:
     """
     backend = settings.STORAGES.get("default", {}).get("BACKEND", "")
     if "s3" in backend.lower():
-        return "S3"
-    return "Local FS"
+        return _("S3")
+    return _("Local FS")
 
 
 class ImageListView(AdminRequiredMixin, ListView):
