@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
@@ -12,6 +13,21 @@ from .forms import ImageImportForm
 from .models import ImageImportJob, ImageRelease
 
 
+def _storage_backend_label() -> str:
+    """Short label for the active default-storage backend.
+
+    Settings flip STORAGES["default"]["BACKEND"] to the S3 backend
+    only when USE_S3=true; otherwise Django's FileSystemStorage is
+    used. The Image-Releases KPI tile shows this label so operators
+    can tell at a glance whether artifacts are landing in object
+    storage or on the local filesystem.
+    """
+    backend = settings.STORAGES.get("default", {}).get("BACKEND", "")
+    if "s3" in backend.lower():
+        return _("S3")
+    return _("Local FS")
+
+
 class ImageListView(AdminRequiredMixin, ListView):
     model = ImageRelease
     template_name = "images/image_list.html"
@@ -21,6 +37,15 @@ class ImageListView(AdminRequiredMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         ctx["import_form"] = ImageImportForm()
         ctx["recent_jobs"] = ImageImportJob.objects.order_by("-created_at")[:10]
+        # KPI tile aggregates: cheap counts over small tables.
+        ctx["latest_total"] = ImageRelease.objects.filter(is_latest=True).count()
+        ctx["pending_jobs"] = ImageImportJob.objects.filter(
+            status__in=[
+                ImageImportJob.Status.PENDING,
+                ImageImportJob.Status.RUNNING,
+            ],
+        ).count()
+        ctx["storage_backend_label"] = _storage_backend_label()
         return ctx
 
 

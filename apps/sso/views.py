@@ -189,6 +189,15 @@ class SsoDashboardView(AdminOnlyMixin, ListView):
             ),
         ).order_by("name")
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # Fleet-wide active grant total powers the KPI tile; cheap
+        # aggregate since AppGrant is a small table.
+        ctx["active_grants_total"] = AppGrant.objects.filter(
+            revoked_at__isnull=True,
+        ).count()
+        return ctx
+
 
 class ApplicationDetailView(AdminOnlyMixin, DetailView):
     """Per-application detail page. Template lands in T15."""
