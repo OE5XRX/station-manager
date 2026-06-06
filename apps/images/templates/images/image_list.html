@@ -125,8 +125,10 @@
             </div>
           </td>
           <td data-label="{% trans 'Machine' %}">
-            {# Pill color keyed off the raw machine slug, label text uses the
-               model's translatable Machine.choices via get_machine_display. #}
+            {% comment %}
+            Pill color keyed off the raw machine slug, label text uses the
+            model's translatable Machine.choices via get_machine_display.
+            {% endcomment %}
             {% if rel.machine == "raspberrypi4-64" %}
               <span class="pill pill-violet">{{ rel.get_machine_display }}</span>
             {% elif rel.machine == "qemux86-64" %}
