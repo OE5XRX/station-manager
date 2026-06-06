@@ -4,6 +4,7 @@ Mirrors the AppGrant.revoked_at soft-delete pattern in apps/sso/models.py.
 """
 
 import pytest
+from django.urls import reverse
 from django.utils import timezone
 
 from apps.images.models import ImageRelease
@@ -88,3 +89,38 @@ def test_restore_is_idempotent_on_active_row():
     rel.refresh_from_db()
 
     assert rel.archived_at is None
+
+
+@pytest.mark.django_db
+def test_delete_view_can_act_on_archived_release(client, admin_user, monkeypatch):
+    """Hard-delete via URL must remain reachable for an archived release
+    (returning the PROTECT-FK flash, or actually deleting if no
+    references) — not silently 404 because the default manager now
+    filters archived rows."""
+    # Stub S3 so the test doesn't try to talk to any storage backend.
+    monkeypatch.setattr("apps.images.storage.delete", lambda key: None)
+
+    rel = _make_release(tag="v1-old", archived=True)
+
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:delete", kwargs={"pk": rel.pk}))
+
+    # Either 302 (deleted — no FK references in this test) or 302 with
+    # the protected flash. Both go to images:list. The thing that must
+    # NOT happen is 404.
+    assert resp.status_code == 302
+
+
+@pytest.mark.django_db
+def test_mark_latest_view_can_act_on_archived_release(client, admin_user):
+    """Mark-latest via URL must remain reachable for an archived release.
+
+    Whether mark-latest on an archived release is semantically meaningful
+    is a future product call (today the UI doesn't link it); the URL
+    must not silently 404 because of the manager-default change in B2."""
+    rel = _make_release(tag="v1-old", archived=True)
+
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:mark_latest", kwargs={"pk": rel.pk}))
+
+    assert resp.status_code == 302

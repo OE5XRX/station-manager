@@ -49,6 +49,10 @@ class ImageRelease(models.Model):
         blank=True,
         related_name="imported_images",
     )
+    # Soft-delete timestamp. Use the archive() / restore() methods
+    # rather than setting this field directly — archive() also clears
+    # is_latest to preserve the "latest archived row cannot exist"
+    # invariant that the rest of the codebase relies on.
     archived_at = models.DateTimeField(
         _("archived at"),
         null=True,

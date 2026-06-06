@@ -82,7 +82,7 @@ class ImageImportView(AdminRequiredMixin, FormView):
 
 class ImageMarkLatestView(AdminRequiredMixin, View):
     def post(self, request, pk):
-        release = get_object_or_404(ImageRelease, pk=pk)
+        release = get_object_or_404(ImageRelease.all_objects, pk=pk)
         release.is_latest = True
         release.save()
         messages.success(request, _("Marked as latest."))
@@ -91,7 +91,7 @@ class ImageMarkLatestView(AdminRequiredMixin, View):
 
 class ImageDeleteView(AdminRequiredMixin, View):
     def post(self, request, pk):
-        release = get_object_or_404(ImageRelease, pk=pk)
+        release = get_object_or_404(ImageRelease.all_objects, pk=pk)
 
         # Probe DB-level deletability BEFORE touching S3. Deployment and
         # ProvisioningJob hold PROTECT FKs to ImageRelease because they
