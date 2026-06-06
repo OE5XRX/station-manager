@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import views
+from .views_region_set import StationSetRegionView
 
 app_name = "stations"
 
@@ -30,6 +31,11 @@ urlpatterns = [
         "<int:pk>/log/add/",
         views.StationLogEntryCreateView.as_view(),
         name="station_log_add",
+    ),
+    path(
+        "<int:pk>/region/",
+        StationSetRegionView.as_view(),
+        name="station_set_region",
     ),
     # Tags
     path("tags/", views.StationTagListView.as_view(), name="tag_list"),
