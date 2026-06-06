@@ -1,8 +1,22 @@
 {% load i18n %}
-<div id="provisioning-status">
-  <strong>{% trans "Status:" %}</strong> {{ job.get_status_display|lower }}
+<div id="provisioning-status" class="row-gap-8" style="flex-wrap:wrap;">
+  <span class="t-label">{% trans "Status" %}</span>
   {% if job.status == job.Status.READY %}
-    &mdash; <a href="{% url 'provisioning:download' job.id %}">{% trans "Download" %}</a>
+    <span class="pill pill-online"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+    <a href="{% url 'provisioning:download' job.id %}" class="btn btn-sm btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>
+      </svg>
+      {% trans "Download bundle" %}
+    </a>
+  {% elif job.status == job.Status.FAILED %}
+    <span class="pill pill-failed"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+  {% elif job.status == job.Status.RUNNING %}
+    <span class="pill pill-in-progress"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+  {% else %}
+    <span class="pill pill-pending">{{ job.get_status_display|upper }}</span>
   {% endif %}
-  {% if job.error_message %}<br><small>{{ job.error_message }}</small>{% endif %}
+  {% if job.error_message %}
+    <div class="t-mono-sm t-danger" style="flex-basis:100%;margin-top:4px;">{{ job.error_message }}</div>
+  {% endif %}
 </div>

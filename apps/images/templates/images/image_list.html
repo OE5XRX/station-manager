@@ -1,65 +1,297 @@
 {% extends "base.html" %}
 {% load i18n %}
 
+{% block title %}{% trans "Image Releases" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Image Releases" %}</span>
+{% endblock %}
+
 {% block content %}
-<h1>{% trans "Image Releases" %}</h1>
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Yocto artifacts" %} · {% trans "OS rootfs library" %}</div>
+    <h1 class="page-title">{% trans "Image Releases" %}</h1>
+    <p class="page-sub">
+      {% trans "Imported station OS images keyed by GitHub release tag. The latest entry per machine is what new provisioning bundles and OTA deployments pick up." %}
+    </p>
+  </div>
+  <div class="page-head-actions">
+    <a href="#import-form" class="btn btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
+      </svg>
+      {% trans "Import from GitHub" %}
+    </a>
+  </div>
+</div>
 
-<section>
-  <h2>{% trans "Import from GitHub" %}</h2>
-  <form method="post" action="{% url 'images:import' %}">
-    {% csrf_token %}
-    {{ import_form.as_p }}
-    <button type="submit">{% trans "Queue import" %}</button>
-  </form>
+{% with total=releases|length %}
+<div class="grid grid-kpi mb-24">
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="10" r="1.4"/><path d="M21 16l-5-5L5 21"/>
+      </svg>
+      {% trans "Releases on file" %}
+    </div>
+    <div class="stat-value">{{ total }}</div>
+    <div class="stat-meta">
+      <span class="t-mono">{% trans "tag × machine pairs" %}</span>
+    </div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M5 12l5 5L20 7"/>
+      </svg>
+      {% trans "Latest-marked" %}
+    </div>
+    <div class="stat-value {% if latest_total %}t-signal{% endif %}">{{ latest_total|default:"0" }}</div>
+    <div class="stat-meta">
+      <span class="t-mono">{% trans "current per machine" %}</span>
+    </div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+      </svg>
+      {% trans "Pending imports" %}
+    </div>
+    <div class="stat-value {% if pending_jobs %}t-accent{% endif %}">{{ pending_jobs|default:"0" }}</div>
+    <div class="stat-meta">
+      <span class="t-mono">{% trans "queued · running" %}</span>
+    </div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M20 6L9 17l-5-5"/>
+      </svg>
+      {% trans "Storage backend" %}
+    </div>
+    <div class="stat-value" style="font-size:22px;">S3</div>
+    <div class="stat-meta">
+      <span class="t-mono">{% trans "cosign-signed · sha256" %}</span>
+    </div>
+  </div>
+</div>
+{% endwith %}
+
+<section class="panel mb-24">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot"></span>
+      {% trans "Imported images" %}
+    </div>
+    <span class="t-label">
+      {% blocktrans count n=releases|length %}{{ n }} release{% plural %}{{ n }} releases{% endblocktrans %}
+    </span>
+  </div>
+
+  <div class="panel-body flush">
+  {% if releases %}
+  <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+    <table class="t-table">
+      <thead>
+        <tr>
+          <th style="width:1%;">#</th>
+          <th>{% trans "Tag" %}</th>
+          <th>{% trans "Machine" %}</th>
+          <th>{% trans "Latest" %}</th>
+          <th>{% trans "OTA" %}</th>
+          <th class="num">{% trans "Size" %}</th>
+          <th>{% trans "SHA-256" %}</th>
+          <th>{% trans "Imported" %}</th>
+          <th style="width:1%;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rel in releases %}
+        <tr>
+          <td class="t-mono" style="color:var(--ink-3);" data-label="#">
+            <span class="frame-id">{{ rel.pk|stringformat:"04d" }}</span>
+          </td>
+          <td data-primary data-label="{% trans 'Tag' %}">
+            <div class="stack-gap-2">
+              <span style="font-weight:600;color:var(--ink-0);font-family:var(--font-mono);letter-spacing:0.02em;">{{ rel.tag }}</span>
+              <span class="t-mono-sm t-muted">{{ rel.s3_key|truncatechars:42 }}</span>
+            </div>
+          </td>
+          <td data-label="{% trans 'Machine' %}">
+            {% if rel.machine == "raspberrypi4-64" %}
+              <span class="pill pill-violet">RPi 4 · 64</span>
+            {% elif rel.machine == "qemux86-64" %}
+              <span class="pill pill-accent">QEMU x86-64</span>
+            {% else %}
+              <span class="pill pill-muted">{{ rel.machine }}</span>
+            {% endif %}
+          </td>
+          <td data-label="{% trans 'Latest' %}">
+            {% if rel.is_latest %}
+              <span class="pill pill-online"><span class="dot"></span>{% trans "LATEST" %}</span>
+            {% else %}
+              <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline;margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-ghost" title="{% trans 'Promote this release to latest for its machine.' %}">
+                  {% trans "Mark latest" %}
+                </button>
+              </form>
+            {% endif %}
+          </td>
+          <td data-label="OTA">
+            {% if rel.is_ota_ready %}
+              <span class="pill pill-online"><span class="dot"></span>{% trans "READY" %}</span>
+            {% else %}
+              <span class="pill pill-warn" title="{% trans 'rootfs slice not yet extracted — re-import required for OTA' %}">
+                <span class="dot"></span>{% trans "WIC only" %}
+              </span>
+            {% endif %}
+          </td>
+          <td class="t-mono num" data-label="{% trans 'Size' %}">{{ rel.size_bytes|filesizeformat }}</td>
+          <td class="t-mono" data-label="SHA-256" title="{{ rel.sha256 }}">
+            <span style="color:var(--ink-2);">{{ rel.sha256|slice:":10" }}…</span>
+          </td>
+          <td class="t-mono-sm t-muted" data-label="{% trans 'Imported' %}">{{ rel.imported_at|date:"Y-m-d H:i" }}</td>
+          <td class="actions">
+            <form method="post"
+                  action="{% url 'images:delete' rel.pk %}"
+                  style="display:inline;margin:0;"
+                  onsubmit="return confirm('{% trans 'Delete this release from S3 and DB? This cannot be undone.' %}');">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-danger" title="{% trans 'Delete release' %}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                </svg>
+                <span class="visually-hidden">{% trans "Delete" %}</span>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">
+    <div class="empty-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="10" r="1.4"/><path d="M21 16l-5-5L5 21"/>
+      </svg>
+    </div>
+    <div class="empty-title">{% trans "No images imported yet" %}</div>
+    <div>{% trans "Import an OS image release from GitHub to provision stations or roll out OTA updates." %}</div>
+  </div>
+  {% endif %}
+  </div>
 </section>
 
-<section>
-  <h2>{% trans "Imported images" %}</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>{% trans "Tag" %}</th>
-        <th>{% trans "Machine" %}</th>
-        <th>{% trans "Latest" %}</th>
-        <th>{% trans "Size" %}</th>
-        <th>{% trans "Imported" %}</th>
-        <th>{% trans "Actions" %}</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for rel in releases %}
-      <tr>
-        <td>{{ rel.tag }}</td>
-        <td>{{ rel.get_machine_display }}</td>
-        <td>{% if rel.is_latest %}&#10003;{% else %}
-          <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline">
-            {% csrf_token %}
-            <button type="submit">{% trans "Mark latest" %}</button>
-          </form>
-        {% endif %}</td>
-        <td>{{ rel.size_bytes|filesizeformat }}</td>
-        <td>{{ rel.imported_at|date:"Y-m-d H:i" }}</td>
-        <td>
-          <form method="post" action="{% url 'images:delete' rel.pk %}" style="display:inline"
-                onsubmit="return confirm('{% trans "Delete this release from S3 and DB?" %}');">
-            {% csrf_token %}
-            <button type="submit">{% trans "Delete" %}</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+<div class="grid grid-main">
 
-<section>
-  <h2>{% trans "Recent import jobs" %}</h2>
-  <ul>
-    {% for job in recent_jobs %}
-    <li>{{ job.tag }} / {{ job.machine }} &mdash; {{ job.get_status_display }} ({{ job.created_at|date:"H:i" }})
-      {% if job.error_message %}<br><small>{{ job.error_message }}</small>{% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-</section>
+  <section class="panel" id="import-form">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--accent);"></span>
+        {% trans "Import from GitHub" %}
+      </div>
+      <span class="t-label">{% trans "Pulls signed .wic.bz2 + cosign bundle" %}</span>
+    </div>
+    <form method="post" action="{% url 'images:import' %}">
+      {% csrf_token %}
+      <div class="panel-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="{{ import_form.tag.id_for_label }}">{{ import_form.tag.label }}</label>
+            {{ import_form.tag }}
+            {% if import_form.tag.help_text %}<div class="form-help">{{ import_form.tag.help_text }}</div>{% endif %}
+            {% if import_form.tag.errors %}<div class="form-error">{{ import_form.tag.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="{{ import_form.machine.id_for_label }}">{{ import_form.machine.label }}</label>
+            {{ import_form.machine }}
+            {% if import_form.machine.errors %}<div class="form-error">{{ import_form.machine.errors|join:", " }}</div>{% endif %}
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-size:13px;color:var(--ink-1);font-weight:500;">
+            {{ import_form.mark_as_latest }}
+            <span>{{ import_form.mark_as_latest.label }}</span>
+          </label>
+          {% if import_form.mark_as_latest.errors %}<div class="form-error">{{ import_form.mark_as_latest.errors|join:", " }}</div>{% endif %}
+        </div>
+      </div>
+      <div class="panel-foot row-gap-8">
+        <button type="submit" class="btn btn-primary">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
+          </svg>
+          {% trans "Queue import" %}
+        </button>
+        <span class="t-mono-sm t-muted">
+          {% trans "Asynchronous — a worker pulls the release from GitHub Releases and uploads to S3." %}
+        </span>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--cyan);"></span>
+        {% trans "Recent import jobs" %}
+      </div>
+      <span class="t-label">{% trans "Last 10" %}</span>
+    </div>
+    <div class="panel-body flush">
+      {% if recent_jobs %}
+      <ul class="timeline" style="padding: 4px 16px;">
+        {% for job in recent_jobs %}
+        <li data-type="{% if job.status == 'failed' %}incident{% elif job.status == 'ready' %}update{% elif job.status == 'running' %}deployment{% else %}note{% endif %}">
+          <div class="tl-head">
+            <span class="tl-title" style="font-family:var(--font-mono);letter-spacing:0.02em;">{{ job.tag }}</span>
+            <span class="t-mono-sm t-muted">·</span>
+            <span class="t-mono-sm t-muted">{{ job.machine }}</span>
+            <span style="margin-left:auto;">
+              {% if job.status == "ready" %}
+                <span class="pill pill-online"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+              {% elif job.status == "failed" %}
+                <span class="pill pill-failed"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+              {% elif job.status == "running" %}
+                <span class="pill pill-in-progress"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+              {% else %}
+                <span class="pill pill-pending">{{ job.get_status_display|upper }}</span>
+              {% endif %}
+            </span>
+          </div>
+          <div class="tl-meta">
+            {{ job.created_at|date:"Y-m-d H:i" }}
+            {% if job.requested_by %} · {{ job.requested_by.username }}{% endif %}
+            {% if job.completed_at %} · {% trans "done" %} {{ job.completed_at|timesince }} {% trans "ago" %}{% endif %}
+          </div>
+          {% if job.error_message %}
+          <div class="tl-message t-danger" style="margin-top:6px;font-family:var(--font-mono);font-size:11.5px;">{{ job.error_message }}</div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty" style="padding: 28px 12px;">
+        <div class="empty-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+          </svg>
+        </div>
+        <div class="empty-title">{% trans "No import jobs yet" %}</div>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+</div>
 {% endblock %}

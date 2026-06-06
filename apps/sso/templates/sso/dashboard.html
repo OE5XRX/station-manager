@@ -1,58 +1,180 @@
 {% extends "base.html" %}
 {% load i18n %}
 
-{% block title %}SSO — {% trans "Registered Apps" %}{% endblock %}
+{% block title %}SSO · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">SSO</span>
+{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h2 class="mb-0">SSO — {% trans "Registered Apps" %}</h2>
-  <a class="btn btn-outline-primary btn-sm" href="{% url 'admin:oauth2_provider_application_add' %}">
-    + {% trans "Neue App registrieren" %}
-  </a>
-</div>
-
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-striped mb-0">
-      <thead>
-        <tr>
-          <th>{% trans "Application" %}</th>
-          <th class="text-end">{% trans "Active Grants" %}</th>
-          <th>{% trans "Client ID" %}</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for app in applications %}
-        <tr>
-          <td>
-            <a href="{% url 'sso:application_detail' pk=app.pk %}">{{ app.name }}</a>
-          </td>
-          <td class="text-end">
-            <span class="badge {% if app.active_grant_count %}bg-success{% else %}bg-secondary{% endif %}">
-              {{ app.active_grant_count }}
-            </span>
-          </td>
-          <td><code class="small">{{ app.client_id }}</code></td>
-          <td class="text-end">
-            <a class="btn btn-sm btn-outline-secondary"
-               href="{% url 'sso:application_detail' pk=app.pk %}">
-              {% trans "Details" %}
-            </a>
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="4" class="text-muted text-center py-5">
-            {% trans "Noch keine Apps registriert." %}
-            <a href="{% url 'admin:oauth2_provider_application_add' %}">
-              {% trans "Eine anlegen →" %}
-            </a>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Identity Provider" %} · OIDC</div>
+    <h1 class="page-title">{% trans "Single Sign-On" %}</h1>
+    <p class="page-sub">
+      {% trans "Every relying party that authenticates against OE5XRX is registered here. Grant access per user on the detail page." %}
+    </p>
+  </div>
+  <div class="page-head-actions">
+    <a class="btn btn-primary" href="{% url 'admin:oauth2_provider_application_add' %}">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+      {% trans "Register app" %}
+    </a>
   </div>
 </div>
+
+{% with total_apps=applications|length %}
+<div class="grid grid-kpi mb-24">
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/>
+      </svg>
+      {% trans "Registered apps" %}
+    </div>
+    <div class="stat-value">{{ total_apps }}</div>
+    <div class="stat-meta"><span class="t-mono">OIDC · OAuth2</span></div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 11V7a4 4 0 0 1 8 0v4"/><rect x="4" y="11" width="16" height="10" rx="2"/>
+      </svg>
+      {% trans "Active grants" %}
+    </div>
+    <div class="stat-value {% if active_grants_total %}t-signal{% endif %}">{{ active_grants_total|default:"0" }}</div>
+    <div class="stat-meta"><span class="t-mono">{% trans "user · app pairs" %}</span></div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+      </svg>
+      {% trans "Token lifetime" %}
+    </div>
+    <div class="stat-value with-unit">
+      <span>1</span><span class="stat-unit">h</span>
+    </div>
+    <div class="stat-meta"><span class="t-mono">{% trans "refresh · 14d" %}</span></div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 2l3 7h7l-5.5 4.5L18 22l-6-4-6 4 1.5-8.5L2 9h7z"/>
+      </svg>
+      {% trans "Audit log" %}
+    </div>
+    <div class="stat-value t-accent" style="font-size: 22px;">{% trans "active" %}</div>
+    <div class="stat-meta">
+      {% url 'audit:audit_list' as audit_url %}{% if audit_url %}
+      <a href="{{ audit_url }}" class="t-mono">{% trans "events" %} →</a>
+      {% else %}<span class="t-mono">{% trans "see admin" %}</span>{% endif %}
+    </div>
+  </div>
+</div>
+{% endwith %}
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot"></span>
+      {% trans "Relying parties" %}
+    </div>
+    <span class="t-label">
+      {% blocktrans count n=applications|length %}{{ n }} application{% plural %}{{ n }} applications{% endblocktrans %}
+    </span>
+  </div>
+  <div class="panel-body flush">
+    {% if applications %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th style="width:1%;">#</th>
+            <th>{% trans "Application" %}</th>
+            <th>{% trans "Client ID" %}</th>
+            <th>{% trans "Grant type" %}</th>
+            <th class="text-end" style="text-align:right;">{% trans "Active grants" %}</th>
+            <th style="width:1%;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for app in applications %}
+          <tr class="is-clickable" onclick="window.location='{% url 'sso:application_detail' pk=app.pk %}'">
+            <td class="t-mono" style="color:var(--ink-3);" data-label="#">
+              {{ forloop.counter|stringformat:"02d" }}
+            </td>
+            <td data-primary data-label="{% trans 'Application' %}">
+              <a href="{% url 'sso:application_detail' pk=app.pk %}" style="color:inherit;text-decoration:none;">
+                <div class="stack-gap-2">
+                  <span class="callsign" style="color:var(--ink-0);font-size:14px;">{{ app.name }}</span>
+                  <span class="t-mono-sm t-muted">
+                    {% if app.client_type %}{{ app.get_client_type_display }}{% endif %}
+                  </span>
+                </div>
+              </a>
+            </td>
+            <td data-label="{% trans 'Client ID' %}">
+              <code class="t-mono" style="font-size:11.5px;color:var(--accent);letter-spacing:0.02em;">{{ app.client_id|truncatechars:28 }}</code>
+            </td>
+            <td data-label="{% trans 'Grant type' %}">
+              <span class="tag" style="--tag-color: var(--violet);">{{ app.get_authorization_grant_type_display }}</span>
+            </td>
+            <td data-label="{% trans 'Active grants' %}" style="text-align:right;">
+              {% if app.active_grant_count %}
+                <span class="pill pill-online"><span class="dot"></span>{{ app.active_grant_count }}</span>
+              {% else %}
+                <span class="pill pill-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="actions">
+              <a class="btn btn-sm btn-ghost"
+                 href="{% url 'sso:application_detail' pk=app.pk %}"
+                 onclick="event.stopPropagation()"
+                 aria-label="{% trans 'Open application' %}">
+                <span>{% trans "Manage" %}</span>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M9 6l6 6-6 6"/>
+                </svg>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M9 14h6"/>
+        </svg>
+      </div>
+      <div class="empty-title">{% trans "No relying parties registered yet" %}</div>
+      <div>{% trans "Register an OAuth2 / OIDC application to start issuing tokens." %}</div>
+      <a class="btn btn-primary mt-10" href="{% url 'admin:oauth2_provider_application_add' %}">
+        {% trans "Register the first app" %}
+      </a>
+    </div>
+    {% endif %}
+  </div>
+  {% if applications %}
+  <div class="panel-foot row-split">
+    <span class="t-mono" style="font-size:11px;letter-spacing:0.08em;color:var(--ink-3);">
+      OE5XRX-IDP / {% now "Y" %} · {% trans "issuer" %} {{ request.scheme }}://{{ request.get_host }}
+    </span>
+    <a class="btn btn-sm btn-ghost" href="{% url 'admin:oauth2_provider_application_changelist' %}">
+      {% trans "Django admin" %} ↗
+    </a>
+  </div>
+  {% endif %}
+</section>
 {% endblock %}

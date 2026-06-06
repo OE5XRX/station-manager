@@ -21,6 +21,14 @@ class ImageListView(AdminRequiredMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         ctx["import_form"] = ImageImportForm()
         ctx["recent_jobs"] = ImageImportJob.objects.order_by("-created_at")[:10]
+        # KPI tile aggregates: cheap counts over small tables.
+        ctx["latest_total"] = ImageRelease.objects.filter(is_latest=True).count()
+        ctx["pending_jobs"] = ImageImportJob.objects.filter(
+            status__in=[
+                ImageImportJob.Status.PENDING,
+                ImageImportJob.Status.RUNNING,
+            ],
+        ).count()
         return ctx
 
 
