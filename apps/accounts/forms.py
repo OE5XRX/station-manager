@@ -30,10 +30,13 @@ class LoginForm(AuthenticationForm):
 class UserCreationForm(BaseUserCreationForm):
     """Form for admins to create new users.
 
-    Group membership (admin / operator / member) is managed via Django
-    Admin's built-in UserAdmin (filter_horizontal widget on the Groups
-    M2M), not from this form. Keeping this form lean to the
-    bare-minimum identity fields.
+    Identity fields only. ``membership_level`` defaults to APPLICANT
+    on creation (set in apps/accounts/models.py); the admin promotes
+    the user via the membership-card on the edit page after creation.
+    Topology assignments (Region-Manager, Station-Admin/Maintainer)
+    are managed from the same edit page once the user is at least
+    Vereins-Mitglied — the ``_ApplicantForbiddenMixin`` invariant
+    rejects assignments for applicants.
     """
 
     class Meta:
@@ -54,10 +57,14 @@ class UserCreationForm(BaseUserCreationForm):
 
 
 class UserChangeForm(BaseUserChangeForm):
-    """Form for admins to edit existing users.
+    """Form for admins to edit existing users — identity fields only.
 
-    Group membership is managed via Django Admin (see UserCreationForm
-    docstring).
+    Membership-level promote/demote and topology assignments are NOT
+    in this form. They are HTMX-driven cards rendered alongside this
+    form in user_form.html (Vereins-Rolle, Region-Manager-Zuordnungen,
+    Stations-Zuordnungen) backed by dedicated POST endpoints — see
+    apps/accounts/views_membership.py / views_region_assignments.py /
+    views_station_assignments.py.
     """
 
     password = None
