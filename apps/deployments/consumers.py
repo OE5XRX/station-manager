@@ -2,7 +2,6 @@ import json
 import logging
 
 from asgiref.sync import async_to_sync
-from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.layers import get_channel_layer
 
@@ -23,13 +22,11 @@ class DeploymentStatusConsumer(AsyncWebsocketConsumer):
         # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
         # and the upgrade dashboard. Members stay excluded (4403) so their
         # auto-reconnect loop from static/js/app.js stops cleanly.
-        # ``is_internal`` is a @cached_property that reads
-        # ``membership_level`` (no ORM hit), but we keep
-        # database_sync_to_async for symmetry with other consumers and
-        # to remain safe if the property's implementation grows ORM
-        # access in the future.
-        is_internal = await database_sync_to_async(lambda: user.is_internal)()
-        if not is_internal:
+        # ``is_internal`` is a pure in-memory check: a @cached_property
+        # that reads the ``membership_level`` field already loaded on
+        # the User instance by AuthMiddleware. No ORM access, so no
+        # database_sync_to_async hop needed.
+        if not user.is_internal:
             await self.close(code=4403)
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)

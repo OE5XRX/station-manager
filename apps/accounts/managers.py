@@ -4,7 +4,7 @@ from django.contrib.auth.models import UserManager as BaseUserManager
 class UserManager(BaseUserManager):
     """Custom manager for the User model.
 
-    ``create_superuser`` additionally sets ``membership_level=ADMIN`` so
+    ``create_superuser`` directly sets ``membership_level=ADMIN`` so
     that ``is_admin`` (membership-level-backed since Task 9) returns True
     on the freshly-created superuser. Without this, ``manage.py
     createsuperuser`` would produce an account that satisfies
@@ -12,11 +12,14 @@ class UserManager(BaseUserManager):
     breaking the bootstrap on a fresh install.
 
     Regular ``create_user`` does NOT auto-assign any membership level
-    beyond the field default (APPLICANT); admins manage levels via the
-    project's UserCreationForm / UserChangeForm or Django Admin's
-    UserAdmin. This mirrors Django's stock ``auth.User`` behaviour:
-    stock ``create_user`` also doesn't pre-populate role state, leaving
-    that decision to the caller.
+    beyond the field default (APPLICANT). In PR-1, admins promote users
+    via Django Admin's UserAdmin user-edit page (which honors the
+    model field's ``choices``). The project's ``UserCreationForm`` /
+    ``UserChangeForm`` in ``apps.accounts.forms`` do NOT yet expose
+    ``membership_level`` — the dedicated user-management UI is
+    deferred to PR-2. This mirrors Django's stock ``auth.User``
+    behaviour: stock ``create_user`` also doesn't pre-populate role
+    state, leaving that decision to the caller.
     """
 
     def create_superuser(self, username, email=None, password=None, **extra_fields):

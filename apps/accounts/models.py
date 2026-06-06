@@ -19,9 +19,11 @@ class User(AbstractUser):
     you mutate ``user.membership_level`` in the same request and then
     re-check, you'll see the pre-mutation value. After mutating, bust
     the cache with ``User._invalidate_role_cache(user)``.
-    ``UserCreationForm`` / ``UserChangeForm`` and
-    ``UserManager.create_superuser`` do this automatically when
-    assigning roles.
+    ``UserManager.create_superuser`` does this automatically. The
+    ``UserCreationForm`` / ``UserChangeForm`` in ``apps.accounts.forms``
+    do NOT yet set ``membership_level`` — admin-side membership-level
+    promotion happens via Django Admin until the dedicated UI lands
+    in PR-2.
     """
 
     class Language(models.TextChoices):

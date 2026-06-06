@@ -16,9 +16,10 @@ RESERVED_TAG_SLUGS = frozenset({"__unassigned__"})
 class Region(models.Model):
     """A geographic / organizational grouping of stations.
 
-    Freely manageable via /regions/ admin UI. Provides the scope for
-    RegionAssignment (a Region-Manager has operative authority over
-    all stations of the region). Station.region is the FK.
+    Created/managed via Django Admin in PR-1; a dedicated /regions/
+    CRUD UI lands in PR-2. Provides the scope for RegionAssignment
+    (a Region-Manager has operative authority over all stations of
+    the region). Station.region is the FK.
     """
 
     name = models.CharField(_("name"), max_length=80, unique=True)
@@ -436,14 +437,15 @@ class _ApplicantForbiddenMixin:
     least Vereins-Mitglied level. Mixed into StationAssignment and
     RegionAssignment so the rule lives in one place.
 
-    save() calls self.clean() (NOT self.full_clean()) deliberately:
-    full_clean() runs validate_unique(), which would pre-empt the
-    DB-level UniqueConstraint violations as ValidationError. Task 4's
-    tests (tests/test_topology_models.py::TestStationAssignment::
-    test_uniq_user_per_station, test_uniq_admin_per_station, and
-    TestRegionAssignment::test_uniq_user_role_per_region) explicitly
-    assert IntegrityError from those constraints. The Applicant rule
-    is a cross-table business rule that DB CHECK can't express, so
+    save() calls self.full_clean(validate_unique=False,
+    validate_constraints=False): this runs field-level validation
+    (choices, NOT NULL, max_length) and our custom clean() (Applicant
+    check), but explicitly skips validate_unique() and
+    validate_constraints() so DB-level UniqueConstraint violations
+    still surface as IntegrityError (Task 4's test contract:
+    test_uniq_user_per_station / test_uniq_admin_per_station /
+    test_uniq_user_role_per_region). The Applicant rule is a
+    cross-table business rule that DB CHECK can't express, so
     Python-side validation via clean() is the correct layer.
     """
 
@@ -460,7 +462,11 @@ class _ApplicantForbiddenMixin:
             )
 
     def save(self, *args, **kwargs):
-        self.clean()
+        # full_clean with validate_unique/validate_constraints disabled:
+        # we want field-level validation (role choices, FK existence)
+        # AND the custom clean() Applicant check, but NOT pre-empting
+        # DB-level UniqueConstraints (Task 4's IntegrityError contract).
+        self.full_clean(validate_unique=False, validate_constraints=False)
         super().save(*args, **kwargs)
 
 

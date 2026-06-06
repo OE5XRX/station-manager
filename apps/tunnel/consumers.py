@@ -27,15 +27,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        # ``user.is_internal`` is @cached_property reading
-        # ``membership_level`` (no ORM hit today), but we wrap with
-        # database_sync_to_async for symmetry with other consumers and
-        # to remain safe if the property's implementation grows ORM
-        # access in the future. database_sync_to_async (vs the more
-        # generic asgiref.sync.sync_to_async) is the Channels-recommended
-        # primitive for ORM access.
-        is_internal = await database_sync_to_async(lambda: user.is_internal)()
-        if not is_internal:
+        # ``user.is_internal`` is a pure in-memory check: a
+        # @cached_property that reads the ``membership_level`` field
+        # already loaded on the User instance by AuthMiddleware. No
+        # ORM access, so no database_sync_to_async hop needed.
+        if not user.is_internal:
             await self.close(code=4403)
             return
 
