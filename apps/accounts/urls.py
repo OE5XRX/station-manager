@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import views
+from .views_membership import MembershipSetView
 
 app_name = "accounts"
 
@@ -12,4 +13,9 @@ urlpatterns = [
     path("users/create/", views.UserCreateView.as_view(), name="user_create"),
     path("users/<int:pk>/edit/", views.UserUpdateView.as_view(), name="user_edit"),
     path("users/<int:pk>/delete/", views.UserDeleteView.as_view(), name="user_delete"),
+    path(
+        "users/<int:pk>/membership/",
+        MembershipSetView.as_view(),
+        name="membership_set",
+    ),
 ]
