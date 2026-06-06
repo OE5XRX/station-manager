@@ -125,12 +125,14 @@
             </div>
           </td>
           <td data-label="{% trans 'Machine' %}">
+            {# Pill color keyed off the raw machine slug, label text uses the
+               model's translatable Machine.choices via get_machine_display. #}
             {% if rel.machine == "raspberrypi4-64" %}
-              <span class="pill pill-violet">RPi 4 · 64</span>
+              <span class="pill pill-violet">{{ rel.get_machine_display }}</span>
             {% elif rel.machine == "qemux86-64" %}
-              <span class="pill pill-accent">QEMU x86-64</span>
+              <span class="pill pill-accent">{{ rel.get_machine_display }}</span>
             {% else %}
-              <span class="pill pill-muted">{{ rel.machine }}</span>
+              <span class="pill pill-muted">{{ rel.get_machine_display }}</span>
             {% endif %}
           </td>
           <td data-label="{% trans 'Latest' %}">
@@ -256,7 +258,7 @@
           <div class="tl-head">
             <span class="tl-title" style="font-family:var(--font-mono);letter-spacing:0.02em;">{{ job.tag }}</span>
             <span class="t-mono-sm t-muted">·</span>
-            <span class="t-mono-sm t-muted">{{ job.machine }}</span>
+            <span class="t-mono-sm t-muted">{{ job.get_machine_display }}</span>
             <span style="margin-left:auto;">
               {% if job.status == "ready" %}
                 <span class="pill pill-online"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
