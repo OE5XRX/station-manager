@@ -1,0 +1,59 @@
+{% load i18n %}
+<section class="panel" id="region-assignments-card" style="max-width:640px;margin-top:16px;">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot"></span>{% trans "Region-Manager" %}</div>
+  </div>
+  <div class="panel-body">
+
+    {% if object.membership_level == "applicant" %}
+      <p class="t-muted">
+        {% trans "Vereins-Bewerber cannot hold a Region-Manager assignment. Promote the user to Vereins-Mitglied first." %}
+      </p>
+    {% else %}
+
+      {% if existing_region_assignments %}
+        <ul class="stack-gap-2" style="margin-bottom:12px;list-style:none;padding-left:0;">
+          {% for ra in existing_region_assignments %}
+            <li class="row-gap-8" style="align-items:center;">
+              <span class="pill pill-muted">{{ ra.region.name }}</span>
+              <form hx-post="{% url 'accounts:region_assignment_revoke' ra.pk %}"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                    style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-ghost btn-sm"
+                        title="{% trans 'Revoke assignment' %}">✕</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="t-muted" style="margin-bottom:12px;">
+          {% trans "No Region-Manager assignments yet." %}
+        </p>
+      {% endif %}
+
+      {% if available_regions %}
+        <form hx-post="{% url 'accounts:region_assignment_create' object.pk %}"
+              hx-on::after-request="if (event.detail.successful) window.location.reload()">
+          {% csrf_token %}
+          <label class="form-label" for="region-add-select">
+            {% trans "Add Region-Manager assignment" %}:
+          </label>
+          <div class="row-gap-8" style="align-items:flex-end;">
+            <select id="region-add-select" name="region" class="form-select" style="max-width:280px;">
+              {% for r in available_regions %}
+                <option value="{{ r.pk }}">{{ r.name }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">{% trans "Add" %}</button>
+          </div>
+        </form>
+      {% else %}
+        <p class="t-muted t-mono-sm">
+          {% trans "No remaining regions to assign." %}
+        </p>
+      {% endif %}
+
+    {% endif %}
+  </div>
+</section>

@@ -40,11 +40,15 @@
       <dl class="dlist">
         <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ user.username }}</dd>
         <dt>{% trans "Role" %}</dt><dd>
-          {% for g in user.groups.all %}
-            {% if g.name == "admin" %}<span class="pill pill-accent">ADMIN</span>
-            {% elif g.name == "operator" %}<span class="pill pill-violet">OPERATOR</span>
-            {% else %}<span class="pill">{{ g.name|upper }}</span>{% endif %}
-          {% empty %}<span class="pill">—</span>{% endfor %}
+          {% if user.membership_level == "admin" %}
+            <span class="pill pill-accent">{{ user.get_membership_level_display }}</span>
+          {% elif user.membership_level == "staff" %}
+            <span class="pill pill-violet">{{ user.get_membership_level_display }}</span>
+          {% elif user.membership_level == "member" %}
+            <span class="pill">{{ user.get_membership_level_display }}</span>
+          {% else %}
+            <span class="pill pill-muted">{{ user.get_membership_level_display }}</span>
+          {% endif %}
         </dd>
         <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ user.last_login|date:"Y-m-d H:i" }}</dd>
         <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ user.date_joined|date:"Y-m-d" }}</dd>

@@ -1,0 +1,93 @@
+{% load i18n %}
+<section class="panel" id="station-assignments-card" style="max-width:640px;margin-top:16px;">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot"></span>{% trans "Station-Zuordnungen" %}</div>
+  </div>
+  <div class="panel-body">
+
+    {% if object.membership_level == "applicant" %}
+      <p class="t-muted">
+        {% trans "Vereins-Bewerber cannot hold a Station-Admin or Maintainer assignment. Promote the user to Vereins-Mitglied first." %}
+      </p>
+    {% else %}
+
+      {% if existing_station_assignments %}
+        <ul class="stack-gap-2" style="margin-bottom:12px;list-style:none;padding-left:0;">
+          {% for sa in existing_station_assignments %}
+            <li class="row-gap-8" style="align-items:center;">
+              <span class="pill pill-muted">{{ sa.station.callsign|default:sa.station.name }}</span>
+              <span class="t-mono-sm">{{ sa.get_role_display }}</span>
+              <form hx-post="{% url 'accounts:station_assignment_revoke' sa.pk %}"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                    style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-ghost btn-sm"
+                        title="{% trans 'Revoke assignment' %}">✕</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="t-muted" style="margin-bottom:12px;">
+          {% trans "No Station assignments yet." %}
+        </p>
+      {% endif %}
+
+      {% if all_stations %}
+        <form id="station-assignment-add-form"
+              hx-post="{% url 'accounts:station_assignment_create' object.pk %}"
+              hx-on::after-request="handleStationAssignmentResponse(event)">
+          {% csrf_token %}
+          <label class="form-label">{% trans "Add Station assignment" %}:</label>
+          <div class="row-gap-8" style="align-items:flex-end;flex-wrap:wrap;">
+            <select name="station" class="form-select" style="max-width:240px;">
+              {% for s in all_stations %}
+                <option value="{{ s.pk }}">{{ s.callsign|default:s.name }}</option>
+              {% endfor %}
+            </select>
+            <select name="role" class="form-select" style="max-width:200px;">
+              <option value="admin">{% trans "Station-Admin (max 1)" %}</option>
+              <option value="maintainer" selected>{% trans "Station-Maintainer" %}</option>
+            </select>
+            <input type="hidden" name="takeover" value="0">
+            <button type="submit" class="btn btn-primary btn-sm">{% trans "Add" %}</button>
+          </div>
+        </form>
+
+        <script nonce="{{ csp_nonce }}">
+          function handleStationAssignmentResponse(event) {
+            const xhr = event.detail.xhr;
+            if (event.detail.successful) {
+              window.location.reload();
+              return;
+            }
+
+            // Failure path: ensure takeover is reset before any subsequent
+            // retry or manual submit, so a failed retry doesn't silently
+            // keep the takeover=1 flag.
+            const form = document.getElementById('station-assignment-add-form');
+            form.querySelector('input[name=takeover]').value = '0';
+
+            if (xhr.status === 409) {
+              let info = {};
+              try { info = JSON.parse(xhr.responseText); } catch (_) {}
+              const currentAdmin = info.current_admin_username || 'someone';
+              const ok = window.confirm(
+                "{% trans 'Station already has' %} " + currentAdmin +
+                " {% trans 'as Station-Admin. Take over the role?' %}"
+              );
+              if (!ok) return;
+              form.querySelector('input[name=takeover]').value = '1';
+              htmx.trigger(form, 'submit');
+            }
+          }
+        </script>
+      {% else %}
+        <p class="t-muted t-mono-sm">
+          {% trans "No stations to assign." %}
+        </p>
+      {% endif %}
+
+    {% endif %}
+  </div>
+</section>

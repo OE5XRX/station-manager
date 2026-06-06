@@ -46,9 +46,7 @@ class UserListView(AdminRequiredMixin, ListView):
     template_name = "accounts/user_list.html"
     context_object_name = "users"
     paginate_by = 25
-    # user_list.html iterates ``u.groups.all`` per row — without the
-    # prefetch each row triggers a separate auth_user_groups join.
-    queryset = User.objects.prefetch_related("groups").order_by("username")
+    queryset = User.objects.order_by("username")
 
 
 class UserCreateView(AdminRequiredMixin, CreateView):
@@ -85,6 +83,24 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         from apps.sso.views import _build_grants_for_user
 
         context["app_grants_list"] = _build_grants_for_user(self.object)
+        # Membership-level picker uses the model's TextChoices.
+        context["membership_level_choices"] = User.MembershipLevel.choices
+
+        # Region-Assignment card.
+        from apps.stations.models import Region, Station
+
+        existing_ra = list(self.object.region_assignments.select_related("region"))
+        context["existing_region_assignments"] = existing_ra
+        assigned_region_ids = {ra.region_id for ra in existing_ra}
+        context["available_regions"] = Region.objects.exclude(pk__in=assigned_region_ids).order_by(
+            "name"
+        )
+
+        # Station-Assignment card.
+        context["existing_station_assignments"] = list(
+            self.object.station_assignments.select_related("station")
+        )
+        context["all_stations"] = Station.objects.order_by("name")
         return context
 
 

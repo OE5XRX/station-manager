@@ -14,7 +14,7 @@
   <div class="page-head-main">
     <div class="page-eyebrow">{% trans "Administration" %} · {% trans "People" %}</div>
     <h1 class="page-title">{% trans "Users" %}</h1>
-    <p class="page-sub">{% trans "Admins can add, edit, and remove operator & member accounts." %}</p>
+    <p class="page-sub">{% trans "Admins can add, edit, and remove member, staff, and admin accounts." %}</p>
   </div>
   <div class="page-head-actions">
     <a href="{% url 'accounts:user_create' %}" class="btn btn-primary">
@@ -51,11 +51,15 @@
         </td>
         <td class="t-mono" data-label="{% trans 'Email' %}">{{ u.email|default:"—" }}</td>
         <td data-label="{% trans 'Role' %}">
-          {% for g in u.groups.all %}
-            {% if g.name == "admin" %}<span class="pill pill-accent">ADMIN</span>
-            {% elif g.name == "operator" %}<span class="pill pill-violet">OPERATOR</span>
-            {% else %}<span class="pill">{{ g.name|upper }}</span>{% endif %}
-          {% empty %}<span class="t-muted">—</span>{% endfor %}
+          {% if u.membership_level == "admin" %}
+            <span class="pill pill-accent">{{ u.get_membership_level_display }}</span>
+          {% elif u.membership_level == "staff" %}
+            <span class="pill pill-violet">{{ u.get_membership_level_display }}</span>
+          {% elif u.membership_level == "member" %}
+            <span class="pill">{{ u.get_membership_level_display }}</span>
+          {% else %}
+            <span class="pill pill-muted">{{ u.get_membership_level_display }}</span>
+          {% endif %}
         </td>
         <td class="t-mono" data-label="{% trans 'Language' %}">{{ u.get_language_display }}</td>
         <td data-label="{% trans 'Active' %}">
