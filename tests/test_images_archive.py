@@ -182,3 +182,35 @@ def test_archive_view_works_on_release_with_referenced_deployment(
     assert resp.status_code == 302
     rel.refresh_from_db()
     assert rel.archived_at is not None
+
+
+@pytest.mark.django_db
+def test_restore_view_restores_release(client, admin_user):
+    rel = _make_release(tag="v1-old", archived=True)
+
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:restore", kwargs={"pk": rel.pk}))
+
+    assert resp.status_code == 302
+    rel.refresh_from_db()
+    assert rel.archived_at is None
+    # restore() must NOT auto-promote to latest
+    assert rel.is_latest is False
+
+
+@pytest.mark.django_db
+def test_restore_view_requires_admin(client, member_user):
+    rel = _make_release(tag="v1-old", archived=True)
+
+    client.force_login(member_user)
+    resp = client.post(reverse("images:restore", kwargs={"pk": rel.pk}))
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_restore_view_404_on_unknown_pk(client, admin_user):
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:restore", kwargs={"pk": 99999}))
+
+    assert resp.status_code == 404

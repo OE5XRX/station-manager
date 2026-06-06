@@ -183,3 +183,17 @@ class ImageArchiveView(AdminRequiredMixin, View):
             _("Release %(tag)s archived.") % {"tag": release.tag},
         )
         return redirect("images:list")
+
+
+class ImageRestoreView(AdminRequiredMixin, View):
+    """Undo a previous archive. Operates on ``all_objects`` because
+    archived rows are hidden from the default manager."""
+
+    def post(self, request, pk):
+        release = get_object_or_404(ImageRelease.all_objects, pk=pk)
+        release.restore()
+        messages.success(
+            request,
+            _("Release %(tag)s restored.") % {"tag": release.tag},
+        )
+        return redirect("images:list")
