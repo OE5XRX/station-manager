@@ -3,6 +3,18 @@ from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 
 
+class ImageReleaseManager(models.Manager):
+    """Default manager: hides archived (soft-deleted) rows.
+
+    Use ``ImageRelease.all_objects`` to get the full set (incl.
+    archived) — e.g. the "Show archived" UI toggle, auto-restore
+    lookups during re-import, Django admin.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(archived_at__isnull=True)
+
+
 class ImageRelease(models.Model):
     class Machine(models.TextChoices):
         QEMU = "qemux86-64", _("QEMU x86-64")
@@ -47,6 +59,9 @@ class ImageRelease(models.Model):
             "Deployment or ProvisioningJob that still references them."
         ),
     )
+
+    objects = ImageReleaseManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = _("image release")
