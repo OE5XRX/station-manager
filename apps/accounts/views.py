@@ -85,6 +85,16 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         context["app_grants_list"] = _build_grants_for_user(self.object)
         # Membership-level picker uses the model's TextChoices.
         context["membership_level_choices"] = User.MembershipLevel.choices
+
+        # Region-Assignment card.
+        from apps.stations.models import Region
+
+        existing_ra = list(self.object.region_assignments.select_related("region"))
+        context["existing_region_assignments"] = existing_ra
+        assigned_region_ids = {ra.region_id for ra in existing_ra}
+        context["available_regions"] = Region.objects.exclude(pk__in=assigned_region_ids).order_by(
+            "name"
+        )
         return context
 
 

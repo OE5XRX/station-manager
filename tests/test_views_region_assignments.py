@@ -101,3 +101,42 @@ class TestRegionAssignmentRevokeView:
         response = client.post(reverse("accounts:region_assignment_revoke", args=[a.pk]))
         assert response.status_code in (302, 403)
         assert RegionAssignment.objects.filter(pk=a.pk).exists()
+
+
+@pytest.mark.django_db
+class TestRegionAssignmentsCardRendering:
+    def test_card_visible_to_admin_for_member(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        lisa = _user(User.MembershipLevel.MEMBER, "lisa")
+        Region.objects.create(name="Tirol", slug="tirol")
+        Region.objects.create(name="OOe", slug="ooe")
+        client.force_login(admin)
+        response = client.get(reverse("accounts:user_edit", args=[lisa.pk]))
+        body = response.content.decode()
+        assert response.status_code == 200
+        assert "Region-Manager" in body
+        # The select offers the two regions
+        assert "Tirol" in body
+        assert "OOe" in body
+
+    def test_card_lists_existing_assignment_with_revoke_button(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        lisa = _user(User.MembershipLevel.MEMBER, "lisa")
+        r = Region.objects.create(name="Tirol", slug="tirol")
+        a = RegionAssignment.objects.create(
+            user=lisa, region=r, role=RegionAssignment.Role.MANAGER
+        )
+        client.force_login(admin)
+        response = client.get(reverse("accounts:user_edit", args=[lisa.pk]))
+        body = response.content.decode()
+        # The revoke URL is rendered as the form target
+        assert reverse("accounts:region_assignment_revoke", args=[a.pk]) in body
+
+    def test_card_warns_for_applicant_target(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        applicant = _user(User.MembershipLevel.APPLICANT, "newbie")
+        client.force_login(admin)
+        response = client.get(reverse("accounts:user_edit", args=[applicant.pk]))
+        body = response.content.decode()
+        # The warning mentions the membership-level requirement
+        assert "Vereins-Bewerber" in body or "applicant" in body.lower()
