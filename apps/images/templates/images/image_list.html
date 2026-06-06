@@ -145,7 +145,7 @@
               </form>
             {% endif %}
           </td>
-          <td data-label="OTA">
+          <td data-label="{% trans 'OTA' %}">
             {% if rel.is_ota_ready %}
               <span class="pill pill-online"><span class="dot"></span>{% trans "READY" %}</span>
             {% else %}
@@ -155,7 +155,7 @@
             {% endif %}
           </td>
           <td class="t-mono num" data-label="{% trans 'Size' %}">{{ rel.size_bytes|filesizeformat }}</td>
-          <td class="t-mono" data-label="SHA-256" title="{{ rel.sha256 }}">
+          <td class="t-mono" data-label="{% trans 'SHA-256' %}" title="{{ rel.sha256 }}">
             <span style="color:var(--ink-2);">{{ rel.sha256|slice:":10" }}…</span>
           </td>
           <td class="t-mono-sm t-muted" data-label="{% trans 'Imported' %}">{{ rel.imported_at|date:"Y-m-d H:i" }}</td>
