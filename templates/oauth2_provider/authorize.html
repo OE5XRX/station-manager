@@ -58,10 +58,12 @@
     <div class="consent-fact-stack">
       <div class="consent-fact">
         <span class="consent-fact-key">{% trans "Issuer" %}</span>
-        {# oauth2_provider URLs are mounted at /sso/ (config/urls.py),
-           so the OIDC issuer includes that prefix — show the full
-           prefix to avoid misleading the user about what they're
-           consenting against. #}
+        {% comment %}
+        oauth2_provider URLs are mounted at /sso/ (config/urls.py),
+        so the OIDC issuer includes that prefix — show the full
+        prefix to avoid misleading the user about what they're
+        consenting against.
+        {% endcomment %}
         <span class="consent-fact-val">{{ request.scheme }}://{{ request.get_host }}/sso</span>
       </div>
       <div class="consent-fact">
@@ -195,9 +197,11 @@
 
       <div class="consent-footer">
         <span class="consent-footer-key">{% trans "Redirect" %}</span>
-        {# Full URI in the DOM (security-relevant: users + AT must be able
-           to inspect/copy the actual redirect target). CSS does the visual
-           ellipsis; the title exposes the full value on hover. #}
+        {% comment %}
+        Full URI in the DOM (security-relevant: users + AT must be able
+        to inspect/copy the actual redirect target). CSS does the visual
+        ellipsis; the title exposes the full value on hover.
+        {% endcomment %}
         <code class="consent-footer-val" title="{{ redirect_uri }}">{{ redirect_uri }}</code>
       </div>
     </form>
