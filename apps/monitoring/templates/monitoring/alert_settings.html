@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n %}
+{% load i18n l10n %}
 
 {% block title %}{% trans "Alert rules" %} · OE5XRX{% endblock %}
 
@@ -47,7 +47,7 @@
           <td>
             <form hx-post="{% url 'monitoring:alert_rule_update' rule.pk %}" class="row-gap-8">
               {% csrf_token %}
-              <input type="number" step="0.1" name="threshold" value="{{ rule.threshold }}" style="width:120px;">
+              <input type="number" step="0.1" name="threshold" value="{{ rule.threshold|unlocalize }}" style="width:120px;">
               <button type="submit" class="btn btn-sm">{% trans "Save" %}</button>
             </form>
           </td>
