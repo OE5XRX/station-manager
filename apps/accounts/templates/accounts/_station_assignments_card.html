@@ -61,6 +61,13 @@
               window.location.reload();
               return;
             }
+
+            // Failure path: ensure takeover is reset before any subsequent
+            // retry or manual submit, so a failed retry doesn't silently
+            // keep the takeover=1 flag.
+            const form = document.getElementById('station-assignment-add-form');
+            form.querySelector('input[name=takeover]').value = '0';
+
             if (xhr.status === 409) {
               let info = {};
               try { info = JSON.parse(xhr.responseText); } catch (_) {}
@@ -70,7 +77,6 @@
                 " {% trans 'as Station-Admin. Take over the role?' %}"
               );
               if (!ok) return;
-              const form = document.getElementById('station-assignment-add-form');
               form.querySelector('input[name=takeover]').value = '1';
               htmx.trigger(form, 'submit');
             }

@@ -56,6 +56,12 @@ class StationAssignmentCreateView(AdminRequiredMixin, View):
             # apps/sso/views.py:GrantToggleView.
             try:
                 with transaction.atomic():
+                    # Lock the Station row to serialize concurrent admin-set
+                    # requests on the same station. Without this, two requests
+                    # arriving simultaneously when no admin exists yet would
+                    # both see "no admin", both create, and one would hit
+                    # uniq_admin_per_station as IntegrityError 500.
+                    Station.objects.select_for_update().get(pk=station.pk)
                     # Pre-check: does the TARGET already have any
                     # assignment on this station? If yes, the
                     # uniq_user_per_station_assignment constraint will
@@ -98,12 +104,26 @@ class StationAssignmentCreateView(AdminRequiredMixin, View):
                         existing_admin.delete()
 
                     # Whether takeover or fresh admin: create the new row.
-                    StationAssignment.objects.create(
-                        user=target,
-                        station=station,
-                        role=StationAssignment.Role.ADMIN,
-                        assigned_by=request.user,
-                    )
+                    try:
+                        StationAssignment.objects.create(
+                            user=target,
+                            station=station,
+                            role=StationAssignment.Role.ADMIN,
+                            assigned_by=request.user,
+                        )
+                    except ValidationError as e:
+                        # The with-block rolls back the takeover delete
+                        # automatically on exception.
+                        return HttpResponseBadRequest(str(e))
+                    except IntegrityError:
+                        # Race despite the Station-row lock above — rare,
+                        # but possible if another path (e.g., concurrent
+                        # maintainer-set on the same user+station) inserts
+                        # between the pre-check and the create. The
+                        # with-block rolls back the takeover delete.
+                        return HttpResponseBadRequest(
+                            "Concurrent change blocked the assignment. Refresh and try again."
+                        )
             except ValidationError as e:
                 # Applicant target etc — atomic rolls back the
                 # takeover delete (if it ran) before we get here.
