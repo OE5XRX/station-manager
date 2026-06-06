@@ -110,6 +110,14 @@
       </svg>
       <span class="label">{% trans "Audit Log" %}</span>
     </a>
+    <a href="{% url 'stations:region_list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'stations' and 'region' in request.resolver_match.url_name %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'stations' and 'region' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/>
+      </svg>
+      <span class="label">{% trans "Regions" %}</span>
+    </a>
     <a href="{% url 'stations:tag_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'stations' and 'tag' in request.resolver_match.url_name %} active{% endif %}"
        {% if request.resolver_match.namespace == 'stations' and 'tag' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
