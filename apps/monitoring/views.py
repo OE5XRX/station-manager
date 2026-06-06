@@ -20,10 +20,15 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 
 class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Restrict access to users with admin or operator role."""
+    """Restrict access to internal users (Vereins-Staff or Vereins-Admin).
+
+    Class name retained for backwards-compat during the PR-1 -> PR-2
+    rollout; the actual check is now ``user.is_internal``
+    (membership_level in {STAFF, ADMIN}), not Django-group membership.
+    """
 
     def test_func(self):
-        return self.request.user.is_staff_member
+        return self.request.user.is_internal
 
 
 class AlertListView(AdminRequiredMixin, ListView):

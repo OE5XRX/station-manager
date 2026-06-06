@@ -10,7 +10,6 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
-from django.contrib.auth.models import Group
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.accounts.models import User
@@ -68,33 +67,36 @@ def device_auth_headers(private_key: Ed25519PrivateKey, station_id: int, body_by
     }
 
 
-def _user_in_group(username, password, group_name):
-    """Create a user and add them to the named auth.Group.
-
-    Replaces the pre-T6 ``role="..."`` shorthand. The group is created
-    on demand because the test DB may not have run the bootstrap
-    fixtures from migration 0002.
-    """
+def _user_with_level(username, password, level):
+    """Create a user with the given membership_level."""
     user = User.objects.create_user(username=username, password=password)
-    group, _ = Group.objects.get_or_create(name=group_name)
-    user.groups.add(group)
+    user.membership_level = level
+    user.save(update_fields=["membership_level"])
     User._invalidate_role_cache(user)
     return user
 
 
 @pytest.fixture
 def admin_user(db):
-    return _user_in_group("admin", "testpass123", "admin")
+    return _user_with_level("admin", "testpass123", User.MembershipLevel.ADMIN)
 
 
 @pytest.fixture
 def operator_user(db):
-    return _user_in_group("operator", "testpass123", "operator")
+    """Kept fixture name for test-suite continuity. The membership
+    level is STAFF (formerly the 'operator' group).
+    """
+    return _user_with_level("operator", "testpass123", User.MembershipLevel.STAFF)
 
 
 @pytest.fixture
 def member_user(db):
-    return _user_in_group("member", "testpass123", "member")
+    return _user_with_level("member", "testpass123", User.MembershipLevel.MEMBER)
+
+
+@pytest.fixture
+def applicant_user(db):
+    return _user_with_level("applicant", "testpass123", User.MembershipLevel.APPLICANT)
 
 
 @pytest.fixture

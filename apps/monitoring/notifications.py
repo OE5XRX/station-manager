@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def send_alert_notifications(alert):
     """Send notifications for a new alert to all admin users."""
-    admins = User.objects.filter(groups__name="admin").distinct()
+    admins = User.objects.filter(membership_level=User.MembershipLevel.ADMIN)
     if not admins.exists():
         logger.warning("No admin users found for alert notifications.")
         return
@@ -105,7 +105,7 @@ def _test_email():
     if not getattr(settings, "ALERT_EMAIL_ENABLED", False):
         return False, "Email notifications are not enabled (ALERT_EMAIL_ENABLED)."
 
-    admins = User.objects.filter(groups__name="admin").distinct()
+    admins = User.objects.filter(membership_level=User.MembershipLevel.ADMIN)
     recipient_list = [admin.email for admin in admins if admin.email]
     if not recipient_list:
         return False, "No admin users have email addresses configured."

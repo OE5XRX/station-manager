@@ -16,6 +16,8 @@ def admin_user(db):
     g, _ = Group.objects.get_or_create(name="admin")
     u = User.objects.create_user(username="admin", password="x", email="a@x.test")
     u.groups.add(g)
+    u.membership_level = User.MembershipLevel.ADMIN
+    u.save(update_fields=["membership_level"])
     return u
 
 
