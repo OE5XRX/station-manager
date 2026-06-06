@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -108,6 +109,40 @@ class ImageRelease(models.Model):
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
+
+    def archive(self):
+        """Soft-delete this release. Idempotent.
+
+        Atomically stamps ``archived_at`` and clears ``is_latest`` —
+        a "latest archived" row would be semantically nonsensical and
+        would also stop the partial unique index from doing useful
+        work on the next ``mark_as_latest`` operation.
+        """
+        if self.archived_at is not None:
+            return  # idempotent: don't bump the timestamp
+
+        with transaction.atomic():
+            self.archived_at = timezone.now()
+            update_fields = ["archived_at"]
+            if self.is_latest:
+                self.is_latest = False
+                update_fields.append("is_latest")
+            self.save(update_fields=update_fields)
+
+    def restore(self):
+        """Undo a previous archive. Idempotent.
+
+        Does NOT touch ``is_latest`` — re-promotion to "latest" after
+        a restore is an explicit operator action via the existing
+        Mark-Latest button. Restoring a previously-archived release
+        must not silently steal the latest bit from whatever is
+        currently active.
+        """
+        if self.archived_at is None:
+            return  # idempotent
+
+        self.archived_at = None
+        self.save(update_fields=["archived_at"])
 
 
 class ImageImportJob(models.Model):

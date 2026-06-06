@@ -41,3 +41,50 @@ def test_all_objects_manager_returns_everything():
 
     pks = set(ImageRelease.all_objects.values_list("pk", flat=True))
     assert pks == {active.pk, archived.pk}
+
+
+@pytest.mark.django_db
+def test_archive_sets_archived_at_and_clears_is_latest():
+    rel = _make_release(tag="v1-current", is_latest=True)
+
+    rel.archive()
+    rel.refresh_from_db()
+
+    assert rel.archived_at is not None
+    assert rel.is_latest is False
+
+
+@pytest.mark.django_db
+def test_archive_is_idempotent():
+    rel = _make_release(tag="v1-current", archived=True)
+    first_ts = rel.archived_at
+
+    rel.archive()
+    rel.refresh_from_db()
+
+    # archive() on an already-archived row must not bump the timestamp
+    # — restoring then re-archiving should be the only path to a new ts.
+    assert rel.archived_at == first_ts
+
+
+@pytest.mark.django_db
+def test_restore_clears_archived_at():
+    rel = _make_release(tag="v1-old", archived=True)
+
+    rel.restore()
+    rel.refresh_from_db()
+
+    assert rel.archived_at is None
+    # restore() must NOT silently re-promote to latest — that's a
+    # separate operator action.
+    assert rel.is_latest is False
+
+
+@pytest.mark.django_db
+def test_restore_is_idempotent_on_active_row():
+    rel = _make_release(tag="v1-current")
+
+    rel.restore()
+    rel.refresh_from_db()
+
+    assert rel.archived_at is None
