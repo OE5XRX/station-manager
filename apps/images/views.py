@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
@@ -10,6 +11,21 @@ from apps.accounts.views import AdminRequiredMixin
 from . import storage
 from .forms import ImageImportForm
 from .models import ImageImportJob, ImageRelease
+
+
+def _storage_backend_label() -> str:
+    """Short label for the active default-storage backend.
+
+    Settings flip STORAGES["default"]["BACKEND"] to the S3 backend
+    only when USE_S3=true; otherwise Django's FileSystemStorage is
+    used. The Image-Releases KPI tile shows this label so operators
+    can tell at a glance whether artifacts are landing in object
+    storage or on the local filesystem.
+    """
+    backend = settings.STORAGES.get("default", {}).get("BACKEND", "")
+    if "s3" in backend.lower():
+        return "S3"
+    return "Local FS"
 
 
 class ImageListView(AdminRequiredMixin, ListView):
@@ -29,6 +45,7 @@ class ImageListView(AdminRequiredMixin, ListView):
                 ImageImportJob.Status.RUNNING,
             ],
         ).count()
+        ctx["storage_backend_label"] = _storage_backend_label()
         return ctx
 
 

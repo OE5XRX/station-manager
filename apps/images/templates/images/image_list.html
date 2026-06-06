@@ -76,7 +76,7 @@
       </svg>
       {% trans "Storage backend" %}
     </div>
-    <div class="stat-value" style="font-size:22px;">S3</div>
+    <div class="stat-value" style="font-size:22px;">{{ storage_backend_label|default:"—" }}</div>
     <div class="stat-meta">
       <span class="t-mono">{% trans "cosign-signed · sha256" %}</span>
     </div>
