@@ -40,3 +40,6 @@ htmlcov/
 # OIDC signing keys (managed by setup_oidc_keys, never commit)
 oidc_keys/
 *.pem
+
+# Git worktrees (parallel agent workspaces)
+.worktrees/
