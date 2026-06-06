@@ -163,3 +163,23 @@ def _delete_blockers(release: ImageRelease) -> list[str]:
             _("%(n)d provisioning job(s)") % {"n": provisioning},
         )
     return [str(p) for p in parts]
+
+
+class ImageArchiveView(AdminRequiredMixin, View):
+    """Soft-delete a release. Always succeeds (vs hard delete which
+    PROTECT-FKs from Deployment/ProvisioningJob can block).
+
+    Operates on ``all_objects`` so the same view also accepts an
+    already-archived row (idempotent) — but the UI only renders the
+    Archive button for active rows, so in practice this is the
+    active-row entry path.
+    """
+
+    def post(self, request, pk):
+        release = get_object_or_404(ImageRelease.all_objects, pk=pk)
+        release.archive()
+        messages.success(
+            request,
+            _("Release %(tag)s archived.") % {"tag": release.tag},
+        )
+        return redirect("images:list")

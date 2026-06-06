@@ -124,3 +124,61 @@ def test_mark_latest_view_can_act_on_archived_release(client, admin_user):
     resp = client.post(reverse("images:mark_latest", kwargs={"pk": rel.pk}))
 
     assert resp.status_code == 302
+
+
+@pytest.mark.django_db
+def test_archive_view_archives_release(client, admin_user):
+    rel = _make_release(tag="v1-current", is_latest=True)
+
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:archive", kwargs={"pk": rel.pk}))
+
+    assert resp.status_code == 302
+    rel.refresh_from_db()
+    assert rel.archived_at is not None
+    assert rel.is_latest is False
+
+
+@pytest.mark.django_db
+def test_archive_view_requires_admin(client, member_user):
+    rel = _make_release(tag="v1-current")
+
+    client.force_login(member_user)
+    resp = client.post(reverse("images:archive", kwargs={"pk": rel.pk}))
+
+    # AdminRequiredMixin raises PermissionDenied for authenticated
+    # non-admins → 403.
+    assert resp.status_code == 403
+    rel.refresh_from_db()
+    assert rel.archived_at is None
+
+
+@pytest.mark.django_db
+def test_archive_view_404_on_unknown_pk(client, admin_user):
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:archive", kwargs={"pk": 99999}))
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_archive_view_works_on_release_with_referenced_deployment(
+    client, admin_user, station
+):
+    """The whole point of archive vs hard-delete: archive succeeds
+    even when Deployment/ProvisioningJob FKs would PROTECT a delete."""
+    from apps.deployments.models import Deployment
+
+    rel = _make_release(tag="v1-shipped")
+    Deployment.objects.create(
+        image_release=rel,
+        target_type=Deployment.TargetType.ALL,
+        created_by=admin_user,
+    )
+
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:archive", kwargs={"pk": rel.pk}))
+
+    assert resp.status_code == 302
+    rel.refresh_from_db()
+    assert rel.archived_at is not None
