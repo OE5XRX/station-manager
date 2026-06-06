@@ -23,7 +23,15 @@
       <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ target_user.username }}</dd>
       <dt>{% trans "Email" %}</dt><dd class="t-mono">{{ target_user.email|default:"—" }}</dd>
       <dt>{% trans "Role" %}</dt><dd>
-        {% for g in target_user.groups.all %}{{ g.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+        {% if target_user.membership_level == "admin" %}
+          <span class="pill pill-accent">{{ target_user.get_membership_level_display }}</span>
+        {% elif target_user.membership_level == "staff" %}
+          <span class="pill pill-violet">{{ target_user.get_membership_level_display }}</span>
+        {% elif target_user.membership_level == "member" %}
+          <span class="pill">{{ target_user.get_membership_level_display }}</span>
+        {% else %}
+          <span class="pill pill-muted">{{ target_user.get_membership_level_display }}</span>
+        {% endif %}
       </dd>
     </dl>
   </div>
