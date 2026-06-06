@@ -118,3 +118,45 @@ class TestStationAssignmentRevokeView:
         response = client.post(reverse("accounts:station_assignment_revoke", args=[a.pk]))
         assert response.status_code == 200
         assert not StationAssignment.objects.filter(pk=a.pk).exists()
+
+
+@pytest.mark.django_db
+class TestStationAssignmentsCardRendering:
+    def test_card_visible_to_admin_for_member(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        franz = _user(User.MembershipLevel.MEMBER, "franz")
+        Station.objects.create(name="OE5A", callsign="OE5A")
+        Station.objects.create(name="OE5B", callsign="OE5B")
+        client.force_login(admin)
+        response = client.get(reverse("accounts:user_edit", args=[franz.pk]))
+        body = response.content.decode()
+        assert response.status_code == 200
+        assert "Station-Zuordnungen" in body or "Station Assignments" in body
+        assert "OE5A" in body
+        assert "OE5B" in body
+
+    def test_card_lists_existing_with_revoke_button(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        franz = _user(User.MembershipLevel.MEMBER, "franz")
+        s = Station.objects.create(name="OE5A", callsign="OE5A")
+        a = StationAssignment.objects.create(
+            user=franz, station=s, role=StationAssignment.Role.ADMIN
+        )
+        client.force_login(admin)
+        response = client.get(reverse("accounts:user_edit", args=[franz.pk]))
+        body = response.content.decode()
+        assert reverse("accounts:station_assignment_revoke", args=[a.pk]) in body
+        # Display label for the role
+        assert "Station-Admin" in body
+
+    def test_card_warns_for_applicant_target(self, client):
+        admin = _user(User.MembershipLevel.ADMIN, "admin")
+        applicant = _user(User.MembershipLevel.APPLICANT, "newbie")
+        Station.objects.create(name="OE5A", callsign="OE5A")
+        client.force_login(admin)
+        response = client.get(reverse("accounts:user_edit", args=[applicant.pk]))
+        body = response.content.decode()
+        # Match a string unique to the station-card's APPLICANT branch
+        # (the region-card's APPLICANT warning also contains "Vereins-Bewerber",
+        # so we need a station-specific substring to verify this card renders).
+        assert "Station-Admin or Maintainer" in body

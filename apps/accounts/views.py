@@ -87,7 +87,7 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         context["membership_level_choices"] = User.MembershipLevel.choices
 
         # Region-Assignment card.
-        from apps.stations.models import Region
+        from apps.stations.models import Region, Station
 
         existing_ra = list(self.object.region_assignments.select_related("region"))
         context["existing_region_assignments"] = existing_ra
@@ -95,6 +95,12 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         context["available_regions"] = Region.objects.exclude(pk__in=assigned_region_ids).order_by(
             "name"
         )
+
+        # Station-Assignment card.
+        context["existing_station_assignments"] = list(
+            self.object.station_assignments.select_related("station")
+        )
+        context["all_stations"] = Station.objects.order_by("name")
         return context
 
 

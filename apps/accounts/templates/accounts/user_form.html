@@ -44,6 +44,10 @@
 {% endif %}
 
 {% if request.user.is_admin and object %}
+  {% include "accounts/_station_assignments_card.html" %}
+{% endif %}
+
+{% if request.user.is_admin and object %}
   {% include "sso/_app_grants_card.html" with target_user=object applications=app_grants_list %}
 {% endif %}
 {% endblock %}
