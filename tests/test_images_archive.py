@@ -185,6 +185,38 @@ def test_archive_view_works_on_release_with_referenced_deployment(client, admin_
 
 
 @pytest.mark.django_db
+def test_fk_dereference_still_resolves_to_archived_release(admin_user):
+    """Archiving must not break related-object access — a mid-flight
+    Deployment that references a release being archived needs to keep
+    resolving ``deployment.image_release`` to the actual row, otherwise
+    the agent's deployment-check 500s and the audit trail disappears
+    from the UI.
+
+    Django resolves forward FKs through the model's *base* manager, which
+    defaults to the first declared one — our filtering
+    ``ImageReleaseManager``. Without ``Meta.base_manager_name =
+    "all_objects"`` this test fails (``deployment.image_release`` would
+    raise ``ImageRelease.DoesNotExist`` after archive)."""
+    from apps.deployments.models import Deployment
+
+    rel = _make_release(tag="v1-shipped")
+    deployment = Deployment.objects.create(
+        image_release=rel,
+        target_type=Deployment.TargetType.ALL,
+        created_by=admin_user,
+    )
+
+    rel.archive()
+
+    # Re-fetch the Deployment from the DB so the FK cache is cold —
+    # we're exercising the resolution path, not the previously loaded
+    # in-memory pointer.
+    fresh = Deployment.objects.get(pk=deployment.pk)
+    assert fresh.image_release.pk == rel.pk
+    assert fresh.image_release.archived_at is not None
+
+
+@pytest.mark.django_db
 def test_restore_view_restores_release(client, admin_user):
     rel = _make_release(tag="v1-old", archived=True)
 
