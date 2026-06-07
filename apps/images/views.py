@@ -34,11 +34,22 @@ class ImageListView(AdminRequiredMixin, ListView):
     template_name = "images/image_list.html"
     context_object_name = "releases"
 
+    def _show_archived(self) -> bool:
+        return self.request.GET.get("show_archived") == "1"
+
+    def get_queryset(self):
+        # all_objects when the toggle is on so archived rows appear
+        # alongside active; default manager (objects) otherwise.
+        manager = ImageRelease.all_objects if self._show_archived() else ImageRelease.objects
+        return manager.all()
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["import_form"] = ImageImportForm()
         ctx["recent_jobs"] = ImageImportJob.objects.order_by("-created_at")[:10]
-        # KPI tile aggregates: cheap counts over small tables.
+        # KPI tile aggregates — always over the ACTIVE set (the default
+        # manager) regardless of the show_archived toggle. KPIs should
+        # describe the operational state, not the toggle's UI mode.
         ctx["latest_total"] = ImageRelease.objects.filter(is_latest=True).count()
         ctx["pending_jobs"] = ImageImportJob.objects.filter(
             status__in=[
@@ -47,6 +58,7 @@ class ImageListView(AdminRequiredMixin, ListView):
             ],
         ).count()
         ctx["storage_backend_label"] = _storage_backend_label()
+        ctx["show_archived"] = self._show_archived()
         return ctx
 
 

@@ -265,6 +265,34 @@ def import_stubs():
 
 
 @pytest.mark.django_db
+def test_image_list_hides_archived_by_default(client, admin_user):
+    _make_release(tag="v1-active")
+    _make_release(tag="v1-old", archived=True)
+
+    client.force_login(admin_user)
+    resp = client.get(reverse("images:list"))
+
+    assert resp.status_code == 200
+    body = resp.content.decode()
+    assert "v1-active" in body
+    assert "v1-old" not in body
+
+
+@pytest.mark.django_db
+def test_image_list_shows_archived_with_query_param(client, admin_user):
+    _make_release(tag="v1-active")
+    _make_release(tag="v1-old", archived=True)
+
+    client.force_login(admin_user)
+    resp = client.get(reverse("images:list") + "?show_archived=1")
+
+    assert resp.status_code == 200
+    body = resp.content.decode()
+    assert "v1-active" in body
+    assert "v1-old" in body
+
+
+@pytest.mark.django_db
 def test_reimport_auto_restores_archived_release(import_stubs, admin_user):
     from apps.provisioning.management.commands.run_background_jobs import (
         _run_import_job,
