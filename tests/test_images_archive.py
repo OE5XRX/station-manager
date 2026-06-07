@@ -314,3 +314,57 @@ def test_reimport_auto_restores_archived_release(import_stubs, admin_user):
     archived.refresh_from_db()
     assert archived.pk == archived_pk  # not a brand-new row
     assert archived.archived_at is None
+
+
+@pytest.mark.django_db
+def test_archive_then_reimport_workflow(import_stubs, admin_user, client):
+    """End-to-end: operator archives a release, later re-imports
+    the same tag, observes the row is restored with updated fields
+    and surfaces in the default (non-archived) UI list again.
+
+    NOTE on the chosen tag: the ImageImportForm's tag-field help text
+    is literally "GitHub release tag, e.g. v1-alpha", which means any
+    body-level assertion on "v1-alpha" would collide with form copy
+    on the same page. Use a tag that's distinct from that example.
+    """
+    rel = _make_release(tag="v9-workflow")
+    rel_pk = rel.pk
+
+    # Step 1: operator archives via the UI
+    client.force_login(admin_user)
+    resp = client.post(reverse("images:archive", kwargs={"pk": rel_pk}))
+    assert resp.status_code == 302
+    rel.refresh_from_db()
+    assert rel.archived_at is not None
+
+    # Drain the post-archive success flash ("Release v9-workflow archived.")
+    # so it doesn't pollute the next GET's body — the messages framework
+    # consumes the queue on first iteration in the template.
+    client.get(reverse("images:list"))
+
+    # Default list view no longer shows v9-workflow
+    resp = client.get(reverse("images:list"))
+    assert b"v9-workflow" not in resp.content
+
+    # Step 2: re-import the same tag from "GitHub"
+    from apps.images.models import ImageImportJob
+    from apps.provisioning.management.commands.run_background_jobs import (
+        _run_import_job,
+    )
+
+    job = ImageImportJob.objects.create(
+        tag="v9-workflow",
+        machine="qemux86-64",
+        mark_as_latest=False,
+        requested_by=admin_user,
+    )
+    _run_import_job(job)
+
+    # The very same row (same pk) is back to active
+    rel.refresh_from_db()
+    assert rel.pk == rel_pk
+    assert rel.archived_at is None
+
+    # And it surfaces in the default list view
+    resp = client.get(reverse("images:list"))
+    assert b"v9-workflow" in resp.content
