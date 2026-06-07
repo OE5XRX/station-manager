@@ -164,9 +164,7 @@ def test_archive_view_404_on_unknown_pk(client, admin_user):
 
 
 @pytest.mark.django_db
-def test_archive_view_works_on_release_with_referenced_deployment(
-    client, admin_user, station
-):
+def test_archive_view_works_on_release_with_referenced_deployment(client, admin_user, station):
     """The whole point of archive vs hard-delete: archive succeeds
     even when Deployment/ProvisioningJob FKs would PROTECT a delete."""
     from apps.deployments.models import Deployment
@@ -247,15 +245,11 @@ def import_stubs():
             "apps.provisioning.management.commands.run_background_jobs.github.fetch_release_asset",
             return_value=fake_asset,
         ),
-        patch(
-            "apps.provisioning.management.commands.run_background_jobs.cosign.verify_blob"
-        ),
+        patch("apps.provisioning.management.commands.run_background_jobs.cosign.verify_blob"),
         patch(
             "apps.provisioning.management.commands.run_background_jobs.image_storage.upload_bytes"
         ),
-        patch(
-            "apps.provisioning.management.commands.run_background_jobs._decompress_to"
-        ),
+        patch("apps.provisioning.management.commands.run_background_jobs._decompress_to"),
         patch(
             "apps.provisioning.management.commands.run_background_jobs.extraction.extract_rootfs",
             side_effect=_fake_extract,
