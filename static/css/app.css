@@ -1855,6 +1855,8 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
 }
 .sequence-add-form select { min-width: 220px; }
 
-/* Archived ImageRelease rows in the Image Releases table */
-.t-table tr.is-archived td { opacity: 0.55; }
-.t-table tr.is-archived td .frame-id { color: var(--ink-3); }
+/* Archived ImageRelease rows in the Image Releases table.
+   Mute the data cells only — the .actions cell carries the Restore
+   button and must stay at full contrast so it doesn't look disabled. */
+.t-table tr.is-archived td:not(.actions) { opacity: 0.55; }
+.t-table tr.is-archived td:not(.actions) .frame-id { color: var(--ink-3); }
