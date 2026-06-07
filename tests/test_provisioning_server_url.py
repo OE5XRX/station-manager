@@ -64,9 +64,7 @@ def provisioning_stubs():
 
 @pytest.mark.django_db
 @override_settings(SERVER_PUBLIC_URL="")
-def test_provisioning_fails_loud_without_server_public_url(
-    station, provisioning_stubs
-):
+def test_provisioning_fails_loud_without_server_public_url(station, provisioning_stubs):
     """An empty SERVER_PUBLIC_URL must mark the ProvisioningJob FAILED
     with a clear error_message rather than producing a config.yml with
     an empty server_url field that the agent would silently fail against."""
@@ -85,9 +83,7 @@ def test_provisioning_fails_loud_without_server_public_url(
 
 @pytest.mark.django_db
 @override_settings(SERVER_PUBLIC_URL="https://remote.oe5xrx.org")
-def test_provisioning_bakes_server_public_url_from_settings(
-    station, provisioning_stubs
-):
+def test_provisioning_bakes_server_public_url_from_settings(station, provisioning_stubs):
     """Happy path: the configured URL ends up in the rendered config.yml.
 
     Note: this test passes both before and after the fix because
