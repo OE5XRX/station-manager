@@ -153,9 +153,11 @@ class ImageRelease(models.Model):
 
         now = timezone.now()
         with transaction.atomic():
-            rows = type(self).all_objects.filter(
-                pk=self.pk, archived_at__isnull=True
-            ).update(archived_at=now, is_latest=False)
+            rows = (
+                type(self)
+                .all_objects.filter(pk=self.pk, archived_at__isnull=True)
+                .update(archived_at=now, is_latest=False)
+            )
             if rows == 0:
                 # Another transaction archived this row first; refresh
                 # in-memory state and return — idempotent no-op.
