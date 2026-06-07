@@ -117,9 +117,16 @@ class ImageRelease(models.Model):
         # Single `is_latest=True` per machine is an application-level invariant;
         # flipping older rows lives next to the write so both paths (admin UI,
         # worker, data migrations) get it for free.
+        #
+        # all_objects rather than objects: if an archived row ever ended
+        # up with is_latest=True (handcrafted URL, bad data fixup, old
+        # migration), the default manager would hide it and a later
+        # mark-latest on another release would hit the
+        # uniq_latest_per_machine DB constraint. Defence in depth for the
+        # "single latest per machine" invariant.
         if self.is_latest:
             with transaction.atomic():
-                ImageRelease.objects.filter(machine=self.machine, is_latest=True).exclude(
+                ImageRelease.all_objects.filter(machine=self.machine, is_latest=True).exclude(
                     pk=self.pk
                 ).update(is_latest=False)
                 super().save(*args, **kwargs)

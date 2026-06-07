@@ -95,6 +95,21 @@ class ImageImportView(AdminRequiredMixin, FormView):
 class ImageMarkLatestView(AdminRequiredMixin, View):
     def post(self, request, pk):
         release = get_object_or_404(ImageRelease.all_objects, pk=pk)
+        if release.archived_at is not None:
+            # "Latest archived" cannot exist — see ImageRelease.archive().
+            # Without this guard a hand-crafted URL (or a UI bug exposing
+            # the button on an archived row) could flip is_latest=True on
+            # an archived row and leave the machine with no UI-visible
+            # latest release (the default manager hides archived rows).
+            messages.error(
+                request,
+                _(
+                    "Cannot mark archived release %(tag)s (%(machine)s) "
+                    "as latest. Restore it first."
+                )
+                % {"tag": release.tag, "machine": release.machine},
+            )
+            return redirect("images:list")
         release.is_latest = True
         release.save()
         messages.success(request, _("Marked as latest."))

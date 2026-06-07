@@ -114,18 +114,25 @@ def test_delete_view_can_act_on_archived_release(client, admin_user, monkeypatch
 
 
 @pytest.mark.django_db
-def test_mark_latest_view_can_act_on_archived_release(client, admin_user):
-    """Mark-latest via URL must remain reachable for an archived release.
+def test_mark_latest_view_refuses_archived_release(client, admin_user):
+    """Mark-latest must refuse an archived release with a flash error
+    instead of flipping is_latest=True — "latest archived" cannot exist
+    per the archive() method's documented invariant. Without this guard
+    a handcrafted URL could leave the machine with no UI-visible latest
+    release (archived rows are hidden by the default manager)."""
+    from django.contrib.messages import get_messages
 
-    Whether mark-latest on an archived release is semantically meaningful
-    is a future product call (today the UI doesn't link it); the URL
-    must not silently 404 because of the manager-default change in B2."""
     rel = _make_release(tag="v1-old", archived=True)
 
     client.force_login(admin_user)
     resp = client.post(reverse("images:mark_latest", kwargs={"pk": rel.pk}))
 
     assert resp.status_code == 302
+    rel.refresh_from_db()
+    assert rel.is_latest is False
+    assert rel.archived_at is not None
+    flashes = [str(m) for m in get_messages(resp.wsgi_request)]
+    assert any("archived" in m.lower() for m in flashes), flashes
 
 
 @pytest.mark.django_db

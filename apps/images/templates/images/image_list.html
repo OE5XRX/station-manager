@@ -151,6 +151,11 @@
           <td data-label="{% trans 'Latest' %}">
             {% if rel.is_latest %}
               <span class="pill pill-online"><span class="dot"></span>{% trans "LATEST" %}</span>
+            {% elif rel.archived_at %}
+              {# Mark-latest is refused for archived rows server-side
+                 (see ImageMarkLatestView). Don't render the button at all
+                 so the UI doesn't suggest an action it would reject. #}
+              <span class="t-muted">—</span>
             {% else %}
               <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline;margin:0;">
                 {% csrf_token %}

@@ -159,7 +159,12 @@ def _run_import_job(job: ImageImportJob) -> None:
         # mismatch until the operator re-runs the import — but leaving
         # the keys in place keeps provisioning / bare-metal flash
         # resolvable instead of 502'ing every download.
-        existing = ImageRelease.objects.filter(tag=job.tag, machine=job.machine).first()
+        # all_objects: an archived (tag, machine) row still references
+        # the stable S3 keys via deployments / provisioning bundles;
+        # the default manager would hide it and the cleanup below would
+        # delete keys that are still in use. See Meta.base_manager_name
+        # rationale in apps/images/models.py.
+        existing = ImageRelease.all_objects.filter(tag=job.tag, machine=job.machine).first()
         in_use: set[str] = set()
         if existing is not None:
             for key in (
