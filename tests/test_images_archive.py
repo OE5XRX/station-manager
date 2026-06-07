@@ -71,6 +71,35 @@ def test_archive_is_idempotent():
 
 
 @pytest.mark.django_db
+def test_archive_is_idempotent_under_concurrent_in_memory_copies():
+    """Two ORM instances of the same row that BOTH observe
+    archived_at=None in memory must not both bump the timestamp.
+
+    Simulates the race the conditional-UPDATE guard exists to
+    handle: two concurrent POSTs both pass the early in-memory
+    check, hit the DB simultaneously; whichever loses the
+    UPDATE-WHERE-NULL race must be a clean no-op."""
+    rel = _make_release(tag="v1-racy")
+
+    # Two cold copies, both have archived_at=None in memory.
+    rel_a = ImageRelease.all_objects.get(pk=rel.pk)
+    rel_b = ImageRelease.all_objects.get(pk=rel.pk)
+    assert rel_a.archived_at is None
+    assert rel_b.archived_at is None
+
+    rel_a.archive()
+    winning_ts = rel_a.archived_at
+
+    # rel_b's in-memory archived_at is still None (stale). archive()
+    # must detect the row is already archived via the DB and become a
+    # no-op — NOT overwrite winning_ts.
+    rel_b.archive()
+
+    rel.refresh_from_db()
+    assert rel.archived_at == winning_ts
+
+
+@pytest.mark.django_db
 def test_restore_clears_archived_at():
     rel = _make_release(tag="v1-old", archived=True)
 

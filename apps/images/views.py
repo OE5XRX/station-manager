@@ -50,6 +50,10 @@ class ImageListView(AdminRequiredMixin, ListView):
         # KPI tile aggregates — always over the ACTIVE set (the default
         # manager) regardless of the show_archived toggle. KPIs should
         # describe the operational state, not the toggle's UI mode.
+        # The "Releases on file" tile needs its own count rather than
+        # reusing `releases|length` because that queryset switches to
+        # all_objects when the toggle is on.
+        ctx["active_total"] = ImageRelease.objects.count()
         ctx["latest_total"] = ImageRelease.objects.filter(is_latest=True).count()
         ctx["pending_jobs"] = ImageImportJob.objects.filter(
             status__in=[

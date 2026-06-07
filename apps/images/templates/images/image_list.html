@@ -28,7 +28,6 @@
   </div>
 </div>
 
-{% with total=releases|length %}
 <div class="grid grid-kpi mb-24">
   <div class="stat">
     <div class="stat-label">
@@ -37,7 +36,10 @@
       </svg>
       {% trans "Releases on file" %}
     </div>
-    <div class="stat-value">{{ total }}</div>
+    {# active_total is provided by the view — releases|length would include
+       archived rows when the Show archived toggle is on, contradicting the
+       'KPIs describe operational state' contract. #}
+    <div class="stat-value">{{ active_total }}</div>
     <div class="stat-meta">
       <span class="t-mono">{% trans "tag × machine pairs" %}</span>
     </div>
@@ -82,7 +84,6 @@
     </div>
   </div>
 </div>
-{% endwith %}
 
 <form method="get" class="filter-bar mb-14" style="justify-content:flex-end;">
   <label class="row-gap-8" style="cursor:pointer;font-size:13px;color:var(--ink-1);">

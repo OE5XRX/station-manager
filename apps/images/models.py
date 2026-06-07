@@ -134,23 +134,35 @@ class ImageRelease(models.Model):
             super().save(*args, **kwargs)
 
     def archive(self):
-        """Soft-delete this release. Idempotent.
+        """Soft-delete this release. Idempotent under concurrency.
 
         Atomically stamps ``archived_at`` and clears ``is_latest`` —
         a "latest archived" row would be semantically nonsensical and
         would also stop the partial unique index from doing useful
         work on the next ``mark_as_latest`` operation.
+
+        Concurrency: the in-memory ``self.archived_at`` may be stale
+        (two concurrent POSTs can both observe ``None`` before either
+        commits). The write is therefore guarded by a conditional
+        UPDATE WHERE archived_at IS NULL — the DB arbitrates, only
+        the first transaction's update touches the row, and we use
+        the rowcount to skip the in-memory mutation on the loser.
         """
         if self.archived_at is not None:
-            return  # idempotent: don't bump the timestamp
+            return  # short-circuit: already known archived in-memory
 
+        now = timezone.now()
         with transaction.atomic():
-            self.archived_at = timezone.now()
-            update_fields = ["archived_at"]
-            if self.is_latest:
-                self.is_latest = False
-                update_fields.append("is_latest")
-            self.save(update_fields=update_fields)
+            rows = type(self).all_objects.filter(
+                pk=self.pk, archived_at__isnull=True
+            ).update(archived_at=now, is_latest=False)
+            if rows == 0:
+                # Another transaction archived this row first; refresh
+                # in-memory state and return — idempotent no-op.
+                self.refresh_from_db(fields=["archived_at", "is_latest"])
+                return
+            self.archived_at = now
+            self.is_latest = False
 
     def restore(self):
         """Undo a previous archive. Idempotent.
