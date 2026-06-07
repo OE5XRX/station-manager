@@ -1854,3 +1854,7 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   border-style: dashed;
 }
 .sequence-add-form select { min-width: 220px; }
+
+/* Archived ImageRelease rows in the Image Releases table */
+.t-table tr.is-archived td { opacity: 0.55; }
+.t-table tr.is-archived td .frame-id { color: var(--ink-3); }
