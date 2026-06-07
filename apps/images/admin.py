@@ -5,8 +5,16 @@ from .models import ImageImportJob, ImageRelease
 
 @admin.register(ImageRelease)
 class ImageReleaseAdmin(admin.ModelAdmin):
-    list_display = ("tag", "machine", "is_latest", "size_bytes", "imported_at", "imported_by")
-    list_filter = ("machine", "is_latest")
+    list_display = (
+        "tag",
+        "machine",
+        "is_latest",
+        "archived_at",
+        "size_bytes",
+        "imported_at",
+        "imported_by",
+    )
+    list_filter = ("machine", "is_latest", "archived_at")
     search_fields = ("tag",)
     readonly_fields = (
         "imported_at",
@@ -19,6 +27,12 @@ class ImageReleaseAdmin(admin.ModelAdmin):
         "rootfs_s3_key",
         "rootfs_size_bytes",
     )
+
+    def get_queryset(self, request):
+        # Django admin uses the default manager by default, which now
+        # hides archived rows. Operators need to be able to see + un-
+        # archive directly from admin, so pin this view to all_objects.
+        return self.model.all_objects.get_queryset()
 
 
 @admin.register(ImageImportJob)

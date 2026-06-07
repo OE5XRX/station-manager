@@ -28,7 +28,6 @@
   </div>
 </div>
 
-{% with total=releases|length %}
 <div class="grid grid-kpi mb-24">
   <div class="stat">
     <div class="stat-label">
@@ -37,7 +36,10 @@
       </svg>
       {% trans "Releases on file" %}
     </div>
-    <div class="stat-value">{{ total }}</div>
+    {# active_total is provided by the view — releases|length would include
+       archived rows when the Show archived toggle is on, contradicting the
+       'KPIs describe operational state' contract. #}
+    <div class="stat-value">{{ active_total }}</div>
     <div class="stat-meta">
       <span class="t-mono">{% trans "tag × machine pairs" %}</span>
     </div>
@@ -82,7 +84,17 @@
     </div>
   </div>
 </div>
-{% endwith %}
+
+<form method="get" class="filter-bar mb-14" style="justify-content:flex-end;">
+  <label class="row-gap-8" style="cursor:pointer;font-size:13px;color:var(--ink-1);">
+    <input type="checkbox"
+           name="show_archived"
+           value="1"
+           data-submit-on-change
+           {% if show_archived %}checked{% endif %}>
+    <span>{% trans "Show archived" %}</span>
+  </label>
+</form>
 
 <section class="panel mb-24">
   <div class="panel-head">
@@ -114,7 +126,7 @@
       </thead>
       <tbody>
         {% for rel in releases %}
-        <tr>
+        <tr {% if rel.archived_at %}class="is-archived"{% endif %}>
           <td class="t-mono" style="color:var(--ink-3);" data-label="#">
             <span class="frame-id">{{ rel.pk|stringformat:"04d" }}</span>
           </td>
@@ -140,6 +152,11 @@
           <td data-label="{% trans 'Latest' %}">
             {% if rel.is_latest %}
               <span class="pill pill-online"><span class="dot"></span>{% trans "LATEST" %}</span>
+            {% elif rel.archived_at %}
+              {# Mark-latest is refused for archived rows server-side
+                 (see ImageMarkLatestView). Don't render the button at all
+                 so the UI doesn't suggest an action it would reject. #}
+              <span class="t-muted">—</span>
             {% else %}
               <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline;margin:0;">
                 {% csrf_token %}
@@ -162,20 +179,41 @@
           <td class="t-mono" data-label="{% trans 'SHA-256' %}" title="{{ rel.sha256 }}">
             <span style="color:var(--ink-2);">{{ rel.sha256|slice:":10" }}…</span>
           </td>
-          <td class="t-mono-sm t-muted" data-label="{% trans 'Imported' %}">{{ rel.imported_at|date:"Y-m-d H:i" }}</td>
+          <td class="t-mono-sm t-muted" data-label="{% trans 'Imported' %}">
+            {{ rel.imported_at|date:"Y-m-d H:i" }}
+            {% if rel.archived_at %}
+              <div style="color:var(--ink-3);font-size:10.5px;letter-spacing:0.08em;">
+                {% trans "archived" %} {{ rel.archived_at|date:"Y-m-d" }}
+              </div>
+            {% endif %}
+          </td>
           <td class="actions">
-            <form method="post"
-                  action="{% url 'images:delete' rel.pk %}"
-                  style="display:inline;margin:0;"
-                  data-confirm="{% trans 'Delete this release from S3 and DB? This cannot be undone.' %}">
-              {% csrf_token %}
-              <button type="submit" class="btn btn-sm btn-danger" title="{% trans 'Delete release' %}">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                </svg>
-                <span class="visually-hidden">{% trans "Delete" %}</span>
-              </button>
-            </form>
+            {% if rel.archived_at %}
+              <form method="post"
+                    action="{% url 'images:restore' rel.pk %}"
+                    style="display:inline;margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-ghost" title="{% trans 'Restore release' %}">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>
+                  </svg>
+                  <span class="visually-hidden">{% trans "Restore" %}</span>
+                </button>
+              </form>
+            {% else %}
+              <form method="post"
+                    action="{% url 'images:archive' rel.pk %}"
+                    style="display:inline;margin:0;"
+                    data-confirm="{% trans 'Archive this release? It stays available to any deployment that references it, but is hidden from the list.' %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-ghost" title="{% trans 'Archive release' %}">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>
+                  </svg>
+                  <span class="visually-hidden">{% trans "Archive" %}</span>
+                </button>
+              </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

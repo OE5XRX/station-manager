@@ -1,6 +1,19 @@
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
+
+class ImageReleaseManager(models.Manager):
+    """Default manager: hides archived (soft-deleted) rows.
+
+    Use ``ImageRelease.all_objects`` to get the full set (incl.
+    archived) — e.g. the "Show archived" UI toggle, auto-restore
+    lookups during re-import, Django admin.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(archived_at__isnull=True)
 
 
 class ImageRelease(models.Model):
@@ -36,10 +49,40 @@ class ImageRelease(models.Model):
         blank=True,
         related_name="imported_images",
     )
+    # Soft-delete timestamp. Use the archive() / restore() methods
+    # rather than setting this field directly — archive() also clears
+    # is_latest to preserve the "latest archived row cannot exist"
+    # invariant that the rest of the codebase relies on.
+    archived_at = models.DateTimeField(
+        _("archived at"),
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_(
+            "Soft-delete timestamp. Archived releases are hidden from "
+            "the default UI list but remain available for any "
+            "Deployment or ProvisioningJob that still references them."
+        ),
+    )
+
+    objects = ImageReleaseManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = _("image release")
         verbose_name_plural = _("image releases")
+        # FK dereference (Deployment.image_release, ProvisioningJob.
+        # image_release, ImageImportJob.image_release) goes through the
+        # *base* manager, which defaults to the FIRST declared manager —
+        # that's our filtering ImageReleaseManager. Without this override
+        # archiving a release would silently break every related-object
+        # access pointing at it: deployment.image_release becomes None
+        # mid-flight, the agent's deployment-check 500s, the audit trail
+        # disappears from the UI. Pin the base manager to all_objects so
+        # related lookups always see the row regardless of archived_at;
+        # default_manager_name (= objects) keeps the UI list and KPI
+        # counts honest.
+        base_manager_name = "all_objects"
         constraints = [
             models.UniqueConstraint(fields=["tag", "machine"], name="uniq_tag_per_machine"),
             models.UniqueConstraint(
@@ -74,14 +117,69 @@ class ImageRelease(models.Model):
         # Single `is_latest=True` per machine is an application-level invariant;
         # flipping older rows lives next to the write so both paths (admin UI,
         # worker, data migrations) get it for free.
+        #
+        # all_objects rather than objects: if an archived row ever ended
+        # up with is_latest=True (handcrafted URL, bad data fixup, old
+        # migration), the default manager would hide it and a later
+        # mark-latest on another release would hit the
+        # uniq_latest_per_machine DB constraint. Defence in depth for the
+        # "single latest per machine" invariant.
         if self.is_latest:
             with transaction.atomic():
-                ImageRelease.objects.filter(machine=self.machine, is_latest=True).exclude(
+                ImageRelease.all_objects.filter(machine=self.machine, is_latest=True).exclude(
                     pk=self.pk
                 ).update(is_latest=False)
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
+
+    def archive(self):
+        """Soft-delete this release. Idempotent under concurrency.
+
+        Atomically stamps ``archived_at`` and clears ``is_latest`` —
+        a "latest archived" row would be semantically nonsensical and
+        would also stop the partial unique index from doing useful
+        work on the next ``mark_as_latest`` operation.
+
+        Concurrency: the in-memory ``self.archived_at`` may be stale
+        (two concurrent POSTs can both observe ``None`` before either
+        commits). The write is therefore guarded by a conditional
+        UPDATE WHERE archived_at IS NULL — the DB arbitrates, only
+        the first transaction's update touches the row, and we use
+        the rowcount to skip the in-memory mutation on the loser.
+        """
+        if self.archived_at is not None:
+            return  # short-circuit: already known archived in-memory
+
+        now = timezone.now()
+        with transaction.atomic():
+            rows = (
+                type(self)
+                .all_objects.filter(pk=self.pk, archived_at__isnull=True)
+                .update(archived_at=now, is_latest=False)
+            )
+            if rows == 0:
+                # Another transaction archived this row first; refresh
+                # in-memory state and return — idempotent no-op.
+                self.refresh_from_db(fields=["archived_at", "is_latest"])
+                return
+            self.archived_at = now
+            self.is_latest = False
+
+    def restore(self):
+        """Undo a previous archive. Idempotent.
+
+        Does NOT touch ``is_latest`` — re-promotion to "latest" after
+        a restore is an explicit operator action via the existing
+        Mark-Latest button. Restoring a previously-archived release
+        must not silently steal the latest bit from whatever is
+        currently active.
+        """
+        if self.archived_at is None:
+            return  # idempotent
+
+        self.archived_at = None
+        self.save(update_fields=["archived_at"])
 
 
 class ImageImportJob(models.Model):

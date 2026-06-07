@@ -9,4 +9,6 @@ urlpatterns = [
     path("import/", views.ImageImportView.as_view(), name="import"),
     path("<int:pk>/mark-latest/", views.ImageMarkLatestView.as_view(), name="mark_latest"),
     path("<int:pk>/delete/", views.ImageDeleteView.as_view(), name="delete"),
+    path("<int:pk>/archive/", views.ImageArchiveView.as_view(), name="archive"),
+    path("<int:pk>/restore/", views.ImageRestoreView.as_view(), name="restore"),
 ]
