@@ -171,7 +171,7 @@ def test_archive_view_404_on_unknown_pk(client, admin_user):
 
 
 @pytest.mark.django_db
-def test_archive_view_works_on_release_with_referenced_deployment(client, admin_user, station):
+def test_archive_view_works_on_release_with_referenced_deployment(client, admin_user):
     """The whole point of archive vs hard-delete: archive succeeds
     even when Deployment/ProvisioningJob FKs would PROTECT a delete."""
     from apps.deployments.models import Deployment
