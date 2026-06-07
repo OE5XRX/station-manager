@@ -28,6 +28,12 @@ jobs:
       - name: Check linting
         run: ruff check .
 
+      - name: Check Django template comments
+        # Django's {# … #} is single-line only. Multi-line versions
+        # render as raw text on the page — bitten the project twice
+        # in prod (PR #61, PR #65). Stdlib-only script, no deps.
+        run: python scripts/check_template_comments.py
+
   test:
     name: Test
     runs-on: ubuntu-latest
