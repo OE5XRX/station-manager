@@ -36,9 +36,11 @@
       </svg>
       {% trans "Releases on file" %}
     </div>
-    {# active_total is provided by the view — releases|length would include
-       archived rows when the Show archived toggle is on, contradicting the
-       'KPIs describe operational state' contract. #}
+    {% comment %}
+    active_total is provided by the view — releases|length would include
+    archived rows when the Show archived toggle is on, contradicting the
+    'KPIs describe operational state' contract.
+    {% endcomment %}
     <div class="stat-value">{{ active_total }}</div>
     <div class="stat-meta">
       <span class="t-mono">{% trans "tag × machine pairs" %}</span>
@@ -153,9 +155,11 @@
             {% if rel.is_latest %}
               <span class="pill pill-online"><span class="dot"></span>{% trans "LATEST" %}</span>
             {% elif rel.archived_at %}
-              {# Mark-latest is refused for archived rows server-side
-                 (see ImageMarkLatestView). Don't render the button at all
-                 so the UI doesn't suggest an action it would reject. #}
+              {% comment %}
+              Mark-latest is refused for archived rows server-side
+              (see ImageMarkLatestView). Don't render the button at all
+              so the UI doesn't suggest an action it would reject.
+              {% endcomment %}
               <span class="t-muted">—</span>
             {% else %}
               <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline;margin:0;">
