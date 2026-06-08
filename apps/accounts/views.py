@@ -80,9 +80,10 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         context["form_title"] = _("Edit User")
         # Local import: avoids loading apps.sso at module-load time
         # (defensive against import-cycle surprises).
-        from apps.sso.views import _build_grants_for_user
+        from apps.sso.views import _active_sessions_for, _build_grants_for_user
 
         context["app_grants_list"] = _build_grants_for_user(self.object)
+        context["user_sessions"] = _active_sessions_for(self.object)
         # Membership-level picker uses the model's TextChoices.
         context["membership_level_choices"] = User.MembershipLevel.choices
 
