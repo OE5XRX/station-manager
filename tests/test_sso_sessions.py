@@ -8,6 +8,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from django.core.management import call_command
 from django.utils import timezone
 from oauth2_provider.models import AccessToken, Application, RefreshToken
 
@@ -264,3 +265,28 @@ def test_save_bearer_token_rotation_falls_back_to_source_refresh_token(db, user,
     parent_session.refresh_from_db()
     assert parent_session.revoked_at is not None, "Parent must be marked revoked"
     assert parent_session.revoke_reason == TokenSession.RevokeReason.ROTATED
+
+
+def test_prune_keeps_recent_revoked_sessions(db, user, app):
+    s = TokenSession.objects.create(user=user, application=app)
+    s.revoked_at = timezone.now() - timedelta(days=5)
+    s.save(update_fields=["revoked_at"])
+    call_command("prune_token_sessions")
+    assert TokenSession.objects.filter(pk=s.pk).exists()
+
+
+def test_prune_deletes_old_revoked_sessions(db, user, app):
+    s = TokenSession.objects.create(user=user, application=app)
+    s.revoked_at = timezone.now() - timedelta(days=40)
+    s.save(update_fields=["revoked_at"])
+    call_command("prune_token_sessions")
+    assert not TokenSession.objects.filter(pk=s.pk).exists()
+
+
+def test_prune_is_idempotent(db, user, app):
+    s = TokenSession.objects.create(user=user, application=app)
+    s.revoked_at = timezone.now() - timedelta(days=40)
+    s.save(update_fields=["revoked_at"])
+    call_command("prune_token_sessions")
+    call_command("prune_token_sessions")  # second call: no error
+    assert not TokenSession.objects.filter(pk=s.pk).exists()
