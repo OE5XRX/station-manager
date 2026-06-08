@@ -595,6 +595,19 @@ class TagMembershipToggleView(AdminOnlyMixin, View):
             ip_address=_client_ip(request),
         )
 
+        if getattr(request, "htmx", False):
+            # HTMX caller: re-render the tags card with refreshed entries.
+            # This works for both call sites — tag_detail page and user_form
+            # (the partial #tags-card root id matches both contexts).
+            member_ids = set(target.groups.values_list("pk", flat=True))
+            tag_entries = [
+                {"group": g, "is_member": g.pk in member_ids}
+                for g in Group.objects.order_by("name")
+            ]
+            return render(request, "sso/_tags_card.html", {
+                "target_user": target,
+                "tag_entries": tag_entries,
+            })
         return HttpResponseRedirect(
             reverse("sso:tag_detail", kwargs={"pk": group.pk}),
         )

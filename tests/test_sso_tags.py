@@ -71,3 +71,13 @@ def test_tag_membership_toggle_adds_then_removes(db, client, admin, target_user)
         target_user=target_user,
         message__icontains="removed: target -> kontakt-team",
     ).exists()
+
+
+def test_tag_toggle_htmx_returns_partial(db, client, admin, target_user):
+    g = Group.objects.create(name="kontakt-team")
+    client.force_login(admin)
+    url = reverse("sso:tag_toggle", kwargs={"user_id": target_user.pk, "group_id": g.pk})
+    resp = client.post(url, HTTP_HX_REQUEST="true")
+    assert resp.status_code == 200
+    assert b"tags-card" in resp.content  # the root id of the partial
+    assert b"kontakt-team" in resp.content
