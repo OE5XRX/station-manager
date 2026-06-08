@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 FIXTURE = Path(__file__).parent / "fixtures" / "dbip-city-lite-test.mmdb"
 
 
