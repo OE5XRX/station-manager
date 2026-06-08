@@ -43,3 +43,15 @@ def test_ssoauditlog_log_helper_accepts_minimal_kwargs():
     assert entry.actor is None
     assert entry.target_user is None
     assert entry.application is None
+
+
+def test_audit_event_type_includes_session_revoked():
+    assert SsoAuditLog.EventType.SESSION_REVOKED == "session_revoked"
+
+
+def test_audit_event_type_includes_app_policy_changed():
+    assert SsoAuditLog.EventType.APP_POLICY_CHANGED == "app_policy_changed"
+
+
+def test_audit_event_type_includes_group_membership_changed():
+    assert SsoAuditLog.EventType.GROUP_MEMBERSHIP_CHANGED == "group_membership_changed"

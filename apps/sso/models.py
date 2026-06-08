@@ -82,6 +82,9 @@ class SsoAuditLog(models.Model):
         LOGIN_DENIED_NO_GRANT = "login_denied_no_grant", _("Login Denied — No Grant")
         LOGIN_DENIED_INACTIVE = "login_denied_inactive", _("Login Denied — Inactive User")
         TOKEN_REVOKED = "token_revoked", _("Token Revoked")
+        SESSION_REVOKED = "session_revoked", _("Session Revoked (admin)")
+        APP_POLICY_CHANGED = "app_policy_changed", _("App Policy Changed")
+        GROUP_MEMBERSHIP_CHANGED = "group_membership_changed", _("Group Membership Changed")
 
     event_type = models.CharField(
         _("event type"),
