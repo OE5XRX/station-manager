@@ -206,3 +206,92 @@ def test_toggle_without_hx_trigger_returns_partial_as_before(client, admin_user,
     assert "HX-Redirect" not in resp.headers
     # And it renders the app-grants-card div.
     assert b"sso-grants-card" in resp.content
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1: SessionRevokeView
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def admin(db):
+    u = User.objects.create_user(username="admin_revoke", password="x")
+    u.membership_level = User.MembershipLevel.ADMIN
+    u.save(update_fields=["membership_level"])
+    User._invalidate_role_cache(u)
+    return u
+
+
+@pytest.fixture
+def session_row(db):
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from oauth2_provider.models import AccessToken, RefreshToken
+
+    from apps.sso.models import TokenSession
+
+    user = User.objects.create_user(username="target", password="x")
+    app = Application.objects.create(
+        name="InvenTreeSess",
+        client_type=Application.CLIENT_CONFIDENTIAL,
+        authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        redirect_uris="https://x.example.org/cb/",
+    )
+    at = AccessToken.objects.create(
+        user=user,
+        application=app,
+        token="at1",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
+    )
+    rt = RefreshToken.objects.create(
+        user=user,
+        application=app,
+        token="rt1",
+        access_token=at,
+    )
+    return TokenSession.objects.create(user=user, application=app, refresh_token=rt)
+
+
+def test_session_revoke_view_requires_admin(db, client, session_row):
+    user = User.objects.create_user(username="nonadmin", password="x")
+    client.force_login(user)
+    resp = client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    assert resp.status_code == 403
+
+
+def test_session_revoke_view_revokes(db, client, admin, session_row):
+    from apps.sso.models import TokenSession
+
+    client.force_login(admin)
+    resp = client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    assert resp.status_code in (200, 302)
+
+    session_row.refresh_from_db()
+    assert session_row.revoked_at is not None
+    assert session_row.revoked_by == admin
+    assert session_row.revoke_reason == TokenSession.RevokeReason.ADMIN_REVOKE
+
+    rt = session_row.refresh_token
+    rt.refresh_from_db()
+    assert rt.revoked is not None
+
+    log = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.SESSION_REVOKED,
+        actor=admin,
+        target_user=session_row.user,
+    ).first()
+    assert log is not None
+
+
+def test_session_revoke_view_is_idempotent(db, client, admin, session_row):
+    client.force_login(admin)
+    client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    # Second call: no second audit row, no error.
+    client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    log_count = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.SESSION_REVOKED,
+        target_user=session_row.user,
+    ).count()
+    assert log_count == 1

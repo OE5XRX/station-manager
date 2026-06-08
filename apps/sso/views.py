@@ -345,3 +345,88 @@ def _is_registered_redirect(application, candidate_uri: str) -> bool:
     if application is None or not candidate_uri:
         return False
     return application.redirect_uri_allowed(candidate_uri)
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1: SessionRevokeView
+# ---------------------------------------------------------------------------
+
+
+class SessionRevokeView(AdminOnlyMixin, View):
+    """POST-only: revoke a single TokenSession + its RefreshToken.
+
+    Idempotent: a second POST on an already-revoked session is a no-op
+    (no extra audit row, no extra DOT-token mutation). Spec §4.4.
+    """
+
+    def post(self, request, pk):
+        from datetime import timedelta
+
+        from oauth2_provider.models import AccessToken
+
+        from .models import TokenSession
+
+        session = get_object_or_404(TokenSession, pk=pk)
+        if session.revoked_at is None:
+            with transaction.atomic():
+                rt = session.refresh_token
+                if rt is not None and rt.revoked is None:
+                    rt.revoked = timezone.now()
+                    rt.save(update_fields=["revoked"])
+                    # Expire any AccessTokens issued via this refresh
+                    # chain so the client can't keep using a still-
+                    # valid AT after the RT is gone.
+                    AccessToken.objects.filter(
+                        source_refresh_token=rt,
+                    ).update(expires=timezone.now() - timedelta(seconds=1))
+
+                session.revoked_at = timezone.now()
+                session.revoked_by = request.user
+                session.revoke_reason = TokenSession.RevokeReason.ADMIN_REVOKE
+                session.save(
+                    update_fields=["revoked_at", "revoked_by", "revoke_reason"],
+                )
+
+            SsoAuditLog.log(
+                event_type=SsoAuditLog.EventType.SESSION_REVOKED,
+                actor=request.user,
+                target_user=session.user,
+                application=session.application,
+                message=(
+                    f"Session {session.pk} revoked. "
+                    f"Issued {session.issued_at.isoformat()} "
+                    f"from {session.ip_address} ({session.city or 'unknown'})"
+                ),
+                ip_address=_client_ip(request),
+            )
+
+        # HTMX vs. standard browser response. The partial template
+        # ``sso/_sessions_card.html`` lands in Task 6.1; until then the
+        # HTMX branch will TemplateDoesNotExist — fine, no caller yet.
+        if getattr(request, "htmx", False):
+            return render(
+                request,
+                "sso/_sessions_card.html",
+                {
+                    "target_user": session.user,
+                    "sessions": _active_sessions_for(session.user),
+                },
+            )
+        return HttpResponseRedirect(
+            request.META.get("HTTP_REFERER", reverse("sso:dashboard")),
+        )
+
+
+def _active_sessions_for(user):
+    """Active TokenSessions for a user, newest first.
+
+    Used by the user-form template (Task 6.1) and by the HTMX swap
+    response from ``SessionRevokeView``.
+    """
+    from .models import TokenSession
+
+    return (
+        TokenSession.objects.filter(user=user, revoked_at__isnull=True)
+        .select_related("application")
+        .order_by("-last_seen_at")
+    )

@@ -16,4 +16,9 @@ urlpatterns = [
         views.GrantToggleView.as_view(),
         name="grant_toggle",
     ),
+    path(
+        "sessions/<int:pk>/revoke/",
+        views.SessionRevokeView.as_view(),
+        name="session_revoke",
+    ),
 ]
