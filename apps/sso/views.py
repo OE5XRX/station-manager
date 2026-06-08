@@ -229,6 +229,12 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
         return Application.objects.all()
 
     def get_context_data(self, **kwargs):
+        from django.contrib.auth.models import Group
+
+        from apps.stations.models import RegionAssignment, StationAssignment
+
+        from .models import ApplicationPolicy, TokenSession
+
         ctx = super().get_context_data(**kwargs)
         active_user_ids = AppGrant.objects.filter(
             application=self.object,
@@ -238,6 +244,40 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
         ctx["users_without_grant"] = User.objects.exclude(pk__in=active_user_ids).order_by(
             "username"
         )
+
+        # Task 6.4: Policy selector context
+        ctx["policy"] = getattr(self.object, "sso_policy", None)
+        ctx["policy_choices"] = ApplicationPolicy.AccessPolicy.choices
+        ctx["current_policy_value"] = (
+            ctx["policy"].access_policy if ctx["policy"] else "grant_required"
+        )
+
+        # Task 6.4: Preview list of all groups currently propagated for any
+        # user in the system. Used for the "Group propagation" section.
+        # Station has no slug field — use station.pk.
+        membership_levels = ["applicant", "member", "staff", "admin"]
+        station_groups = [
+            f"station:{a.station.pk}:{a.role}"
+            for a in StationAssignment.objects.select_related("station").distinct()
+        ]
+        region_groups = [
+            f"region:{a.region.slug}:{a.role}"
+            for a in RegionAssignment.objects.select_related("region").distinct()
+        ]
+        tag_groups = [f"tag:{n}" for n in Group.objects.values_list("name", flat=True)]
+        ctx["propagated_group_strings"] = sorted(
+            set(membership_levels + station_groups + region_groups + tag_groups)
+        )
+
+        # Task 6.4: Recent sessions on this app (last 50)
+        ctx["recent_sessions"] = (
+            TokenSession.objects.filter(
+                application=self.object,
+            )
+            .select_related("user")
+            .order_by("-issued_at")[:50]
+        )
+
         return ctx
 
 
@@ -604,10 +644,14 @@ class TagMembershipToggleView(AdminOnlyMixin, View):
                 {"group": g, "is_member": g.pk in member_ids}
                 for g in Group.objects.order_by("name")
             ]
-            return render(request, "sso/_tags_card.html", {
-                "target_user": target,
-                "tag_entries": tag_entries,
-            })
+            return render(
+                request,
+                "sso/_tags_card.html",
+                {
+                    "target_user": target,
+                    "tag_entries": tag_entries,
+                },
+            )
         return HttpResponseRedirect(
             reverse("sso:tag_detail", kwargs={"pk": group.pk}),
         )
