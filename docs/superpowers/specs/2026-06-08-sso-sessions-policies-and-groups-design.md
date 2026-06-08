@@ -490,11 +490,13 @@ def _build_groups(user):
     """
     groups = []
 
-    # 1. Membership-Level (Applicant wird absichtlich NICHT propagiert --
-    #    Applicant ist ein "noch-nicht-Mitglied", soll keine Rolle in RP
-    #    impliieren).
-    if user.membership_level != user.MembershipLevel.APPLICANT:
-        groups.append(user.membership_level)  # "member"/"staff"/"admin"
+    # 1. Membership-Level (alle vier Werte werden propagiert, inklusive
+    #    Applicant. Use-Case: eine RP wie eine Trainings-Software kann
+    #    Applicant-spezifische Inhalte anzeigen ("Einsteiger-Trainings"),
+    #    Member-Inhalte verbergen, etc. Applicant ist die niedrigste
+    #    Stufe, der String impliziert keine Permission-Eskalation in der
+    #    RP -- die RP entscheidet selbst, was sie damit anstellt.)
+    groups.append(user.membership_level)  # "applicant"/"member"/"staff"/"admin"
 
     # 2. Station-Assignments
     for assignment in user.station_assignments.select_related("station"):
@@ -529,6 +531,17 @@ Für Peter (Vereins-Mitglied, StationAdmin von OE5XRX-1, Region-Manager Wien, in
   ]
 }
 ```
+
+Für eine Anwärterin (Applicant) Anna ohne Assignments oder Tags:
+
+```json
+{
+  "preferred_username": "anna",
+  "groups": ["applicant"]
+}
+```
+
+Eine Trainings-RP-App kann darauf direkt mappen: `"applicant"` → Einsteiger-Modul, `"member"` → Fortgeschrittenen-Modul.
 
 ### 5.4 RP-Mapping-Konvention (Doku-Anhang)
 
@@ -1048,3 +1061,151 @@ Nach Merge dieses Specs sind folgende Capabilities live:
 - [ ] Test-Coverage: Policy-Matrix, Session-Lifecycle, Group-Synthese, GeoIP-Fallback, Cascade, Admin-Revoke-Idempotenz.
 - [ ] Bestehender Login-Flow + Station-Agent Ed25519-Auth bleiben unverändert.
 - [ ] Bestehende AppGrant-Mechanik bleibt unverändert (Default `GRANT_REQUIRED` ist abwärtskompatibel).
+- [ ] Deployment-Änderungen in `servers`-Repo (siehe Section 14) sind merged und laufen.
+
+---
+
+## 14. Deployment-Änderungen im `servers`-Repo (separater PR)
+
+Das Feature ist ohne Infrastruktur-Begleit-Änderungen nicht funktional. Diese Änderungen leben im **`servers`-Repo** (Terraform + Service-Compose-Manifests + GitHub-Actions-Workflows), nicht im station-manager-Repo. Sie werden **als separater PR** in `servers` umgesetzt — die beiden PRs (station-manager + servers) werden parallel entwickelt und können in beliebiger Reihenfolge mergen, aber beide müssen live sein, bevor das Feature End-User-sichtbar wird.
+
+### 14.1 `services/station_manager/docker-compose.yml`
+
+Drei kleine Anpassungen:
+
+**a) `prepare-volumes`-init-Container** legt zusätzlich `geoip_db`-Subdirectory mit appuser-Ownership an (analog zum bestehenden `oidc_keys`):
+
+```yaml
+prepare-volumes:
+  image: alpine:3
+  user: "0:0"
+  restart: "no"
+  command:
+    - /bin/sh
+    - -c
+    - >
+      install -d -m 0700 -o 1000 -g 1000 /target/oidc_keys &&
+      install -d -m 0750 -o 1000 -g 1000 /target/geoip_db &&
+      echo "volumes ready"
+  volumes:
+    - /opt/oe5xrx-data/station_manager:/target
+  networks:
+    - station_manager-internal
+```
+
+**b) `web`-Service** bekommt zusätzliche Bind-Mount + Env-Variable:
+
+```yaml
+web:
+  ...
+  environment:
+    <<: *station-manager-env
+    GEOIP_DB_PATH: /app/geoip_db/dbip-city-lite.mmdb
+  volumes:
+    - /opt/oe5xrx-data/station_manager/oidc_keys:/app/oidc_keys
+    - /opt/oe5xrx-data/station_manager/geoip_db:/app/geoip_db   # NEU
+```
+
+**c) Auch die Worker-Container** (`station-monitor`, `alert-monitor`, `background-worker`) brauchen den Mount NICHT — GeoIP-Lookup passiert nur im `web`-Container während Token-Issue. Cron-Tasks (siehe 14.2) reichen sich `--rm`-Web-Container an.
+
+### 14.2 Cron-Workflows (analog `backup.yml`)
+
+Das Repo nutzt **GitHub-Actions-Cron + self-hosted runner** als Cron-Mechanismus (keine systemd-Timer auf der VM, siehe `backup.yml` als Referenz-Pattern). Zwei neue Workflows:
+
+**`.github/workflows/update-geoip-db.yml`** — einmal pro Monat, lädt die frische db-ip.com City Lite DB:
+
+```yaml
+name: update-geoip-db
+on:
+  schedule:
+    - cron: '0 4 1 * *'   # 04:00 UTC am 1. jeden Monats
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-geoip-db
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: assert ref is main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::update-geoip-db.yml may only run from main"
+            exit 1
+          fi
+
+  update:
+    needs: guard
+    runs-on: [self-hosted, oe5xrx-prod-01]
+    timeout-minutes: 10
+    steps:
+      - name: invoke update_geoip_db inside web container
+        run: |
+          cd /opt/oe5xrx-services/station_manager
+          docker compose exec -T web python manage.py update_geoip_db
+```
+
+**`.github/workflows/prune-token-sessions.yml`** — einmal pro Tag, räumt alte revoked/expired TokenSession-Rows auf:
+
+```yaml
+name: prune-token-sessions
+on:
+  schedule:
+    - cron: '20 3 * * *'   # 03:20 UTC, 20 min nach backup.yml
+  workflow_dispatch:
+
+# (gleiche guard+concurrency-Struktur wie oben)
+
+jobs:
+  prune:
+    needs: guard
+    runs-on: [self-hosted, oe5xrx-prod-01]
+    timeout-minutes: 5
+    steps:
+      - run: |
+          cd /opt/oe5xrx-services/station_manager
+          docker compose exec -T web python manage.py prune_token_sessions
+```
+
+Beide Workflows nutzen `docker compose exec -T web` (analog dem schon existierenden Pattern, falls vorhanden — andernfalls wird `docker compose run --rm web` verwendet, das auch funktioniert, nur teurer im Container-Start).
+
+### 14.3 Initial-Bootstrap der GeoIP-DB
+
+Beim Erst-Deploy nach Merge muss die GeoIP-DB einmal manuell gezogen werden, sonst funktioniert der Lookup beim ersten Login-Versuch nicht (Fallback liefert "Unknown"). Zwei gleichwertige Wege:
+
+1. **Workflow manuell triggern:** `gh workflow run update-geoip-db.yml -R OE5XRX/servers`.
+2. **Direkt auf der VM** (via Workflow-Step im Rahmen des Deploy-PRs): einmaliger Aufruf von `docker compose exec`.
+
+Option 1 ist der Default-Vorschlag — kein zusätzlicher Deploy-Step, klar dokumentiert in den Runbooks.
+
+### 14.4 Doku in `services/station_manager/README.md` (falls existiert)
+
+Kurzer Abschnitt:
+
+- **Bind-Mounts** auf der VM: `/opt/oe5xrx-data/station_manager/{oidc_keys,geoip_db}` — beide 0700-700 für appuser=1000.
+- **GeoIP-DB-Refresh** läuft als GitHub-Action-Cron `update-geoip-db.yml`. Manuelle Refreshes via `gh workflow run`.
+- **TokenSession-Cleanup** läuft als GitHub-Action-Cron `prune-token-sessions.yml`.
+
+### 14.5 Reihenfolge / Cross-Repo-Abhängigkeit
+
+Welcher PR zuerst mergen kann:
+
+- **`servers`-PR zuerst:** Compose-Update legt das geoip_db-Verzeichnis an, neue Env-Variable wird gesetzt, station-manager-Container restartet — der noch nicht vorhandene `apps/sso/geoip.py`-Code wird einfach nicht aufgerufen (station-manager-Code aus PR vorher kennt GEOIP_DB_PATH nicht). **Risiko:** keiner, der Mount ist harmlos.
+- **`station-manager`-PR zuerst:** Code referenziert `GEOIP_DB_PATH`, das im Container-Env noch nicht gesetzt ist. Default-Fallback im Code (`os.environ.get(..., "/app/geoip_db/...")`) verweist auf einen nicht existierenden Pfad → Reader-Init schlägt fehl → Lookups returnen `(None, None)`. **Risiko:** Sessions kriegen leere Standort-Felder, bis der servers-PR landet. Nicht kritisch.
+
+**Empfohlene Reihenfolge:** servers-PR zuerst (oder zumindest gleichzeitig). Vorteil: ab dem station-manager-Merge ist GeoIP-Tracking sofort aktiv.
+
+### 14.6 Checkliste für den `servers`-PR
+
+- [ ] `services/station_manager/docker-compose.yml`: `prepare-volumes` legt `geoip_db` Subdir an + `web`-Service bekommt Bind-Mount + `GEOIP_DB_PATH` Env.
+- [ ] `.github/workflows/update-geoip-db.yml`: monatlicher Cron, ref-guard auf `main`, läuft auf self-hosted runner.
+- [ ] `.github/workflows/prune-token-sessions.yml`: täglicher Cron, gleiche Struktur.
+- [ ] Optional: README-Erweiterung in `services/station_manager/`.
+- [ ] Erstbefüllung-Trigger nach Merge: `gh workflow run update-geoip-db.yml`.
