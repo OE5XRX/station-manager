@@ -1,0 +1,55 @@
+{% load i18n %}
+<section class="panel" id="tags-card" style="max-width:960px;margin-top:16px;">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--cyan,var(--accent));box-shadow:0 0 8px var(--cyan-soft,var(--accent-soft,var(--accent)));"></span>
+      {% trans "Tags" %}
+    </div>
+    <span class="t-label">{{ target_user.username }}</span>
+  </div>
+
+  {% if tag_entries %}
+  <div class="panel-body">
+    <div class="row-gap-8" style="display:flex;flex-wrap:wrap;gap:0.5em;">
+      {% for entry in tag_entries %}
+        <form method="post"
+              action="{% url 'sso:tag_toggle' user_id=target_user.pk group_id=entry.group.pk %}"
+              hx-post="{% url 'sso:tag_toggle' user_id=target_user.pk group_id=entry.group.pk %}"
+              hx-target="#tags-card"
+              hx-swap="outerHTML"
+              style="display:inline-block;">
+          {% csrf_token %}
+          <button type="submit"
+                  class="btn btn-sm {% if entry.is_member %}btn-primary{% else %}btn-ghost{% endif %}"
+                  aria-pressed="{% if entry.is_member %}true{% else %}false{% endif %}">
+            {% if entry.is_member %}✓{% else %}+{% endif %} {{ entry.group.name }}
+          </button>
+        </form>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div class="panel-body">
+    <div class="empty" style="padding: 24px 12px;">
+      <div class="empty-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/>
+        </svg>
+      </div>
+      <div class="empty-title">{% trans "No tags defined yet" %}</div>
+      <div class="t-mono-sm">
+        <a href="{% url 'sso:tag_list' %}">{% trans "Manage tags" %} →</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel-foot row-split">
+    <span class="t-mono" style="font-size:11px;letter-spacing:0.08em;color:var(--ink-3);">
+      {% trans "SSO · group membership" %}
+    </span>
+    <a class="btn btn-sm btn-ghost" href="{% url 'sso:tag_list' %}">
+      {% trans "Manage tags" %} →
+    </a>
+  </div>
+</section>
