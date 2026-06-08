@@ -5,13 +5,15 @@ later tasks.
 """
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
 from oauth2_provider.models import AccessToken, Application, RefreshToken
 
 from apps.accounts.models import User
-from apps.sso.models import TokenSession
+from apps.sso.models import SsoAuditLog, TokenSession
+from apps.sso.permissions import SsoOAuth2Validator
 
 
 @pytest.fixture
@@ -112,3 +114,109 @@ def test_token_session_is_active_false_when_lifetime_exceeded(db, user, app):
     )
     s.refresh_from_db()
     assert s.is_active is False
+
+
+def _make_dot_tokens(user, app):
+    """Create AccessToken + RefreshToken via DOT's models as if save_bearer_token
+    had just run super(). The validator hook attaches metadata afterwards."""
+    at = AccessToken.objects.create(
+        user=user, application=app,
+        token="atok-123",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
+    )
+    rt = RefreshToken.objects.create(
+        user=user, application=app, token="rtok-456",
+        access_token=at,
+    )
+    return at, rt
+
+
+def test_save_bearer_token_creates_token_session(db, user, app):
+    _, rt = _make_dot_tokens(user, app)
+    request = SimpleNamespace(
+        headers={"X-Forwarded-For": "89.207.4.5", "User-Agent": "TestUA/1.0"},
+        refresh_token_instance=None,
+    )
+
+    validator = SsoOAuth2Validator()
+    validator._record_token_session({"refresh_token": "rtok-456"}, request)
+
+    s = TokenSession.objects.get(refresh_token=rt)
+    assert s.user == user
+    assert s.application == app
+    assert s.ip_address == "89.207.4.5"
+    assert s.user_agent == "TestUA/1.0"
+    assert s.parent is None
+    assert s.revoked_at is None
+
+
+def test_save_bearer_token_emits_login_success_audit(db, user, app):
+    _, rt = _make_dot_tokens(user, app)
+    request = SimpleNamespace(
+        headers={"X-Real-IP": "89.207.4.5"},
+        refresh_token_instance=None,
+    )
+    validator = SsoOAuth2Validator()
+    validator._record_token_session({"refresh_token": "rtok-456"}, request)
+
+    log = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
+        target_user=user, application=app,
+    ).first()
+    assert log is not None
+    assert log.ip_address == "89.207.4.5"
+
+
+def test_save_bearer_token_refresh_rotation_chains_parent(db, user, app):
+    _, parent_rt = _make_dot_tokens(user, app)
+    validator = SsoOAuth2Validator()
+    validator._record_token_session(
+        {"refresh_token": "rtok-456"},
+        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"},
+                        refresh_token_instance=None),
+    )
+    parent_session = TokenSession.objects.get(refresh_token=parent_rt)
+
+    # Simulate rotation: DOT creates a new RefreshToken; we feed it in.
+    at2 = AccessToken.objects.create(
+        user=user, application=app, token="atok-789",
+        expires=timezone.now() + timedelta(hours=1), scope="openid",
+    )
+    rt2 = RefreshToken.objects.create(
+        user=user, application=app, token="rtok-789", access_token=at2,
+    )
+
+    validator._record_token_session(
+        {"refresh_token": "rtok-789"},
+        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"},
+                        refresh_token_instance=parent_rt),
+    )
+
+    child_session = TokenSession.objects.get(refresh_token=rt2)
+    assert child_session.parent == parent_session
+
+    parent_session.refresh_from_db()
+    assert parent_session.revoked_at is not None
+    assert parent_session.revoke_reason == TokenSession.RevokeReason.ROTATED
+
+
+def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app):
+    """When GeoIP DB is missing, country/city stay empty -- session row is
+    still created, login is not blocked."""
+    _, rt = _make_dot_tokens(user, app)
+    request = SimpleNamespace(headers={"X-Real-IP": "203.0.113.99"},
+                              refresh_token_instance=None)
+    # Force-disable GeoIP for this test
+    from apps.sso import geoip
+    geoip._reader = None
+    geoip._reader_load_failed = True
+
+    validator = SsoOAuth2Validator()
+    validator._record_token_session({"refresh_token": "rtok-456"}, request)
+    s = TokenSession.objects.get(refresh_token=rt)
+    assert s.country_code == ""
+    assert s.city == ""
+    assert s.ip_address == "203.0.113.99"
+
+    geoip._reader_load_failed = False
