@@ -368,19 +368,27 @@ class SessionRevokeView(AdminOnlyMixin, View):
 
         session = get_object_or_404(TokenSession, pk=pk)
         if session.revoked_at is None:
+            now = timezone.now()
             with transaction.atomic():
                 rt = session.refresh_token
                 if rt is not None and rt.revoked is None:
-                    rt.revoked = timezone.now()
+                    rt.revoked = now
                     rt.save(update_fields=["revoked"])
-                    # Expire any AccessTokens issued via this refresh
-                    # chain so the client can't keep using a still-
-                    # valid AT after the RT is gone.
+                    # Expire any AccessTokens tied to this session so
+                    # the client can't keep using a still-valid AT
+                    # after the RT is gone. We include both:
+                    #  - rotated ATs (source_refresh_token=rt), and
+                    #  - the original AT this RT was issued alongside
+                    #    (rt.access_token), which DOT does NOT mark
+                    #    with source_refresh_token and would otherwise
+                    #    survive until natural expiry (~1h).
+                    # Spec §4.4 requires killing ALL access for this
+                    # session.
                     AccessToken.objects.filter(
-                        source_refresh_token=rt,
-                    ).update(expires=timezone.now() - timedelta(seconds=1))
+                        Q(source_refresh_token=rt) | Q(pk=rt.access_token_id),
+                    ).update(expires=now - timedelta(seconds=1))
 
-                session.revoked_at = timezone.now()
+                session.revoked_at = now
                 session.revoked_by = request.user
                 session.revoke_reason = TokenSession.RevokeReason.ADMIN_REVOKE
                 session.save(

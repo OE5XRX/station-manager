@@ -262,6 +262,8 @@ def test_session_revoke_view_requires_admin(db, client, session_row):
 
 
 def test_session_revoke_view_revokes(db, client, admin, session_row):
+    from django.utils import timezone
+
     from apps.sso.models import TokenSession
 
     client.force_login(admin)
@@ -276,6 +278,12 @@ def test_session_revoke_view_revokes(db, client, admin, session_row):
     rt = session_row.refresh_token
     rt.refresh_from_db()
     assert rt.revoked is not None
+
+    # Spec §4.4: the original AT (the one this RT was issued alongside)
+    # must be expired by revoke, not just rotated children.
+    at = session_row.refresh_token.access_token
+    at.refresh_from_db()
+    assert at.expires < timezone.now(), "Original AccessToken must be expired by revoke"
 
     log = SsoAuditLog.objects.filter(
         event_type=SsoAuditLog.EventType.SESSION_REVOKED,
