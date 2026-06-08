@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Tag: {{ tag.name }}</h1>
+<h2>Members</h2>
+<ul>
+  {% for member in members %}
+    <li>
+      {{ member.username }}
+      <form method="post" action="{% url 'sso:tag_toggle' user_id=member.pk group_id=tag.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit">Remove</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
+<h2>Non-members</h2>
+<ul>
+  {% for u in non_members %}
+    <li>
+      {{ u.username }}
+      <form method="post" action="{% url 'sso:tag_toggle' user_id=u.pk group_id=tag.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit">Add</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
+{% endblock %}

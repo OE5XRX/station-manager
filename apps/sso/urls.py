@@ -26,4 +26,12 @@ urlpatterns = [
         views.ApplicationPolicyUpdateView.as_view(),
         name="app_policy_update",
     ),
+    path("tags/", views.TagListView.as_view(), name="tag_list"),
+    path("tags/create/", views.TagCreateView.as_view(), name="tag_create"),
+    path("tags/<int:pk>/", views.TagDetailView.as_view(), name="tag_detail"),
+    path(
+        "tags/toggle/<int:user_id>/<int:group_id>/",
+        views.TagMembershipToggleView.as_view(),
+        name="tag_toggle",
+    ),
 ]

@@ -10,6 +10,7 @@ template files land in subsequent tasks.
 """
 
 import logging
+import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from django.contrib.auth import get_user_model
@@ -492,4 +493,89 @@ class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
 
         return HttpResponseRedirect(
             reverse("sso:application_detail", kwargs={"pk": application.pk}),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task 5.3: Tag management views
+# ---------------------------------------------------------------------------
+
+
+_TAG_NAME_RE = re.compile(r"^[a-z0-9-]+$")
+
+
+class TagListView(AdminOnlyMixin, ListView):
+    template_name = "sso/tag_list.html"
+    context_object_name = "tags"
+
+    def get_queryset(self):
+        from django.contrib.auth.models import Group
+
+        return Group.objects.annotate(member_count=Count("user")).order_by("name")
+
+
+class TagCreateView(AdminOnlyMixin, View):
+    """POST-only: create a Django auth.Group with a slug-safe name.
+
+    Spec §12 open question default: enforce slug format so the synthesised
+    'tag:<name>' string in OIDC tokens stays predictable (no spaces, no
+    case sensitivity surprises).
+    """
+
+    def post(self, request):
+        from django.contrib.auth.models import Group
+
+        name = (request.POST.get("name") or "").strip()
+        if not _TAG_NAME_RE.match(name):
+            return HttpResponseBadRequest(
+                "Tag name must match [a-z0-9-]+",
+            )
+        Group.objects.get_or_create(name=name)
+        return HttpResponseRedirect(reverse("sso:tag_list"))
+
+
+class TagDetailView(AdminOnlyMixin, DetailView):
+    template_name = "sso/tag_detail.html"
+    context_object_name = "tag"
+
+    def get_queryset(self):
+        from django.contrib.auth.models import Group
+
+        return Group.objects.all()
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["members"] = self.object.user_set.order_by("username")
+        ctx["non_members"] = User.objects.exclude(
+            pk__in=self.object.user_set.values_list("pk"),
+        ).order_by("username")
+        return ctx
+
+
+class TagMembershipToggleView(AdminOnlyMixin, View):
+    """POST-only: toggle a user's membership in a tag (Django auth.Group)."""
+
+    def post(self, request, user_id, group_id):
+        from django.contrib.auth.models import Group
+
+        target = get_object_or_404(User, pk=user_id)
+        group = get_object_or_404(Group, pk=group_id)
+
+        if target.groups.filter(pk=group.pk).exists():
+            target.groups.remove(group)
+            verb = "removed"
+        else:
+            target.groups.add(group)
+            verb = "added"
+
+        SsoAuditLog.log(
+            event_type=SsoAuditLog.EventType.GROUP_MEMBERSHIP_CHANGED,
+            actor=request.user,
+            target_user=target,
+            message=f"{verb}: {group.name}",
+            ip_address=_client_ip(request),
+        )
+
+        return HttpResponseRedirect(
+            reverse("sso:tag_detail", kwargs={"pk": group.pk}),
         )
