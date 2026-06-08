@@ -206,7 +206,10 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
     assert payload["aud"] == application.client_id, (
         f"aud mismatch: expected {application.client_id}, got {payload.get('aud')}"
     )
-    assert "operator" in payload["groups"]
+    # Task 2.2: groups claim is synthesized — membership_level ("applicant"
+    # by default for create_user) plus tag:<django-group> entries.
+    assert "applicant" in payload["groups"]
+    assert "tag:operator" in payload["groups"]
     assert payload["iss"], "issuer claim must be non-empty"
 
     # --- Step 5: GET /sso/userinfo/ with the access token -----------------
@@ -218,7 +221,9 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
     info = resp.json()
     assert info["preferred_username"] == "peterb"
     assert info["email"] == "peter@oe5xrx.org"
-    assert "operator" in info["groups"]
+    # Task 2.2: synthesized groups schema (see ID-token assertion above).
+    assert "applicant" in info["groups"]
+    assert "tag:operator" in info["groups"]
 
 
 @pytest.mark.django_db
