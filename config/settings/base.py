@@ -269,6 +269,15 @@ OIDC_RSA_KEY_PATH = os.environ.get(
     str(BASE_DIR / "oidc_keys" / "private.pem"),
 )
 
+# db-ip.com City Lite database path. Refreshed daily by the
+# update-geoip-db GitHub-Actions cron (see servers repo). If the file
+# is missing, lookups silently return (None, None) — session rows get
+# empty country/city, token issuance is never blocked.
+GEOIP_DB_PATH = os.environ.get(
+    "GEOIP_DB_PATH",
+    str(BASE_DIR / "geoip_db" / "dbip-city-lite.mmdb"),
+)
+
 OAUTH2_PROVIDER = {
     "OIDC_ENABLED": True,
     "OIDC_ISS_ENDPOINT": os.environ.get("OIDC_ISS_ENDPOINT", ""),
