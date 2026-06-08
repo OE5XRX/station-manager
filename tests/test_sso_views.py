@@ -6,7 +6,7 @@ from django.contrib.auth.models import Group
 from django.urls import reverse
 from oauth2_provider.models import Application
 
-from apps.sso.models import AppGrant, SsoAuditLog
+from apps.sso.models import AppGrant, ApplicationPolicy, SsoAuditLog
 
 User = get_user_model()
 
@@ -303,3 +303,59 @@ def test_session_revoke_view_is_idempotent(db, client, admin, session_row):
         target_user=session_row.user,
     ).count()
     assert log_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 5.2: ApplicationPolicyUpdateView
+# ---------------------------------------------------------------------------
+
+
+def test_app_policy_update_creates_row_if_missing(db, client, admin, session_row):
+    app = session_row.application
+    client.force_login(admin)
+    resp = client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_members"},
+    )
+    assert resp.status_code in (200, 302)
+    pol = ApplicationPolicy.objects.get(application=app)
+    assert pol.access_policy == "open_to_members"
+    assert pol.modified_by == admin
+
+
+def test_app_policy_update_emits_audit_with_old_and_new(db, client, admin, session_row):
+    app = session_row.application
+    ApplicationPolicy.objects.create(application=app, access_policy="grant_required")
+    client.force_login(admin)
+    client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    log = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
+        application=app,
+    ).first()
+    assert log is not None
+    assert "grant_required" in log.message
+    assert "open_to_all" in log.message
+
+
+def test_app_policy_update_rejects_unknown_policy(db, client, admin, session_row):
+    app = session_row.application
+    client.force_login(admin)
+    resp = client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "not-a-real-policy"},
+    )
+    assert resp.status_code == 400
+
+
+def test_app_policy_update_requires_admin(db, client, session_row):
+    app = session_row.application
+    user = User.objects.create_user(username="member-only", password="x")
+    client.force_login(user)
+    resp = client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    assert resp.status_code == 403

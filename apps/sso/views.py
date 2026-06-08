@@ -438,3 +438,56 @@ def _active_sessions_for(user):
         .select_related("application")
         .order_by("-last_seen_at")
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5.2: ApplicationPolicyUpdateView
+# ---------------------------------------------------------------------------
+
+
+class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
+    """POST-only: set or update the ApplicationPolicy for an Application.
+
+    Auto-creates the policy row on first set; existing-row update emits
+    APP_POLICY_CHANGED audit with snapshot of affected active sessions
+    at the time of the change. Spec §3.4.
+    """
+
+    def post(self, request, pk):
+        from .models import ApplicationPolicy, TokenSession
+
+        application = get_object_or_404(Application, pk=pk)
+        new_policy = request.POST.get("access_policy", "")
+        valid_choices = {v for v, _ in ApplicationPolicy.AccessPolicy.choices}
+        if new_policy not in valid_choices:
+            return HttpResponseBadRequest("invalid access_policy value")
+
+        pol, created = ApplicationPolicy.objects.get_or_create(
+            application=application,
+            defaults={"access_policy": new_policy, "modified_by": request.user},
+        )
+        old_policy = pol.access_policy if not created else "grant_required"
+
+        if not created and pol.access_policy != new_policy:
+            pol.access_policy = new_policy
+            pol.modified_by = request.user
+            pol.save(update_fields=["access_policy", "modified_by", "updated_at"])
+
+        active_session_count = TokenSession.objects.filter(
+            application=application,
+            revoked_at__isnull=True,
+        ).count()
+        SsoAuditLog.log(
+            event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
+            actor=request.user,
+            application=application,
+            message=(
+                f"Policy {old_policy} -> {new_policy}. "
+                f"{active_session_count} active session(s) at the time of change."
+            ),
+            ip_address=_client_ip(request),
+        )
+
+        return HttpResponseRedirect(
+            reverse("sso:application_detail", kwargs={"pk": application.pk}),
+        )

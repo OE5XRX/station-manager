@@ -21,4 +21,9 @@ urlpatterns = [
         views.SessionRevokeView.as_view(),
         name="session_revoke",
     ),
+    path(
+        "applications/<int:pk>/policy/",
+        views.ApplicationPolicyUpdateView.as_view(),
+        name="app_policy_update",
+    ),
 ]
