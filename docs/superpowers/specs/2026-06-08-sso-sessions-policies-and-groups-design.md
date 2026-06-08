@@ -1170,6 +1170,8 @@ Das Repo nutzt **GitHub-Actions-Cron + self-hosted runner** als Cron-Mechanismus
 
 **`.github/workflows/update-geoip-db.yml`** — einmal pro Tag, lädt (falls verfügbar) die frische db-ip.com City Lite DB. Begründung für Daily statt Monthly: db-ip.com veröffentlicht zwar monatlich, aber der Veröffentlichungs-Tag innerhalb des Monats schwankt — ein striktes Monthly-Cron am 1. um 04:00 UTC würde 404 holen und einen ganzen Monat alte Daten behalten (Worst Case: 2-3 Monate hinten nach). Daily-Cron + Vormonats-Fallback im Command (Section 6.3) kappt das auf max. 1 Tag Lag. Bandbreite: ~150 MB × 30 Tage ≈ 4.5 GB/Monat, vernachlässigbar.
 
+Bei Failure (z.B. beide Kandidaten 404 → URL-Schema-Wechsel, 5xx, Netzwerk-Timeout, Disk-Full, korrupte gzip-Datei): Workflow wird rot **und** ein GitHub-Issue mit Label `geoip-update-failure` wird eröffnet (bzw. ein bestehendes Issue mit demselben Label kommentiert, um Issue-Spam bei mehrtägigen Ausfällen zu vermeiden). Pattern 1:1 von `backup.yml` übernommen.
+
 ```yaml
 name: update-geoip-db
 on:
@@ -1179,6 +1181,7 @@ on:
 
 permissions:
   contents: read
+  issues: write   # für failure-issue
 
 concurrency:
   group: update-geoip-db
@@ -1203,12 +1206,57 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: invoke update_geoip_db inside web container
+        id: run_update
         run: |
           cd /opt/oe5xrx-services/station_manager
-          docker compose exec -T web python manage.py update_geoip_db
+          docker compose exec -T web python manage.py update_geoip_db 2>&1 | tee /tmp/geoip-update.log
+
+      - name: Open or update failure issue
+        if: failure()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            let logTail = '';
+            try {
+              const log = fs.readFileSync('/tmp/geoip-update.log', 'utf-8');
+              logTail = log.split('\n').slice(-50).join('\n');
+            } catch (e) {
+              core.warning(`could not read log: ${e.message}`);
+              logTail = '(log collection failed; check the workflow logs)';
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `Workflow run: ${runUrl}\n\nLast 50 lines of update_geoip_db output:\n\n\`\`\`\n${logTail}\n\`\`\``;
+            try {
+              const existing = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'geoip-update-failure',
+                per_page: 5,
+              });
+              if (existing.data.length > 0) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.data[0].number,
+                  body: `Another failure at ${new Date().toISOString()}\n\n${body}`,
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: `geoip-update failed @ ${new Date().toISOString()}`,
+                  labels: ['geoip-update-failure', 'auto-generated'],
+                  body,
+                });
+              }
+            } catch (e) {
+              core.error(`failed to file geoip-update-failure issue: ${e.message}. Check the workflow logs directly.`);
+            }
 ```
 
-**`.github/workflows/prune-token-sessions.yml`** — einmal pro Tag, räumt alte revoked/expired TokenSession-Rows auf:
+**`.github/workflows/prune-token-sessions.yml`** — einmal pro Tag, räumt alte revoked/expired TokenSession-Rows auf. Failure-Pattern identisch (eigenes Label `prune-token-sessions-failure`, damit Triage die beiden Cron-Workflows unterscheiden kann):
 
 ```yaml
 name: prune-token-sessions
@@ -1217,20 +1265,54 @@ on:
     - cron: '20 3 * * *'   # 03:20 UTC, 20 min nach backup.yml
   workflow_dispatch:
 
-# (gleiche guard+concurrency-Struktur wie oben)
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: prune-token-sessions
+  cancel-in-progress: false
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: assert ref is main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::prune-token-sessions.yml may only run from main"
+            exit 1
+          fi
+
   prune:
     needs: guard
     runs-on: [self-hosted, oe5xrx-prod-01]
     timeout-minutes: 5
     steps:
-      - run: |
+      - name: invoke prune_token_sessions inside web container
+        run: |
           cd /opt/oe5xrx-services/station_manager
-          docker compose exec -T web python manage.py prune_token_sessions
+          docker compose exec -T web python manage.py prune_token_sessions 2>&1 | tee /tmp/prune-sessions.log
+
+      - name: Open or update failure issue
+        if: failure()
+        uses: actions/github-script@v9
+        with:
+          # Gleiche Logik wie update-geoip-db.yml, nur mit Label
+          # 'prune-token-sessions-failure' und Log /tmp/prune-sessions.log.
+          # Spec-Detail wird in der Plan-Phase ausgearbeitet -- Pattern
+          # ist 1:1 von update-geoip-db.yml zu kopieren mit den drei
+          # genannten String-Ersetzungen.
+          script: |
+            // siehe update-geoip-db.yml oben; Label ersetzen.
+            ...
 ```
 
 Beide Workflows nutzen `docker compose exec -T web` (analog dem schon existierenden Pattern, falls vorhanden — andernfalls wird `docker compose run --rm web` verwendet, das auch funktioniert, nur teurer im Container-Start).
+
+**Issue-Workflow-Begründung:** ohne automatisches Issue würde ein gescheiterter Cron nur in der Actions-UI auftauchen — Operator müsste regelmäßig durchklicken. Mit Label-Filter (`is:open label:geoip-update-failure`) sieht der Operator beim normalen Issue-Triage sofort, was hängt. Bei mehrtägigen Ausfällen wird kein zweites Issue eröffnet sondern das bestehende kommentiert (kein Issue-Spam).
 
 ### 14.3 Initial-Bootstrap der GeoIP-DB
 
@@ -1261,7 +1343,7 @@ Welcher PR zuerst mergen kann:
 ### 14.6 Checkliste für den `servers`-PR
 
 - [ ] `services/station_manager/docker-compose.yml`: `prepare-volumes` legt `geoip_db` Subdir an + `web`-Service bekommt Bind-Mount + `GEOIP_DB_PATH` Env.
-- [ ] `.github/workflows/update-geoip-db.yml`: täglicher Cron (Begründung in Section 6.3), ref-guard auf `main`, läuft auf self-hosted runner.
-- [ ] `.github/workflows/prune-token-sessions.yml`: täglicher Cron, gleiche Struktur.
+- [ ] `.github/workflows/update-geoip-db.yml`: täglicher Cron (Begründung in Section 6.3), ref-guard auf `main`, läuft auf self-hosted runner, **Failure → Issue mit Label `geoip-update-failure` (Pattern aus `backup.yml`)**.
+- [ ] `.github/workflows/prune-token-sessions.yml`: täglicher Cron, gleiche Struktur, **Failure → Issue mit Label `prune-token-sessions-failure`**.
 - [ ] Optional: README-Erweiterung in `services/station_manager/`.
 - [ ] Erstbefüllung-Trigger nach Merge: `gh workflow run update-geoip-db.yml`.
