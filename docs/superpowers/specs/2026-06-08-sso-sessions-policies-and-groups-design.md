@@ -672,6 +672,19 @@ def lookup_location(ip: str | None) -> tuple[str | None, str | None]:
 """Download + atomic replace of the db-ip.com City Lite DB.
 
 URL-Schema: https://download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz
+
+Release-Kadenz von db-ip.com: monatlich, aber NICHT garantiert am Monats-
+ersten -- typischerweise innerhalb der ersten Wochen-Tage des Monats,
+gelegentlich später. Deshalb:
+  1. Cron lauft TAEGLICH (nicht monatlich), siehe Section 14.2.
+  2. Bei 404 auf die aktuelle Monatsdatei -> Fallback auf Vormonat.
+     Damit kann der erste Deploy auch dann frische Daten ziehen, wenn
+     der laufende Monat noch nicht publiziert wurde (Worst-Case 1 Tag
+     Lag statt 1-3 Monaten bei strikt-1.-des-Monats-Cron).
+
+Das Kommando ist idempotent: identische URL liefert identischen Inhalt,
+der atomare Replace ist ein No-Op (modulo File-Stat-Timestamp). Daily-
+Cron erzeugt damit keinen unnötigen Restart-Druck.
 """
 
 from datetime import date
@@ -679,10 +692,23 @@ from pathlib import Path
 import gzip
 import shutil
 import tempfile
+import urllib.error
 import urllib.request
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+
+
+DBIP_URL_TEMPLATE = "https://download.db-ip.com/free/dbip-city-lite-{year_month}.mmdb.gz"
+
+
+def _previous_month(today: date) -> date:
+    """Erster Tag des Vormonats. Stdlib statt python-dateutil:
+    dateutil ist nur transitiv via boto3 da -- nicht als direkte
+    Dependency deklariert, also benutzen wir's nicht."""
+    if today.month == 1:
+        return today.replace(year=today.year - 1, month=12, day=1)
+    return today.replace(month=today.month - 1, day=1)
 
 
 class Command(BaseCommand):
@@ -693,35 +719,65 @@ class Command(BaseCommand):
         target.parent.mkdir(parents=True, exist_ok=True)
 
         today = date.today()
-        url = f"https://download.db-ip.com/free/dbip-city-lite-{today:%Y-%m}.mmdb.gz"
+        candidates = [
+            today.strftime("%Y-%m"),
+            _previous_month(today).strftime("%Y-%m"),
+        ]
 
+        downloaded_from = None
+        for year_month in candidates:
+            url = DBIP_URL_TEMPLATE.format(year_month=year_month)
+            try:
+                self._download(url, target)
+                downloaded_from = year_month
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    self.stdout.write(self.style.WARNING(
+                        f"{year_month} not yet published (404), trying previous"
+                    ))
+                    continue
+                raise
+
+        if downloaded_from is None:
+            # Beide Kandidaten 404 -- ungewoehnlich (db-ip waere zwei
+            # Monate ohne Release). Exit non-zero damit der Workflow
+            # rot wird und der Operator informiert ist; bestehende DB
+            # bleibt unangetastet, Lookups funktionieren weiter mit
+            # alten Daten.
+            raise SystemExit(
+                f"Both {candidates[0]} and {candidates[1]} return 404 -- "
+                f"db-ip.com release schedule changed? Manual check needed."
+            )
+
+        self.stdout.write(self.style.SUCCESS(
+            f"Updated {target} from db-ip.com {downloaded_from}"
+        ))
+
+        # GeoIP-Reader-Singleton zuruecksetzen (siehe Modul-Docstring von
+        # apps/sso/geoip.py): nur der Process, in dem das Command lief,
+        # sieht das Reset; andere worker halten ihren alten Reader bis
+        # Restart. Bei daily-cron + 14d-token-lifetime ist das tolerierbar.
+        from apps.sso import geoip
+        geoip._reader = None
+        geoip._reader_load_failed = False
+
+    def _download(self, url: str, target: Path) -> None:
         with tempfile.NamedTemporaryFile(delete=False, dir=target.parent) as tmp:
             tmp_path = Path(tmp.name)
-
         try:
             self.stdout.write(f"Download {url} ...")
             with urllib.request.urlopen(url) as resp, gzip.GzipFile(fileobj=resp) as gz:
                 with tmp_path.open("wb") as out:
                     shutil.copyfileobj(gz, out)
-
             # Atomarer Tausch: os.rename auf POSIX ist atomar im selben FS.
             tmp_path.replace(target)
-            self.stdout.write(self.style.SUCCESS(f"Updated {target}"))
-
-            # GeoIP-Reader-Singleton zuruecksetzen, damit naechster Lookup
-            # die frische DB laedt. Bei multi-process-WSGI (mehrere
-            # gunicorn-Worker) sieht NUR der Prozess, in dem das Command
-            # gelaufen ist, das Reset; die anderen halten ihren alten
-            # Reader bis Restart. Akzeptabel: die Daten sind tagaktuell,
-            # Worker-Restart bei naechstem Deploy.
-            from apps.sso import geoip
-            geoip._reader = None
-            geoip._reader_load_failed = False
-        finally:
+        except BaseException:
             tmp_path.unlink(missing_ok=True)
+            raise
 ```
 
-Soll als Cron einmal pro Monat (oder häufiger; idempotent) laufen.
+Soll als Cron einmal pro Tag laufen (siehe Section 14.2). Bei jeder Ausführung wird zuerst die Datei für den laufenden Monat versucht; wenn db-ip diese Monatsdatei noch nicht hochgeladen hat (Release-Lag), wird die Vormonats-Datei gezogen. Resultierender max. Lag zwischen db-ip-Publikation und unserer Übernahme: ~1 Tag.
 
 ### 6.4 Settings-Erweiterung
 
@@ -993,7 +1049,7 @@ volumes:
    docker compose run --rm web python manage.py update_geoip_db
    ```
    Idempotent — falls die DB schon da ist, Overwrite ist OK.
-3. **Cron-Job aufsetzen** für `update_geoip_db` (1×/Monat) und `prune_token_sessions` (1×/Tag). Hetzner-Cron auf dem Host oder ein systemd-Timer im Container — Ops-Entscheidung; nicht App-Code.
+3. **Cron-Job aufsetzen** für `update_geoip_db` (1×/Tag — Begründung siehe Section 6.3: db-ip-Release-Zeitpunkt innerhalb des Monats ist nicht garantiert, daily-Cron + Vormonats-Fallback kappt den Worst-Case-Lag auf ~1 Tag) und `prune_token_sessions` (1×/Tag). Beide laufen als GitHub-Actions-Cron — Details in Section 14.2.
 
 ### 10.4 Bestehende Sessions / Tokens
 
@@ -1057,7 +1113,7 @@ Nach Merge dieses Specs sind folgende Capabilities live:
 - [ ] Admin kann Tags (Django auth.Group) im Custom-UI verwalten ohne Django-Admin-Backend.
 - [ ] Dokumentation für RP-Operatoren ("So mappst du die Groups in InvenTree/Grafana") existiert.
 - [ ] Audit-Log enthält für jede Sicherheits-relevante Aktion einen Eintrag (LOGIN_SUCCESS, SESSION_REVOKED, APP_POLICY_CHANGED, GROUP_MEMBERSHIP_CHANGED).
-- [ ] GeoIP-DB von db-ip.com Free wird per Cron monatlich erneuert.
+- [ ] GeoIP-DB von db-ip.com Free wird per Cron täglich aktualisiert (Vormonats-Fallback bei 404 für noch-nicht-publizierte Monats-Files).
 - [ ] Test-Coverage: Policy-Matrix, Session-Lifecycle, Group-Synthese, GeoIP-Fallback, Cascade, Admin-Revoke-Idempotenz.
 - [ ] Bestehender Login-Flow + Station-Agent Ed25519-Auth bleiben unverändert.
 - [ ] Bestehende AppGrant-Mechanik bleibt unverändert (Default `GRANT_REQUIRED` ist abwärtskompatibel).
@@ -1112,13 +1168,13 @@ web:
 
 Das Repo nutzt **GitHub-Actions-Cron + self-hosted runner** als Cron-Mechanismus (keine systemd-Timer auf der VM, siehe `backup.yml` als Referenz-Pattern). Zwei neue Workflows:
 
-**`.github/workflows/update-geoip-db.yml`** — einmal pro Monat, lädt die frische db-ip.com City Lite DB:
+**`.github/workflows/update-geoip-db.yml`** — einmal pro Tag, lädt (falls verfügbar) die frische db-ip.com City Lite DB. Begründung für Daily statt Monthly: db-ip.com veröffentlicht zwar monatlich, aber der Veröffentlichungs-Tag innerhalb des Monats schwankt — ein striktes Monthly-Cron am 1. um 04:00 UTC würde 404 holen und einen ganzen Monat alte Daten behalten (Worst Case: 2-3 Monate hinten nach). Daily-Cron + Vormonats-Fallback im Command (Section 6.3) kappt das auf max. 1 Tag Lag. Bandbreite: ~150 MB × 30 Tage ≈ 4.5 GB/Monat, vernachlässigbar.
 
 ```yaml
 name: update-geoip-db
 on:
   schedule:
-    - cron: '0 4 1 * *'   # 04:00 UTC am 1. jeden Monats
+    - cron: '0 4 * * *'   # 04:00 UTC täglich
   workflow_dispatch:
 
 permissions:
@@ -1190,7 +1246,7 @@ Option 1 ist der Default-Vorschlag — kein zusätzlicher Deploy-Step, klar doku
 Kurzer Abschnitt:
 
 - **Bind-Mounts** auf der VM: `/opt/oe5xrx-data/station_manager/{oidc_keys,geoip_db}` — beide 0700-700 für appuser=1000.
-- **GeoIP-DB-Refresh** läuft als GitHub-Action-Cron `update-geoip-db.yml`. Manuelle Refreshes via `gh workflow run`.
+- **GeoIP-DB-Refresh** läuft als GitHub-Action-Cron `update-geoip-db.yml` (täglich, Begründung siehe Section 6.3). Manuelle Refreshes via `gh workflow run`.
 - **TokenSession-Cleanup** läuft als GitHub-Action-Cron `prune-token-sessions.yml`.
 
 ### 14.5 Reihenfolge / Cross-Repo-Abhängigkeit
@@ -1205,7 +1261,7 @@ Welcher PR zuerst mergen kann:
 ### 14.6 Checkliste für den `servers`-PR
 
 - [ ] `services/station_manager/docker-compose.yml`: `prepare-volumes` legt `geoip_db` Subdir an + `web`-Service bekommt Bind-Mount + `GEOIP_DB_PATH` Env.
-- [ ] `.github/workflows/update-geoip-db.yml`: monatlicher Cron, ref-guard auf `main`, läuft auf self-hosted runner.
+- [ ] `.github/workflows/update-geoip-db.yml`: täglicher Cron (Begründung in Section 6.3), ref-guard auf `main`, läuft auf self-hosted runner.
 - [ ] `.github/workflows/prune-token-sessions.yml`: täglicher Cron, gleiche Struktur.
 - [ ] Optional: README-Erweiterung in `services/station_manager/`.
 - [ ] Erstbefüllung-Trigger nach Merge: `gh workflow run update-geoip-db.yml`.
