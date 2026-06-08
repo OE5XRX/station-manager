@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "dbip-city-lite-test.mmdb"
 
@@ -129,5 +130,5 @@ def test_update_geoip_db_raises_when_both_months_404(settings, tmp_path):
         "apps.sso.management.commands.update_geoip_db.urllib.request.urlopen",
         side_effect=fake_urlopen,
     ):
-        with pytest.raises(SystemExit):
+        with pytest.raises(CommandError):
             call_command("update_geoip_db")

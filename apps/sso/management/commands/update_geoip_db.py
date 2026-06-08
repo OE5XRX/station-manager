@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 DBIP_URL_TEMPLATE = "https://download.db-ip.com/free/dbip-city-lite-{year_month}.mmdb.gz"
 
@@ -57,7 +57,7 @@ class Command(BaseCommand):
                 raise
 
         if downloaded_from is None:
-            raise SystemExit(
+            raise CommandError(
                 f"Both {candidates[0]} and {candidates[1]} return 404 -- "
                 f"db-ip.com release schedule changed? Manual check needed."
             )
@@ -78,9 +78,12 @@ class Command(BaseCommand):
             tmp_path = Path(tmp.name)
         try:
             self.stdout.write(f"Download {url} ...")
-            with urllib.request.urlopen(url) as resp, gzip.GzipFile(fileobj=resp) as gz:
-                with tmp_path.open("wb") as out:
-                    shutil.copyfileobj(gz, out)
+            with (
+                urllib.request.urlopen(url, timeout=60) as resp,
+                gzip.GzipFile(fileobj=resp) as gz,
+                tmp_path.open("wb") as out,
+            ):
+                shutil.copyfileobj(gz, out)
             tmp_path.replace(target)
         except BaseException:
             tmp_path.unlink(missing_ok=True)
