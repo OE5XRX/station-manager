@@ -61,19 +61,19 @@ def user_can_access(user, application) -> bool:
     # import cycle on settings loading (see existing pattern below).
     from .models import AppGrant, ApplicationPolicy
 
-    access_policy = ApplicationPolicy.AccessPolicy
-    policy = access_policy.GRANT_REQUIRED
+    Policy = ApplicationPolicy.AccessPolicy  # noqa: N806 — enum class alias
+    policy = Policy.GRANT_REQUIRED
     pol_obj = getattr(application, "sso_policy", None)
     if pol_obj is not None:
         policy = pol_obj.access_policy
 
-    if policy == access_policy.OPEN_TO_ALL:
+    if policy == Policy.OPEN_TO_ALL:
         return True
-    if policy == access_policy.OPEN_TO_MEMBERS:
+    if policy == Policy.OPEN_TO_MEMBERS:
         return user.membership_level != user.MembershipLevel.APPLICANT
-    if policy == access_policy.OPEN_TO_INTERNAL:
+    if policy == Policy.OPEN_TO_INTERNAL:
         return user.is_internal
-    if policy == access_policy.OPEN_TO_ADMINS:
+    if policy == Policy.OPEN_TO_ADMINS:
         return user.is_admin
 
     # GRANT_REQUIRED — pre-existing behaviour

@@ -83,6 +83,13 @@ def _make_user(level: str, *, active: bool = True) -> User:
         # OPEN_TO_ADMINS: admin only
         ("open_to_admins", "staff", True, False, False),
         ("open_to_admins", "admin", True, False, True),
+        # GRANT_REQUIRED additional negatives (no policy row + no grant)
+        ("grant_required", "staff", True, False, False),
+        ("grant_required", "admin", True, False, False),
+        # OPEN_TO_INTERNAL applicant boundary (denied)
+        ("open_to_internal", "applicant", True, False, False),
+        # OPEN_TO_ADMINS member boundary (denied)
+        ("open_to_admins", "member", True, False, False),
     ],
 )
 def test_user_can_access_matrix(db, app, policy, level, is_active, has_grant, expected):
