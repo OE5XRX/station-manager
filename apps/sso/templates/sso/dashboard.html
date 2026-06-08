@@ -55,6 +55,21 @@
   <div class="stat">
     <div class="stat-label">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M3 12h4l3 8 4-16 3 8h4"/>
+      </svg>
+      {% trans "Active sessions" %}
+    </div>
+    <div class="stat-value {% if active_sessions_total %}t-signal{% endif %}">{{ active_sessions_total|default:"0" }}</div>
+    <div class="stat-meta">
+      <span class="t-mono">
+        {% blocktrans count n=active_sessions_apps %}across {{ n }} app{% plural %}across {{ n }} apps{% endblocktrans %}
+      </span>
+    </div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
       </svg>
       {% trans "Token lifetime" %}
@@ -102,7 +117,9 @@
             <th>{% trans "Application" %}</th>
             <th>{% trans "Client ID" %}</th>
             <th>{% trans "Grant type" %}</th>
+            <th>{% trans "Policy" %}</th>
             <th class="text-end" style="text-align:right;">{% trans "Active grants" %}</th>
+            <th class="text-end" style="text-align:right;">{% trans "Active sessions" %}</th>
             <th style="width:1%;"></th>
           </tr>
         </thead>
@@ -128,9 +145,31 @@
             <td data-label="{% trans 'Grant type' %}">
               <span class="tag" style="--tag-color: var(--violet);">{{ app.get_authorization_grant_type_display }}</span>
             </td>
+            <td data-label="{% trans 'Policy' %}">
+              {% with pol=app.sso_policy.access_policy|default:"grant_required" %}
+                {% if pol == "grant_required" %}
+                  <span class="badge bg-secondary">{% trans "Grant required" %}</span>
+                {% elif pol == "open_to_all" %}
+                  <span class="badge bg-success">{% trans "Open to all" %}</span>
+                {% elif pol == "open_to_members" %}
+                  <span class="badge bg-success">{% trans "Open to members" %}</span>
+                {% elif pol == "open_to_internal" %}
+                  <span class="badge bg-success">{% trans "Open to internal" %}</span>
+                {% elif pol == "open_to_admins" %}
+                  <span class="badge bg-success">{% trans "Open to admins" %}</span>
+                {% endif %}
+              {% endwith %}
+            </td>
             <td data-label="{% trans 'Active grants' %}" style="text-align:right;">
               {% if app.active_grant_count %}
                 <span class="pill pill-online"><span class="dot"></span>{{ app.active_grant_count }}</span>
+              {% else %}
+                <span class="pill pill-muted">0</span>
+              {% endif %}
+            </td>
+            <td data-label="{% trans 'Active sessions' %}" style="text-align:right;">
+              {% if app.active_session_count %}
+                <span class="pill pill-online"><span class="dot"></span>{{ app.active_session_count }}</span>
               {% else %}
                 <span class="pill pill-muted">0</span>
               {% endif %}

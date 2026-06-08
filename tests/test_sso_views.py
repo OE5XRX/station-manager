@@ -379,3 +379,26 @@ def test_app_policy_update_noop_skips_audit(db, client, admin, session_row):
         application=app,
     ).count()
     assert log_count == 1, "No-op repost must not produce a second audit row"
+
+
+# ---------------------------------------------------------------------------
+# Task 5.4: Dashboard KPI tile + policy column
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_shows_active_sessions_count(db, client, admin, session_row):
+    client.force_login(admin)
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 200
+    assert b"Active sessions" in resp.content
+    # The session_row fixture creates exactly one active session.
+    assert b">1<" in resp.content or b">1 " in resp.content
+
+
+def test_dashboard_shows_policy_badge(db, client, admin, session_row):
+    app = session_row.application
+    ApplicationPolicy.objects.create(application=app, access_policy="open_to_members")
+    client.force_login(admin)
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 200
+    assert b"Open to members" in resp.content

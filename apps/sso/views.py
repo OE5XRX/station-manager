@@ -181,22 +181,41 @@ class SsoDashboardView(AdminOnlyMixin, ListView):
     context_object_name = "applications"
 
     def get_queryset(self):
-        # Annotate the grant count in a single query instead of doing
-        # one COUNT per Application in a Python loop (N+1).
+        # Annotate the grant count + session count in a single query
+        # instead of doing one COUNT per Application in a Python loop
+        # (N+1). Sessions feed the per-app column added in Task 5.4.
         return Application.objects.annotate(
             active_grant_count=Count(
                 "grants",
                 filter=Q(grants__revoked_at__isnull=True),
             ),
+            active_session_count=Count(
+                "token_sessions",
+                filter=Q(token_sessions__revoked_at__isnull=True),
+            ),
         ).order_by("name")
 
     def get_context_data(self, **kwargs):
+        from .models import TokenSession
+
         ctx = super().get_context_data(**kwargs)
         # Fleet-wide active grant total powers the KPI tile; cheap
         # aggregate since AppGrant is a small table.
         ctx["active_grants_total"] = AppGrant.objects.filter(
             revoked_at__isnull=True,
         ).count()
+        # Active session KPI (Task 5.4): both the global count and the
+        # number of distinct apps with at least one active session
+        # (drives the "across N app(s)" secondary line).
+        ctx["active_sessions_total"] = TokenSession.objects.filter(
+            revoked_at__isnull=True,
+        ).count()
+        ctx["active_sessions_apps"] = (
+            TokenSession.objects.filter(revoked_at__isnull=True)
+            .values("application")
+            .distinct()
+            .count()
+        )
         return ctx
 
 
