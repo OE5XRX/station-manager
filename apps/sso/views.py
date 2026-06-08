@@ -572,7 +572,7 @@ class TagMembershipToggleView(AdminOnlyMixin, View):
             event_type=SsoAuditLog.EventType.GROUP_MEMBERSHIP_CHANGED,
             actor=request.user,
             target_user=target,
-            message=f"{verb}: {group.name}",
+            message=f"{verb}: {target.username} -> {group.name}",
             ip_address=_client_ip(request),
         )
 

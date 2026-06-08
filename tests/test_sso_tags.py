@@ -62,12 +62,12 @@ def test_tag_membership_toggle_adds_then_removes(db, client, admin, target_user)
     assert SsoAuditLog.objects.filter(
         event_type=SsoAuditLog.EventType.GROUP_MEMBERSHIP_CHANGED,
         target_user=target_user,
-        message__icontains="added: kontakt-team",
+        message__icontains="added: target -> kontakt-team",
     ).exists()
 
     client.post(url)
     assert not target_user.groups.filter(pk=g.pk).exists()
     assert SsoAuditLog.objects.filter(
         target_user=target_user,
-        message__icontains="removed: kontakt-team",
+        message__icontains="removed: target -> kontakt-team",
     ).exists()
