@@ -201,16 +201,21 @@ def test_save_bearer_token_refresh_rotation_chains_parent(db, user, app):
     assert parent_session.revoke_reason == TokenSession.RevokeReason.ROTATED
 
 
-def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app):
+def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app, monkeypatch):
     """When GeoIP DB is missing, country/city stay empty -- session row is
     still created, login is not blocked."""
     _, rt = _make_dot_tokens(user, app)
     request = SimpleNamespace(headers={"X-Real-IP": "203.0.113.99"},
                               refresh_token_instance=None)
-    # Force-disable GeoIP for this test
-    from apps.sso import geoip
-    geoip._reader = None
-    geoip._reader_load_failed = True
+
+    # Monkeypatch lookup_location at the geoip module (the import target
+    # of the local ``from .geoip import lookup_location`` inside
+    # ``_record_token_session``). This avoids mutating module-level
+    # singleton state in apps.sso.geoip; pytest auto-restores on teardown
+    # so a failing assert can't leak GeoIP-disabled state into other tests.
+    from apps.sso import geoip as geoip_mod
+    monkeypatch.setattr(geoip_mod, "lookup_location",
+                        lambda _ip: (None, None), raising=True)
 
     validator = SsoOAuth2Validator()
     validator._record_token_session({"refresh_token": "rtok-456"}, request)
@@ -219,4 +224,43 @@ def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app):
     assert s.city == ""
     assert s.ip_address == "203.0.113.99"
 
-    geoip._reader_load_failed = False
+
+def test_save_bearer_token_rotation_falls_back_to_source_refresh_token(db, user, app):
+    """Cover the production rotation path where DOT clears request.refresh_token_instance.
+
+    DOT's oauth2_validators._save_bearer_token sets refresh_token_instance to None
+    after the parent's revoke completes. Our recorder must then fall back to
+    walking new_rt.access_token.source_refresh_token (which DOT wires reliably at
+    _create_access_token).
+    """
+    _, parent_rt = _make_dot_tokens(user, app)
+    validator = SsoOAuth2Validator()
+    validator._record_token_session(
+        {"refresh_token": "rtok-456"},
+        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5"}, refresh_token_instance=None),
+    )
+    parent_session = TokenSession.objects.get(refresh_token=parent_rt)
+
+    # Simulate DOT post-revoke state: attribute cleared, source_refresh_token wired.
+    at2 = AccessToken.objects.create(
+        user=user, application=app, token="atok-789",
+        expires=timezone.now() + timedelta(hours=1), scope="openid",
+        source_refresh_token=parent_rt,
+    )
+    rt2 = RefreshToken.objects.create(
+        user=user, application=app, token="rtok-789", access_token=at2,
+    )
+
+    validator._record_token_session(
+        {"refresh_token": "rtok-789"},
+        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5"}, refresh_token_instance=None),
+    )
+
+    child_session = TokenSession.objects.get(refresh_token=rt2)
+    assert child_session.parent == parent_session, (
+        "Fallback to source_refresh_token must wire parent FK"
+    )
+
+    parent_session.refresh_from_db()
+    assert parent_session.revoked_at is not None, "Parent must be marked revoked"
+    assert parent_session.revoke_reason == TokenSession.RevokeReason.ROTATED

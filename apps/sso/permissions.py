@@ -168,6 +168,7 @@ class SsoOAuth2Validator(OAuth2Validator):
             logger.exception("TokenSession recording failed")
 
     def _record_token_session(self, token, request):
+        from django.db import transaction
         from django.utils import timezone
         from oauth2_provider.models import RefreshToken
 
@@ -181,63 +182,70 @@ class SsoOAuth2Validator(OAuth2Validator):
         if rt is None:
             return
 
-        # Refresh-rotation detection: oauthlib's DOT validator attaches
-        # the previous RefreshToken instance to the request as
-        # ``request.refresh_token_instance`` in ``validate_refresh_token``
-        # (verified against the installed DOT source). For initial
-        # issuance the attribute is absent / None.
-        #
-        # Note: DOT's _save_bearer_token clears the attribute after a
-        # successful revoke on rotation (sets it to None). As a fallback
-        # for that case we walk the new AccessToken.source_refresh_token
-        # FK, which DOT wires up to the previous RefreshToken when a new
-        # token pair is minted.
-        parent_session = None
-        old_refresh = getattr(request, "refresh_token_instance", None)
-        if old_refresh is None:
-            new_at = getattr(rt, "access_token", None)
-            if new_at is not None:
-                old_refresh = getattr(new_at, "source_refresh_token", None)
-        if old_refresh is not None:
-            parent_session = TokenSession.objects.filter(
-                refresh_token=old_refresh,
-            ).first()
-            if parent_session is not None:
-                now = timezone.now()
-                parent_session.last_seen_at = now
-                parent_session.revoked_at = now
-                parent_session.revoke_reason = TokenSession.RevokeReason.ROTATED
-                parent_session.save(update_fields=[
-                    "last_seen_at", "revoked_at", "revoke_reason",
-                ])
+        # Wrap parent.save + TokenSession.create + audit.log in a single
+        # transaction so a DB error between writes cannot leave audit /
+        # session state half-applied. The outer save_bearer_token catches
+        # the rollback exception and logs it; DOT's own token writes have
+        # already committed before this hook runs, so production token
+        # issuance is unaffected.
+        with transaction.atomic():
+            # Refresh-rotation detection: oauthlib's DOT validator attaches
+            # the previous RefreshToken instance to the request as
+            # ``request.refresh_token_instance`` in ``validate_refresh_token``
+            # (verified against the installed DOT source). For initial
+            # issuance the attribute is absent / None.
+            #
+            # Note: DOT's _save_bearer_token clears the attribute after a
+            # successful revoke on rotation (sets it to None). As a fallback
+            # for that case we walk the new AccessToken.source_refresh_token
+            # FK, which DOT wires up to the previous RefreshToken when a new
+            # token pair is minted.
+            parent_session = None
+            old_refresh = getattr(request, "refresh_token_instance", None)
+            if old_refresh is None:
+                new_at = getattr(rt, "access_token", None)
+                if new_at is not None:
+                    old_refresh = getattr(new_at, "source_refresh_token", None)
+            if old_refresh is not None:
+                parent_session = TokenSession.objects.filter(
+                    refresh_token=old_refresh,
+                ).first()
+                if parent_session is not None:
+                    now = timezone.now()
+                    parent_session.last_seen_at = now
+                    parent_session.revoked_at = now
+                    parent_session.revoke_reason = TokenSession.RevokeReason.ROTATED
+                    parent_session.save(update_fields=[
+                        "last_seen_at", "revoked_at", "revoke_reason",
+                    ])
 
-        ip = self._extract_ip(request)
-        ua = ""
-        if getattr(request, "headers", None):
-            ua = (request.headers.get("User-Agent") or "")[:512]
-        country, city = lookup_location(ip)
+            ip = self._extract_ip(request)
+            ua = ""
+            if getattr(request, "headers", None):
+                ua = (request.headers.get("User-Agent") or "")[:512]
+            country, city = lookup_location(ip)
 
-        TokenSession.objects.create(
-            user=rt.user,
-            application=rt.application,
-            refresh_token=rt,
-            parent=parent_session,
-            ip_address=ip,
-            user_agent=ua,
-            country_code=country or "",
-            city=city or "",
-        )
-
-        # LOGIN_SUCCESS audit only on initial issuance, not on every
-        # refresh-rotation (would be noisy and not actionable).
-        if parent_session is None:
-            SsoAuditLog.log(
-                event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
-                target_user=rt.user,
+            TokenSession.objects.create(
+                user=rt.user,
                 application=rt.application,
-                message=f"Token issued. UA={ua[:80]} City={city or 'unknown'}",
+                refresh_token=rt,
+                parent=parent_session,
                 ip_address=ip,
+                user_agent=ua,
+                country_code=country or "",
+                city=city or "",
             )
+
+            # LOGIN_SUCCESS audit only on initial issuance, not on every
+            # refresh-rotation (would be noisy and not actionable).
+            if parent_session is None:
+                SsoAuditLog.log(
+                    event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
+                    target_user=rt.user,
+                    application=rt.application,
+                    message=f"Token issued. UA={ua[:80]} City={city or 'unknown'}",
+                    ip_address=ip,
+                )
 
     @staticmethod
     def _extract_ip(request):
