@@ -468,25 +468,27 @@ class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
         )
         old_policy = pol.access_policy if not created else "grant_required"
 
+        policy_changed = created or (old_policy != new_policy)
         if not created and pol.access_policy != new_policy:
             pol.access_policy = new_policy
             pol.modified_by = request.user
             pol.save(update_fields=["access_policy", "modified_by", "updated_at"])
 
-        active_session_count = TokenSession.objects.filter(
-            application=application,
-            revoked_at__isnull=True,
-        ).count()
-        SsoAuditLog.log(
-            event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
-            actor=request.user,
-            application=application,
-            message=(
-                f"Policy {old_policy} -> {new_policy}. "
-                f"{active_session_count} active session(s) at the time of change."
-            ),
-            ip_address=_client_ip(request),
-        )
+        if policy_changed:
+            active_session_count = TokenSession.objects.filter(
+                application=application,
+                revoked_at__isnull=True,
+            ).count()
+            SsoAuditLog.log(
+                event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
+                actor=request.user,
+                application=application,
+                message=(
+                    f"Policy {old_policy} -> {new_policy}. "
+                    f"{active_session_count} active session(s) at the time of change."
+                ),
+                ip_address=_client_ip(request),
+            )
 
         return HttpResponseRedirect(
             reverse("sso:application_detail", kwargs={"pk": application.pk}),

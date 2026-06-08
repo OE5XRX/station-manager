@@ -359,3 +359,23 @@ def test_app_policy_update_requires_admin(db, client, session_row):
         data={"access_policy": "open_to_all"},
     )
     assert resp.status_code == 403
+
+
+def test_app_policy_update_noop_skips_audit(db, client, admin, session_row):
+    """Posting the same policy twice should produce exactly one audit row
+    (from the first set), not two."""
+    app = session_row.application
+    client.force_login(admin)
+    client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    log_count = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
+        application=app,
+    ).count()
+    assert log_count == 1, "No-op repost must not produce a second audit row"
