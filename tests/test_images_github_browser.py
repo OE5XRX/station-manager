@@ -518,9 +518,7 @@ class TestDottedTagSelectorRegression:
     '#gh-row-2026 .04 .24-18-…' (class selectors). hx-target must
     survive this — use an attribute selector instead."""
 
-    def test_dotted_tag_uses_attribute_selector_in_partial(
-        self, client, admin_user, monkeypatch
-    ):
+    def test_dotted_tag_uses_attribute_selector_in_partial(self, client, admin_user, monkeypatch):
         tag = "2026.04.24-18"
         rel = _mk_release(tag)
         monkeypatch.setattr(
@@ -543,9 +541,7 @@ class TestDottedTagSelectorRegression:
         assert f'data-gh-row="{tag}-qemux86-64"' in body
         assert f"hx-target=\"[data-gh-row='{tag}-qemux86-64']\"" in body
 
-    def test_dotted_tag_quick_queue_returns_swappable_row(
-        self, client, admin_user
-    ):
+    def test_dotted_tag_quick_queue_returns_swappable_row(self, client, admin_user):
         tag = "2026.04.24-18"
         client.force_login(admin_user)
         response = client.post(
@@ -604,15 +600,11 @@ class TestShowModePreservation:
         assert m, "Refresh button not found in partial body"
         assert "?show=all" not in m.group(0)
 
-    def test_error_partial_includes_controls(
-        self, client, admin_user, monkeypatch
-    ):
+    def test_error_partial_includes_controls(self, client, admin_user, monkeypatch):
         def boom(repo, limit):
             raise github_releases.GitHubAPIError("read timed out")
 
-        monkeypatch.setattr(
-            "apps.images.views.github_releases.fetch_releases", boom
-        )
+        monkeypatch.setattr("apps.images.views.github_releases.fetch_releases", boom)
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial") + "?show=all")
         body = response.content.decode()
@@ -630,9 +622,7 @@ class TestArchivedReleaseHandling:
     'imported' so the GitHub browser doesn't show them as queueable and
     QuickQueueView doesn't create duplicate jobs for them."""
 
-    def test_archived_release_row_is_omitted_from_partial(
-        self, client, admin_user, monkeypatch
-    ):
+    def test_archived_release_row_is_omitted_from_partial(self, client, admin_user, monkeypatch):
         release = ImageRelease.objects.create(
             tag="v1",
             machine="qemux86-64",
@@ -656,9 +646,7 @@ class TestArchivedReleaseHandling:
         # Archived (tag,machine) must be treated as imported -> row omitted.
         assert "gh-row-v1-qemux86-64" not in body
 
-    def test_archived_release_quick_queue_returns_imported(
-        self, client, admin_user
-    ):
+    def test_archived_release_quick_queue_returns_imported(self, client, admin_user):
         release = ImageRelease.objects.create(
             tag="v1",
             machine="qemux86-64",
