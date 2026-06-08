@@ -47,21 +47,38 @@ SSO_CLAIM_SCOPE["groups"] = "groups"
 
 
 def user_can_access(user, application) -> bool:
-    """Return True iff user is active AND holds an active AppGrant for app.
+    """Return True iff user is active AND policy/grant allows access.
 
-    Pure function — no side effects, suitable for direct unit testing.
+    Spec §3.2: rote Linie ist inactive=False; alle 5 Policies haben das
+    als Grundvoraussetzung. Wenn keine ApplicationPolicy-Row existiert,
+    faellt der Code auf das pre-existierende GRANT_REQUIRED-Verhalten
+    zurueck (abwaertskompatibel).
     """
     if not getattr(user, "is_active", False):
         return False
 
-    # Local import to avoid the circular load path:
-    # sso.permissions <- OAUTH2_PROVIDER settings <- DOT <- sso.models
-    from .models import AppGrant
+    # Local imports keep the validator/permissions module free of an
+    # import cycle on settings loading (see existing pattern below).
+    from .models import AppGrant, ApplicationPolicy
 
+    access_policy = ApplicationPolicy.AccessPolicy
+    policy = access_policy.GRANT_REQUIRED
+    pol_obj = getattr(application, "sso_policy", None)
+    if pol_obj is not None:
+        policy = pol_obj.access_policy
+
+    if policy == access_policy.OPEN_TO_ALL:
+        return True
+    if policy == access_policy.OPEN_TO_MEMBERS:
+        return user.membership_level != user.MembershipLevel.APPLICANT
+    if policy == access_policy.OPEN_TO_INTERNAL:
+        return user.is_internal
+    if policy == access_policy.OPEN_TO_ADMINS:
+        return user.is_admin
+
+    # GRANT_REQUIRED — pre-existing behaviour
     return AppGrant.objects.filter(
-        user=user,
-        application=application,
-        revoked_at__isnull=True,
+        user=user, application=application, revoked_at__isnull=True,
     ).exists()
 
 
