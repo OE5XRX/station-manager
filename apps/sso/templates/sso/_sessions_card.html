@@ -1,0 +1,93 @@
+{% load i18n %}
+<section class="panel" id="sessions-card" style="max-width:960px;margin-top:16px;">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--accent);box-shadow:0 0 8px var(--accent-soft,var(--accent));"></span>
+      {% trans "Active sessions" %}
+    </div>
+    <span class="t-label">{{ target_user.username }}</span>
+  </div>
+
+  {% if sessions %}
+  <div class="panel-body flush">
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "App" %}</th>
+            <th>{% trans "Issued" %}</th>
+            <th>{% trans "Last seen" %}</th>
+            <th>{% trans "Location" %}</th>
+            <th>{% trans "Device" %}</th>
+            <th style="width:1%;text-align:right;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sessions %}
+          <tr>
+            <td data-primary data-label="{% trans 'App' %}">
+              <div class="stack-gap-2">
+                <span style="font-weight:600;color:var(--ink-0);font-size:13px;">{{ s.application.name }}</span>
+                <code class="t-mono-sm" style="color:var(--ink-3);">{{ s.application.client_id|truncatechars:24 }}</code>
+              </div>
+            </td>
+            <td data-label="{% trans 'Issued' %}">
+              <span class="t-mono-sm" style="color:var(--ink-2);">{{ s.issued_at|date:"d M H:i" }}</span>
+            </td>
+            <td data-label="{% trans 'Last seen' %}">
+              <span class="t-mono-sm" style="color:var(--ink-2);">{{ s.last_seen_at|date:"d M H:i" }}</span>
+            </td>
+            <td data-label="{% trans 'Location' %}">
+              {% if s.country_code %}
+                <span class="t-mono-sm">{{ s.country_code }}{% if s.city %} · {{ s.city }}{% endif %}</span>
+              {% else %}
+                <span class="pill pill-muted">{% trans "Unknown" %}</span>
+              {% endif %}
+            </td>
+            <td data-label="{% trans 'Device' %}">
+              <span class="t-mono-sm t-muted" title="{{ s.user_agent }}">{{ s.user_agent|truncatechars:30|default:"—" }}</span>
+            </td>
+            <td class="actions">
+              <form method="post"
+                    action="{% url 'sso:session_revoke' pk=s.pk %}"
+                    hx-post="{% url 'sso:session_revoke' pk=s.pk %}"
+                    hx-target="#sessions-card"
+                    hx-swap="outerHTML"
+                    style="display:inline;">
+                {% csrf_token %}
+                <button type="submit"
+                        class="btn btn-sm btn-danger"
+                        aria-label="{% trans 'Revoke session' %}">
+                  {% trans "Revoke" %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="panel-body">
+    <div class="empty" style="padding: 24px 12px;">
+      <div class="empty-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+        </svg>
+      </div>
+      <div class="empty-title">{% trans "No active sessions" %}</div>
+      <div class="t-mono-sm">{% trans "This user has no live OIDC sessions right now." %}</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel-foot row-split">
+    <span class="t-mono" style="font-size:11px;letter-spacing:0.08em;color:var(--ink-3);">
+      {% trans "SSO · live token sessions" %}
+    </span>
+    <a class="btn btn-sm btn-ghost" href="{% url 'sso:dashboard' %}">
+      {% trans "SSO dashboard" %} →
+    </a>
+  </div>
+</section>
