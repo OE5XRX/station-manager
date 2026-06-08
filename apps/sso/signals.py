@@ -23,6 +23,7 @@ import logging
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -30,9 +31,10 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
-def _mark_sessions_revoked(user, *, application=None, reason):
-    """Mark all active TokenSessions of a user revoked. Optional app
-    filter for grant-revoke cascade (Spec §4.3).
+def _mark_sessions_revoked(user, *, application=None, reason) -> int:
+    """Mark all active TokenSessions of a user revoked. Returns row count.
+
+    Optional app filter for grant-revoke cascade (Spec §4.3).
 
     Uses .update() so the cascade is one bulk statement; filtering on
     revoked_at__isnull=True keeps it idempotent and preserves any
@@ -71,16 +73,20 @@ def _revoke_tokens_on_user_deactivation(sender, instance, created, **kwargs):
     if old and not instance.is_active:
         from oauth2_provider.models import AccessToken, RefreshToken
 
-        past = timezone.now() - timedelta(seconds=1)
-        n_at = AccessToken.objects.filter(user=instance, expires__gt=timezone.now()).update(
-            expires=past
-        )
-        n_rt = RefreshToken.objects.filter(user=instance, revoked__isnull=True).update(
-            revoked=timezone.now()
-        )
         from .models import TokenSession
 
-        n_ts = _mark_sessions_revoked(instance, reason=TokenSession.RevokeReason.USER_DEACTIVATED)
+        past = timezone.now() - timedelta(seconds=1)
+        with transaction.atomic():
+            n_at = AccessToken.objects.filter(user=instance, expires__gt=timezone.now()).update(
+                expires=past
+            )
+            n_rt = RefreshToken.objects.filter(user=instance, revoked__isnull=True).update(
+                revoked=timezone.now()
+            )
+            n_ts = _mark_sessions_revoked(
+                instance, reason=TokenSession.RevokeReason.USER_DEACTIVATED
+            )
+
         logger.info(
             "User %s deactivated → revoked %d access + %d refresh tokens, %d sessions",
             instance.username,
@@ -91,6 +97,7 @@ def _revoke_tokens_on_user_deactivation(sender, instance, created, **kwargs):
 
         # Audit log is best-effort: a transient DB error on the audit
         # write must not undo the deactivation that already committed.
+        # Intentionally outside the atomic block above.
         try:
             from .models import SsoAuditLog
 
@@ -98,7 +105,8 @@ def _revoke_tokens_on_user_deactivation(sender, instance, created, **kwargs):
                 event_type=SsoAuditLog.EventType.TOKEN_REVOKED,
                 target_user=instance,
                 message=(
-                    f"User deactivated; {n_at} access tokens + {n_rt} refresh tokens revoked."
+                    f"User deactivated; {n_at} access tokens + {n_rt} refresh tokens "
+                    f"+ {n_ts} sessions revoked."
                 ),
             )
         except Exception:
@@ -114,18 +122,20 @@ def _revoke_tokens_for_user_and_app(user, application):
     """Helper called from the AppGrant post_save handler below."""
     from oauth2_provider.models import AccessToken, RefreshToken
 
-    past = timezone.now() - timedelta(seconds=1)
-    n_at = AccessToken.objects.filter(
-        user=user, application=application, expires__gt=timezone.now()
-    ).update(expires=past)
-    n_rt = RefreshToken.objects.filter(
-        user=user, application=application, revoked__isnull=True
-    ).update(revoked=timezone.now())
     from .models import TokenSession
 
-    n_ts = _mark_sessions_revoked(
-        user, application=application, reason=TokenSession.RevokeReason.GRANT_REVOKED
-    )
+    past = timezone.now() - timedelta(seconds=1)
+    with transaction.atomic():
+        n_at = AccessToken.objects.filter(
+            user=user, application=application, expires__gt=timezone.now()
+        ).update(expires=past)
+        n_rt = RefreshToken.objects.filter(
+            user=user, application=application, revoked__isnull=True
+        ).update(revoked=timezone.now())
+        n_ts = _mark_sessions_revoked(
+            user, application=application, reason=TokenSession.RevokeReason.GRANT_REVOKED
+        )
+
     logger.info(
         "AppGrant revoked user=%s app=%s → %d access + %d refresh, %d sessions revoked",
         user.username,
@@ -135,6 +145,7 @@ def _revoke_tokens_for_user_and_app(user, application):
         n_ts,
     )
 
+    # Audit log is best-effort, intentionally outside the atomic block.
     try:
         from .models import SsoAuditLog
 
@@ -142,7 +153,10 @@ def _revoke_tokens_for_user_and_app(user, application):
             event_type=SsoAuditLog.EventType.TOKEN_REVOKED,
             target_user=user,
             application=application,
-            message=(f"AppGrant revoked; {n_at} access + {n_rt} refresh tokens revoked."),
+            message=(
+                f"AppGrant revoked; {n_at} access + {n_rt} refresh tokens "
+                f"+ {n_ts} sessions revoked."
+            ),
         )
     except Exception:
         logger.exception("Audit log write failed during grant revoke cascade")
