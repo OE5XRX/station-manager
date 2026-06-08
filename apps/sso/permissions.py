@@ -221,8 +221,12 @@ class SsoOAuth2Validator(OAuth2Validator):
 
             ip = self._extract_ip(request)
             ua = ""
-            if getattr(request, "headers", None):
-                ua = (request.headers.get("User-Agent") or "")[:512]
+            headers = getattr(request, "headers", None) or {}
+            ua = (
+                headers.get("HTTP_USER_AGENT")
+                or headers.get("User-Agent")
+                or ""
+            )[:512]
             country, city = lookup_location(ip)
 
             TokenSession.objects.create(
@@ -249,8 +253,16 @@ class SsoOAuth2Validator(OAuth2Validator):
 
     @staticmethod
     def _extract_ip(request):
+        """Return the client IP from oauthlib request headers.
+
+        oauthlib's extract_headers copies Django's request.META keys
+        verbatim, so the production-reality keys are
+        HTTP_X_FORWARDED_FOR / HTTP_X_REAL_IP. Unit tests using
+        SimpleNamespace with the HTTP standard names (X-Forwarded-For,
+        X-Real-IP) are also supported via the second-arg fallback.
+        """
         headers = getattr(request, "headers", None) or {}
-        xff = headers.get("X-Forwarded-For")
+        xff = headers.get("HTTP_X_FORWARDED_FOR") or headers.get("X-Forwarded-For")
         if xff:
             return xff.split(",")[0].strip()
-        return headers.get("X-Real-IP")
+        return headers.get("HTTP_X_REAL_IP") or headers.get("X-Real-IP")
