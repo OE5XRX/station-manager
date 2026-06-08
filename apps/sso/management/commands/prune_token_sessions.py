@@ -12,7 +12,6 @@ from django.utils import timezone
 
 from apps.sso.models import TokenSession
 
-
 CUTOFF_DAYS = 30
 
 
@@ -25,6 +24,5 @@ class Command(BaseCommand):
             Q(refresh_token__revoked__lt=cutoff)
             | Q(revoked_at__lt=cutoff),
         )
-        n = qs.count()
-        qs.delete()
+        n, _ = qs.delete()
         self.stdout.write(f"Pruned {n} TokenSession row(s).")
