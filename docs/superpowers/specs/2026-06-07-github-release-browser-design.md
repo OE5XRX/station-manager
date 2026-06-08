@@ -323,11 +323,15 @@ group repeats the tag). Each row renders:
    is_latest=rel.is_latest html_url=rel.html_url %}
 ```
 
-**`_github_release_row.html`** — single `<tr>` keyed by HTMX-friendly id
-(`id="gh-row-{tag}-{machine}"`). The Queue form:
+**`_github_release_row.html`** — single `<tr>` keyed by both an HTML
+`id` and a `data-gh-row` attribute. The Queue button targets the row via
+**attribute selector** (`[data-gh-row='…']`), not an ID selector — real
+Yocto tags contain dots (`2026.04.24-18`), and `#gh-row-2026.04.24-18-…`
+gets parsed as `#gh-row-2026` + `.04` + `.24-18-…` (class selectors) by
+CSS, breaking the HTMX swap.
 
 ```html
-<tr id="gh-row-{{ tag }}-{{ machine }}">
+<tr id="gh-row-{{ tag }}-{{ machine }}" data-gh-row="{{ tag }}-{{ machine }}">
   <td>
     {% if html_url %}
       <a href="{{ html_url }}" target="_blank" rel="noopener">{{ tag }}</a>
@@ -348,9 +352,9 @@ group repeats the tag). Each row renders:
     {% if state == "ready" %}
       <button class="btn btn-primary btn-sm"
               hx-post="{% url 'images:gh_queue' %}"
-              hx-vals='{"tag": "{{ tag }}", "machine": "{{ machine }}", "is_latest": "{% if is_latest %}1{% else %}0{% endif %}"}'
+              hx-vals='{"tag": "{{ tag|escapejs }}", "machine": "{{ machine|escapejs }}", "is_latest": "{% if is_latest %}1{% else %}0{% endif %}"}'
               hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-              hx-target="#gh-row-{{ tag }}-{{ machine }}"
+              hx-target="[data-gh-row='{{ tag }}-{{ machine }}']"
               hx-swap="outerHTML">{% trans "Queue" %}</button>
     {% elif state == "queued" %}
       <span class="pill pill-pending">{% trans "QUEUED" %}</span>

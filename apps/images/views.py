@@ -219,9 +219,13 @@ class GitHubReleasesPartialView(AdminRequiredMixin, View):
                 limit=ALL_LIMIT,
             )
         except github_releases.GitHubAPIError as exc:
-            return render(request, "images/_github_error.html", {"error": str(exc)})
+            return render(
+                request,
+                "images/_github_error.html",
+                {"error": str(exc), "show": show},
+            )
 
-        imported = set(ImageRelease.objects.values_list("tag", "machine"))
+        imported = set(ImageRelease.all_objects.values_list("tag", "machine"))
         in_flight = set(
             ImageImportJob.objects.filter(
                 status__in=[
@@ -266,7 +270,7 @@ class QuickQueueView(AdminRequiredMixin, View):
         if not tag or machine not in {m.value for m in MACHINES}:
             return HttpResponseBadRequest("invalid tag/machine")
 
-        if ImageRelease.objects.filter(tag=tag, machine=machine).exists():
+        if ImageRelease.all_objects.filter(tag=tag, machine=machine).exists():
             return _render_row(request, tag, machine, is_latest=is_latest, state="imported")
         existing = ImageImportJob.objects.filter(
             tag=tag,

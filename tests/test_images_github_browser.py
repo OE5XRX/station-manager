@@ -558,3 +558,120 @@ class TestDottedTagSelectorRegression:
         # so HTMX outerHTML-swap finds it via the original attribute selector.
         assert f'id="gh-row-{tag}-qemux86-64"' in body
         assert f'data-gh-row="{tag}-qemux86-64"' in body
+
+
+@pytest.mark.django_db
+class TestShowModePreservation:
+    """Refresh button must preserve the current show-mode. Originally
+    Refresh always called `/gh_partial/` with no `show=`, which would
+    revert a user from 'Show all' back to 'newest 10' on click."""
+
+    def test_show_all_partial_refresh_button_preserves_show_all(
+        self, client, admin_user, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial") + "?show=all")
+        body = response.content.decode()
+        # Refresh button in the controls partial must carry ?show=all
+        # when current mode is 'all'.
+        assert "Refresh" in body
+        assert "?show=all" in body
+
+    def test_show_newest_partial_refresh_button_omits_show_param(
+        self, client, admin_user, monkeypatch
+    ):
+        import re
+
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        # In default mode, the Refresh button must NOT add show=all to its URL.
+        # Match the <button…>…Refresh…</button> block and inspect its
+        # attributes for the show=all leak.
+        m = re.search(
+            r"<button[^>]*>\s*[^<]*Refresh[^<]*</button>",
+            body,
+            re.DOTALL,
+        )
+        assert m, "Refresh button not found in partial body"
+        assert "?show=all" not in m.group(0)
+
+    def test_error_partial_includes_controls(
+        self, client, admin_user, monkeypatch
+    ):
+        def boom(repo, limit):
+            raise github_releases.GitHubAPIError("read timed out")
+
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases", boom
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial") + "?show=all")
+        body = response.content.decode()
+        # Even in error state, controls render with the right show-mode
+        # so the user can switch back without losing context.
+        assert "Refresh" in body
+        assert "?show=all" in body
+        # And the error banner is also shown.
+        assert "GitHub temporarily unreachable" in body
+
+
+@pytest.mark.django_db
+class TestArchivedReleaseHandling:
+    """Soft-deleted (archived) ImageRelease rows must still count as
+    'imported' so the GitHub browser doesn't show them as queueable and
+    QuickQueueView doesn't create duplicate jobs for them."""
+
+    def test_archived_release_row_is_omitted_from_partial(
+        self, client, admin_user, monkeypatch
+    ):
+        release = ImageRelease.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            s3_key="x",
+            sha256="a" * 64,
+            size_bytes=1,
+        )
+        release.archive()  # soft-delete
+        # ImageRelease.objects.filter(...).count() is 0 now, but all_objects sees it.
+        assert ImageRelease.objects.filter(tag="v1").count() == 0
+        assert ImageRelease.all_objects.filter(tag="v1").count() == 1
+
+        releases = [_mk_release("v1")]
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: releases,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        # Archived (tag,machine) must be treated as imported -> row omitted.
+        assert "gh-row-v1-qemux86-64" not in body
+
+    def test_archived_release_quick_queue_returns_imported(
+        self, client, admin_user
+    ):
+        release = ImageRelease.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            s3_key="x",
+            sha256="a" * 64,
+            size_bytes=1,
+        )
+        release.archive()
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "is_latest": "0"},
+        )
+        assert response.status_code == 200
+        assert ImageImportJob.objects.count() == 0
+        assert b"IMPORTED" in response.content
