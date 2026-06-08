@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -275,8 +278,6 @@ class TokenSession(models.Model):
     def is_active(self) -> bool:
         """Lebende Session: nicht revoked, RefreshToken intakt, nicht
         ueber die Refresh-Lifetime hinaus."""
-        from datetime import timedelta
-
         if self.revoked_at is not None:
             return False
         rt = self.refresh_token
@@ -287,8 +288,6 @@ class TokenSession(models.Model):
                 "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
             )
         )
-        from django.utils import timezone
-
         return self.issued_at + max_lifetime > timezone.now()
 
     def __str__(self):
