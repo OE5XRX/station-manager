@@ -1,7 +1,9 @@
 {% load i18n %}
-{# Controls re-render with every partial fetch so the Refresh button picks
-   up the current show-mode. Loaded by _github_releases_table.html and
-   _github_error.html. #}
+{% comment %}
+  Controls re-render with every partial fetch so the Refresh button picks
+  up the current show-mode. Loaded by _github_releases_table.html and
+  _github_error.html.
+{% endcomment %}
 <div class="row-gap-8" style="padding:12px 16px;border-bottom:1px solid var(--line);">
   <button type="button" class="btn btn-sm"
           hx-get="{% url 'images:gh_partial' %}{% if show == 'all' %}?show=all{% endif %}"

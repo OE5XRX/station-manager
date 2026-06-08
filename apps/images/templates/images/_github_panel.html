@@ -8,9 +8,11 @@
     <span class="t-label">{% trans "Live list of release tags" %}</span>
   </div>
   <div class="panel-body flush">
-    {# Controls (Refresh / Show all / Show newest 10) live inside the
-       partial response so they pick up the current show-mode on every
-       fetch — see _github_controls.html. #}
+    {% comment %}
+      Controls (Refresh / Show all / Show newest 10) live inside the
+      partial response so they pick up the current show-mode on every
+      fetch — see _github_controls.html.
+    {% endcomment %}
     <div id="gh-releases"
          hx-get="{% url 'images:gh_partial' %}"
          hx-trigger="load"
