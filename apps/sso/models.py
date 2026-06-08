@@ -148,3 +148,48 @@ class SsoAuditLog(models.Model):
             message=message,
             ip_address=ip_address,
         )
+
+
+class ApplicationPolicy(models.Model):
+    """Per-App access policy. 1:1 zu DOT's Application.
+
+    Wenn keine Row existiert -> Policy ist implizit GRANT_REQUIRED
+    (Spec §3.1).
+    """
+
+    class AccessPolicy(models.TextChoices):
+        GRANT_REQUIRED = "grant_required", _("Grant required (default)")
+        OPEN_TO_ALL = "open_to_all", _("Open to all (incl. applicants)")
+        OPEN_TO_MEMBERS = "open_to_members", _("Open to members and above")
+        OPEN_TO_INTERNAL = "open_to_internal", _("Open to staff and admins")
+        OPEN_TO_ADMINS = "open_to_admins", _("Open to admins only")
+
+    application = models.OneToOneField(
+        "oauth2_provider.Application",
+        on_delete=models.CASCADE,
+        related_name="sso_policy",
+        verbose_name=_("application"),
+    )
+    access_policy = models.CharField(
+        _("access policy"),
+        max_length=32,
+        choices=AccessPolicy.choices,
+        default=AccessPolicy.GRANT_REQUIRED,
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+    modified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="modified_app_policies",
+        verbose_name=_("modified by"),
+    )
+
+    class Meta:
+        verbose_name = _("application policy")
+        verbose_name_plural = _("application policies")
+
+    def __str__(self):
+        return f"{self.application.name} -> {self.get_access_policy_display()}"
