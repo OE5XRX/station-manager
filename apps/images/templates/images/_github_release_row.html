@@ -1,0 +1,48 @@
+{% load i18n %}
+<tr id="gh-row-{{ tag }}-{{ machine }}" data-gh-row="{{ tag }}-{{ machine }}">
+  <td data-label="{% trans 'Tag' %}">
+    {% if html_url %}
+      <a href="{{ html_url }}" target="_blank" rel="noopener"
+         style="font-family:var(--font-mono);font-weight:600;color:var(--ink-0);">{{ tag }}</a>
+    {% else %}
+      <span style="font-family:var(--font-mono);font-weight:600;color:var(--ink-0);">{{ tag }}</span>
+    {% endif %}
+    {% if is_latest %}
+      <span class="pill pill-accent" style="margin-left:6px;">{% trans "LATEST" %}</span>
+    {% endif %}
+  </td>
+  <td data-label="{% trans 'Machine' %}">
+    {% if machine == "raspberrypi4-64" %}
+      <span class="pill pill-violet">RPi 4 · 64</span>
+    {% elif machine == "qemux86-64" %}
+      <span class="pill pill-accent">QEMU x86-64</span>
+    {% else %}
+      <span class="pill pill-muted">{{ machine }}</span>
+    {% endif %}
+  </td>
+  <td data-label="{% trans 'Asset' %}">
+    {% if state == "no_asset" %}
+      <span class="pill pill-muted" title="{% trans 'release does not contain an asset for this machine' %}">{% trans "no asset" %}</span>
+    {% else %}
+      <span class="t-mono-sm t-muted">{% trans "ok" %}</span>
+    {% endif %}
+  </td>
+  <td class="actions" data-label="{% trans 'Action' %}">
+    {% if state == "ready" %}
+      <button class="btn btn-sm btn-primary"
+              hx-post="{% url 'images:gh_queue' %}"
+              hx-vals='{"tag": "{{ tag|escapejs }}", "machine": "{{ machine|escapejs }}", "is_latest": "{% if is_latest %}1{% else %}0{% endif %}"}'
+              hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+              hx-target="[data-gh-row='{{ tag }}-{{ machine }}']"
+              hx-swap="outerHTML">
+        {% trans "Queue" %}
+      </button>
+    {% elif state == "queued" %}
+      <span class="pill pill-pending"><span class="dot"></span>{% trans "QUEUED" %}</span>
+    {% elif state == "imported" %}
+      <span class="pill pill-online"><span class="dot"></span>{% trans "IMPORTED" %}</span>
+    {% elif state == "no_asset" %}
+      <button class="btn btn-sm" disabled>{% trans "Queue" %}</button>
+    {% endif %}
+  </td>
+</tr>

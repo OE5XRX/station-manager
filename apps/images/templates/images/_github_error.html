@@ -1,0 +1,12 @@
+{% load i18n %}
+{% include "images/_github_controls.html" %}
+<div class="empty" style="padding:28px 12px;">
+  <div class="empty-title">{% trans "GitHub temporarily unreachable" %}</div>
+  <div class="t-mono-sm t-muted" style="margin:6px 0 12px;">{{ error }}</div>
+  <button type="button" class="btn btn-sm"
+          hx-get="{% url 'images:gh_partial' %}{% if show == 'all' %}?show=all{% endif %}"
+          hx-target="#gh-releases"
+          hx-swap="innerHTML">
+    {% trans "Try again" %}
+  </button>
+</div>

@@ -240,51 +240,7 @@
 
 <div class="grid grid-main">
 
-  <section class="panel" id="import-form">
-    <div class="panel-head">
-      <div class="panel-title">
-        <span class="dot" style="background:var(--accent);"></span>
-        {% trans "Import from GitHub" %}
-      </div>
-      <span class="t-label">{% trans "Pulls signed .wic.bz2 + cosign bundle" %}</span>
-    </div>
-    <form method="post" action="{% url 'images:import' %}">
-      {% csrf_token %}
-      <div class="panel-body">
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label" for="{{ import_form.tag.id_for_label }}">{{ import_form.tag.label }}</label>
-            {{ import_form.tag }}
-            {% if import_form.tag.help_text %}<div class="form-help">{{ import_form.tag.help_text }}</div>{% endif %}
-            {% if import_form.tag.errors %}<div class="form-error">{{ import_form.tag.errors|join:", " }}</div>{% endif %}
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="{{ import_form.machine.id_for_label }}">{{ import_form.machine.label }}</label>
-            {{ import_form.machine }}
-            {% if import_form.machine.errors %}<div class="form-error">{{ import_form.machine.errors|join:", " }}</div>{% endif %}
-          </div>
-        </div>
-        <div class="form-group" style="margin-bottom:0;">
-          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-size:13px;color:var(--ink-1);font-weight:500;">
-            {{ import_form.mark_as_latest }}
-            <span>{{ import_form.mark_as_latest.label }}</span>
-          </label>
-          {% if import_form.mark_as_latest.errors %}<div class="form-error">{{ import_form.mark_as_latest.errors|join:", " }}</div>{% endif %}
-        </div>
-      </div>
-      <div class="panel-foot row-gap-8">
-        <button type="submit" class="btn btn-primary">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
-          </svg>
-          {% trans "Queue import" %}
-        </button>
-        <span class="t-mono-sm t-muted">
-          {% blocktrans with backend=storage_backend_label %}Asynchronous — a worker pulls the release from GitHub Releases and uploads it to the configured artifact store ({{ backend }}).{% endblocktrans %}
-        </span>
-      </div>
-    </form>
-  </section>
+  {% include "images/_github_panel.html" %}
 
   <section class="panel">
     <div class="panel-head">

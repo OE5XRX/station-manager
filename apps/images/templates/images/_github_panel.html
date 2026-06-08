@@ -1,0 +1,25 @@
+{% load i18n %}
+<section class="panel mb-24" id="import-form">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--accent);"></span>
+      {% trans "Import from GitHub" %}
+    </div>
+    <span class="t-label">{% trans "Live list of release tags" %}</span>
+  </div>
+  <div class="panel-body flush">
+    {% comment %}
+      Controls (Refresh / Show all / Show newest 10) live inside the
+      partial response so they pick up the current show-mode on every
+      fetch — see _github_controls.html.
+    {% endcomment %}
+    <div id="gh-releases"
+         hx-get="{% url 'images:gh_partial' %}"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+      <div class="empty" style="padding:28px 12px;">
+        <div class="empty-title">{% trans "Loading releases from GitHub…" %}</div>
+      </div>
+    </div>
+  </div>
+</section>
