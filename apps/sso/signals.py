@@ -30,6 +30,21 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def _mark_sessions_revoked(user, *, application=None, reason):
+    """Mark all active TokenSessions of a user revoked. Optional app
+    filter for grant-revoke cascade (Spec §4.3).
+
+    Uses .update() so the cascade is one bulk statement; filtering on
+    revoked_at__isnull=True keeps it idempotent and preserves any
+    earlier revoke reason (e.g. USER_LOGOUT)."""
+    from .models import TokenSession
+
+    qs = TokenSession.objects.filter(user=user, revoked_at__isnull=True)
+    if application is not None:
+        qs = qs.filter(application=application)
+    return qs.update(revoked_at=timezone.now(), revoke_reason=reason)
+
+
 # ---------------------------------------------------------------------------
 # User.is_active False-edge
 # ---------------------------------------------------------------------------
@@ -63,11 +78,15 @@ def _revoke_tokens_on_user_deactivation(sender, instance, created, **kwargs):
         n_rt = RefreshToken.objects.filter(user=instance, revoked__isnull=True).update(
             revoked=timezone.now()
         )
+        from .models import TokenSession
+
+        n_ts = _mark_sessions_revoked(instance, reason=TokenSession.RevokeReason.USER_DEACTIVATED)
         logger.info(
-            "User %s deactivated → revoked %d access + %d refresh tokens",
+            "User %s deactivated → revoked %d access + %d refresh tokens, %d sessions",
             instance.username,
             n_at,
             n_rt,
+            n_ts,
         )
 
         # Audit log is best-effort: a transient DB error on the audit
@@ -102,12 +121,18 @@ def _revoke_tokens_for_user_and_app(user, application):
     n_rt = RefreshToken.objects.filter(
         user=user, application=application, revoked__isnull=True
     ).update(revoked=timezone.now())
+    from .models import TokenSession
+
+    n_ts = _mark_sessions_revoked(
+        user, application=application, reason=TokenSession.RevokeReason.GRANT_REVOKED
+    )
     logger.info(
-        "AppGrant revoked user=%s app=%s → %d access + %d refresh revoked",
+        "AppGrant revoked user=%s app=%s → %d access + %d refresh, %d sessions revoked",
         user.username,
         application.client_id,
         n_at,
         n_rt,
+        n_ts,
     )
 
     try:
