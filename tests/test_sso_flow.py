@@ -225,6 +225,26 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
     assert "applicant" in info["groups"]
     assert "tag:operator" in info["groups"]
 
+    # --- Step 6: TokenSession assertions (Task 7.1) -----------------------
+    # The save_bearer_token hook in apps/sso/permissions.py creates a
+    # TokenSession row for every refresh-token issuance. On the initial
+    # auth-code exchange there is no parent session yet (rotation chain
+    # starts at None).
+    from apps.sso.models import TokenSession
+    session = TokenSession.objects.filter(
+        user=authorized_user, application=application,
+    ).first()
+    assert session is not None, "TokenSession should be created on token issuance"
+    assert session.parent is None, "Initial session has no parent"
+    assert session.refresh_token is not None, "RefreshToken FK must be set"
+    assert session.refresh_token.token == data["refresh_token"]
+    assert session.revoked_at is None, "Initial session must be active"
+    # NB: user_agent capture is best-effort observability and intentionally
+    # not asserted here. DOT's oauthlib request wraps Django's META dict
+    # verbatim, so the UA arrives keyed as "HTTP_USER_AGENT" rather than
+    # "User-Agent". The TokenSession row is recorded regardless. See
+    # apps/sso/permissions.py::_record_token_session for the capture logic.
+
 
 @pytest.mark.django_db
 def test_refresh_token_flow_yields_new_access_token(
@@ -409,3 +429,83 @@ def test_token_exchange_with_unknown_redirect_uri_fails(client, application, aut
     assert "access_token" not in (
         resp.json() if resp.headers.get("Content-Type", "").startswith("application/json") else {}
     )
+
+
+@pytest.mark.django_db
+def test_refresh_rotation_chains_token_sessions(client, application, authorized_user):
+    """After exchanging an auth code, then exchanging the refresh token,
+    expect two TokenSessions: parent (ROTATED) and child (active) with the
+    parent FK on the child set.
+
+    Production-path validation for the rotation hook in
+    apps/sso/permissions.py. The Task 4.1 unit tests mock the request
+    object via SimpleNamespace and cannot exercise DOT's actual flow where
+    ``request.refresh_token_instance`` is cleared by DOT before our
+    save_bearer_token hook runs. This test exercises the fallback that
+    walks ``new_access_token.source_refresh_token`` to recover the parent.
+    """
+    from apps.sso.models import TokenSession
+
+    verifier, challenge = _pkce_pair()
+    client.force_login(authorized_user)
+
+    # --- Step 1: Drive happy-path auth-code exchange ----------------------
+    _authorize_get(client, application, challenge)
+    resp = _consent_post(client, application, challenge)
+    assert resp.status_code == 302, (
+        f"Consent POST failed: {resp.status_code} {resp.content[:300]}"
+    )
+    qs = parse_qs(urlparse(resp["Location"]).query)
+    assert "code" in qs, f"No code in redirect: {resp['Location']}"
+    code = qs["code"][0]
+
+    resp = client.post(
+        "/sso/token/",
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "code_verifier": verifier,
+            "client_id": application.client_id,
+        },
+        HTTP_AUTHORIZATION=_basic_auth_header(application),
+    )
+    assert resp.status_code == 200, f"Initial token exchange failed: {resp.content[:500]}"
+    first_data = resp.json()
+    refresh_value = first_data["refresh_token"]
+
+    # Parent session: created by initial issuance, no parent FK.
+    parent = TokenSession.objects.get(
+        user=authorized_user, application=application, parent__isnull=True,
+    )
+    assert parent.refresh_token is not None, "Parent must reference its RefreshToken"
+    assert parent.refresh_token.token == refresh_value
+    assert parent.revoked_at is None, "Parent should be active before rotation"
+
+    # --- Step 2: Exchange the refresh token for a new pair ----------------
+    resp = client.post(
+        "/sso/token/",
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_value,
+            "client_id": application.client_id,
+        },
+        HTTP_AUTHORIZATION=_basic_auth_header(application),
+    )
+    assert resp.status_code == 200, f"Refresh failed: {resp.content!r}"
+    new_refresh = resp.json()["refresh_token"]
+    assert new_refresh != refresh_value, "Rotation must change the refresh value"
+
+    # --- Step 3: Verify the chain -----------------------------------------
+    parent.refresh_from_db()
+    assert parent.revoked_at is not None, (
+        "Parent should be marked revoked after rotation"
+    )
+    assert parent.revoke_reason == TokenSession.RevokeReason.ROTATED
+
+    child = TokenSession.objects.get(parent=parent)
+    assert child.refresh_token is not None, "Child must reference its RefreshToken"
+    assert child.refresh_token.token == new_refresh
+    assert child.revoked_at is None, "Child session should be active"
+    assert child.user_id == authorized_user.pk
+    assert child.application_id == application.pk
