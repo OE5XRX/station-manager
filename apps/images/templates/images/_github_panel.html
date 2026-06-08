@@ -1,0 +1,40 @@
+{% load i18n %}
+<section class="panel mb-24" id="import-form">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--accent);"></span>
+      {% trans "Import from GitHub" %}
+    </div>
+    <span class="t-label">{% trans "Live list of release tags" %}</span>
+  </div>
+  <div class="panel-body flush">
+    <div class="row-gap-8" style="padding:12px 16px;border-bottom:1px solid var(--line);">
+      <a class="btn btn-sm"
+         hx-get="{% url 'images:gh_partial' %}"
+         hx-target="#gh-releases"
+         hx-swap="innerHTML">
+        {% trans "Refresh" %}
+      </a>
+      <a class="btn btn-sm"
+         hx-get="{% url 'images:gh_partial' %}?show=all"
+         hx-target="#gh-releases"
+         hx-swap="innerHTML">
+        {% trans "Show all" %}
+      </a>
+      <a class="btn btn-sm"
+         hx-get="{% url 'images:gh_partial' %}"
+         hx-target="#gh-releases"
+         hx-swap="innerHTML">
+        {% trans "Show newest 10" %}
+      </a>
+    </div>
+    <div id="gh-releases"
+         hx-get="{% url 'images:gh_partial' %}"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+      <div class="empty" style="padding:28px 12px;">
+        <div class="empty-title">{% trans "Loading releases from GitHub…" %}</div>
+      </div>
+    </div>
+  </div>
+</section>

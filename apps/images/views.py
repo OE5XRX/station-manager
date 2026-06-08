@@ -1,17 +1,28 @@
+from enum import StrEnum
+
 from django.conf import settings
 from django.contrib import messages
 from django.db.models import ProtectedError
-from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse_lazy
+from django.http import HttpResponseBadRequest
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.translation import gettext_lazy as _
 from django.views import View
-from django.views.generic import FormView, ListView
+from django.views.generic import ListView
 
 from apps.accounts.views import AdminRequiredMixin
 
-from . import storage
-from .forms import ImageImportForm
+from . import github_releases, storage
 from .models import ImageImportJob, ImageRelease
+
+MACHINES = [ImageRelease.Machine.QEMU, ImageRelease.Machine.RPI]
+NEWEST_LIMIT = 10
+ALL_LIMIT = 30
+
+
+class _RowState(StrEnum):
+    READY = "ready"
+    QUEUED = "queued"
+    NO_ASSET = "no_asset"
 
 
 def _storage_backend_label() -> str:
@@ -45,7 +56,6 @@ class ImageListView(AdminRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["import_form"] = ImageImportForm()
         ctx["recent_jobs"] = ImageImportJob.objects.order_by("-created_at")[:10]
         # KPI tile aggregates — always over the ACTIVE set (the default
         # manager) regardless of the show_archived toggle. KPIs should
@@ -64,36 +74,6 @@ class ImageListView(AdminRequiredMixin, ListView):
         ctx["storage_backend_label"] = _storage_backend_label()
         ctx["show_archived"] = self._show_archived()
         return ctx
-
-
-class ImageImportView(AdminRequiredMixin, FormView):
-    form_class = ImageImportForm
-    template_name = "images/image_list.html"
-    success_url = reverse_lazy("images:list")
-
-    def form_valid(self, form):
-        ImageImportJob.objects.create(
-            tag=form.cleaned_data["tag"],
-            machine=form.cleaned_data["machine"],
-            mark_as_latest=form.cleaned_data["mark_as_latest"],
-            requested_by=self.request.user,
-        )
-        messages.success(
-            self.request,
-            _("Import queued. It will appear below in a minute or two."),
-        )
-        return super().form_valid(form)
-
-    def form_invalid(self, form):
-        # The list template needs import_form/releases/recent_jobs context,
-        # which FormView does not supply. Since the form has only two fields
-        # (tag + machine choice) a dedicated error page is not warranted —
-        # surface the errors via messages and bounce back to the list.
-        messages.error(
-            self.request,
-            _("Invalid import request: %(errors)s") % {"errors": form.errors.as_text()},
-        )
-        return redirect("images:list")
 
 
 class ImageMarkLatestView(AdminRequiredMixin, View):
@@ -228,3 +208,95 @@ class ImageRestoreView(AdminRequiredMixin, View):
             _("Release %(tag)s restored.") % {"tag": release.tag},
         )
         return redirect("images:list")
+
+
+class GitHubReleasesPartialView(AdminRequiredMixin, View):
+    def get(self, request):
+        show = request.GET.get("show", "newest")
+        try:
+            releases = github_releases.fetch_releases(
+                getattr(settings, "LINUX_IMAGE_REPO", "OE5XRX/linux-image"),
+                limit=ALL_LIMIT,
+            )
+        except github_releases.GitHubAPIError as exc:
+            return render(request, "images/_github_error.html", {"error": str(exc)})
+
+        imported = set(ImageRelease.objects.values_list("tag", "machine"))
+        in_flight = set(
+            ImageImportJob.objects.filter(
+                status__in=[
+                    ImageImportJob.Status.PENDING,
+                    ImageImportJob.Status.RUNNING,
+                ]
+            ).values_list("tag", "machine")
+        )
+
+        rows_by_tag = []
+        for rel in releases:
+            machine_rows = []
+            for m in MACHINES:
+                key = (rel.tag, m.value)
+                if key in imported:
+                    continue
+                if key in in_flight:
+                    state = _RowState.QUEUED.value
+                elif not rel.has_assets_for(m.value):
+                    state = _RowState.NO_ASSET.value
+                else:
+                    state = _RowState.READY.value
+                machine_rows.append((m.value, state))
+            if machine_rows:
+                rows_by_tag.append((rel, machine_rows))
+
+        if show != "all":
+            rows_by_tag = rows_by_tag[:NEWEST_LIMIT]
+
+        return render(
+            request,
+            "images/_github_releases_table.html",
+            {"rows_by_tag": rows_by_tag, "show": show},
+        )
+
+
+class QuickQueueView(AdminRequiredMixin, View):
+    def post(self, request):
+        tag = request.POST.get("tag", "").strip()
+        machine = request.POST.get("machine", "").strip()
+        is_latest = request.POST.get("is_latest", "0") == "1"
+        if not tag or machine not in {m.value for m in MACHINES}:
+            return HttpResponseBadRequest("invalid tag/machine")
+
+        if ImageRelease.objects.filter(tag=tag, machine=machine).exists():
+            return _render_row(request, tag, machine, is_latest=is_latest, state="imported")
+        existing = ImageImportJob.objects.filter(
+            tag=tag,
+            machine=machine,
+            status__in=[
+                ImageImportJob.Status.PENDING,
+                ImageImportJob.Status.RUNNING,
+            ],
+        ).first()
+        if existing:
+            return _render_row(request, tag, machine, is_latest=is_latest, state="queued")
+
+        ImageImportJob.objects.create(
+            tag=tag,
+            machine=machine,
+            mark_as_latest=is_latest,
+            requested_by=request.user,
+        )
+        return _render_row(request, tag, machine, is_latest=is_latest, state="queued")
+
+
+def _render_row(request, tag, machine, *, is_latest, state, html_url=""):
+    return render(
+        request,
+        "images/_github_release_row.html",
+        {
+            "tag": tag,
+            "machine": machine,
+            "is_latest": is_latest,
+            "state": state,
+            "html_url": html_url,
+        },
+    )

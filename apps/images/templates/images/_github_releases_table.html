@@ -1,0 +1,27 @@
+{% load i18n %}
+{% if rows_by_tag %}
+<div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Tag" %}</th>
+        <th>{% trans "Machine" %}</th>
+        <th>{% trans "Asset" %}</th>
+        <th style="width:1%;">{% trans "Action" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rel, machine_rows in rows_by_tag %}
+        {% for m, state in machine_rows %}
+          {% include "images/_github_release_row.html" with tag=rel.tag machine=m state=state is_latest=rel.is_latest html_url=rel.html_url %}
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty" style="padding:28px 12px;">
+  <div class="empty-title">{% trans "No new releases to import" %}</div>
+  <div>{% trans "All current GitHub releases are already in the database." %}</div>
+</div>
+{% endif %}

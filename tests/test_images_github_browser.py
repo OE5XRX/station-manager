@@ -1,0 +1,560 @@
+import http.client
+import io
+import json
+import urllib.error
+from unittest.mock import patch
+
+import pytest
+from django.urls import reverse
+
+from apps.images import github_releases
+from apps.images.github_releases import (
+    GitHubAPIError,
+    GitHubRelease,
+    fetch_releases,
+)
+from apps.images.models import ImageImportJob, ImageRelease
+
+
+class TestGitHubReleaseAssets:
+    def _release(self, names):
+        return GitHubRelease(
+            tag="v1-alpha",
+            html_url="https://example.invalid/v1-alpha",
+            is_latest=False,
+            asset_names=frozenset(names),
+        )
+
+    def test_all_three_assets_present_returns_true(self):
+        rel = self._release(
+            [
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
+            ]
+        )
+        assert rel.has_assets_for("qemux86-64") is True
+
+    def test_missing_bundle_returns_false(self):
+        rel = self._release(
+            [
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
+            ]
+        )
+        assert rel.has_assets_for("qemux86-64") is False
+
+    def test_missing_sha256_returns_false(self):
+        rel = self._release(
+            [
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
+            ]
+        )
+        assert rel.has_assets_for("qemux86-64") is False
+
+    def test_missing_wic_returns_false(self):
+        rel = self._release(
+            [
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
+            ]
+        )
+        assert rel.has_assets_for("qemux86-64") is False
+
+    def test_other_machine_assets_dont_satisfy(self):
+        rel = self._release(
+            [
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
+                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
+            ]
+        )
+        assert rel.has_assets_for("raspberrypi4-64") is False
+
+
+def _gh_response(payload):
+    """Return a fake urlopen context manager yielding JSON bytes."""
+
+    class _CM:
+        def __enter__(self):
+            return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+        def __exit__(self, *a):
+            return False
+
+    return _CM()
+
+
+def _make_fake_urlopen(responses_by_url):
+    def fake(req, timeout):
+        url = req.full_url if hasattr(req, "full_url") else req
+        if url not in responses_by_url:
+            raise AssertionError(f"unexpected url {url}")
+        return _gh_response(responses_by_url[url])
+
+    return fake
+
+
+class TestFetchReleasesHappy:
+    def test_returns_releases_newest_first_with_is_latest(self):
+        list_url = "https://api.github.com/repos/OE5XRX/linux-image/releases?per_page=30"
+        latest_url = "https://api.github.com/repos/OE5XRX/linux-image/releases/latest"
+        responses = {
+            list_url: [
+                {
+                    "tag_name": "v2",
+                    "html_url": "https://github.com/x/v2",
+                    "assets": [{"name": "oe5xrx-qemux86-64-v2.wic.bz2"}],
+                },
+                {
+                    "tag_name": "v1",
+                    "html_url": "https://github.com/x/v1",
+                    "assets": [],
+                },
+            ],
+            latest_url: {"tag_name": "v2"},
+        }
+
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=_make_fake_urlopen(responses),
+        ):
+            result = fetch_releases("OE5XRX/linux-image", limit=30)
+
+        assert len(result) == 2
+        assert result[0].tag == "v2"
+        assert result[0].is_latest is True
+        assert result[0].html_url == "https://github.com/x/v2"
+        assert result[0].asset_names == frozenset(["oe5xrx-qemux86-64-v2.wic.bz2"])
+        assert result[1].tag == "v1"
+        assert result[1].is_latest is False
+        assert result[1].asset_names == frozenset()
+
+    def test_empty_release_list_returns_empty(self):
+        list_url = "https://api.github.com/repos/OE5XRX/linux-image/releases?per_page=30"
+        latest_url = "https://api.github.com/repos/OE5XRX/linux-image/releases/latest"
+
+        # /releases/latest is allowed to 404 when there are no releases at all;
+        # we mock it as 200 with a non-matching tag so the latest-tag branch runs cleanly.
+        responses = {list_url: [], latest_url: {"tag_name": "nope"}}
+
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=_make_fake_urlopen(responses),
+        ):
+            assert fetch_releases("OE5XRX/linux-image", limit=30) == []
+
+
+class TestFetchReleasesHTTPException:
+    def test_http_client_exception_is_wrapped_as_github_api_error(self):
+        def fake(req, timeout):
+            raise http.client.RemoteDisconnected("server closed connection")
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            with pytest.raises(GitHubAPIError) as exc:
+                fetch_releases("OE5XRX/linux-image")
+            assert "server closed connection" in str(exc.value)
+
+
+class TestFetchReleasesErrors:
+    def test_list_url_error_raises_github_api_error(self):
+        def fake(req, timeout):
+            raise urllib.error.URLError("no route to host")
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            with pytest.raises(GitHubAPIError) as exc:
+                fetch_releases("OE5XRX/linux-image")
+            assert "no route to host" in str(exc.value)
+
+    def test_list_timeout_raises_github_api_error(self):
+        def fake(req, timeout):
+            raise TimeoutError("read timed out")
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            with pytest.raises(GitHubAPIError):
+                fetch_releases("OE5XRX/linux-image")
+
+    def test_list_malformed_json_raises_github_api_error(self):
+        class _BadJSON:
+            def __enter__(self):
+                return io.BytesIO(b"<<not json>>")
+
+            def __exit__(self, *a):
+                return False
+
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            return_value=_BadJSON(),
+        ):
+            with pytest.raises(GitHubAPIError):
+                fetch_releases("OE5XRX/linux-image")
+
+    def test_latest_url_failure_keeps_list_renderable(self):
+        """If /releases/latest fails (e.g. repo has only prereleases),
+        the list still renders with is_latest=False on every row."""
+        list_url = "https://api.github.com/repos/OE5XRX/linux-image/releases?per_page=30"
+        latest_url = "https://api.github.com/repos/OE5XRX/linux-image/releases/latest"
+
+        def fake(req, timeout):
+            url = req.full_url
+            if url == list_url:
+                return _gh_response([{"tag_name": "v1", "html_url": "", "assets": []}])
+            if url == latest_url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+            raise AssertionError(f"unexpected url {url}")
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            result = fetch_releases("OE5XRX/linux-image")
+
+        assert len(result) == 1
+        assert result[0].is_latest is False
+
+
+@pytest.mark.django_db
+class TestRoutingAndAuth:
+    def test_partial_url_reverses(self):
+        # i18n_patterns prefixes URLs with the active language code.
+        assert reverse("images:gh_partial") == "/en/images/github-releases/"
+
+    def test_queue_url_reverses(self):
+        assert reverse("images:gh_queue") == "/en/images/github-releases/queue/"
+
+    def test_partial_requires_admin(self, client, operator_user):
+        client.force_login(operator_user)
+        response = client.get(reverse("images:gh_partial"))
+        assert response.status_code == 403
+
+    def test_queue_requires_admin(self, client, operator_user):
+        client.force_login(operator_user)
+        response = client.post(reverse("images:gh_queue"))
+        assert response.status_code == 403
+
+    def test_partial_anonymous_redirects(self, client):
+        response = client.get(reverse("images:gh_partial"))
+        # AdminRequiredMixin -> LoginRequiredMixin -> 302
+        assert response.status_code == 302
+
+
+def _mk_release(tag, is_latest=False, machines=("qemux86-64", "raspberrypi4-64")):
+    names = set()
+    for m in machines:
+        prefix = f"oe5xrx-{m}-{tag}.wic.bz2"
+        names.update([prefix, f"{prefix}.bundle", f"{prefix}.sha256"])
+    return GitHubRelease(
+        tag=tag,
+        html_url=f"https://github.com/x/{tag}",
+        is_latest=is_latest,
+        asset_names=frozenset(names),
+    )
+
+
+@pytest.mark.django_db
+class TestGitHubReleasesPartialViewHappy:
+    def test_empty_list_renders_empty_state(self, client, admin_user, monkeypatch):
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        assert response.status_code == 200
+        assert b"No new releases" in response.content
+
+    def test_twelve_releases_default_shows_newest_ten(self, client, admin_user, monkeypatch):
+        releases = [_mk_release(f"v{i}") for i in range(12, 0, -1)]  # v12..v1
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: releases,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        assert response.status_code == 200
+        body = response.content.decode()
+        # 10 newest tags visible
+        for tag in [f"v{i}" for i in range(12, 2, -1)]:
+            assert f"gh-row-{tag}-qemux86-64" in body
+        # v2 and v1 hidden
+        assert "gh-row-v2-qemux86-64" not in body
+        assert "gh-row-v1-qemux86-64" not in body
+
+    def test_show_all_widens_to_full_list(self, client, admin_user, monkeypatch):
+        releases = [_mk_release(f"v{i}") for i in range(12, 0, -1)]
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: releases,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial") + "?show=all")
+        body = response.content.decode()
+        assert "gh-row-v1-qemux86-64" in body
+        assert "gh-row-v12-qemux86-64" in body
+
+    def test_imported_machine_row_is_omitted(self, client, admin_user, monkeypatch):
+        ImageRelease.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            s3_key="x",
+            sha256="a" * 64,
+            size_bytes=1,
+        )
+        releases = [_mk_release("v1")]
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: releases,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        assert "gh-row-v1-qemux86-64" not in body  # imported → omitted
+        assert "gh-row-v1-raspberrypi4-64" in body  # missing → visible
+
+    def test_tag_fully_imported_is_omitted_entirely(self, client, admin_user, monkeypatch):
+        for m in ("qemux86-64", "raspberrypi4-64"):
+            ImageRelease.objects.create(
+                tag="v1",
+                machine=m,
+                s3_key=f"x-{m}",
+                sha256="a" * 64,
+                size_bytes=1,
+            )
+        releases = [_mk_release("v1"), _mk_release("v2")]
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: releases,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        assert "gh-row-v1-" not in body
+        assert "gh-row-v2-qemux86-64" in body
+
+    def test_pending_job_shows_queued_state(self, client, admin_user, monkeypatch):
+        ImageImportJob.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            status=ImageImportJob.Status.PENDING,
+            mark_as_latest=False,
+        )
+        releases = [_mk_release("v1")]
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: releases,
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        assert "gh-row-v1-qemux86-64" in body
+        # Queued-row contains the QUEUED pill, no submit button
+        row_start = body.index("gh-row-v1-qemux86-64")
+        row_end = body.index("</tr>", row_start)
+        row = body[row_start:row_end]
+        assert "QUEUED" in row
+        assert "hx-post" not in row
+
+    def test_missing_asset_disables_queue(self, client, admin_user, monkeypatch):
+        rel = _mk_release("v1", machines=("qemux86-64",))  # no rpi assets
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [rel],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        rpi_row_start = body.index("gh-row-v1-raspberrypi4-64")
+        rpi_row_end = body.index("</tr>", rpi_row_start)
+        rpi_row = body[rpi_row_start:rpi_row_end]
+        assert "no asset" in rpi_row
+        assert "disabled" in rpi_row
+
+    def test_is_latest_renders_pill(self, client, admin_user, monkeypatch):
+        rel = _mk_release("v1", is_latest=True)
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [rel],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        row_start = body.index("gh-row-v1-qemux86-64")
+        row_end = body.index("</tr>", row_start)
+        assert "LATEST" in body[row_start:row_end]
+
+
+@pytest.mark.django_db
+class TestGitHubReleasesPartialViewErrors:
+    def test_github_api_error_renders_error_partial(self, client, admin_user, monkeypatch):
+        def boom(repo, limit):
+            raise github_releases.GitHubAPIError("read timed out")
+
+        monkeypatch.setattr("apps.images.views.github_releases.fetch_releases", boom)
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        assert response.status_code == 200
+        body = response.content.decode()
+        assert "GitHub temporarily unreachable" in body
+        assert "read timed out" in body
+        assert "Try again" in body
+
+
+@pytest.mark.django_db
+class TestQuickQueueViewCore:
+    def test_creates_job_with_is_latest_true(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "is_latest": "1"},
+        )
+        assert response.status_code == 200
+        job = ImageImportJob.objects.get()
+        assert job.tag == "v1"
+        assert job.machine == "qemux86-64"
+        assert job.mark_as_latest is True
+        assert job.status == ImageImportJob.Status.PENDING
+        assert job.requested_by == admin_user
+        assert b"QUEUED" in response.content
+        assert b"gh-row-v1-qemux86-64" in response.content
+
+    def test_creates_job_with_is_latest_false(self, client, admin_user):
+        client.force_login(admin_user)
+        client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "raspberrypi4-64", "is_latest": "0"},
+        )
+        job = ImageImportJob.objects.get()
+        assert job.mark_as_latest is False
+
+    def test_omitted_is_latest_defaults_false(self, client, admin_user):
+        client.force_login(admin_user)
+        client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64"},
+        )
+        job = ImageImportJob.objects.get()
+        assert job.mark_as_latest is False
+
+    def test_existing_release_does_not_create_job_shows_imported(self, client, admin_user):
+        ImageRelease.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            s3_key="x",
+            sha256="a" * 64,
+            size_bytes=1,
+        )
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "is_latest": "0"},
+        )
+        assert response.status_code == 200
+        assert ImageImportJob.objects.count() == 0
+        assert b"IMPORTED" in response.content
+
+    def test_pending_job_does_not_create_second_shows_queued(self, client, admin_user):
+        ImageImportJob.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            status=ImageImportJob.Status.PENDING,
+            mark_as_latest=False,
+        )
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "is_latest": "0"},
+        )
+        assert ImageImportJob.objects.count() == 1
+        assert b"QUEUED" in response.content
+
+    def test_running_job_does_not_create_second_shows_queued(self, client, admin_user):
+        ImageImportJob.objects.create(
+            tag="v1",
+            machine="qemux86-64",
+            status=ImageImportJob.Status.RUNNING,
+            mark_as_latest=False,
+        )
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "is_latest": "0"},
+        )
+        assert ImageImportJob.objects.count() == 1
+        assert b"QUEUED" in response.content
+
+
+@pytest.mark.django_db
+class TestQuickQueueViewValidation:
+    def test_missing_tag_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"machine": "qemux86-64", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
+    def test_invalid_machine_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "not-a-machine", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
+    def test_empty_tag_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "   ", "machine": "qemux86-64", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestDottedTagSelectorRegression:
+    """Yocto daily builds use tags like '2026.04.24-18'. The bare id
+    selector '#gh-row-2026.04.24-18-…' is parsed by CSS as
+    '#gh-row-2026 .04 .24-18-…' (class selectors). hx-target must
+    survive this — use an attribute selector instead."""
+
+    def test_dotted_tag_uses_attribute_selector_in_partial(
+        self, client, admin_user, monkeypatch
+    ):
+        tag = "2026.04.24-18"
+        rel = _mk_release(tag)
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [rel],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        # Row is still findable by id (HTML id allows dots, only CSS selector
+        # parsing trips up).
+        assert f'id="gh-row-{tag}-qemux86-64"' in body
+        # hx-target must NOT use the bare id selector.
+        bad_selector = f'hx-target="#gh-row-{tag}-qemux86-64"'
+        assert bad_selector not in body, (
+            "hx-target uses bare id selector which CSS misparses on dots; "
+            "switch to attribute selector"
+        )
+        # Verify our actual fix is in place.
+        assert f'data-gh-row="{tag}-qemux86-64"' in body
+        assert f"hx-target=\"[data-gh-row='{tag}-qemux86-64']\"" in body
+
+    def test_dotted_tag_quick_queue_returns_swappable_row(
+        self, client, admin_user
+    ):
+        tag = "2026.04.24-18"
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": tag, "machine": "qemux86-64", "is_latest": "1"},
+        )
+        assert response.status_code == 200
+        body = response.content.decode()
+        # The returned row still carries both the id and the data attribute
+        # so HTMX outerHTML-swap finds it via the original attribute selector.
+        assert f'id="gh-row-{tag}-qemux86-64"' in body
+        assert f'data-gh-row="{tag}-qemux86-64"' in body
