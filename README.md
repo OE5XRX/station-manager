@@ -167,6 +167,26 @@ docker compose run --rm web python manage.py setup_oidc_keys
 Fresh installs (images built from this commit onward) inherit the
 correct ownership on first mount and don't need the manual chown.
 
+### GeoIP database
+
+The station-manager resolves session IPs to country + city for the
+admin-facing "Active sessions" view. The lookup uses the free
+[db-ip.com City Lite](https://db-ip.com/db/lite.php) database (no
+API key required).
+
+On a fresh deployment, seed the DB once:
+
+```bash
+docker compose run --rm web python manage.py update_geoip_db
+```
+
+In production, this command runs daily via the `update-geoip-db`
+GitHub Actions workflow in the [`servers`](https://github.com/OE5XRX/servers)
+repo (see `.github/workflows/update-geoip-db.yml`).
+
+If the DB file is missing or a lookup fails, the session row keeps
+an empty country/city — token issuance is never blocked.
+
 ### Registering a new RP application
 
 1. Log into the station-manager as an admin.
