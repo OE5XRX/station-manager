@@ -193,6 +193,125 @@ page to inject the token automatically.
   </section>
 
 </div>
+
+<section class="panel mt-20">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--accent);box-shadow:0 0 8px var(--accent-soft,var(--accent));"></span>
+      {% trans "Access policy" %}
+    </div>
+    <span class="t-label">{% trans "Per-app rule" %}</span>
+  </div>
+  <div class="panel-body">
+    <p class="t-muted" style="margin-top:0;">
+      {% trans "Controls which users may obtain tokens for this application. The default 'grant required' restricts access to users with an explicit AppGrant." %}
+    </p>
+    <form method="post" action="{% url 'sso:app_policy_update' pk=application.pk %}" class="row-split" style="align-items:flex-end;gap:12px;flex-wrap:wrap;">
+      {% csrf_token %}
+      <label for="access_policy" class="t-label" style="display:flex;flex-direction:column;gap:6px;flex:1;min-width:220px;">
+        <span>{% trans "Policy" %}</span>
+        <select id="access_policy" name="access_policy" class="form-control">
+          {% for value, label in policy_choices %}
+            <option value="{{ value }}" {% if value == current_policy_value %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="btn btn-primary">{% trans "Save policy" %}</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel mt-20">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--violet);box-shadow:0 0 8px var(--violet-soft);"></span>
+      {% trans "Group propagation" %}
+    </div>
+    <span class="t-label">OIDC · groups claim</span>
+  </div>
+  <div class="panel-body">
+    <p class="t-muted" style="margin-top:0;">
+      {% blocktrans %}The OIDC token sent to this app contains a <code>groups</code> claim built from the strings below. Configure your RP-side mapping accordingly.{% endblocktrans %}
+    </p>
+    {% if propagated_group_strings %}
+    <pre class="codebox t-mono-sm" style="white-space:pre-wrap;max-height:320px;overflow:auto;">{% for s in propagated_group_strings %}{{ s }}
+{% endfor %}</pre>
+    {% else %}
+    <div class="empty">
+      <div class="empty-title">{% trans "No groups configured" %}</div>
+      <div>{% trans "No memberships, station/region assignments, or tags exist yet." %}</div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel mt-20">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--signal);box-shadow:0 0 8px rgba(62,213,152,0.5);"></span>
+      {% trans "Recent sessions (last 50)" %}
+    </div>
+    <span class="t-label">{% trans "Token sessions" %}</span>
+  </div>
+  {% if recent_sessions %}
+  <div class="panel-body flush">
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "User" %}</th>
+            <th>{% trans "Issued" %}</th>
+            <th>{% trans "Status" %}</th>
+            <th>{% trans "Location" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in recent_sessions %}
+          <tr>
+            <td data-primary data-label="{% trans 'User' %}">
+              <a href="{% url 'accounts:user_edit' s.user.pk %}" class="t-mono-sm">{{ s.user.username }}</a>
+            </td>
+            <td data-label="{% trans 'Issued' %}">
+              <span class="t-mono-sm" style="color:var(--ink-2);">{{ s.issued_at|date:"d M H:i" }}</span>
+            </td>
+            <td data-label="{% trans 'Status' %}">
+              {% if s.is_active %}
+                <span class="pill pill-online"><span class="dot"></span>{% trans "active" %}</span>
+              {% elif s.revoked_at %}
+                <span class="pill pill-muted"><span class="dot"></span>{% trans "revoked" %}</span>
+              {% else %}
+                <span class="pill pill-muted"><span class="dot"></span>{% trans "expired" %}</span>
+              {% endif %}
+            </td>
+            <td data-label="{% trans 'Location' %}">
+              {% if s.country_code %}
+                <span class="t-mono-sm">{{ s.country_code }}{% if s.city %} · {{ s.city }}{% endif %}</span>
+              {% else %}
+                <span class="t-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="panel-body">
+    <div class="empty">
+      <div class="empty-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+        </svg>
+      </div>
+      <div class="empty-title">{% trans "No sessions yet" %}</div>
+      <div>{% trans "Nobody has signed in via this application yet." %}</div>
+    </div>
+  </div>
+  {% endif %}
+</section>
 {% endblock %}
 
 {% block extra_head %}

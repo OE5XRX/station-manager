@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Tags" %} · SSO · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'sso:dashboard' %}">SSO</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Tags" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Identity Provider" %} · {% trans "Groups" %}</div>
+    <h1 class="page-title">{% trans "Tags" %}</h1>
+    <p class="page-sub">
+      {% trans "Tags are Django auth groups that propagate to the OIDC groups claim as tag:<name>. Use them to route access for relying parties." %}
+    </p>
+  </div>
+</div>
+
+<section class="panel mb-20">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--cyan,var(--accent));box-shadow:0 0 8px var(--cyan-soft,var(--accent-soft,var(--accent)));"></span>
+      {% trans "Create tag" %}
+    </div>
+    <span class="t-label">{% trans "Slug format" %}</span>
+  </div>
+  <div class="panel-body">
+    <p class="t-muted" style="margin-top:0;">
+      {% trans "Tag names must match [a-z0-9-]+ so the synthesised tag:<name> string in OIDC tokens stays predictable." %}
+    </p>
+    <form method="post" action="{% url 'sso:tag_create' %}" class="row-split" style="align-items:flex-end;gap:12px;flex-wrap:wrap;">
+      {% csrf_token %}
+      <label for="tag_name" class="t-label" style="display:flex;flex-direction:column;gap:6px;flex:1;min-width:220px;">
+        <span>{% trans "Name" %}</span>
+        <input id="tag_name" type="text" name="name" class="form-control" placeholder="kontakt-team" required pattern="[a-z0-9-]+">
+      </label>
+      <button type="submit" class="btn btn-primary">{% trans "Create tag" %}</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot"></span>
+      {% trans "Defined tags" %}
+    </div>
+    <span class="t-label">
+      {% blocktrans count n=tags|length %}{{ n }} tag{% plural %}{{ n }} tags{% endblocktrans %}
+    </span>
+  </div>
+  <div class="panel-body flush">
+    {% if tags %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th style="width:1%;">#</th>
+            <th>{% trans "Name" %}</th>
+            <th class="text-end" style="text-align:right;">{% trans "Members" %}</th>
+            <th style="width:1%;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for tag in tags %}
+          <tr>
+            <td class="t-mono" style="color:var(--ink-3);" data-label="#">
+              {{ forloop.counter|stringformat:"02d" }}
+            </td>
+            <td data-primary data-label="{% trans 'Name' %}">
+              <a href="{% url 'sso:tag_detail' pk=tag.pk %}" style="color:inherit;text-decoration:none;">
+                <span class="callsign" style="color:var(--ink-0);font-size:14px;">{{ tag.name }}</span>
+              </a>
+            </td>
+            <td data-label="{% trans 'Members' %}" style="text-align:right;">
+              {% if tag.member_count %}
+                <span class="pill pill-online"><span class="dot"></span>{{ tag.member_count }}</span>
+              {% else %}
+                <span class="pill pill-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="actions">
+              <a class="btn btn-sm btn-ghost"
+                 href="{% url 'sso:tag_detail' pk=tag.pk %}"
+                 aria-label="{% trans 'Open tag' %}">
+                <span>{% trans "Manage" %}</span>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M9 6l6 6-6 6"/>
+                </svg>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/>
+        </svg>
+      </div>
+      <div class="empty-title">{% trans "No tags defined yet" %}</div>
+      <div>{% trans "Create the first tag above to start propagating group claims." %}</div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

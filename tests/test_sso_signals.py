@@ -138,3 +138,109 @@ def test_creating_an_active_user_does_not_revoke_anything(app):
     from apps.sso.models import SsoAuditLog
 
     assert not SsoAuditLog.objects.filter(event_type=SsoAuditLog.EventType.TOKEN_REVOKED).exists()
+
+
+# ---------------------------------------------------------------------------
+# TokenSession cascade (Spec §4.3, Task 4.2)
+# ---------------------------------------------------------------------------
+
+
+def _make_session(user, application):
+    """Helper: create a TokenSession (with matched Access/RefreshToken)
+    for (user, application). Returns the TokenSession."""
+    from apps.sso.models import TokenSession
+
+    now = timezone.now()
+    at = AccessToken.objects.create(
+        user=user,
+        application=application,
+        token=f"at-sess-{user.pk}-{application.pk}",
+        expires=now + timedelta(hours=1),
+        scope="openid",
+    )
+    rt = RefreshToken.objects.create(
+        user=user,
+        application=application,
+        token=f"rt-sess-{user.pk}-{application.pk}",
+        access_token=at,
+    )
+    return TokenSession.objects.create(
+        user=user,
+        application=application,
+        refresh_token=rt,
+    )
+
+
+@pytest.mark.django_db
+def test_user_deactivation_marks_sessions_revoked(alice, app):
+    from apps.sso.models import TokenSession
+
+    s = _make_session(alice, app)
+
+    alice.is_active = False
+    alice.save(update_fields=["is_active"])
+
+    s.refresh_from_db()
+    assert s.revoked_at is not None
+    assert s.revoke_reason == TokenSession.RevokeReason.USER_DEACTIVATED
+
+
+@pytest.mark.django_db
+def test_user_deactivation_marks_all_sessions_across_apps(alice, app, other_app):
+    """USER_DEACTIVATED has NO application filter — every active session
+    of that user, across every RP, must be revoked."""
+    from apps.sso.models import TokenSession
+
+    s_app = _make_session(alice, app)
+    s_other = _make_session(alice, other_app)
+
+    alice.is_active = False
+    alice.save(update_fields=["is_active"])
+
+    s_app.refresh_from_db()
+    s_other.refresh_from_db()
+    assert s_app.revoked_at is not None
+    assert s_other.revoked_at is not None
+    assert s_app.revoke_reason == TokenSession.RevokeReason.USER_DEACTIVATED
+    assert s_other.revoke_reason == TokenSession.RevokeReason.USER_DEACTIVATED
+
+
+@pytest.mark.django_db
+def test_grant_revoke_marks_sessions_for_that_app_only(alice, app, other_app):
+    from apps.sso.models import TokenSession
+
+    grant = AppGrant.objects.create(user=alice, application=app)
+    s1 = _make_session(alice, app)
+    s2 = _make_session(alice, other_app)
+
+    grant.revoked_at = timezone.now()
+    grant.save(update_fields=["revoked_at"])
+
+    s1.refresh_from_db()
+    s2.refresh_from_db()
+    assert s1.revoked_at is not None
+    assert s1.revoke_reason == TokenSession.RevokeReason.GRANT_REVOKED
+    assert s2.revoked_at is None  # unrelated app — untouched
+
+
+@pytest.mark.django_db
+def test_grant_revoke_does_not_overwrite_already_revoked_session(alice, app):
+    """If a session is already revoked (e.g. user_logout), the grant-revoke
+    cascade must not clobber its reason."""
+    from apps.sso.models import TokenSession
+
+    s = _make_session(alice, app)
+    # Pre-revoke with USER_LOGOUT
+    earlier = timezone.now() - timedelta(minutes=5)
+    s.revoked_at = earlier
+    s.revoke_reason = TokenSession.RevokeReason.USER_LOGOUT
+    s.save(update_fields=["revoked_at", "revoke_reason"])
+
+    grant = AppGrant.objects.create(user=alice, application=app)
+    grant.revoked_at = timezone.now()
+    grant.save(update_fields=["revoked_at"])
+
+    s.refresh_from_db()
+    # Original reason preserved — cascade filters on revoked_at__isnull=True
+    assert s.revoke_reason == TokenSession.RevokeReason.USER_LOGOUT
+    assert s.revoked_at == earlier

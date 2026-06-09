@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -79,6 +82,9 @@ class SsoAuditLog(models.Model):
         LOGIN_DENIED_NO_GRANT = "login_denied_no_grant", _("Login Denied — No Grant")
         LOGIN_DENIED_INACTIVE = "login_denied_inactive", _("Login Denied — Inactive User")
         TOKEN_REVOKED = "token_revoked", _("Token Revoked")
+        SESSION_REVOKED = "session_revoked", _("Session Revoked (admin)")
+        APP_POLICY_CHANGED = "app_policy_changed", _("App Policy Changed")
+        GROUP_MEMBERSHIP_CHANGED = "group_membership_changed", _("Group Membership Changed")
 
     event_type = models.CharField(
         _("event type"),
@@ -148,3 +154,181 @@ class SsoAuditLog(models.Model):
             message=message,
             ip_address=ip_address,
         )
+
+
+class ApplicationPolicy(models.Model):
+    """Per-App access policy. 1:1 zu DOT's Application.
+
+    Wenn keine Row existiert -> Policy ist implizit GRANT_REQUIRED
+    (Spec §3.1).
+    """
+
+    class AccessPolicy(models.TextChoices):
+        GRANT_REQUIRED = "grant_required", _("Grant required (default)")
+        OPEN_TO_ALL = "open_to_all", _("Open to all (incl. applicants)")
+        OPEN_TO_MEMBERS = "open_to_members", _("Open to members and above")
+        OPEN_TO_INTERNAL = "open_to_internal", _("Open to staff and admins")
+        OPEN_TO_ADMINS = "open_to_admins", _("Open to admins only")
+
+    application = models.OneToOneField(
+        "oauth2_provider.Application",
+        on_delete=models.CASCADE,
+        related_name="sso_policy",
+        verbose_name=_("application"),
+    )
+    access_policy = models.CharField(
+        _("access policy"),
+        max_length=32,
+        choices=AccessPolicy.choices,
+        default=AccessPolicy.GRANT_REQUIRED,
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+    modified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="modified_app_policies",
+        verbose_name=_("modified by"),
+    )
+
+    class Meta:
+        verbose_name = _("application policy")
+        verbose_name_plural = _("application policies")
+
+    def __str__(self):
+        return f"{self.application.name} -> {self.get_access_policy_display()}"
+
+
+class TokenSessionQuerySet(models.QuerySet):
+    """Custom queryset so the same "active" criteria are reused across
+    the validator hook, audit-log counters, and admin UI helpers.
+
+    Matches the predicate of ``TokenSession.is_active`` at the DB level:
+        revoked_at IS NULL
+        AND refresh_token IS NOT NULL
+        AND refresh_token.revoked IS NULL
+        AND issued_at + REFRESH_TOKEN_EXPIRE_SECONDS > now
+    """
+
+    def active(self):
+        from django.conf import settings as dj_settings
+        from django.utils import timezone
+
+        lifetime_seconds = dj_settings.OAUTH2_PROVIDER.get(
+            "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
+        )
+        lifetime_cutoff = timezone.now() - timedelta(seconds=lifetime_seconds)
+        return self.filter(
+            revoked_at__isnull=True,
+            refresh_token__isnull=False,
+            refresh_token__revoked__isnull=True,
+            issued_at__gt=lifetime_cutoff,
+        )
+
+
+class TokenSession(models.Model):
+    """1:1 zu jeder RefreshToken-Issuance (inkl. Rotations-Chain).
+
+    Spec §4.1.
+    """
+
+    objects = TokenSessionQuerySet.as_manager()
+
+    class RevokeReason(models.TextChoices):
+        ADMIN_REVOKE = "admin_revoke", _("Admin revoke")
+        USER_LOGOUT = "user_logout", _("User logout")
+        USER_DEACTIVATED = "user_deactivated", _("User deactivated")
+        GRANT_REVOKED = "grant_revoked", _("Grant revoked")
+        ROTATED = "rotated", _("Rotated (refresh)")
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="token_sessions",
+        verbose_name=_("user"),
+    )
+    application = models.ForeignKey(
+        "oauth2_provider.Application",
+        on_delete=models.CASCADE,
+        related_name="token_sessions",
+        verbose_name=_("application"),
+    )
+    refresh_token = models.OneToOneField(
+        "oauth2_provider.RefreshToken",
+        on_delete=models.CASCADE,
+        related_name="sso_session",
+        null=True,
+        blank=True,
+        verbose_name=_("refresh token"),
+    )
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="children",
+        verbose_name=_("parent session"),
+    )
+
+    ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
+    user_agent = models.CharField(_("user agent"), max_length=512, blank=True)
+    country_code = models.CharField(_("country code"), max_length=2, blank=True)
+    city = models.CharField(_("city"), max_length=100, blank=True)
+
+    issued_at = models.DateTimeField(_("issued at"), auto_now_add=True)
+    last_seen_at = models.DateTimeField(_("last seen at"), auto_now_add=True)
+
+    revoked_at = models.DateTimeField(_("revoked at"), null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="revoked_sessions",
+        verbose_name=_("revoked by"),
+    )
+    revoke_reason = models.CharField(
+        _("revoke reason"),
+        max_length=32,
+        choices=RevokeReason.choices,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = _("token session")
+        verbose_name_plural = _("token sessions")
+        ordering = ("-issued_at",)
+        indexes = [
+            models.Index(fields=["user", "-issued_at"]),
+            models.Index(fields=["application", "-issued_at"]),
+            models.Index(fields=["revoked_at"]),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        """Lebende Session: nicht revoked, RefreshToken intakt, nicht
+        ueber die Refresh-Lifetime hinaus."""
+        if self.revoked_at is not None:
+            return False
+        rt = self.refresh_token
+        if rt is None or rt.revoked is not None:
+            return False
+        max_lifetime = timedelta(
+            seconds=settings.OAUTH2_PROVIDER.get("REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600)
+        )
+        return self.issued_at + max_lifetime > timezone.now()
+
+    def __str__(self):
+        # Match the full is_active predicate (refresh-token present and
+        # not revoked, within refresh-lifetime). Sessions where the
+        # refresh-token aged past the lifetime would otherwise be
+        # misleadingly labeled "active" in admin/log output.
+        if self.is_active:
+            status = "active"
+        elif self.revoked_at:
+            status = "revoked"
+        else:
+            status = "expired"
+        return f"{self.user} → {self.application} ({status})"

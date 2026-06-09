@@ -6,7 +6,7 @@ from django.contrib.auth.models import Group
 from django.urls import reverse
 from oauth2_provider.models import Application
 
-from apps.sso.models import AppGrant, SsoAuditLog
+from apps.sso.models import AppGrant, ApplicationPolicy, SsoAuditLog
 
 User = get_user_model()
 
@@ -206,3 +206,199 @@ def test_toggle_without_hx_trigger_returns_partial_as_before(client, admin_user,
     assert "HX-Redirect" not in resp.headers
     # And it renders the app-grants-card div.
     assert b"sso-grants-card" in resp.content
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1: SessionRevokeView
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def admin(db):
+    u = User.objects.create_user(username="admin_revoke", password="x")
+    u.membership_level = User.MembershipLevel.ADMIN
+    u.save(update_fields=["membership_level"])
+    User._invalidate_role_cache(u)
+    return u
+
+
+@pytest.fixture
+def session_row(db):
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from oauth2_provider.models import AccessToken, RefreshToken
+
+    from apps.sso.models import TokenSession
+
+    user = User.objects.create_user(username="target", password="x")
+    app = Application.objects.create(
+        name="InvenTreeSess",
+        client_type=Application.CLIENT_CONFIDENTIAL,
+        authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        redirect_uris="https://x.example.org/cb/",
+    )
+    at = AccessToken.objects.create(
+        user=user,
+        application=app,
+        token="at1",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
+    )
+    rt = RefreshToken.objects.create(
+        user=user,
+        application=app,
+        token="rt1",
+        access_token=at,
+    )
+    return TokenSession.objects.create(user=user, application=app, refresh_token=rt)
+
+
+def test_session_revoke_view_requires_admin(db, client, session_row):
+    user = User.objects.create_user(username="nonadmin", password="x")
+    client.force_login(user)
+    resp = client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    assert resp.status_code == 403
+
+
+def test_session_revoke_view_revokes(db, client, admin, session_row):
+    from django.utils import timezone
+
+    from apps.sso.models import TokenSession
+
+    client.force_login(admin)
+    resp = client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    assert resp.status_code in (200, 302)
+
+    session_row.refresh_from_db()
+    assert session_row.revoked_at is not None
+    assert session_row.revoked_by == admin
+    assert session_row.revoke_reason == TokenSession.RevokeReason.ADMIN_REVOKE
+
+    rt = session_row.refresh_token
+    rt.refresh_from_db()
+    assert rt.revoked is not None
+
+    # Spec §4.4: the original AT (the one this RT was issued alongside)
+    # must be expired by revoke, not just rotated children.
+    at = session_row.refresh_token.access_token
+    at.refresh_from_db()
+    assert at.expires < timezone.now(), "Original AccessToken must be expired by revoke"
+
+    log = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.SESSION_REVOKED,
+        actor=admin,
+        target_user=session_row.user,
+    ).first()
+    assert log is not None
+
+
+def test_session_revoke_view_is_idempotent(db, client, admin, session_row):
+    client.force_login(admin)
+    client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    # Second call: no second audit row, no error.
+    client.post(reverse("sso:session_revoke", kwargs={"pk": session_row.pk}))
+    log_count = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.SESSION_REVOKED,
+        target_user=session_row.user,
+    ).count()
+    assert log_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 5.2: ApplicationPolicyUpdateView
+# ---------------------------------------------------------------------------
+
+
+def test_app_policy_update_creates_row_if_missing(db, client, admin, session_row):
+    app = session_row.application
+    client.force_login(admin)
+    resp = client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_members"},
+    )
+    assert resp.status_code in (200, 302)
+    pol = ApplicationPolicy.objects.get(application=app)
+    assert pol.access_policy == "open_to_members"
+    assert pol.modified_by == admin
+
+
+def test_app_policy_update_emits_audit_with_old_and_new(db, client, admin, session_row):
+    app = session_row.application
+    ApplicationPolicy.objects.create(application=app, access_policy="grant_required")
+    client.force_login(admin)
+    client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    log = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
+        application=app,
+    ).first()
+    assert log is not None
+    assert "grant_required" in log.message
+    assert "open_to_all" in log.message
+
+
+def test_app_policy_update_rejects_unknown_policy(db, client, admin, session_row):
+    app = session_row.application
+    client.force_login(admin)
+    resp = client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "not-a-real-policy"},
+    )
+    assert resp.status_code == 400
+
+
+def test_app_policy_update_requires_admin(db, client, session_row):
+    app = session_row.application
+    user = User.objects.create_user(username="member-only", password="x")
+    client.force_login(user)
+    resp = client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    assert resp.status_code == 403
+
+
+def test_app_policy_update_noop_skips_audit(db, client, admin, session_row):
+    """Posting the same policy twice should produce exactly one audit row
+    (from the first set), not two."""
+    app = session_row.application
+    client.force_login(admin)
+    client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    client.post(
+        reverse("sso:app_policy_update", kwargs={"pk": app.pk}),
+        data={"access_policy": "open_to_all"},
+    )
+    log_count = SsoAuditLog.objects.filter(
+        event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
+        application=app,
+    ).count()
+    assert log_count == 1, "No-op repost must not produce a second audit row"
+
+
+# ---------------------------------------------------------------------------
+# Task 5.4: Dashboard KPI tile + policy column
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_shows_active_sessions_count(db, client, admin, session_row):
+    client.force_login(admin)
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 200
+    assert b"Active sessions" in resp.content
+    # The session_row fixture creates exactly one active session.
+    assert b">1<" in resp.content or b">1 " in resp.content
+
+
+def test_dashboard_shows_policy_badge(db, client, admin, session_row):
+    app = session_row.application
+    ApplicationPolicy.objects.create(application=app, access_policy="open_to_members")
+    client.force_login(admin)
+    resp = client.get(reverse("sso:dashboard"))
+    assert resp.status_code == 200
+    assert b"Open to members" in resp.content

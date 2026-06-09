@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ tag.name }} · {% trans "Tag" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'sso:dashboard' %}">SSO</a>
+  <span class="sep">/</span>
+  <a href="{% url 'sso:tag_list' %}">{% trans "Tags" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ tag.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Tag" %} · {% trans "Group membership" %}</div>
+    <h1 class="page-title">{{ tag.name }}</h1>
+    <p class="page-sub">
+      {% blocktrans count w=members|length %}{{ w }} user is tagged. Toggle membership below.{% plural %}{{ w }} users are tagged. Toggle membership below.{% endblocktrans %}
+    </p>
+  </div>
+  <div class="page-head-actions">
+    <a class="btn btn-ghost" href="{% url 'sso:tag_list' %}">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M15 6l-6 6 6 6"/>
+      </svg>
+      {% trans "All tags" %}
+    </a>
+  </div>
+</div>
+
+<div class="summary-bar mb-20">
+  <div class="summary-item">
+    <span class="summary-key">{% trans "Tag" %}</span>
+    <span class="summary-val mono" style="color:var(--accent);">{{ tag.name }}</span>
+  </div>
+  <div class="summary-item">
+    <span class="summary-key">{% trans "OIDC claim" %}</span>
+    <span class="summary-val mono" style="font-size:13px;">tag:{{ tag.name }}</span>
+  </div>
+  <div class="summary-item">
+    <span class="summary-key">{% trans "Members" %}</span>
+    <span class="summary-val">
+      {% with member_count=members|length non_member_count=non_members|length %}
+        {% if members %}<span class="t-signal">{{ member_count }}</span>{% else %}<span class="t-muted">0</span>{% endif %}
+        <span class="stat-unit" style="font-size:12px;">/ {{ member_count|add:non_member_count }}</span>
+      {% endwith %}
+    </span>
+  </div>
+</div>
+
+<div class="grid grid-2-col" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;">
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--signal);box-shadow:0 0 8px rgba(62,213,152,0.5);"></span>
+        {% trans "Members" %}
+      </div>
+      <span class="pill pill-online"><span class="dot"></span>{{ members|length }}</span>
+    </div>
+    <div class="panel-body flush">
+      {% if members %}
+      <ul class="user-grant-list">
+        {% for member in members %}
+        <li class="user-grant-row">
+          <div class="user-grant-id">
+            <span class="user-avatar" aria-hidden="true">{{ member.username|slice:":2"|upper }}</span>
+            <a href="{% url 'accounts:user_edit' member.pk %}" class="user-grant-name">{{ member.username }}</a>
+          </div>
+          <form method="post" action="{% url 'sso:tag_toggle' user_id=member.pk group_id=tag.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-ghost">
+              {% trans "Remove" %}
+            </button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty">
+        <div class="empty-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>
+          </svg>
+        </div>
+        <div class="empty-title">{% trans "No members yet" %}</div>
+        <div>{% trans "Add users from the right panel to start propagating this tag." %}</div>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot" style="background:var(--violet);box-shadow:0 0 8px var(--violet-soft);"></span>
+        {% trans "Non-members" %}
+      </div>
+      <span class="pill pill-muted">{{ non_members|length }}</span>
+    </div>
+    <div class="panel-body flush">
+      {% if non_members %}
+      <ul class="user-grant-list">
+        {% for u in non_members %}
+        <li class="user-grant-row is-muted">
+          <div class="user-grant-id">
+            <span class="user-avatar user-avatar-muted" aria-hidden="true">{{ u.username|slice:":2"|upper }}</span>
+            <a href="{% url 'accounts:user_edit' u.pk %}" class="user-grant-name">{{ u.username }}</a>
+          </div>
+          <form method="post" action="{% url 'sso:tag_toggle' user_id=u.pk group_id=tag.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-primary">
+              {% trans "Add" %}
+            </button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty">
+        <div class="empty-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M5 12l5 5L20 7"/>
+          </svg>
+        </div>
+        <div class="empty-title">{% trans "Every user is tagged" %}</div>
+        <div>{% trans "All accounts already carry this tag." %}</div>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+</div>
+{% endblock %}

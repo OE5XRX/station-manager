@@ -47,17 +47,36 @@ SSO_CLAIM_SCOPE["groups"] = "groups"
 
 
 def user_can_access(user, application) -> bool:
-    """Return True iff user is active AND holds an active AppGrant for app.
+    """Return True iff user is active AND policy/grant allows access.
 
-    Pure function — no side effects, suitable for direct unit testing.
+    Spec §3.2: rote Linie ist inactive=False; alle 5 Policies haben das
+    als Grundvoraussetzung. Wenn keine ApplicationPolicy-Row existiert,
+    faellt der Code auf das pre-existierende GRANT_REQUIRED-Verhalten
+    zurueck (abwaertskompatibel).
     """
     if not getattr(user, "is_active", False):
         return False
 
-    # Local import to avoid the circular load path:
-    # sso.permissions <- OAUTH2_PROVIDER settings <- DOT <- sso.models
-    from .models import AppGrant
+    # Local imports keep the validator/permissions module free of an
+    # import cycle on settings loading (see existing pattern below).
+    from .models import AppGrant, ApplicationPolicy
 
+    Policy = ApplicationPolicy.AccessPolicy  # noqa: N806 — enum class alias
+    policy = Policy.GRANT_REQUIRED
+    pol_obj = getattr(application, "sso_policy", None)
+    if pol_obj is not None:
+        policy = pol_obj.access_policy
+
+    if policy == Policy.OPEN_TO_ALL:
+        return True
+    if policy == Policy.OPEN_TO_MEMBERS:
+        return user.membership_level != user.MembershipLevel.APPLICANT
+    if policy == Policy.OPEN_TO_INTERNAL:
+        return user.is_internal
+    if policy == Policy.OPEN_TO_ADMINS:
+        return user.is_admin
+
+    # GRANT_REQUIRED — pre-existing behaviour
     return AppGrant.objects.filter(
         user=user,
         application=application,
@@ -136,3 +155,116 @@ class SsoOAuth2Validator(OAuth2Validator):
         if user is None or not getattr(user, "is_authenticated", False):
             return {}
         return add_claims({}, user, request)
+
+    def save_bearer_token(self, token, request, *args, **kwargs):
+        """Override DOT hook to record a TokenSession after token-issue.
+
+        Spec §4.2. Session tracking is observability, NOT a security gate
+        -- a DB error here must NEVER block token issuance. All work is
+        wrapped in try/except with logger.exception.
+        """
+        super().save_bearer_token(token, request, *args, **kwargs)
+        try:
+            self._record_token_session(token, request)
+        except Exception:
+            logger.exception("TokenSession recording failed")
+
+    def _record_token_session(self, token, request):
+        from django.db import transaction
+        from django.utils import timezone
+        from oauth2_provider.models import RefreshToken
+
+        from .geoip import lookup_location
+        from .models import SsoAuditLog, TokenSession
+
+        refresh_value = token.get("refresh_token") if isinstance(token, dict) else None
+        if not refresh_value:
+            return  # No refresh -> no session row (e.g. client_credentials)
+        rt = RefreshToken.objects.filter(token=refresh_value).first()
+        if rt is None:
+            return
+
+        # Wrap parent.save + TokenSession.create + audit.log in a single
+        # transaction so a DB error between writes cannot leave audit /
+        # session state half-applied. The outer save_bearer_token catches
+        # the rollback exception and logs it; DOT's own token writes have
+        # already committed before this hook runs, so production token
+        # issuance is unaffected.
+        with transaction.atomic():
+            # Refresh-rotation detection: oauthlib's DOT validator attaches
+            # the previous RefreshToken instance to the request as
+            # ``request.refresh_token_instance`` in ``validate_refresh_token``
+            # (verified against the installed DOT source). For initial
+            # issuance the attribute is absent / None.
+            #
+            # Note: DOT's _save_bearer_token clears the attribute after a
+            # successful revoke on rotation (sets it to None). As a fallback
+            # for that case we walk the new AccessToken.source_refresh_token
+            # FK, which DOT wires up to the previous RefreshToken when a new
+            # token pair is minted.
+            parent_session = None
+            old_refresh = getattr(request, "refresh_token_instance", None)
+            if old_refresh is None:
+                new_at = getattr(rt, "access_token", None)
+                if new_at is not None:
+                    old_refresh = getattr(new_at, "source_refresh_token", None)
+            if old_refresh is not None:
+                parent_session = TokenSession.objects.filter(
+                    refresh_token=old_refresh,
+                ).first()
+                if parent_session is not None:
+                    now = timezone.now()
+                    parent_session.last_seen_at = now
+                    parent_session.revoked_at = now
+                    parent_session.revoke_reason = TokenSession.RevokeReason.ROTATED
+                    parent_session.save(
+                        update_fields=[
+                            "last_seen_at",
+                            "revoked_at",
+                            "revoke_reason",
+                        ]
+                    )
+
+            ip = self._extract_ip(request)
+            ua = ""
+            headers = getattr(request, "headers", None) or {}
+            ua = (headers.get("HTTP_USER_AGENT") or headers.get("User-Agent") or "")[:512]
+            country, city = lookup_location(ip)
+
+            TokenSession.objects.create(
+                user=rt.user,
+                application=rt.application,
+                refresh_token=rt,
+                parent=parent_session,
+                ip_address=ip,
+                user_agent=ua,
+                country_code=country or "",
+                city=city or "",
+            )
+
+            # LOGIN_SUCCESS audit only on initial issuance, not on every
+            # refresh-rotation (would be noisy and not actionable).
+            if parent_session is None:
+                SsoAuditLog.log(
+                    event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
+                    target_user=rt.user,
+                    application=rt.application,
+                    message=f"Token issued. UA={ua[:80]} City={city or 'unknown'}",
+                    ip_address=ip,
+                )
+
+    @staticmethod
+    def _extract_ip(request):
+        """Return the client IP from oauthlib request headers.
+
+        oauthlib's extract_headers copies Django's request.META keys
+        verbatim, so the production-reality keys are
+        HTTP_X_FORWARDED_FOR / HTTP_X_REAL_IP. Unit tests using
+        SimpleNamespace with the HTTP standard names (X-Forwarded-For,
+        X-Real-IP) are also supported via the second-arg fallback.
+        """
+        headers = getattr(request, "headers", None) or {}
+        xff = headers.get("HTTP_X_FORWARDED_FOR") or headers.get("X-Forwarded-For")
+        if xff:
+            return xff.split(",")[0].strip()
+        return headers.get("HTTP_X_REAL_IP") or headers.get("X-Real-IP")
