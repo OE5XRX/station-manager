@@ -521,10 +521,16 @@ def _active_sessions_for(user):
     )
     lifetime_cutoff = timezone.now() - timedelta(seconds=lifetime_seconds)
 
+    # ``refresh_token__isnull=False`` is required because Django's LEFT
+    # JOIN treats rows without a refresh_token as ``refresh_token.revoked
+    # IS NULL`` → without the explicit not-null filter, sessions with no
+    # token attached (which can't be active by definition) would slip
+    # through.
     return (
         TokenSession.objects.filter(
             user=user,
             revoked_at__isnull=True,
+            refresh_token__isnull=False,
             refresh_token__revoked__isnull=True,
             issued_at__gt=lifetime_cutoff,
         )
@@ -561,7 +567,13 @@ class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
         )
         old_policy = pol.access_policy if not created else "grant_required"
 
-        policy_changed = created or (old_policy != new_policy)
+        # NB: do not include ``created`` here. When the row is freshly
+        # created with the implicit-default ``grant_required`` value
+        # (admin posts the same value that was already in effect),
+        # ``old_policy`` and ``new_policy`` both equal ``grant_required``
+        # and no real change happened — emitting an audit row would be
+        # misleading no-op noise.
+        policy_changed = old_policy != new_policy
         if not created and pol.access_policy != new_policy:
             pol.access_policy = new_policy
             pol.modified_by = request.user

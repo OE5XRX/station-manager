@@ -19,7 +19,7 @@
     <div class="page-eyebrow">{% trans "Tag" %} · {% trans "Group membership" %}</div>
     <h1 class="page-title">{{ tag.name }}</h1>
     <p class="page-sub">
-      {% blocktrans count w=members|length %}{{ w }} operator is tagged. Toggle membership below.{% plural %}{{ w }} operators are tagged. Toggle membership below.{% endblocktrans %}
+      {% blocktrans count w=members|length %}{{ w }} user is tagged. Toggle membership below.{% plural %}{{ w }} users are tagged. Toggle membership below.{% endblocktrans %}
     </p>
   </div>
   <div class="page-head-actions">
@@ -88,7 +88,7 @@
           </svg>
         </div>
         <div class="empty-title">{% trans "No members yet" %}</div>
-        <div>{% trans "Add operators from the right panel to start propagating this tag." %}</div>
+        <div>{% trans "Add users from the right panel to start propagating this tag." %}</div>
       </div>
       {% endif %}
     </div>
@@ -127,7 +127,7 @@
             <path d="M5 12l5 5L20 7"/>
           </svg>
         </div>
-        <div class="empty-title">{% trans "Every operator is tagged" %}</div>
+        <div class="empty-title">{% trans "Every user is tagged" %}</div>
         <div>{% trans "All accounts already carry this tag." %}</div>
       </div>
       {% endif %}
