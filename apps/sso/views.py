@@ -184,14 +184,20 @@ class SsoDashboardView(AdminOnlyMixin, ListView):
         # Annotate the grant count + session count in a single query
         # instead of doing one COUNT per Application in a Python loop
         # (N+1). Sessions feed the per-app column added in Task 5.4.
+        # `distinct=True` on both Counts is critical: when Django generates
+        # the JOIN to both `grants` and `token_sessions` tables, rows
+        # multiply (M grants × N sessions). Without distinct, each Count
+        # would over-report by the size of the *other* relation.
         return Application.objects.annotate(
             active_grant_count=Count(
                 "grants",
                 filter=Q(grants__revoked_at__isnull=True),
+                distinct=True,
             ),
             active_session_count=Count(
                 "token_sessions",
                 filter=Q(token_sessions__revoked_at__isnull=True),
+                distinct=True,
             ),
         ).order_by("name")
 
@@ -255,14 +261,24 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
         # Task 6.4: Preview list of all groups currently propagated for any
         # user in the system. Used for the "Group propagation" section.
         # Station has no slug field — use station.pk.
+        #
+        # Use ``values_list(..., distinct=True)`` so the DB de-duplicates
+        # on the (id, role) / (slug, role) tuple before hydrating any
+        # rows. The naïve form (iterating assignment objects and
+        # de-duping in Python) scales O(N) with the assignment count
+        # even if there are only a handful of distinct combinations.
         membership_levels = ["applicant", "member", "staff", "admin"]
         station_groups = [
-            f"station:{a.station.pk}:{a.role}"
-            for a in StationAssignment.objects.select_related("station").distinct()
+            f"station:{pk}:{role}"
+            for pk, role in StationAssignment.objects.values_list(
+                "station_id", "role"
+            ).distinct()
         ]
         region_groups = [
-            f"region:{a.region.slug}:{a.role}"
-            for a in RegionAssignment.objects.select_related("region").distinct()
+            f"region:{slug}:{role}"
+            for slug, role in RegionAssignment.objects.values_list(
+                "region__slug", "role"
+            ).distinct()
         ]
         tag_groups = [f"tag:{n}" for n in Group.objects.values_list("name", flat=True)]
         ctx["propagated_group_strings"] = sorted(
@@ -489,12 +505,29 @@ def _active_sessions_for(user):
     """Active TokenSessions for a user, newest first.
 
     Used by the user-form template (Task 6.1) and by the HTMX swap
-    response from ``SessionRevokeView``.
+    response from ``SessionRevokeView``. Matches the same semantics as
+    ``TokenSession.is_active`` at queryset level: row is included iff
+    not revoked, refresh-token still alive, and within refresh-lifetime.
     """
+    from datetime import timedelta
+
+    from django.conf import settings
+    from django.utils import timezone
+
     from .models import TokenSession
 
+    lifetime_seconds = settings.OAUTH2_PROVIDER.get(
+        "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
+    )
+    lifetime_cutoff = timezone.now() - timedelta(seconds=lifetime_seconds)
+
     return (
-        TokenSession.objects.filter(user=user, revoked_at__isnull=True)
+        TokenSession.objects.filter(
+            user=user,
+            revoked_at__isnull=True,
+            refresh_token__revoked__isnull=True,
+            issued_at__gt=lifetime_cutoff,
+        )
         .select_related("application")
         .order_by("-last_seen_at")
     )

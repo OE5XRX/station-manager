@@ -44,8 +44,10 @@
   <div class="summary-item">
     <span class="summary-key">{% trans "Members" %}</span>
     <span class="summary-val">
-      {% if members %}<span class="t-signal">{{ members|length }}</span>{% else %}<span class="t-muted">0</span>{% endif %}
-      <span class="stat-unit" style="font-size:12px;">/ {{ members|length|add:non_members|length }}</span>
+      {% with member_count=members|length non_member_count=non_members|length %}
+        {% if members %}<span class="t-signal">{{ member_count }}</span>{% else %}<span class="t-muted">0</span>{% endif %}
+        <span class="stat-unit" style="font-size:12px;">/ {{ member_count|add:non_member_count }}</span>
+      {% endwith %}
     </span>
   </div>
 </div>
