@@ -75,11 +75,17 @@ def test_token_session_is_active_property(db, user, app):
 def test_token_session_is_active_with_live_refresh_token(db, user, app):
     """Positive path: revoked_at None + live refresh_token + within lifetime => True."""
     at = AccessToken.objects.create(
-        user=user, application=app, token="at-1",
-        expires=timezone.now() + timedelta(hours=1), scope="openid",
+        user=user,
+        application=app,
+        token="at-1",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
     )
     rt = RefreshToken.objects.create(
-        user=user, application=app, token="rt-1", access_token=at,
+        user=user,
+        application=app,
+        token="rt-1",
+        access_token=at,
     )
     s = TokenSession.objects.create(user=user, application=app, refresh_token=rt)
     assert s.is_active is True
@@ -88,11 +94,17 @@ def test_token_session_is_active_with_live_refresh_token(db, user, app):
 def test_token_session_is_active_false_when_refresh_token_revoked(db, user, app):
     """Negative path: refresh_token.revoked is set => False."""
     at = AccessToken.objects.create(
-        user=user, application=app, token="at-2",
-        expires=timezone.now() + timedelta(hours=1), scope="openid",
+        user=user,
+        application=app,
+        token="at-2",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
     )
     rt = RefreshToken.objects.create(
-        user=user, application=app, token="rt-2", access_token=at,
+        user=user,
+        application=app,
+        token="rt-2",
+        access_token=at,
         revoked=timezone.now(),
     )
     s = TokenSession.objects.create(user=user, application=app, refresh_token=rt)
@@ -102,11 +114,17 @@ def test_token_session_is_active_false_when_refresh_token_revoked(db, user, app)
 def test_token_session_is_active_false_when_lifetime_exceeded(db, user, app):
     """Negative path: issued_at older than REFRESH_TOKEN_EXPIRE_SECONDS => False."""
     at = AccessToken.objects.create(
-        user=user, application=app, token="at-3",
-        expires=timezone.now() + timedelta(hours=1), scope="openid",
+        user=user,
+        application=app,
+        token="at-3",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
     )
     rt = RefreshToken.objects.create(
-        user=user, application=app, token="rt-3", access_token=at,
+        user=user,
+        application=app,
+        token="rt-3",
+        access_token=at,
     )
     s = TokenSession.objects.create(user=user, application=app, refresh_token=rt)
     # Backdate issued_at via .update() to bypass auto_now_add
@@ -121,13 +139,16 @@ def _make_dot_tokens(user, app):
     """Create AccessToken + RefreshToken via DOT's models as if save_bearer_token
     had just run super(). The validator hook attaches metadata afterwards."""
     at = AccessToken.objects.create(
-        user=user, application=app,
+        user=user,
+        application=app,
         token="atok-123",
         expires=timezone.now() + timedelta(hours=1),
         scope="openid",
     )
     rt = RefreshToken.objects.create(
-        user=user, application=app, token="rtok-456",
+        user=user,
+        application=app,
+        token="rtok-456",
         access_token=at,
     )
     return at, rt
@@ -183,7 +204,8 @@ def test_save_bearer_token_emits_login_success_audit(db, user, app):
 
     log = SsoAuditLog.objects.filter(
         event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
-        target_user=user, application=app,
+        target_user=user,
+        application=app,
     ).first()
     assert log is not None
     assert log.ip_address == "89.207.4.5"
@@ -194,24 +216,33 @@ def test_save_bearer_token_refresh_rotation_chains_parent(db, user, app):
     validator = SsoOAuth2Validator()
     validator._record_token_session(
         {"refresh_token": "rtok-456"},
-        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"},
-                        refresh_token_instance=None),
+        SimpleNamespace(
+            headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"}, refresh_token_instance=None
+        ),
     )
     parent_session = TokenSession.objects.get(refresh_token=parent_rt)
 
     # Simulate rotation: DOT creates a new RefreshToken; we feed it in.
     at2 = AccessToken.objects.create(
-        user=user, application=app, token="atok-789",
-        expires=timezone.now() + timedelta(hours=1), scope="openid",
+        user=user,
+        application=app,
+        token="atok-789",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
     )
     rt2 = RefreshToken.objects.create(
-        user=user, application=app, token="rtok-789", access_token=at2,
+        user=user,
+        application=app,
+        token="rtok-789",
+        access_token=at2,
     )
 
     validator._record_token_session(
         {"refresh_token": "rtok-789"},
-        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"},
-                        refresh_token_instance=parent_rt),
+        SimpleNamespace(
+            headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"},
+            refresh_token_instance=parent_rt,
+        ),
     )
 
     child_session = TokenSession.objects.get(refresh_token=rt2)
@@ -226,8 +257,7 @@ def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app, mon
     """When GeoIP DB is missing, country/city stay empty -- session row is
     still created, login is not blocked."""
     _, rt = _make_dot_tokens(user, app)
-    request = SimpleNamespace(headers={"X-Real-IP": "203.0.113.99"},
-                              refresh_token_instance=None)
+    request = SimpleNamespace(headers={"X-Real-IP": "203.0.113.99"}, refresh_token_instance=None)
 
     # Monkeypatch lookup_location at the geoip module (the import target
     # of the local ``from .geoip import lookup_location`` inside
@@ -235,8 +265,8 @@ def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app, mon
     # singleton state in apps.sso.geoip; pytest auto-restores on teardown
     # so a failing assert can't leak GeoIP-disabled state into other tests.
     from apps.sso import geoip as geoip_mod
-    monkeypatch.setattr(geoip_mod, "lookup_location",
-                        lambda _ip: (None, None), raising=True)
+
+    monkeypatch.setattr(geoip_mod, "lookup_location", lambda _ip: (None, None), raising=True)
 
     validator = SsoOAuth2Validator()
     validator._record_token_session({"refresh_token": "rtok-456"}, request)
@@ -264,12 +294,18 @@ def test_save_bearer_token_rotation_falls_back_to_source_refresh_token(db, user,
 
     # Simulate DOT post-revoke state: attribute cleared, source_refresh_token wired.
     at2 = AccessToken.objects.create(
-        user=user, application=app, token="atok-789",
-        expires=timezone.now() + timedelta(hours=1), scope="openid",
+        user=user,
+        application=app,
+        token="atok-789",
+        expires=timezone.now() + timedelta(hours=1),
+        scope="openid",
         source_refresh_token=parent_rt,
     )
     rt2 = RefreshToken.objects.create(
-        user=user, application=app, token="rtok-789", access_token=at2,
+        user=user,
+        application=app,
+        token="rtok-789",
+        access_token=at2,
     )
 
     validator._record_token_session(

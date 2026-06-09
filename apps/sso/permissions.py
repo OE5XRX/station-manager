@@ -78,7 +78,9 @@ def user_can_access(user, application) -> bool:
 
     # GRANT_REQUIRED — pre-existing behaviour
     return AppGrant.objects.filter(
-        user=user, application=application, revoked_at__isnull=True,
+        user=user,
+        application=application,
+        revoked_at__isnull=True,
     ).exists()
 
 
@@ -215,18 +217,18 @@ class SsoOAuth2Validator(OAuth2Validator):
                     parent_session.last_seen_at = now
                     parent_session.revoked_at = now
                     parent_session.revoke_reason = TokenSession.RevokeReason.ROTATED
-                    parent_session.save(update_fields=[
-                        "last_seen_at", "revoked_at", "revoke_reason",
-                    ])
+                    parent_session.save(
+                        update_fields=[
+                            "last_seen_at",
+                            "revoked_at",
+                            "revoke_reason",
+                        ]
+                    )
 
             ip = self._extract_ip(request)
             ua = ""
             headers = getattr(request, "headers", None) or {}
-            ua = (
-                headers.get("HTTP_USER_AGENT")
-                or headers.get("User-Agent")
-                or ""
-            )[:512]
+            ua = (headers.get("HTTP_USER_AGENT") or headers.get("User-Agent") or "")[:512]
             country, city = lookup_location(ip)
 
             TokenSession.objects.create(

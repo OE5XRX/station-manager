@@ -35,9 +35,7 @@ class Command(BaseCommand):
         # `issued_at` plus the refresh-lifetime is the natural end of
         # the session's usefulness; add the CUTOFF_DAYS forensic-grace
         # window on top.
-        lifetime_grace_cutoff = now - timedelta(
-            seconds=lifetime_seconds + CUTOFF_DAYS * 86400
-        )
+        lifetime_grace_cutoff = now - timedelta(seconds=lifetime_seconds + CUTOFF_DAYS * 86400)
         qs = TokenSession.objects.filter(
             Q(refresh_token__revoked__lt=cutoff)
             | Q(revoked_at__lt=cutoff)

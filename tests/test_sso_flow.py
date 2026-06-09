@@ -231,8 +231,10 @@ def test_full_auth_code_pkce_flow_yields_id_token_with_groups_claim(
     # auth-code exchange there is no parent session yet (rotation chain
     # starts at None).
     from apps.sso.models import TokenSession
+
     session = TokenSession.objects.filter(
-        user=authorized_user, application=application,
+        user=authorized_user,
+        application=application,
     ).first()
     assert session is not None, "TokenSession should be created on token issuance"
     assert session.parent is None, "Initial session has no parent"
@@ -452,9 +454,7 @@ def test_refresh_rotation_chains_token_sessions(client, application, authorized_
     # --- Step 1: Drive happy-path auth-code exchange ----------------------
     _authorize_get(client, application, challenge)
     resp = _consent_post(client, application, challenge)
-    assert resp.status_code == 302, (
-        f"Consent POST failed: {resp.status_code} {resp.content[:300]}"
-    )
+    assert resp.status_code == 302, f"Consent POST failed: {resp.status_code} {resp.content[:300]}"
     qs = parse_qs(urlparse(resp["Location"]).query)
     assert "code" in qs, f"No code in redirect: {resp['Location']}"
     code = qs["code"][0]
@@ -476,7 +476,9 @@ def test_refresh_rotation_chains_token_sessions(client, application, authorized_
 
     # Parent session: created by initial issuance, no parent FK.
     parent = TokenSession.objects.get(
-        user=authorized_user, application=application, parent__isnull=True,
+        user=authorized_user,
+        application=application,
+        parent__isnull=True,
     )
     assert parent.refresh_token is not None, "Parent must reference its RefreshToken"
     assert parent.refresh_token.token == refresh_value
@@ -498,9 +500,7 @@ def test_refresh_rotation_chains_token_sessions(client, application, authorized_
 
     # --- Step 3: Verify the chain -----------------------------------------
     parent.refresh_from_db()
-    assert parent.revoked_at is not None, (
-        "Parent should be marked revoked after rotation"
-    )
+    assert parent.revoked_at is not None, "Parent should be marked revoked after rotation"
     assert parent.revoke_reason == TokenSession.RevokeReason.ROTATED
 
     child = TokenSession.objects.get(parent=parent)

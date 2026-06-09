@@ -50,9 +50,11 @@ class Command(BaseCommand):
                 break
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
-                    self.stdout.write(self.style.WARNING(
-                        f"{year_month} not yet published (404), trying previous"
-                    ))
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"{year_month} not yet published (404), trying previous"
+                        )
+                    )
                     continue
                 raise
 
@@ -62,14 +64,13 @@ class Command(BaseCommand):
                 f"db-ip.com release schedule changed? Manual check needed."
             )
 
-        self.stdout.write(self.style.SUCCESS(
-            f"Updated {target} from db-ip.com {downloaded_from}"
-        ))
+        self.stdout.write(self.style.SUCCESS(f"Updated {target} from db-ip.com {downloaded_from}"))
 
         # Reset the in-process singleton so the next lookup picks up the
         # fresh DB without a worker restart. Other gunicorn workers
         # still hold their stale reader until next restart -- acceptable.
         from apps.sso import geoip
+
         geoip._reader = None
         geoip._reader_load_failed = False
 

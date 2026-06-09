@@ -33,7 +33,7 @@ def _get_reader():
     with _reader_lock:
         if _reader is not None:
             return _reader
-        if _reader_load_failed:    # re-check inside lock for log-once
+        if _reader_load_failed:  # re-check inside lock for log-once
             return None
         path = Path(settings.GEOIP_DB_PATH)
         if not path.exists():

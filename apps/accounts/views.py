@@ -89,8 +89,7 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         # Tag-membership picker: every defined Group with current membership flag.
         member_ids = set(self.object.groups.values_list("pk", flat=True))
         context["tag_entries"] = [
-            {"group": g, "is_member": g.pk in member_ids}
-            for g in Group.objects.order_by("name")
+            {"group": g, "is_member": g.pk in member_ids} for g in Group.objects.order_by("name")
         ]
         # Membership-level picker uses the model's TextChoices.
         context["membership_level_choices"] = User.MembershipLevel.choices

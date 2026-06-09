@@ -272,9 +272,7 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
         membership_levels = [v for v in User.MembershipLevel.values]
         station_groups = [
             f"station:{pk}:{role}"
-            for pk, role in StationAssignment.objects.values_list(
-                "station_id", "role"
-            ).distinct()
+            for pk, role in StationAssignment.objects.values_list("station_id", "role").distinct()
         ]
         region_groups = [
             f"region:{slug}:{role}"

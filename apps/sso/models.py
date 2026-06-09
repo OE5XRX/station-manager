@@ -316,9 +316,7 @@ class TokenSession(models.Model):
         if rt is None or rt.revoked is not None:
             return False
         max_lifetime = timedelta(
-            seconds=settings.OAUTH2_PROVIDER.get(
-                "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
-            )
+            seconds=settings.OAUTH2_PROVIDER.get("REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600)
         )
         return self.issued_at + max_lifetime > timezone.now()
 
