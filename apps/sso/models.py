@@ -201,11 +201,40 @@ class ApplicationPolicy(models.Model):
         return f"{self.application.name} -> {self.get_access_policy_display()}"
 
 
+class TokenSessionQuerySet(models.QuerySet):
+    """Custom queryset so the same "active" criteria are reused across
+    the validator hook, audit-log counters, and admin UI helpers.
+
+    Matches the predicate of ``TokenSession.is_active`` at the DB level:
+        revoked_at IS NULL
+        AND refresh_token IS NOT NULL
+        AND refresh_token.revoked IS NULL
+        AND issued_at + REFRESH_TOKEN_EXPIRE_SECONDS > now
+    """
+
+    def active(self):
+        from django.conf import settings as dj_settings
+        from django.utils import timezone
+
+        lifetime_seconds = dj_settings.OAUTH2_PROVIDER.get(
+            "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
+        )
+        lifetime_cutoff = timezone.now() - timedelta(seconds=lifetime_seconds)
+        return self.filter(
+            revoked_at__isnull=True,
+            refresh_token__isnull=False,
+            refresh_token__revoked__isnull=True,
+            issued_at__gt=lifetime_cutoff,
+        )
+
+
 class TokenSession(models.Model):
     """1:1 zu jeder RefreshToken-Issuance (inkl. Rotations-Chain).
 
     Spec §4.1.
     """
+
+    objects = TokenSessionQuerySet.as_manager()
 
     class RevokeReason(models.TextChoices):
         ADMIN_REVOKE = "admin_revoke", _("Admin revoke")

@@ -267,7 +267,9 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
         # rows. The naïve form (iterating assignment objects and
         # de-duping in Python) scales O(N) with the assignment count
         # even if there are only a handful of distinct combinations.
-        membership_levels = ["applicant", "member", "staff", "admin"]
+        # Derive from the enum so the preview list never silently drifts
+        # when User.MembershipLevel adds/removes a value.
+        membership_levels = [v for v in User.MembershipLevel.values]
         station_groups = [
             f"station:{pk}:{role}"
             for pk, role in StationAssignment.objects.values_list(
@@ -496,44 +498,38 @@ class SessionRevokeView(AdminOnlyMixin, View):
                     "sessions": _active_sessions_for(session.user),
                 },
             )
-        return HttpResponseRedirect(
-            request.META.get("HTTP_REFERER", reverse("sso:dashboard")),
-        )
+        # HTTP_REFERER is attacker-controllable, so validate it against
+        # the request's own host before redirecting. Falls back to the
+        # SSO dashboard for off-host or empty referers (open-redirect
+        # safe).
+        from django.utils.http import url_has_allowed_host_and_scheme
+
+        referer = request.META.get("HTTP_REFERER", "")
+        if referer and url_has_allowed_host_and_scheme(
+            referer,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            target = referer
+        else:
+            target = reverse("sso:dashboard")
+        return HttpResponseRedirect(target)
 
 
 def _active_sessions_for(user):
     """Active TokenSessions for a user, newest first.
 
     Used by the user-form template (Task 6.1) and by the HTMX swap
-    response from ``SessionRevokeView``. Matches the same semantics as
-    ``TokenSession.is_active`` at queryset level: row is included iff
-    not revoked, refresh-token still alive, and within refresh-lifetime.
+    response from ``SessionRevokeView``. Delegates the "active"
+    predicate to ``TokenSession.objects.active()`` so the criteria
+    stay consistent across all call sites (admin UI, audit-log
+    counters, etc.).
     """
-    from datetime import timedelta
-
-    from django.conf import settings
-    from django.utils import timezone
-
     from .models import TokenSession
 
-    lifetime_seconds = settings.OAUTH2_PROVIDER.get(
-        "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
-    )
-    lifetime_cutoff = timezone.now() - timedelta(seconds=lifetime_seconds)
-
-    # ``refresh_token__isnull=False`` is required because Django's LEFT
-    # JOIN treats rows without a refresh_token as ``refresh_token.revoked
-    # IS NULL`` → without the explicit not-null filter, sessions with no
-    # token attached (which can't be active by definition) would slip
-    # through.
     return (
-        TokenSession.objects.filter(
-            user=user,
-            revoked_at__isnull=True,
-            refresh_token__isnull=False,
-            refresh_token__revoked__isnull=True,
-            issued_at__gt=lifetime_cutoff,
-        )
+        TokenSession.objects.active()
+        .filter(user=user)
         .select_related("application")
         .order_by("-last_seen_at")
     )
@@ -580,10 +576,15 @@ class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
             pol.save(update_fields=["access_policy", "modified_by", "updated_at"])
 
         if policy_changed:
-            active_session_count = TokenSession.objects.filter(
-                application=application,
-                revoked_at__isnull=True,
-            ).count()
+            # Use ``.active()`` so the audit log records the precise
+            # number of *usable* sessions affected by the change (not
+            # just rows with revoked_at IS NULL, which would include
+            # lifetime-expired sessions). The KPI tile elsewhere uses
+            # the simpler aggregate by design — but audit-log integrity
+            # warrants the precise count here.
+            active_session_count = (
+                TokenSession.objects.active().filter(application=application).count()
+            )
             SsoAuditLog.log(
                 event_type=SsoAuditLog.EventType.APP_POLICY_CHANGED,
                 actor=request.user,
@@ -633,6 +634,15 @@ class TagCreateView(AdminOnlyMixin, View):
         if not _TAG_NAME_RE.match(name):
             return HttpResponseBadRequest(
                 "Tag name must match [a-z0-9-]+",
+            )
+        # Explicit length pre-check so an over-long but otherwise
+        # slug-safe name returns a clean 400 instead of bubbling a
+        # ``DataError`` from the DB on insert (Group.name is
+        # max_length=150 per Django).
+        max_length = Group._meta.get_field("name").max_length
+        if len(name) > max_length:
+            return HttpResponseBadRequest(
+                f"Tag name must be at most {max_length} characters.",
             )
         Group.objects.get_or_create(name=name)
         return HttpResponseRedirect(reverse("sso:tag_list"))
