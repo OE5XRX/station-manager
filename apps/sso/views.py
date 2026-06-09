@@ -447,10 +447,20 @@ class SessionRevokeView(AdminOnlyMixin, View):
 
         from .models import TokenSession
 
-        session = get_object_or_404(TokenSession, pk=pk)
-        if session.revoked_at is None:
-            now = timezone.now()
-            with transaction.atomic():
+        # First fetch is just a 404 gate; the load-bearing check happens
+        # under SELECT FOR UPDATE inside the transaction. This makes the
+        # operation truly idempotent against concurrent double-clicks /
+        # HTMX retries: two requests can both reach the atomic block,
+        # but only the winner finds revoked_at IS NULL.
+        get_object_or_404(TokenSession, pk=pk)
+        now = timezone.now()
+        already_revoked = False
+        session = None
+        with transaction.atomic():
+            session = TokenSession.objects.select_for_update().get(pk=pk)
+            if session.revoked_at is not None:
+                already_revoked = True
+            else:
                 rt = session.refresh_token
                 if rt is not None and rt.revoked is None:
                     rt.revoked = now
@@ -476,6 +486,7 @@ class SessionRevokeView(AdminOnlyMixin, View):
                     update_fields=["revoked_at", "revoked_by", "revoke_reason"],
                 )
 
+        if not already_revoked:
             SsoAuditLog.log(
                 event_type=SsoAuditLog.EventType.SESSION_REVOKED,
                 actor=request.user,
