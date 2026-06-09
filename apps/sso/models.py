@@ -323,5 +323,14 @@ class TokenSession(models.Model):
         return self.issued_at + max_lifetime > timezone.now()
 
     def __str__(self):
-        status = "revoked" if self.revoked_at else "active"
+        # Match the full is_active predicate (refresh-token present and
+        # not revoked, within refresh-lifetime). Sessions where the
+        # refresh-token aged past the lifetime would otherwise be
+        # misleadingly labeled "active" in admin/log output.
+        if self.is_active:
+            status = "active"
+        elif self.revoked_at:
+            status = "revoked"
+        else:
+            status = "expired"
         return f"{self.user} → {self.application} ({status})"

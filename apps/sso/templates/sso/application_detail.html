@@ -277,10 +277,12 @@ page to inject the token automatically.
               <span class="t-mono-sm" style="color:var(--ink-2);">{{ s.issued_at|date:"d M H:i" }}</span>
             </td>
             <td data-label="{% trans 'Status' %}">
-              {% if s.revoked_at %}
+              {% if s.is_active %}
+                <span class="pill pill-online"><span class="dot"></span>{% trans "active" %}</span>
+              {% elif s.revoked_at %}
                 <span class="pill pill-muted"><span class="dot"></span>{% trans "revoked" %}</span>
               {% else %}
-                <span class="pill pill-online"><span class="dot"></span>{% trans "active" %}</span>
+                <span class="pill pill-muted"><span class="dot"></span>{% trans "expired" %}</span>
               {% endif %}
             </td>
             <td data-label="{% trans 'Location' %}">

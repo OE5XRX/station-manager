@@ -287,12 +287,15 @@ class ApplicationDetailView(AdminOnlyMixin, DetailView):
             set(membership_levels + station_groups + region_groups + tag_groups)
         )
 
-        # Task 6.4: Recent sessions on this app (last 50)
+        # Task 6.4: Recent sessions on this app (last 50). We also
+        # select_related("refresh_token") so the template's
+        # ``s.is_active`` property check (added in the round-4 status
+        # label refactor) doesn't trigger an N+1 fetch per row.
         ctx["recent_sessions"] = (
             TokenSession.objects.filter(
                 application=self.object,
             )
-            .select_related("user")
+            .select_related("user", "refresh_token")
             .order_by("-issued_at")[:50]
         )
 
@@ -486,9 +489,10 @@ class SessionRevokeView(AdminOnlyMixin, View):
                 ip_address=_client_ip(request),
             )
 
-        # HTMX vs. standard browser response. The partial template
-        # ``sso/_sessions_card.html`` lands in Task 6.1; until then the
-        # HTMX branch will TemplateDoesNotExist — fine, no caller yet.
+        # HTMX vs. standard browser response. HTMX callers receive the
+        # rendered ``sso/_sessions_card.html`` partial so the user-form
+        # page can swap the card in place; plain browser POSTs follow
+        # the safe-referer fallback below.
         if getattr(request, "htmx", False):
             return render(
                 request,
