@@ -19,6 +19,13 @@ from django.core.management.base import BaseCommand, CommandError
 
 DBIP_URL_TEMPLATE = "https://download.db-ip.com/free/dbip-city-lite-{year_month}.mmdb.gz"
 
+# db-ip.com's CDN 403s the default Python-urllib/3.x User-Agent string.
+# Send an explicit UA both to dodge the 403 AND to identify our traffic
+# in db-ip's logs (good neighbour). Format follows the convention of
+# named bots (e.g. "OE5XRX-station-manager/1.0 (+https://...)") so the
+# operator there can reach us if there's ever a complaint.
+USER_AGENT = "OE5XRX-station-manager/1.0 (+https://github.com/OE5XRX/station-manager)"
+
 
 def _previous_month(today: date) -> date:
     """First day of the previous month. Stdlib-only -- avoid pulling in
@@ -79,8 +86,9 @@ class Command(BaseCommand):
             tmp_path = Path(tmp.name)
         try:
             self.stdout.write(f"Download {url} ...")
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with (
-                urllib.request.urlopen(url, timeout=60) as resp,
+                urllib.request.urlopen(req, timeout=60) as resp,
                 gzip.GzipFile(fileobj=resp) as gz,
                 tmp_path.open("wb") as out,
             ):
