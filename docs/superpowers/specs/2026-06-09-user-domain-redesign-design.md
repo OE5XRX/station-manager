@@ -87,7 +87,8 @@ Was heute **nicht** geloggt wird (Lücke, die dieser Spec schließt):
 - `users/<pk>/edit/` bleibt Admin-only, aber `UserUpdateView` verliert seinen fetten `get_context_data`-Block. Form expandiert auf alle neuen Felder. Success-Redirect zeigt auf die Detail-Seite.
 - `users/<pk>/delete/` zeigt Impact-Details vor dem Delete. Success-Redirect zur Liste.
 - `users/create/` Success-Redirect zur Detail-Seite des neu erstellten Users.
-- `accounts/profile/` → `ProfileView` wird der Self-Service-Edit-Ort für alle neuen Felder (inkl. Adresse, Telefon, Avatar, Bio, QTH, QRZ-URL, `is_directory_visible`-Toggle). Identity-Felder (Username, Email, First/Last, Language) bleiben — Membership-Level und is_active bleiben Admin-Domain.
+- `accounts/profile/` → `ProfileView` wird der Self-Service-Edit-Ort für alle neuen Felder (inkl. Adresse, Telefon, Avatar, Bio, QTH, QRZ-URL, `is_directory_visible`-Toggle). Identity-Felder (Username, Email, First/Last, Language) bleiben — Membership-Level und is_active bleiben Admin-Domain. Das Template enthält mehrere getrennte Forms (Identity / Profil / Adresse / Passwort) mit eigenen Action-URLs.
+- `accounts/profile/password/` → `ProfilePasswordChangeView` — neuer POST-only Endpoint für Self-Service Password-Change (Sektion 6.2.1). Re-Auth via `current_password`-Feld, `update_session_auth_hash` damit User eingeloggt bleibt.
 
 **Neue Helpers** (apps/accounts/visibility.py):
 
@@ -612,23 +613,109 @@ page-head:
 └ page-sub: "Verwalte deine Identität, Profil, Kontaktdaten und Standort."
 
 grid grid-main:
-├ Linke Spalte (Form, mehrere Panels):
-│   ├ Panel "Identity":  email, first_name, last_name, language
-│   ├ Panel "Profil":    avatar, bio, qth_name, qrz_url, phone
-│   └ Panel "Adresse & Standort": address, locator (override), Hinweis
+├ Linke Spalte (mehrere Panels — separate forms je Panel, eigene POST-URLs):
+│   ├ Panel "Identity" → POST accounts:profile:
+│   │   email, first_name, last_name, language
+│   │
+│   ├ Panel "Profil" → POST accounts:profile:
+│   │   avatar, bio, qth_name, qrz_url, phone
+│   │
+│   ├ Panel "Adresse & Standort" → POST accounts:profile:
+│   │   address, locator (override), Hinweis "Locator wird berechnet"
+│   │
+│   └ Panel "Passwort ändern" → POST accounts:password_change:
+│       current_password, new_password1, new_password2
 │
 └ Rechte Spalte (aside, panel):
     ├ Identity-dlist: Callsign (username — readonly), Membership-Pill,
     │                 last_login, date_joined
-    ├ Panel "Sichtbarkeit im Verzeichnis": Toggle is_directory_visible
-    │   mit Erklär-Text "Wenn aus, sehen andere Mitglieder nur Callsign + Rolle."
+    ├ Panel "Sichtbarkeit im Verzeichnis":
+    │   Toggle is_directory_visible (eigene HTMX-POST), Erklär-Text
+    │   "Wenn aus, sehen andere Mitglieder nur Callsign + Rolle."
     └ Panel "Eigene Sessions": Mini-Übersicht aktiver SSO-Sessions mit Revoke
         (entfaltet sich aus _sessions_card.html mit readonly-self-Flag)
 
-panel-foot je Panel: [Save panel] — oder am Ende ein gemeinsames [Save profile].
+panel-foot je Form-Panel: eigener [Save]-Button.
 ```
 
-**Empfehlung:** Ein gemeinsames `[Save profile]` am Ende. Pro-Panel-Save ist UI-Bloat ohne Mehrwert.
+**Begründung für Pro-Panel-Save:** Vier semantisch unterschiedliche Konzepte (Identity, Profil-Kosmetik, Adresse-mit-Geocoding-Side-Effect, Passwort-mit-Re-Auth). Password-Change-Form *muss* sowieso separat sein (eigener Re-Auth-Schritt mit `current_password`). Adresse-Form triggert Geocoding und sollte unabhängig speicherbar sein. Profile-Form mit alles-oder-nichts-Save würde bei Geocoding-Failure den ganzen Bulk-Save verlieren.
+
+Implementierung: Das eine Template enthält drei `<form>`-Elemente mit unterschiedlichen `action`-URLs, und ein viertes für Passwort. Server-seitig sind das vier views (`ProfileIdentityView`, `ProfileProfileView`, `ProfileAddressView`, `ProfilePasswordView`) bzw. eine Dispatch-View mit `form_name`-Parameter — letzteres ist kompakter. Implementierung-Detail in Phase 8.
+
+### 6.2.1 Password-Change-Panel
+
+Eigenes Form basiert auf Django's `PasswordChangeForm`:
+
+```python
+# apps/accounts/forms.py
+from django.contrib.auth.forms import PasswordChangeForm as DjangoPasswordChangeForm
+
+class PasswordChangeForm(DjangoPasswordChangeForm):
+    """Bootstrap-styled overlay über Django's PasswordChangeForm."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = "form-control"
+```
+
+```python
+# apps/accounts/views.py
+class ProfilePasswordChangeView(LoginRequiredMixin, View):
+    """Self-only password change endpoint, posted from the Profile page."""
+
+    def post(self, request):
+        form = PasswordChangeForm(user=request.user, data=request.POST)
+        if form.is_valid():
+            user = form.save()
+            # update_session_auth_hash → User bleibt eingeloggt nach PW-change
+            update_session_auth_hash(request, user)
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.PASSWORD_CHANGED,
+                actor=request.user,
+                target_user=request.user,
+                message="self-edit changed: password",
+                ip_address=_get_client_ip(request),
+            )
+            messages.success(request, _("Password updated successfully."))
+        else:
+            for error in form.errors.values():
+                messages.error(request, "; ".join(error))
+        return redirect("accounts:profile")
+```
+
+`update_session_auth_hash` ist wichtig: ohne den Call killt der Password-Change die laufende Session.
+
+Audit: Neuer EventType `PASSWORD_CHANGED` (siehe Sektion 7.1 — wird dort ergänzt).
+
+### 6.2.2 Onboarding-Empty-State
+
+Wenn der eingeloggte User Profil-Felder leer hat, rendert das Profile-Template dezente Empty-State-Hinweise innerhalb der jeweiligen Panel-Bodies — kein Modal, kein blocking Banner:
+
+```django
+{# Beispiel im Profil-Panel #}
+{% if not user.avatar %}
+  <div class="onboarding-hint" role="note">
+    <span class="onboarding-hint-icon">📷</span>
+    <span class="onboarding-hint-text">
+      {% trans "Lade ein Profilbild hoch, damit dich andere Mitglieder im Verzeichnis erkennen." %}
+    </span>
+  </div>
+{% endif %}
+```
+
+Pro Sektion ein Hinweis nach folgendem Mapping:
+
+| Panel | Trigger | Text |
+|---|---|---|
+| Identity | `not user.first_name and not user.last_name` | „Trag deinen Real-Namen ein — andere Mitglieder sehen ihn im Verzeichnis." |
+| Profil | `not user.avatar` | „Lade ein Profilbild hoch." |
+| Profil | `not user.bio` | „Stell dich kurz vor (max. 500 Zeichen)." |
+| Profil | `not user.qth_name` | „QTH-Name? Das ist dein Funker-Standort-Label." |
+| Adresse | `not user.address` | „Trag deine Adresse ein — Locator und lat/lon werden automatisch berechnet." |
+
+Visual: dezent — kleine `border-left:3px solid var(--accent-soft)` Box mit Icon + 1 Satz Text. Wenn das Feld ausgefüllt ist, verschwindet der Hinweis.
+
+CSS-Klasse `onboarding-hint` neu in `app.css` (kompakter Style, Mobile-tauglich). Nicht-stylistisch in der Detail-Page — diese Hilfe gehört nur auf die Edit-Surface.
 
 ### 6.3 Form-Klassen
 
@@ -795,9 +882,12 @@ USER_UPDATED              = "user_updated",                _("User Updated")
 USER_DELETED              = "user_deleted",                _("User Deleted")
 USER_ACTIVATED            = "user_activated",              _("User Activated")
 USER_DEACTIVATED          = "user_deactivated",            _("User Deactivated")
+PASSWORD_CHANGED          = "password_changed",            _("Password Changed")
 STATION_ASSIGNMENT_CREATED = "station_assignment_created",  _("Station Assignment Created")
 STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked",  _("Station Assignment Revoked")
 ```
+
+`PASSWORD_CHANGED` emittiert sich selbstständig aus `ProfilePasswordChangeView` (Sektion 6.2.1). Die `message` ist konstant `"self-edit changed: password"` — der Passwort-Wert selbst wird nie geloggt. Audit-Anzeige im Per-User-Tab + im globalen Feed unter Account-Kategorie.
 
 Migration: schema-leere `AlterField` auf `event_type.choices` — TextChoices-Erweiterung erfordert in Django keine DB-Änderung, aber `makemigrations` möchte den State-Change festschreiben. Standard für dieses Projekt (siehe SSO-Spec).
 
@@ -1319,15 +1409,35 @@ Für das Detail-Page-Layout braucht es Mobile-Verifikation an drei Breakpoints: 
 - `address` geleert → lat/lon/locator auf null/leer (außer locator wurde manuell gesetzt).
 - `is_directory_visible` toggle → korrekt persistiert + USER_UPDATED audit.
 
-### 13.8 Permissions an HTMX-Endpoints
+### 13.8 Password-Change-Self-Service
+
+`apps/accounts/tests/test_password_change.py` (neu):
+
+- `POST /accounts/profile/password/` mit gültigem current_password + matching new1/new2 → 302 redirect + Session bleibt → `PASSWORD_CHANGED`-Audit-Eintrag mit actor=target_user=self.
+- Falsches current_password → Form-Error in `messages`, kein Audit.
+- new1 != new2 → Form-Error, kein Audit.
+- Password zu schwach (gegen `AUTH_PASSWORD_VALIDATORS`) → Form-Error.
+- Audit-Message ist konstant `"self-edit changed: password"` — kein Passwort-Wert geleakt.
+- Nach erfolgreichem Change: alter Hash funktioniert nicht mehr (Login mit altem PW schlägt fehl).
+
+### 13.9 Onboarding-Empty-State-Render
+
+`apps/accounts/tests/test_profile_onboarding.py` (neu):
+
+- User mit allen Profilfeldern leer → alle 5 Onboarding-Hints im HTML.
+- User mit Avatar gesetzt → Avatar-Hint fehlt, andere noch da.
+- User mit allen Feldern gefüllt → keine Hints im HTML.
+- Hints erscheinen nur auf `accounts:profile`, nicht auf `accounts:user_detail` (auch bei Self-View).
+
+### 13.10 Permissions an HTMX-Endpoints
 
 Bestehende Tests bleiben grün — kein Change an den HTMX-Views.
 
-### 13.9 Mobile-Snapshot (optional)
+### 13.11 Mobile-Snapshot (optional)
 
 Falls Playwright im Projekt vorhanden ist: Detail-, List-, Edit-, Create-, Delete-, Profile-Page bei Viewports 375 / 768 / 1024 px. Smoke-Tests: kein horizontal-scroll, alle Buttons sichtbar, Tabs umbrechen bzw. scrollen sauber.
 
-### 13.10 Global-Audit-Filter
+### 13.12 Global-Audit-Filter
 
 `apps/audit/tests/test_audit_filter.py`: `?target_user=<pk>` filtert AccountAuditLog und SsoAuditLog korrekt.
 
@@ -1344,7 +1454,7 @@ Empfohlene Build-Phasen (für den Implementation-Plan):
 5. **Avatar-Upload-Pipeline**: Form-clean + Resize + Tests. Standalone.
 6. **DetailView Audience-aware**: Skeleton mit allen Tabs (conditional je Audience), Routing umstellen; Permission-Tests aus 13.3.
 7. **List-View Audience-aware**: Member-View filtert Applicants, Admin sieht alle; Filter-Bar + Audience-conditional Spalten/Aktionen.
-8. **Identity- + Profile-Form-Erweiterung**: Edit-Form + Profile-Form bekommen neue Felder; form_valid triggert Geocoding; USER_UPDATED-Audit für TRACKED_USER_FIELDS.
+8. **Identity- + Profile-Form-Erweiterung**: Edit-Form + Profile-Form (mit getrennten Forms je Panel) bekommen neue Felder; Profile-Page integriert Password-Change-Panel (`ProfilePasswordChangeView`, `update_session_auth_hash`, `PASSWORD_CHANGED`-Audit); form_valid triggert Geocoding; USER_UPDATED-Audit für TRACKED_USER_FIELDS; Onboarding-Empty-State-Hinweise je Panel.
 9. **Card-Migration**: Bestehende HTMX-Cards von Edit-Form in Detail-Tabs umziehen; inline `max-width` raus; Self-readonly-Variante.
 10. **Delete-Confirm**: Impact-Anzeige + USER_DELETED-Emit.
 11. **Audit-Tab + Global-Filter**: Per-User-Feed-Query + `target_user`-Filter im Globalen.
@@ -1368,7 +1478,8 @@ Subagent-driven-development pro Phase. Phasen 1+2+3+4+5 können in Round-1 paral
 
 Bewusst nicht in diesem Spec:
 
-- **Password-Reset** auf der Detail-Seite. Heute läuft das über Django Admin; eigene Surface ist eigener Spec.
+- **Password-Reset-Flow** (forgot-password mit Email-Token). Self-Service Password-*Change* (mit current_password Re-Auth) ist in diesem Spec drin — reset via Email-Link ist eigener Spec mit Token-Tabelle + Email-Templates.
+- **2FA / TOTP** auf der Profile-Page. Sicherheits-Spec für sich, mit Recovery-Codes, Backup-Devices etc.
 - **User-Bulk-Operationen** (mehrere User auf einmal löschen/promoten). Eigener Spec.
 - **Mehrfach-Membership-Levels** oder feinere Permissions. Membership ist heute ein single-value Feld, das bleibt so.
 - **User-und-Station-Map**. Lat/lon-Foundation wird hier gelegt, die Map ist eigener Spec.
