@@ -841,6 +841,8 @@ def form_valid(self, form):
     return response
 ```
 
+> **Roadmap-Hinweis:** `UserCreationForm` behält in diesem Spec die Felder `password1`/`password2` — Admin tippt das PW, kommuniziert dem User außerhalb (per Funk / WhatsApp / persönlich). Das wird im **Folge-Spec „Account Lifecycle"** (siehe Sektion 17) durch einen Welcome-Email-Setup-Token-Flow ersetzt: Admin tippt nur Identity, System sendet Setup-Email, User klickt Link und setzt PW selbst. Bis dahin bleibt der bestehende Flow.
+
 ### 6.7 Geocoding-Trigger im form_valid
 
 Sowohl `UserUpdateView.form_valid` (Admin) als auch `ProfileView.form_valid` (Self) lösen Geocoding aus, wenn `address` geändert wurde:
@@ -1056,6 +1058,8 @@ def form_valid(self, form):
 ```
 
 Nach dem Cascade-Delete wird `target_user` in der Audit-Row durch `on_delete=SET_NULL` auf `NULL` gesetzt — der Username bleibt aber in `message` lesbar. Das ist konsistent mit dem bestehenden Pattern für gelöschte Regions.
+
+> **Roadmap-Hinweis:** Hard-Delete via Cascade ist in diesem Spec der Default — das User-Record verschwindet, Assignments und Audit-FKs werden gemäß Modell-Definition behandelt. Im **Folge-Spec „Account Lifecycle"** (siehe Sektion 17) wird das durch ein **Soft-Delete-Pattern** ersetzt: User-Record bleibt mit `is_deleted=True` + `deleted_at` + `deleted_by`. Assignments werden inaktiv, statt zu kaskadieren. Bestehende `UserDeleteView`-Surface (Impact-Anzeige, Confirm-Page) wird zur „Archive"-Surface — gleicher UX-Flow, nur die Backend-Semantik ändert sich. Audit-FKs bleiben dann gültig, weil der User nicht weg ist.
 
 ---
 
@@ -1476,25 +1480,78 @@ Subagent-driven-development pro Phase. Phasen 1+2+3+4+5 können in Round-1 paral
 
 ## 15. Out-of-Scope
 
-Bewusst nicht in diesem Spec:
+Bewusst nicht in diesem Spec. Aufgeteilt nach Themenbereich und ob ein Folge-Spec geplant ist.
 
-- **Password-Reset-Flow** (forgot-password mit Email-Token). Self-Service Password-*Change* (mit current_password Re-Auth) ist in diesem Spec drin — reset via Email-Link ist eigener Spec mit Token-Tabelle + Email-Templates.
-- **2FA / TOTP** auf der Profile-Page. Sicherheits-Spec für sich, mit Recovery-Codes, Backup-Devices etc.
-- **User-Bulk-Operationen** (mehrere User auf einmal löschen/promoten). Eigener Spec.
-- **Mehrfach-Membership-Levels** oder feinere Permissions. Membership ist heute ein single-value Feld, das bleibt so.
-- **User-und-Station-Map**. Lat/lon-Foundation wird hier gelegt, die Map ist eigener Spec.
+### 15.1 Themen mit geplanten Folge-Specs
+
+Siehe Sektion 17 „Followup-Specs" für die Roadmap.
+
+- **Welcome-Email + Setup-Token-Flow für neue User** — Spec #2 „Account Lifecycle".
+- **Password-Reset-Flow** (forgot-password mit Email-Token) — Spec #2 „Account Lifecycle".
+- **Email-Change-Verification** (neue Email muss bestätigt werden) — Spec #2 „Account Lifecycle".
+- **Soft-Delete + Restore + Archive-Sicht** — Spec #2 „Account Lifecycle".
+- **User-und-Station-Map** auf Basis der Locator-Foundation aus diesem Spec — eigener UI-Spec.
+- **Aufnahme-Workflow für Applicants** (Self-Registration → Vorstandsentscheidung → Promote) — eigener Spec, hängt an Spec #2 Email-Infra.
+
+### 15.2 Themen ohne aktuellen Folge-Spec
+
+Kann später bei Bedarf erweitert werden, kein konkreter Plan:
+
+- **2FA / TOTP** auf der Profile-Page. Eigener Sicherheits-Spec mit Recovery-Codes, Backup-Devices.
+- **User-Bulk-Operationen** (mehrere User auf einmal löschen/promoten).
+- **Mehrfach-Membership-Levels** oder feinere Permissions. Membership ist single-value, bleibt so.
 - **Audit-Filter-Bar auf dem Per-User-Audit-Tab**. Top-50-Anzeige reicht — wer mehr will, geht in den globalen Feed mit `?target_user=<pk>`.
 - **Membership-Level-Selector im Create-Form**. Bleibt 2-Schritt-Flow (APPLICANT auf Create, Promote auf Detail).
 - **Per-Feld-Privacy-Switch durch User** (Modell B). Nur Master-Switch `is_directory_visible` plus System-Defaults pro Feld.
 - **Avatar-Lightbox** / größere Anzeige durch Klick. Avatar wird im Header + Aside fest gerendert.
 - **Geocoding-Background-Job** (Celery). Synchron im form_valid mit 1-Sekunde-Pause für Nominatim-Rate-Limit reicht für unsere Größenordnung.
 - **Orphaned-Avatar-Cleanup-Job**. Bei jedem Re-Upload bleibt das alte File liegen; periodisches Cleanup wäre eigener Job.
-- **Operating-Modes + Bänder-Multi-Select-Felder**. Funker-Profil bleibt minimal (QTH + QRZ-URL). Kann später ergänzt werden ohne Brechen der Visibility-Logik.
-- **Lizenzklasse-Feld** (CEPT-1 / Newcomer / 4). User-Entscheidung gegen Aufnahme — kann später ergänzt werden.
-- **Activity-Heatmap** / Login-Frequenz-Visualisierung. Eigener Spec.
+- **Operating-Modes + Bänder-Multi-Select-Felder**. Funker-Profil bleibt minimal (QTH + QRZ-URL).
+- **Lizenzklasse-Feld** (CEPT-1 / Newcomer / 4). Kann später ergänzt werden.
+- **Activity-Heatmap** / Login-Frequenz-Visualisierung.
 
 ---
 
 ## 16. Offene Punkte
 
 Keine. Alle Entscheidungen sind in den Sektionen 1-15 festgehalten.
+
+---
+
+## 17. Followup-Specs — Roadmap
+
+Diese Spec adressiert das User-Domain-Redesign + Member-Directory. Drei zusammenhängende Themen wurden bewusst ausgeklammert, weil sie eine **gemeinsame Foundation** brauchen (Email-Infrastruktur + Token-Modell) und ein eigener Cross-Cutting-Refactor (Soft-Delete) sind. Die Roadmap:
+
+### 17.1 Spec #2 — „Account Lifecycle"
+
+**Ziel:** Welcome-Email-getriebener Aufnahme-Flow, Self-Service-PW-Reset, Email-Change-Verification, Soft-Delete als Hard-Delete-Ersatz.
+
+**Grobe Sektionsstruktur:**
+
+1. `AuthToken`-Modell — single-use, expiring Tokens mit Purpose-Klassifizierung (`initial_setup`, `password_reset`, `email_change`).
+2. Email-Infrastruktur — SMTP-Settings, Test-Backend, HTML+Text-Templates, Footer-Branding, Tracking-IDs für Audit.
+3. **Aufnahme-Flow** (User-Wunsch): Admin tippt Identity, System sendet Welcome-Email mit Setup-Link, User klickt Link und setzt erstes Passwort. Ersetzt `UserCreateView`'s aktuelle Password-Felder.
+4. **Password-Reset-Flow**: Login-Page-Link „Passwort vergessen?", Email mit Reset-Link, Setup-Form ohne `current_password`.
+5. **Email-Change-Verification**: bei Email-Änderung im Profile-Form wird die neue Email als pending markiert, Verify-Email an die neue Adresse geschickt, erst nach Click greift sie.
+6. **Soft-Delete-Pattern**: `is_deleted` + `deleted_at` + `deleted_by` am User-Modell, Default-Manager exkludiert deleted, `all_objects`-Manager für Archive-Sicht. Cascade-Anpassungen, Username/Email-Suffix-Konvention. Restore-Workflow für Admins.
+7. **UserCreateView**-Refactor — entfernt Password-Felder, sendet Welcome-Email.
+8. **UserDeleteView**-Refactor — wird zur „Archive User"-Surface; Hard-Delete bleibt nur als Admin-Action „Permanently delete (GDPR erasure)".
+9. **Neue Audit-EventTypes**: `WELCOME_EMAIL_SENT`, `SETUP_TOKEN_USED`, `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_USED`, `EMAIL_CHANGE_REQUESTED`, `EMAIL_VERIFIED`, `USER_ARCHIVED`, `USER_RESTORED`.
+
+**Abhängigkeiten zu diesem Spec:** Erbt die `TRACKED_USER_FIELDS`, die `ProfileForm`-Struktur, die `AccountAuditLog`-Architektur und die Audience-Visibility-Logik. Refactoriert aber `UserCreateView` und `UserDeleteView`.
+
+**Erwartete Größenordnung:** ~1000-1500 Zeilen Spec, ~6-8 Implementation-Phasen.
+
+### 17.2 Spec #3 (vorausschauend) — „User-und-Station-Map"
+
+**Ziel:** Visualisierung der Mitglieder + Stationen auf einer Karte. Foundation (lat/lon, Locator) wird in Spec #1 (dieser hier) gelegt.
+
+**Grobe Themen:** Leaflet-Integration, Marker-Cluster, Privacy-Beachtung (`is_directory_visible=False`-User erscheinen nicht), Filter (Member/Station/Region/Topology-Rolle), Click-to-Detail. Hängt **nicht** an Spec #2.
+
+### 17.3 Reihenfolge der Realisierung
+
+Empfohlene Sequence:
+
+1. **Spec #1** (dieser Spec) — User-Domain-Redesign + Member-Directory. **Branch:** `feat/user-domain-redesign`.
+2. **Spec #2** — „Account Lifecycle". Direkt nach Spec #1 — der Aufnahme-Flow ist konkret nachgefragt und die Email-Infra-Foundation ist Voraussetzung für vieles weitere.
+3. **Spec #3** — „User-und-Station-Map". Kann parallel zu Spec #2 angefangen werden (keine harte Abhängigkeit).
