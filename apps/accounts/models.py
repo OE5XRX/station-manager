@@ -245,6 +245,7 @@ class AccountAuditLog(models.Model):
     """
 
     class EventType(models.TextChoices):
+        # === Existing (do not reorder) ===
         MEMBERSHIP_PROMOTED = "membership_promoted", _("Membership Promoted")
         MEMBERSHIP_DEMOTED = "membership_demoted", _("Membership Demoted")
         REGION_ASSIGNMENT_CREATED = "region_assignment_created", _("Region Assignment Created")
@@ -252,6 +253,15 @@ class AccountAuditLog(models.Model):
         REGION_CREATED = "region_created", _("Region Created")
         REGION_UPDATED = "region_updated", _("Region Updated")
         REGION_DELETED = "region_deleted", _("Region Deleted")
+        # === Added in Sub-Spec 1a Foundation ===
+        USER_CREATED = "user_created", _("User Created")
+        USER_UPDATED = "user_updated", _("User Updated")
+        USER_DELETED = "user_deleted", _("User Deleted")
+        USER_ACTIVATED = "user_activated", _("User Activated")
+        USER_DEACTIVATED = "user_deactivated", _("User Deactivated")
+        PASSWORD_CHANGED = "password_changed", _("Password Changed")
+        STATION_ASSIGNMENT_CREATED = "station_assignment_created", _("Station Assignment Created")
+        STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked", _("Station Assignment Revoked")
 
     event_type = models.CharField(
         _("event type"),
