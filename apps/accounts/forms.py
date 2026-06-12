@@ -11,6 +11,9 @@ from django.contrib.auth.forms import (
 )
 from django.utils.translation import gettext_lazy as _
 
+from .avatars import process_avatar_file, validate_avatar_upload
+from .models import LOCATOR_REGEX
+
 User = get_user_model()
 
 
@@ -57,14 +60,11 @@ class UserCreationForm(BaseUserCreationForm):
 
 
 class UserChangeForm(BaseUserChangeForm):
-    """Form for admins to edit existing users — identity fields only.
+    """Form for admins to edit existing users.
 
-    Membership-level promote/demote and topology assignments are NOT
-    in this form. They are HTMX-driven cards rendered alongside this
-    form in user_form.html (Vereins-Rolle, Region-Manager-Zuordnungen,
-    Stations-Zuordnungen) backed by dedicated POST endpoints — see
-    apps/accounts/views_membership.py / views_region_assignments.py /
-    views_station_assignments.py.
+    1c-Erweiterung: Identity-Felder plus die neuen Profile-Felder aus 1a.
+    Avatar wird beim Save via process_avatar_file resized; Locator wird
+    auf uppercase normalisiert und gegen LOCATOR_REGEX validiert.
     """
 
     password = None
@@ -78,6 +78,14 @@ class UserChangeForm(BaseUserChangeForm):
             "last_name",
             "language",
             "is_active",
+            "bio",
+            "avatar",
+            "qth_name",
+            "qrz_url",
+            "phone",
+            "address",
+            "locator",
+            "is_directory_visible",
         )
         widgets = {
             "username": forms.TextInput(attrs={"class": "form-control"}),
@@ -86,7 +94,36 @@ class UserChangeForm(BaseUserChangeForm):
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
             "language": forms.Select(attrs={"class": "form-select"}),
             "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
+            "bio": forms.Textarea(attrs={"class": "form-control", "rows": 3, "maxlength": 500}),
+            "avatar": forms.ClearableFileInput(
+                attrs={"class": "form-control", "accept": "image/*"}
+            ),
+            "qth_name": forms.TextInput(attrs={"class": "form-control"}),
+            "qrz_url": forms.URLInput(attrs={"class": "form-control"}),
+            "phone": forms.TextInput(attrs={"class": "form-control"}),
+            "address": forms.Textarea(attrs={"class": "form-control", "rows": 4}),
+            "locator": forms.TextInput(attrs={"class": "form-control", "placeholder": "JN78AB"}),
+            "is_directory_visible": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
+
+    def clean_avatar(self):
+        f = self.cleaned_data.get("avatar")
+        validate_avatar_upload(f)
+        return f
+
+    def clean_locator(self):
+        loc = self.cleaned_data.get("locator", "").strip().upper()
+        if loc and not LOCATOR_REGEX.match(loc):
+            raise forms.ValidationError(
+                _("Locator muss 2 Buchstaben + 2 Ziffern + 2 Buchstaben sein (z.B. JN78AB).")
+            )
+        return loc
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        if commit and "avatar" in self.changed_data and user.avatar:
+            process_avatar_file(user.avatar.path)
+        return user
 
 
 class ProfileForm(forms.ModelForm):
