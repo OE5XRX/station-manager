@@ -81,3 +81,70 @@ class TestValidateAvatarUpload:
         validate_avatar_upload(f)
         # After validate, the file should be re-seekable to start
         assert f.tell() == 0
+
+
+class TestProcessAvatarFile:
+    """process_avatar_file resizes + re-encodes the file in-place."""
+
+    def test_large_jpeg_resized_to_512(self, tmp_path):
+        from PIL import Image
+
+        from apps.accounts.avatars import process_avatar_file
+
+        # 1024x768 source, will be downscaled
+        src_path = tmp_path / "big.jpg"
+        Image.new("RGB", (1024, 768), color=(255, 0, 0)).save(
+            src_path,
+            "JPEG",
+            quality=85,
+        )
+
+        process_avatar_file(str(src_path))
+
+        result = Image.open(src_path)
+        assert max(result.size) == 512
+        assert result.format == "JPEG"
+
+    def test_png_converted_to_jpeg(self, tmp_path):
+        from PIL import Image
+
+        from apps.accounts.avatars import process_avatar_file
+
+        src_path = tmp_path / "in.png"
+        Image.new("RGB", (256, 256), color=(0, 255, 0)).save(src_path, "PNG")
+
+        process_avatar_file(str(src_path))
+
+        result = Image.open(src_path)
+        assert result.format == "JPEG"
+
+    def test_transparency_flattened_to_rgb(self, tmp_path):
+        from PIL import Image
+
+        from apps.accounts.avatars import process_avatar_file
+
+        src_path = tmp_path / "alpha.png"
+        Image.new("RGBA", (256, 256), color=(0, 0, 255, 128)).save(src_path, "PNG")
+
+        process_avatar_file(str(src_path))
+
+        result = Image.open(src_path)
+        assert result.mode == "RGB"
+
+    def test_small_image_not_upscaled(self, tmp_path):
+        from PIL import Image
+
+        from apps.accounts.avatars import process_avatar_file
+
+        src_path = tmp_path / "small.jpg"
+        Image.new("RGB", (200, 150), color=(255, 0, 0)).save(
+            src_path,
+            "JPEG",
+            quality=85,
+        )
+
+        process_avatar_file(str(src_path))
+
+        result = Image.open(src_path)
+        # thumbnail() does not upscale — bleibt bei 200x150
+        assert result.size == (200, 150)

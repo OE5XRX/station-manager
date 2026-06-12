@@ -41,3 +41,22 @@ def validate_avatar_upload(file):
             file.seek(0)
         except (AttributeError, OSError):
             pass
+
+
+def process_avatar_file(file_field_path: str) -> None:
+    """Resize and re-encode the avatar file at the given filesystem path.
+
+    In-place mutation: opens, resizes to max 512×512 (proportional),
+    converts to RGB (drops alpha), writes back as JPEG quality=85.
+
+    Called from Form.save() after super().save() has written the file
+    to MEDIA_ROOT — at that point file_field_path is the actual disk path.
+    """
+    from PIL import Image
+
+    with Image.open(file_field_path) as img:
+        img.thumbnail((512, 512))
+        # Convert to RGB to drop alpha channel — JPEG doesn't support alpha.
+        # Convert before save() so the conversion is part of the file.
+        rgb = img.convert("RGB")
+        rgb.save(file_field_path, "JPEG", quality=85, optimize=True)
