@@ -127,10 +127,12 @@
         {% endif %}
         <td data-label="{% trans 'Topology' %}">
           {% if is_admin_view or is_visible %}
-            {# Use |length on the prefetched related sets instead of .count
-               to avoid one COUNT(*) per row — UserListView prefetches
-               region_assignments__region and station_assignments__station,
-               so the lists are already materialised. #}
+            {% comment %}
+              Use |length on the prefetched related sets instead of .count
+              to avoid one COUNT(*) per row — UserListView prefetches
+              region_assignments__region and station_assignments__station,
+              so the lists are already materialised.
+            {% endcomment %}
             <span class="pill pill-muted">{{ u.region_assignments.all|length }}·{{ u.station_assignments.all|length }}</span>
           {% else %}—{% endif %}
         </td>

@@ -31,9 +31,11 @@
         {% else %}{{ object.username|slice:":1"|upper }}{% endif %}
       </div>
       <span>{{ object.username }}</span>
-      {# Real name only when first_name or last_name is in visible_fields —
-         a Member viewing an is_directory_visible=False target gets the
-         MINIMAL field set, so we must not leak the name here. #}
+      {% comment %}
+        Real name only when first_name or last_name is in visible_fields —
+        a Member viewing an is_directory_visible=False target gets the
+        MINIMAL field set, so we must not leak the name here.
+      {% endcomment %}
       {% if "first_name" in visible_fields or "last_name" in visible_fields %}
         <span class="t-muted" style="font-family:var(--font-body);font-weight:500;">
           {{ object.get_full_name|default:"—" }}
@@ -244,10 +246,12 @@
 
 <div data-tab-panel="topology" hidden>
   {% if is_admin_view %}
-    {# Membership-Card: Admin viewing own page sees readonly — self-promote/
-       demote is blocked server-side by MembershipSetView, so a writable
-       picker would be misleading. Region/Station-Assignments have no
-       self-restriction, so an admin CAN manage their own topology. #}
+    {% comment %}
+      Membership-Card: Admin viewing own page sees readonly — self-promote/
+      demote is blocked server-side by MembershipSetView, so a writable
+      picker would be misleading. Region/Station-Assignments have no
+      self-restriction, so an admin CAN manage their own topology.
+    {% endcomment %}
     {% if object.pk != request.user.pk %}
       {% include "accounts/_membership_card.html" with readonly=False %}
     {% else %}
