@@ -360,3 +360,44 @@ class TestUserFormCardCleanup:
         assert "sso-grants-card" not in body
         assert "sessions-card" not in body
         assert "tags-card" not in body
+
+
+@pytest.mark.django_db
+class TestSuccessRedirects:
+    """Create/Update redirect to the user_detail page of the affected user."""
+
+    def test_create_redirects_to_detail(self, client, admin):
+        client.force_login(admin)
+        resp = client.post(
+            reverse("accounts:user_create"),
+            {
+                "username": "OE5NEW1",
+                "email": "new@example.org",
+                "first_name": "",
+                "last_name": "",
+                "language": "en",
+                "password1": "abcDEF123!xyz",
+                "password2": "abcDEF123!xyz",
+            },
+            follow=False,
+        )
+        assert resp.status_code == 302
+        created = User.objects.get(username="OE5NEW1")
+        assert resp.url == reverse("accounts:user_detail", kwargs={"pk": created.pk})
+
+    def test_update_redirects_to_detail(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.post(
+            reverse("accounts:user_edit", kwargs={"pk": member.pk}),
+            {
+                "username": member.username,
+                "email": "updated@example.org",
+                "first_name": "Updated",
+                "last_name": "",
+                "language": "en",
+                "is_active": "on",
+            },
+            follow=False,
+        )
+        assert resp.status_code == 302
+        assert resp.url == reverse("accounts:user_detail", kwargs={"pk": member.pk})

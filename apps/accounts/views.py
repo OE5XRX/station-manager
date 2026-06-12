@@ -5,7 +5,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import redirect
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
 
@@ -113,7 +113,9 @@ class UserCreateView(AdminRequiredMixin, CreateView):
     model = User
     template_name = "accounts/user_form.html"
     form_class = UserCreationForm
-    success_url = reverse_lazy("accounts:user_list")
+
+    def get_success_url(self):
+        return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
         messages.success(self.request, _("User created successfully."))
@@ -129,7 +131,9 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
     model = User
     template_name = "accounts/user_form.html"
     form_class = UserChangeForm
-    success_url = reverse_lazy("accounts:user_list")
+
+    def get_success_url(self):
+        return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
         messages.success(self.request, _("User updated successfully."))
