@@ -70,26 +70,28 @@ class TestValidateAvatarUpload:
         # After validate, the file should be re-seekable to start
         assert f.tell() == 0
 
-    def test_decompression_bomb_raises_validation_error(self):
-        """A crafted image with huge declared dimensions but small payload
-        is a classic decompression bomb. Pillow raises
-        Image.DecompressionBombError on open/verify when the pixel count
-        exceeds the threshold; we must convert that to ValidationError
-        so the upload fails safely (rather than 500-ing the form view).
+    def test_decompression_bomb_raises_validation_error(self, monkeypatch):
+        """A crafted image whose declared pixel count exceeds Pillow's
+        ``MAX_IMAGE_PIXELS`` triggers ``Image.DecompressionBombError`` on
+        open/verify. ``validate_avatar_upload`` must convert that to
+        ``ValidationError`` so the upload fails safely rather than 500-ing
+        the form view.
+
+        Implementation note: rather than allocating a 20 000 × 20 000
+        image (≈ 1.2 GB) just to make a real bomb, we temporarily lower
+        ``Image.MAX_IMAGE_PIXELS`` to a tiny number for the duration of
+        this test. A 200 × 200 image (40 000 pixels) is then ``> 100`` and
+        triggers the same guard — keeping the test fast and OOM-safe in
+        CI environments with limited memory.
         """
-        # Default MAX_IMAGE_PIXELS in Pillow is ~178 956 970 (≈ 0.5 GB
-        # at 3 bytes/px). Build a 20 000 × 20 000 PNG header (4×10^8
-        # pixels) which is well above the threshold. The image content
-        # is tiny because it's a solid colour, so file.size stays
-        # under MAX_AVATAR_BYTES.
-        img = Image.new("RGB", (20000, 20000), color=(255, 0, 0))
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        buf.seek(0)
-        # Sanity: we want this within the 2 MB limit so we test the
-        # decompression-bomb path, not the size-limit path.
-        assert len(buf.getvalue()) < MAX_AVATAR_BYTES
-        f = SimpleUploadedFile("bomb.png", buf.read(), content_type="image/png")
+        monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+
+        buf = _make_jpeg(200, 200)  # 40 000 pixels >> 100
+        # Sanity: still well within the 2 MB size limit, so the bomb path
+        # (not the size path) is the one being exercised.
+        payload = buf.read()
+        assert len(payload) < MAX_AVATAR_BYTES
+        f = SimpleUploadedFile("bomb.jpg", payload, content_type="image/jpeg")
         with pytest.raises(ValidationError):
             validate_avatar_upload(f)
 
