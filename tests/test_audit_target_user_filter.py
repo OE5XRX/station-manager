@@ -117,3 +117,95 @@ class TestAuditTableHideSubject:
         resp = client.get(reverse("audit:audit_list") + "?category=account")
         # Global feed renders with hide_subject=False → "Subject" column header present
         assert "Subject" in resp.content.decode()
+
+
+@pytest.mark.django_db
+class TestTargetUserFilterSsoActorBranch:
+    """SsoAuditLog stores the user as ``actor`` for events like LOGIN_SUCCESS.
+    The ?target_user filter on the global feed must match both target_user
+    AND actor so the per-user detail-audit-tab and the global link agree.
+    """
+
+    def test_sso_filter_matches_actor(self, client, admin, member, other_member):
+        # LOGIN_SUCCESS typically fires with actor=user, target_user=None
+        SsoAuditLog.log(
+            event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
+            actor=member,
+            message="member-actor-event",
+        )
+        SsoAuditLog.log(
+            event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
+            actor=other_member,
+            message="other-actor-event",
+        )
+
+        client.force_login(admin)
+        resp = client.get(reverse("audit:audit_list") + f"?category=sso&target_user={member.pk}")
+        body = resp.content.decode()
+        # Actor-side match for member
+        assert "member-actor-event" in body
+        # Other-member event must NOT appear
+        assert "other-actor-event" not in body
+
+
+@pytest.mark.django_db
+class TestTargetUserFilterStationFeed:
+    """When ?target_user is set without an explicit ?user, the station feed
+    narrows by user_id=<target_user> so the global feed doesn't leak
+    unrelated station events into a per-user audit context.
+    """
+
+    def test_station_feed_respects_target_user(self, client, admin, member, other_member):
+        from apps.stations.models import Region, Station, StationAuditLog
+
+        region = Region.objects.create(name="Innviertel")
+        station = Station.objects.create(name="OE5XRX-Test", callsign="OE5XRX", region=region)
+        StationAuditLog.log(
+            station=station,
+            event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            user=member,
+            message="member-station-event",
+        )
+        StationAuditLog.log(
+            station=station,
+            event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            user=other_member,
+            message="other-station-event",
+        )
+
+        client.force_login(admin)
+        resp = client.get(
+            reverse("audit:audit_list") + f"?category=station&target_user={member.pk}"
+        )
+        body = resp.content.decode()
+        assert "member-station-event" in body
+        assert "other-station-event" not in body
+
+    def test_explicit_user_param_wins_over_target_user(self, client, admin, member, other_member):
+        """When both ?user and ?target_user are set on the station feed, the
+        explicit ?user wins (it's the existing param)."""
+        from apps.stations.models import Region, Station, StationAuditLog
+
+        region = Region.objects.create(name="Innviertel")
+        station = Station.objects.create(name="OE5XRX-Test", callsign="OE5XRX", region=region)
+        StationAuditLog.log(
+            station=station,
+            event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            user=member,
+            message="member-station-event",
+        )
+        StationAuditLog.log(
+            station=station,
+            event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            user=other_member,
+            message="other-station-event",
+        )
+
+        client.force_login(admin)
+        resp = client.get(
+            reverse("audit:audit_list")
+            + f"?category=station&user={other_member.pk}&target_user={member.pk}"
+        )
+        body = resp.content.decode()
+        assert "other-station-event" in body
+        assert "member-station-event" not in body

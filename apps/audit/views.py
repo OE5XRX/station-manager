@@ -51,6 +51,14 @@ class AuditLogFilterMixin:
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
 
+        # `target_user` on the StationAuditLog feed maps onto the `user`
+        # column (= who performed the station action — assigned_by). Station
+        # events ABOUT a user come through AccountAuditLog's doppel-emit
+        # (added in 1a) and are filtered on the account side already.
+        target_user = params.get("target_user")
+        if target_user and not user:
+            queryset = queryset.filter(user_id=target_user)
+
         return queryset
 
     def apply_shared_date_filters(self, queryset, params):
@@ -60,6 +68,10 @@ class AuditLogFilterMixin:
         station/event/user). SSO and Account logs only expose the date
         range from the filter sidebar, so they share this narrower helper.
         """
+        from django.db.models import Q
+
+        from apps.sso.models import SsoAuditLog
+
         date_from = params.get("date_from")
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
@@ -67,11 +79,17 @@ class AuditLogFilterMixin:
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
         # Per-user filter — consumed by the "Open in global audit log" link
-        # from the UserDetailView audit-tab. Both AccountAuditLog and
-        # SsoAuditLog expose a target_user FK.
+        # from the UserDetailView audit-tab. For AccountAuditLog the user is
+        # always the target (`target_user`). For SsoAuditLog the per-user
+        # audit-tab in UserDetailView matches `target_user OR actor` (e.g.
+        # LOGIN_SUCCESS fires with the user as actor); match that contract
+        # here so the link-out yields the same row-set as the tab.
         target_user = params.get("target_user")
         if target_user:
-            queryset = queryset.filter(target_user_id=target_user)
+            if queryset.model is SsoAuditLog:
+                queryset = queryset.filter(Q(target_user_id=target_user) | Q(actor_id=target_user))
+            else:
+                queryset = queryset.filter(target_user_id=target_user)
         return queryset
 
 

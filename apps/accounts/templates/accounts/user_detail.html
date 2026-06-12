@@ -238,11 +238,16 @@
 </div>
 
 <div data-tab-panel="topology" hidden>
-  {# Admin gets writable cards only on OTHER users' pages. Admin viewing own
-     page sees readonly cards — self-promote/demote is blocked server-side
-     anyway (MembershipSetView), so a writable picker would be misleading. #}
-  {% if is_admin_view and object.pk != request.user.pk %}
-    {% include "accounts/_membership_card.html" with readonly=False %}
+  {% if is_admin_view %}
+    {# Membership-Card: Admin viewing own page sees readonly — self-promote/
+       demote is blocked server-side by MembershipSetView, so a writable
+       picker would be misleading. Region/Station-Assignments have no
+       self-restriction, so an admin CAN manage their own topology. #}
+    {% if object.pk != request.user.pk %}
+      {% include "accounts/_membership_card.html" with readonly=False %}
+    {% else %}
+      {% include "accounts/_membership_card.html" with readonly=True %}
+    {% endif %}
     <div class="grid grid-main">
       {% include "accounts/_region_assignments_card.html" with readonly=False %}
       {% include "accounts/_station_assignments_card.html" with readonly=False %}

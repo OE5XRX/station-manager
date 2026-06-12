@@ -370,6 +370,25 @@ class TestUserDetailViewTemplateRendering:
         assert "Set membership level" in body
         assert reverse("accounts:membership_set", kwargs={"pk": member.pk}) in body
 
+    def test_admin_self_view_region_station_cards_are_writable(self, client, admin):
+        """Admin viewing own detail page CAN manage own Region/Station
+        assignments (no server-side self-restriction on those endpoints).
+        Only the Membership card is readonly on self-view.
+        """
+        client.force_login(admin)
+        resp = client.get(self.url(admin))
+        body = resp.content.decode()
+        # Region-Assignments-Card endpoints visible
+        assert (
+            reverse("accounts:region_assignment_create", kwargs={"user_pk": admin.pk}) in body
+            or "region-assignments-card" in body
+        )
+        # Station-Assignments-Card endpoints visible
+        assert (
+            reverse("accounts:station_assignment_create", kwargs={"user_pk": admin.pk}) in body
+            or "station-assignments-card" in body
+        )
+
 
 @pytest.mark.django_db
 class TestUserFormCardCleanup:
