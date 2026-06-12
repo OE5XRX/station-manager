@@ -265,9 +265,7 @@ class TestUserFormTemplate:
 
     def test_edit_form_has_three_panels(self, client, admin_user, member):
         client.force_login(admin_user)
-        resp = client.get(
-            reverse("accounts:user_edit", kwargs={"pk": member.pk})
-        )
+        resp = client.get(reverse("accounts:user_edit", kwargs={"pk": member.pk}))
         body = resp.content.decode()
         # Identity panel (always)
         assert ">Identity<" in body or "<h2>Identity</h2>" in body or "Identity" in body
@@ -284,3 +282,86 @@ class TestUserFormTemplate:
         body = resp.content.decode()
         # Profil/Adresse only show up in Edit-Mode (1c spec Sektion 3.4)
         assert "Profil" not in body or "Adresse" not in body
+
+
+@pytest.mark.django_db
+class TestProfileForms:
+    def test_identity_form_fields(self, member):
+        from apps.accounts.forms import ProfileIdentityForm
+
+        form = ProfileIdentityForm(instance=member)
+        assert set(form.fields.keys()) == {"email", "first_name", "last_name", "language"}
+
+    def test_profile_form_fields(self, member):
+        from apps.accounts.forms import ProfileProfileForm
+
+        form = ProfileProfileForm(instance=member)
+        assert set(form.fields.keys()) == {
+            "avatar",
+            "bio",
+            "qth_name",
+            "qrz_url",
+            "phone",
+            "is_directory_visible",
+        }
+
+    def test_address_form_fields(self, member):
+        from apps.accounts.forms import ProfileAddressForm
+
+        form = ProfileAddressForm(instance=member)
+        assert set(form.fields.keys()) == {"address", "locator"}
+
+    def test_address_form_locator_validation(self, member):
+        from apps.accounts.forms import ProfileAddressForm
+
+        form = ProfileAddressForm(data={"address": "anywhere", "locator": "XX"}, instance=member)
+        assert not form.is_valid()
+        assert "locator" in form.errors
+
+    def test_profile_form_avatar_resize_called(self, member, tmp_path, settings, monkeypatch):
+        from apps.accounts.avatars import process_avatar_file as real_resize
+        from apps.accounts.forms import ProfileProfileForm
+
+        settings.MEDIA_ROOT = str(tmp_path)
+        settings.STORAGES = {
+            **settings.STORAGES,
+            "default": {
+                "BACKEND": "django.core.files.storage.FileSystemStorage",
+            },
+        }
+        calls = []
+
+        def fake_process(path):
+            calls.append(path)
+            real_resize(path)
+
+        monkeypatch.setattr("apps.accounts.forms.process_avatar_file", fake_process)
+
+        buf = _make_jpeg(1024, 768)
+        f = SimpleUploadedFile("ok.jpg", buf.read(), content_type="image/jpeg")
+        form = ProfileProfileForm(
+            data={
+                "bio": "",
+                "qth_name": "",
+                "qrz_url": "",
+                "phone": "",
+                "is_directory_visible": "on",
+            },
+            files={"avatar": f},
+            instance=member,
+        )
+        assert form.is_valid(), form.errors
+        form.save()
+        assert len(calls) == 1
+
+
+@pytest.mark.django_db
+class TestPasswordChangeForm:
+    def test_widgets_get_form_control_class(self, member):
+        from apps.accounts.forms import PasswordChangeForm
+
+        member.set_password("oldsecret123!")
+        member.save()
+        form = PasswordChangeForm(user=member)
+        for field in form.fields.values():
+            assert field.widget.attrs.get("class") == "form-control"

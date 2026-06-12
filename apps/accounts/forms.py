@@ -4,6 +4,9 @@ from django.contrib.auth.forms import (
     AuthenticationForm,
 )
 from django.contrib.auth.forms import (
+    PasswordChangeForm as DjangoPasswordChangeForm,
+)
+from django.contrib.auth.forms import (
     UserChangeForm as BaseUserChangeForm,
 )
 from django.contrib.auth.forms import (
@@ -138,3 +141,89 @@ class ProfileForm(forms.ModelForm):
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
             "language": forms.Select(attrs={"class": "form-select"}),
         }
+
+
+class ProfileIdentityForm(forms.ModelForm):
+    """Self-edit of identity fields (Profile page → Identity panel)."""
+
+    class Meta:
+        model = User
+        fields = ("email", "first_name", "last_name", "language")
+        widgets = {
+            "email": forms.EmailInput(attrs={"class": "form-control"}),
+            "first_name": forms.TextInput(attrs={"class": "form-control"}),
+            "last_name": forms.TextInput(attrs={"class": "form-control"}),
+            "language": forms.Select(attrs={"class": "form-select"}),
+        }
+
+
+class ProfileProfileForm(forms.ModelForm):
+    """Self-edit of profile-cosmetic fields (Profile page → Profil panel)."""
+
+    class Meta:
+        model = User
+        fields = (
+            "avatar",
+            "bio",
+            "qth_name",
+            "qrz_url",
+            "phone",
+            "is_directory_visible",
+        )
+        widgets = {
+            "avatar": forms.ClearableFileInput(
+                attrs={"class": "form-control", "accept": "image/*"}
+            ),
+            "bio": forms.Textarea(attrs={"class": "form-control", "rows": 3, "maxlength": 500}),
+            "qth_name": forms.TextInput(attrs={"class": "form-control"}),
+            "qrz_url": forms.URLInput(attrs={"class": "form-control"}),
+            "phone": forms.TextInput(attrs={"class": "form-control"}),
+            "is_directory_visible": forms.CheckboxInput(attrs={"class": "form-check-input"}),
+        }
+
+    def clean_avatar(self):
+        f = self.cleaned_data.get("avatar")
+        validate_avatar_upload(f)
+        return f
+
+    def save(self, commit=True):
+        user = super().save(commit=commit)
+        if commit and "avatar" in self.changed_data and user.avatar:
+            process_avatar_file(user.avatar.path)
+        return user
+
+
+class ProfileAddressForm(forms.ModelForm):
+    """Self-edit of address + locator override (Profile page → Adresse panel).
+
+    Geocoding-Trigger lives in ProfileView._maybe_geocode, not here.
+    """
+
+    class Meta:
+        model = User
+        fields = ("address", "locator")
+        widgets = {
+            "address": forms.Textarea(attrs={"class": "form-control", "rows": 4}),
+            "locator": forms.TextInput(attrs={"class": "form-control", "placeholder": "JN78AB"}),
+        }
+
+    def clean_locator(self):
+        loc = self.cleaned_data.get("locator", "").strip().upper()
+        if loc and not LOCATOR_REGEX.match(loc):
+            raise forms.ValidationError(
+                _("Locator muss 2 Buchstaben + 2 Ziffern + 2 Buchstaben sein (z.B. JN78AB).")
+            )
+        return loc
+
+
+class PasswordChangeForm(DjangoPasswordChangeForm):
+    """Bootstrap-styled overlay over Django's PasswordChangeForm.
+
+    Re-Auth via the inherited ``old_password`` field; ProfilePasswordChangeView
+    calls ``update_session_auth_hash`` after save() so the user stays logged in.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = "form-control"
