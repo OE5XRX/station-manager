@@ -55,14 +55,14 @@
     {% if station_admin_assignments %}
       <div class="onboarding-hint" role="alert" style="border-left-color:var(--danger);margin-top:14px;">
         <span class="onboarding-hint-icon">⚠️</span>
-        <span class="onboarding-hint-text">
+        <div class="onboarding-hint-text">
           {% trans "Achtung: User ist Station-Admin auf folgenden Stationen — die Stationen verlieren ihren Admin:" %}
           <ul style="margin:4px 0 0 0;padding-left:20px;">
             {% for sa in station_admin_assignments %}
               <li>{{ sa.station.callsign|default:sa.station.name }}</li>
             {% endfor %}
           </ul>
-        </span>
+        </div>
       </div>
     {% endif %}
   </div>

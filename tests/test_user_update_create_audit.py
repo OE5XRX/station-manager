@@ -61,7 +61,8 @@ class TestUserUpdateViewAudit:
     def test_identity_change_emits_user_updated(self, client, admin, member):
         client.force_login(admin)
         before = AccountAuditLog.objects.filter(
-            event_type=AccountAuditLog.EventType.USER_UPDATED
+            event_type=AccountAuditLog.EventType.USER_UPDATED,
+            target_user=member,
         ).count()
         client.post(
             reverse("accounts:user_edit", kwargs={"pk": member.pk}),

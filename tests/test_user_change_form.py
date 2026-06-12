@@ -280,8 +280,11 @@ class TestUserFormTemplate:
         client.force_login(admin_user)
         resp = client.get(reverse("accounts:user_create"))
         body = resp.content.decode()
-        # Profil/Adresse only show up in Edit-Mode (1c spec Sektion 3.4)
-        assert "Profil" not in body or "Adresse" not in body
+        # Profil/Adresse only show up in Edit-Mode (1c spec Sektion 3.4).
+        # Match on the panel-title pattern so we don't get fooled by the word
+        # "Profil" appearing in help text or aside content.
+        assert ">Profil<" not in body
+        assert ">Adresse & Standort<" not in body
 
 
 @pytest.mark.django_db
