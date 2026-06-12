@@ -1,5 +1,5 @@
 {% load i18n %}
-<section class="panel" id="region-assignments-card" style="max-width:640px;margin-top:16px;">
+<section class="panel" id="region-assignments-card">
   <div class="panel-head">
     <div class="panel-title"><span class="dot"></span>{% trans "Region-Manager" %}</div>
   </div>
@@ -16,6 +16,7 @@
           {% for ra in existing_region_assignments %}
             <li class="row-gap-8" style="align-items:center;">
               <span class="pill pill-muted">{{ ra.region.name }}</span>
+              {% if not readonly %}
               <form hx-post="{% url 'accounts:region_assignment_revoke' ra.pk %}"
                     hx-on::after-request="if (event.detail.successful) window.location.reload()"
                     style="display:inline;">
@@ -23,6 +24,7 @@
                 <button type="submit" class="btn btn-ghost btn-sm"
                         title="{% trans 'Revoke assignment' %}">✕</button>
               </form>
+              {% endif %}
             </li>
           {% endfor %}
         </ul>
@@ -32,7 +34,7 @@
         </p>
       {% endif %}
 
-      {% if available_regions %}
+      {% if not readonly and available_regions %}
         <form hx-post="{% url 'accounts:region_assignment_create' object.pk %}"
               hx-on::after-request="if (event.detail.successful) window.location.reload()">
           {% csrf_token %}
@@ -40,7 +42,7 @@
             {% trans "Add Region-Manager assignment" %}:
           </label>
           <div class="row-gap-8" style="align-items:flex-end;">
-            <select id="region-add-select" name="region" class="form-select" style="max-width:280px;">
+            <select id="region-add-select" name="region" class="form-select">
               {% for r in available_regions %}
                 <option value="{{ r.pk }}">{{ r.name }}</option>
               {% endfor %}
@@ -48,7 +50,7 @@
             <button type="submit" class="btn btn-primary btn-sm">{% trans "Add" %}</button>
           </div>
         </form>
-      {% else %}
+      {% elif not readonly %}
         <p class="t-muted t-mono-sm">
           {% trans "No remaining regions to assign." %}
         </p>
