@@ -269,3 +269,77 @@ class TestUserDetailViewAuditEntries:
         # Each entry is a (category, log_obj) tuple
         categories = {cat for cat, _ in entries}
         assert categories == {"account", "sso"}
+
+
+@pytest.mark.django_db
+class TestUserDetailViewTemplateRendering:
+    """High-level HTML smoke tests for the four audience modes."""
+
+    def url(self, target):
+        return reverse("accounts:user_detail", kwargs={"pk": target.pk})
+
+    def test_admin_view_renders_4_tabs(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        body = resp.content.decode()
+        assert 'data-tab="overview"' in body
+        assert 'data-tab="topology"' in body
+        assert 'data-tab="sso"' in body
+        assert 'data-tab="audit"' in body
+
+    def test_admin_view_has_edit_and_delete_buttons(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        body = resp.content.decode()
+        assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) in body
+        assert reverse("accounts:user_delete", kwargs={"pk": member.pk}) in body
+
+    def test_admin_self_view_omits_edit_delete(self, client, admin):
+        """Admin viewing own detail page does NOT see Edit/Delete — self-edit
+        goes through accounts:profile (1c), and self-delete is blocked."""
+        client.force_login(admin)
+        resp = client.get(self.url(admin))
+        body = resp.content.decode()
+        # The Detail-Page does not show self-Edit/Delete buttons (deferred to profile)
+        assert reverse("accounts:user_edit", kwargs={"pk": admin.pk}) not in body
+        assert reverse("accounts:user_delete", kwargs={"pk": admin.pk}) not in body
+
+    def test_self_view_has_profile_edit_action(self, client, member):
+        client.force_login(member)
+        resp = client.get(self.url(member))
+        body = resp.content.decode()
+        assert reverse("accounts:profile") in body
+
+    def test_member_view_renders_2_tabs(self, client, member, other_member):
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        body = resp.content.decode()
+        assert 'data-tab="overview"' in body
+        assert 'data-tab="topology"' in body
+        assert 'data-tab="sso"' not in body
+        assert 'data-tab="audit"' not in body
+
+    def test_member_view_hides_private_fields(self, client, member, other_member):
+        other_member.phone = "+43 1 23456"
+        other_member.address = "Geheimstraße 7"
+        other_member.email = "secret@example.org"
+        other_member.save()
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        body = resp.content.decode()
+        # Phone and address must NOT appear for cross-member view.
+        assert "+43 1 23456" not in body
+        assert "Geheimstraße 7" not in body
+        # Email is in PUBLIC_PROFILE_FIELDS, so it CAN show.
+
+    def test_member_view_invisible_target_minimal(self, client, member, other_member):
+        other_member.bio = "Should not appear"
+        other_member.qth_name = "Should not appear either"
+        other_member.is_directory_visible = False
+        other_member.save()
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        body = resp.content.decode()
+        assert "Should not appear" not in body
+        # Membership pill and username still show
+        assert other_member.username in body
