@@ -186,3 +186,79 @@ class TestUserLocatorValidator:
         user = User.objects.create_user(username="OE5TEST", password="x")
         user.locator = ""
         user.full_clean()  # should not raise
+
+
+class TestUserAdminFieldsets:
+    """UserAdmin exposes the new profile fields in dedicated fieldsets."""
+
+    def test_admin_has_profile_fieldset(self):
+        from django.contrib import admin
+
+        from apps.accounts.models import User
+
+        admin_instance = admin.site._registry.get(User)
+        # admin_instance is the registered UserAdmin instance
+        assert admin_instance is not None
+
+        fieldset_labels = [str(fs[0]) for fs in admin_instance.fieldsets]
+        assert "Profile" in fieldset_labels
+
+    def test_admin_has_address_fieldset(self):
+        from django.contrib import admin
+
+        from apps.accounts.models import User
+
+        admin_instance = admin.site._registry.get(User)
+        fieldset_labels = [str(fs[0]) for fs in admin_instance.fieldsets]
+        assert "Address & Location" in fieldset_labels
+
+    def test_admin_has_directory_fieldset(self):
+        from django.contrib import admin
+
+        from apps.accounts.models import User
+
+        admin_instance = admin.site._registry.get(User)
+        fieldset_labels = [str(fs[0]) for fs in admin_instance.fieldsets]
+        assert "Directory" in fieldset_labels
+
+    def test_profile_fieldset_contains_expected_fields(self):
+        from django.contrib import admin
+
+        from apps.accounts.models import User
+
+        admin_instance = admin.site._registry.get(User)
+        profile_fieldset = next(
+            fs for fs in admin_instance.fieldsets if str(fs[0]) == "Profile"
+        )
+        fields = profile_fieldset[1]["fields"]
+        assert "avatar" in fields
+        assert "bio" in fields
+        assert "qth_name" in fields
+        assert "qrz_url" in fields
+        assert "phone" in fields
+
+    def test_address_fieldset_contains_expected_fields(self):
+        from django.contrib import admin
+
+        from apps.accounts.models import User
+
+        admin_instance = admin.site._registry.get(User)
+        addr_fieldset = next(
+            fs for fs in admin_instance.fieldsets if str(fs[0]) == "Address & Location"
+        )
+        fields = addr_fieldset[1]["fields"]
+        assert "address" in fields
+        assert "latitude" in fields
+        assert "longitude" in fields
+        assert "locator" in fields
+
+    def test_directory_fieldset_contains_is_directory_visible(self):
+        from django.contrib import admin
+
+        from apps.accounts.models import User
+
+        admin_instance = admin.site._registry.get(User)
+        dir_fieldset = next(
+            fs for fs in admin_instance.fieldsets if str(fs[0]) == "Directory"
+        )
+        assert "is_directory_visible" in dir_fieldset[1]["fields"]
