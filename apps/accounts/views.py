@@ -7,9 +7,24 @@ from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
-from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
+from django.views.generic import (
+    CreateView,
+    DeleteView,
+    DetailView,
+    ListView,
+    TemplateView,
+    UpdateView,
+)
 
-from .forms import LoginForm, ProfileForm, UserChangeForm, UserCreationForm
+from .forms import (
+    LoginForm,
+    PasswordChangeForm,
+    ProfileAddressForm,
+    ProfileIdentityForm,
+    ProfileProfileForm,
+    UserChangeForm,
+    UserCreationForm,
+)
 from .geocoding import geocode_address, lat_lon_to_locator
 from .models import AccountAuditLog
 
@@ -66,17 +81,130 @@ class LogoutView(auth_views.LogoutView):
     pass
 
 
-class ProfileView(LoginRequiredMixin, UpdateView):
+class ProfileView(LoginRequiredMixin, TemplateView):
     template_name = "accounts/profile.html"
-    form_class = ProfileForm
-    success_url = reverse_lazy("accounts:profile")
 
-    def get_object(self, queryset=None):
-        return self.request.user
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        ctx["identity_form"] = ProfileIdentityForm(instance=user, prefix="identity")
+        ctx["profile_form"] = ProfileProfileForm(instance=user, prefix="profile")
+        ctx["address_form"] = ProfileAddressForm(instance=user, prefix="address")
+        ctx["password_form"] = PasswordChangeForm(user=user)
+        ctx["onboarding_hints"] = self._onboarding_hints(user)
+        from apps.sso.views import _active_sessions_for
 
-    def form_valid(self, form):
-        messages.success(self.request, _("Profile updated successfully."))
-        return super().form_valid(form)
+        ctx["self_sessions"] = _active_sessions_for(user)
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        form_name = request.POST.get("form_name", "")
+        user = request.user
+        if form_name == "identity":
+            return self._save_identity(request, user)
+        if form_name == "profile":
+            return self._save_profile(request, user)
+        if form_name == "address":
+            return self._save_address(request, user)
+        messages.error(request, _("Unknown form."))
+        return redirect("accounts:profile")
+
+    def _save_identity(self, request, user):
+        form = ProfileIdentityForm(request.POST, instance=user, prefix="identity")
+        if form.is_valid():
+            changed = set(form.changed_data)
+            form.save()
+            self._emit_user_updated(request, user, changed)
+            messages.success(request, _("Identity updated."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
+
+    def _save_profile(self, request, user):
+        form = ProfileProfileForm(request.POST, request.FILES, instance=user, prefix="profile")
+        if form.is_valid():
+            changed = set(form.changed_data)
+            form.save()
+            self._emit_user_updated(request, user, changed)
+            messages.success(request, _("Profile updated."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
+
+    def _save_address(self, request, user):
+        form = ProfileAddressForm(request.POST, instance=user, prefix="address")
+        if form.is_valid():
+            changed = set(form.changed_data)
+            # Snapshot the locator BEFORE form.save() so _maybe_geocode can
+            # restore it on geocode-fail. The form includes locator and would
+            # otherwise blow away a previously-stored value when the user
+            # edits address without touching locator (POST sends "").
+            pre_locator = User.objects.values_list("locator", flat=True).get(pk=user.pk)
+            form.save()
+            self._maybe_geocode(user, changed, pre_locator)
+            self._emit_user_updated(request, user, changed)
+            messages.success(request, _("Address updated."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
+
+    def _maybe_geocode(self, user, changed_fields, pre_locator=""):
+        if "address" not in changed_fields:
+            return
+        if not user.address:
+            user.latitude = None
+            user.longitude = None
+            if "locator" not in changed_fields:
+                user.locator = ""
+            user.save(update_fields=["latitude", "longitude", "locator"])
+            return
+        coords = geocode_address(user.address)
+        if coords:
+            lat, lon = coords
+            user.latitude = lat
+            user.longitude = lon
+            if "locator" not in changed_fields:
+                user.locator = lat_lon_to_locator(float(lat), float(lon))
+            user.save(update_fields=["latitude", "longitude", "locator"])
+        else:
+            # Fail closed: keep existing coords/locator. The form already
+            # wrote the user-submitted locator (potentially empty); restore
+            # the pre-save value so the user's existing data isn't lost
+            # just because Nominatim was down.
+            #
+            # Trade-off: a user who *deliberately* clears their locator in
+            # the same submit as an address that fails to geocode will see
+            # the clear silently reverted. We prefer that over wiping good
+            # data on a transient Nominatim outage. To intentionally clear
+            # the locator, the user can submit address+locator empty (no
+            # geocode runs) or clear locator after a successful save.
+            if user.locator != pre_locator:
+                user.locator = pre_locator
+                user.save(update_fields=["locator"])
+
+    def _emit_user_updated(self, request, user, changed_fields):
+        tracked = changed_fields & TRACKED_USER_FIELDS
+        if not tracked:
+            return
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_UPDATED,
+            actor=user,
+            target_user=user,
+            message=f"self-edit changed: {', '.join(sorted(tracked))}",
+            ip_address=_client_ip(request),
+        )
+
+    def _onboarding_hints(self, user):
+        return {
+            "name_missing": not (user.first_name or user.last_name),
+            "avatar_missing": not user.avatar,
+            "bio_missing": not user.bio,
+            "qth_missing": not user.qth_name,
+            "address_missing": not user.address,
+        }
 
 
 class UserListView(LoginRequiredMixin, ListView):
