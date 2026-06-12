@@ -35,21 +35,43 @@ from apps.stations.models import (
 def _on_station_assignment_save(sender, instance, created, **kwargs):
     if not created:
         return
+    # Bestehender StationAuditLog-Eintrag (unverändert):
     StationAuditLog.log(
         station=instance.station,
         event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
         user=instance.assigned_by,
         message=f"{instance.user} → {instance.get_role_display()}",
     )
+    # NEU in 1a: zusätzlich AccountAuditLog mit target_user=<assignee>
+    # so dass User-Detail-Audit-Tab das findet (Subjekt = User).
+    AccountAuditLog.log(
+        event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+        actor=instance.assigned_by,
+        target_user=instance.user,
+        message=(
+            f"station={instance.station.callsign or instance.station.name}, "
+            f"role={instance.get_role_display()}"
+        ),
+    )
 
 
 @receiver(post_delete, sender=StationAssignment)
 def _on_station_assignment_delete(sender, instance, **kwargs):
+    # Bestehender StationAuditLog-Eintrag (unverändert):
     StationAuditLog.log(
         station=instance.station,
         event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
         user=None,
         message=(f"{instance.user} ({instance.get_role_display()}) entfernt"),
+    )
+    # NEU in 1a: zusätzlich AccountAuditLog.
+    AccountAuditLog.log(
+        event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
+        target_user=instance.user,
+        message=(
+            f"station={instance.station.callsign or instance.station.name}, "
+            f"role={instance.get_role_display()}"
+        ),
     )
 
 
