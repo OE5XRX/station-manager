@@ -53,11 +53,15 @@ def _avatar_upload_path(instance, filename):
 
     Hash-basiert: jeder Upload erzeugt einen frischen Pfad — alte Files bleiben
     orphaned (Cleanup-Job out-of-scope, siehe Overview Sektion 7).
+
+    Extension is hard-coded to ``.jpg`` because ``process_avatar_file``
+    always re-encodes uploads as JPEG; preserving the original extension
+    would produce filenames whose bytes don't match (e.g. ``foo.png``
+    containing JPEG bytes) and breaks Content-Type inference in CDNs.
     """
     import uuid
-    from pathlib import Path
-    ext = Path(filename).suffix.lower() or ".jpg"
-    return f"avatars/{instance.pk or 'new'}/{uuid.uuid4().hex[:12]}{ext}"
+    del filename  # see docstring — bytes are always JPEG after processing
+    return f"avatars/{instance.pk or 'new'}/{uuid.uuid4().hex[:12]}.jpg"
 
 
 class User(AbstractUser):
@@ -379,15 +383,25 @@ logger = logging.getLogger(__name__)
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_TIMEOUT = 10  # Sekunden
-USER_AGENT = "OE5XRX-StationManager/1.0 (peter.buchegger7@gmail.com)"
+# Generic project default — deployments override via NOMINATIM_USER_AGENT
+# setting if Nominatim requires a contact handle. Personal contact info
+# does NOT live in source control.
+DEFAULT_USER_AGENT = "OE5XRX-StationManager/1.0"
+
+
+def _user_agent():
+    return getattr(settings, "NOMINATIM_USER_AGENT", DEFAULT_USER_AGENT)
 
 
 def geocode_address(address: str) -> Optional[tuple[Decimal, Decimal]]:
     """Resolve eine Postadresse zu (latitude, longitude).
 
-    Returns None bei Fehler (Network, kein Result, Timeout).
+    Returns None bei Fehler (Network, kein Result, Timeout, Parse-Failure).
     Throttled per call: ein time.sleep(1) am Start serialisiert mit der
     Nominatim-Free-Tier-Rate-Limit-Policy.
+
+    Privacy: die Adresse darf NICHT in den Warning-Log — sie ist PII.
+    Nur die Exception-Klasse + Message wird geloggt.
     """
     if not address or not address.strip():
         return None
@@ -401,7 +415,7 @@ def geocode_address(address: str) -> Optional[tuple[Decimal, Decimal]]:
                 "limit": 1,
                 "accept-language": "de,en",
             },
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": _user_agent()},
             timeout=NOMINATIM_TIMEOUT,
         )
         resp.raise_for_status()
@@ -410,8 +424,15 @@ def geocode_address(address: str) -> Optional[tuple[Decimal, Decimal]]:
             return None
         first = results[0]
         return (Decimal(first["lat"]), Decimal(first["lon"]))
-    except (requests.RequestException, ValueError, KeyError) as exc:
-        logger.warning("Nominatim geocode failed for address %r: %s", address, exc)
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        TypeError,
+        InvalidOperation,
+    ) as exc:
+        # Privacy: do NOT include `address` in the log record.
+        logger.warning("Nominatim geocode failed: %s: %s", type(exc).__name__, exc)
         return None
 ```
 
