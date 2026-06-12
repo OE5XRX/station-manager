@@ -344,6 +344,43 @@ class TestUserDetailViewTemplateRendering:
         # Membership pill and username still show
         assert other_member.username in body
 
+    def test_member_view_invisible_target_hides_full_name(self, client, member, other_member):
+        """Page-head subtitle must not leak the target's real name to a
+        Member viewing an is_directory_visible=False profile (the spec
+        MINIMAL set has no first_name/last_name)."""
+        other_member.first_name = "Hans"
+        other_member.last_name = "Müller"
+        other_member.is_directory_visible = False
+        other_member.save()
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        body = resp.content.decode()
+        assert "Hans" not in body
+        assert "Müller" not in body
+        assert other_member.username in body
+
+    def test_self_view_topology_cards_show_existing_assignments(self, client, member):
+        """Self/Member views render the management cards in readonly mode,
+        but the cards still need existing_region_assignments /
+        existing_station_assignments to render the pills (otherwise the
+        cards' empty-state 'No assignments yet' fires even when there
+        are assignments)."""
+        from apps.stations.models import Region, RegionAssignment
+
+        region = Region.objects.create(name="Innviertel")
+        RegionAssignment.objects.create(
+            user=member,
+            region=region,
+            role=RegionAssignment.Role.MANAGER,
+        )
+        client.force_login(member)
+        resp = client.get(self.url(member))
+        body = resp.content.decode()
+        # The Region pill should be in the rendered HTML on the topology tab
+        assert "Innviertel" in body
+        # And the "No assignments yet" empty-state should NOT fire
+        assert "No Region-Manager assignments yet" not in body
+
     def test_admin_self_view_membership_picker_is_readonly(self, client, admin):
         """Admin viewing own detail page sees the membership pill but NO
         writable picker. Self-promote/demote is blocked server-side

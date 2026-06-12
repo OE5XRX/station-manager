@@ -201,14 +201,19 @@ class UserDetailView(LoginRequiredMixin, DetailView):
             ctx.update(self._self_context_data())
 
         # Assignment-Pills für Topology-Tab (alle Audiences, sofern Felder visible).
+        # The Admin context already populates `existing_*_assignments` (used by
+        # the management cards). For Self/Member the same list also feeds the
+        # readonly-mode cards in the Topology tab — without it the cards
+        # render their empty-state ("No assignments yet") even when
+        # assignments exist. Reuse one queryset for both consumers.
         if "region_assignments" in ctx["visible_fields"]:
-            ctx["region_assignment_pills"] = self.object.region_assignments.select_related(
-                "region"
-            )
+            region_pills = list(self.object.region_assignments.select_related("region"))
+            ctx["region_assignment_pills"] = region_pills
+            ctx.setdefault("existing_region_assignments", region_pills)
         if "station_assignments" in ctx["visible_fields"]:
-            ctx["station_assignment_pills"] = self.object.station_assignments.select_related(
-                "station"
-            )
+            station_pills = list(self.object.station_assignments.select_related("station"))
+            ctx["station_assignment_pills"] = station_pills
+            ctx.setdefault("existing_station_assignments", station_pills)
 
         # Audit-Tab nur für Self + Admin.
         if aud in (Audience.ADMIN, Audience.SELF, Audience.APPLICANT):
