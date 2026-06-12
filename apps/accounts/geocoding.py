@@ -10,28 +10,41 @@ Spec: docs/superpowers/specs/2026-06-12-user-domain-1a-foundation-design.md
 
 import logging
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import requests
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_TIMEOUT = 10  # seconds
-# Nominatim Free-Tier policy requires identifying User-Agent.
-USER_AGENT = "OE5XRX-StationManager/1.0 (peter.buchegger7@gmail.com)"
+# Nominatim Free-Tier policy requires identifying User-Agent. The default
+# carries the project name only; a deployment can override via the
+# `NOMINATIM_USER_AGENT` Django setting to add a contact handle as required
+# by the Nominatim usage policy.
+DEFAULT_USER_AGENT = "OE5XRX-StationManager/1.0"
+
+
+def _user_agent():
+    """Read User-Agent from Django settings with a generic fallback."""
+    return getattr(settings, "NOMINATIM_USER_AGENT", DEFAULT_USER_AGENT)
 
 
 def geocode_address(address):
     """Resolve a postal address to (latitude, longitude) via Nominatim.
 
     Returns None on any error (network, no result, malformed response,
-    timeout). The function rate-limits itself with a 1-second sleep per
-    call to comply with the Nominatim Free-Tier policy.
+    timeout, parse failure). The function rate-limits itself with a
+    1-second sleep per call to comply with the Nominatim Free-Tier policy.
 
     NOT thread-safe across multiple concurrent calls in the same process —
     the rate-limit pause is local. For a small Verein (≤ a few save-events
     per minute) that's fine.
+
+    Privacy note: the address is intentionally NOT included in the warning
+    log on failure (it can be PII). Callers must propagate the None result
+    to their own UI-level error path if user feedback is needed.
     """
     if not address or not address.strip():
         return None
@@ -47,7 +60,7 @@ def geocode_address(address):
                 "limit": 1,
                 "accept-language": "de,en",
             },
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": _user_agent()},
             timeout=NOMINATIM_TIMEOUT,
         )
         resp.raise_for_status()
@@ -56,8 +69,16 @@ def geocode_address(address):
             return None
         first = results[0]
         return (Decimal(first["lat"]), Decimal(first["lon"]))
-    except (requests.RequestException, ValueError, KeyError) as exc:
-        logger.warning("Nominatim geocode failed for address %r: %s", address, exc)
+    except (
+        requests.RequestException,
+        ValueError,
+        KeyError,
+        TypeError,
+        InvalidOperation,
+    ) as exc:
+        # Do NOT log the address itself — only the exception class so the
+        # operator has a debuggable signal without leaking user PII.
+        logger.warning("Nominatim geocode failed: %s: %s", type(exc).__name__, exc)
         return None
 
 
@@ -80,7 +101,13 @@ def lat_lon_to_locator(lat, lon, precision: int = 6) -> str:
     a_ord = ord("A")
     lon_field, lon_rest = divmod(lon_f, 20.0)
     lat_field, lat_rest = divmod(lat_f, 10.0)
-    out = chr(a_ord + int(lon_field)) + chr(a_ord + int(lat_field))
+    # Clamp field indices to the valid Maidenhead A-R range (0..17). At the
+    # exact boundary lon=180 / lat=90 the divmod result is 18 — without the
+    # clamp we'd emit 'S' (out of range) and produce a locator that the
+    # LOCATOR_REGEX validator would reject.
+    lon_field = min(int(lon_field), 17)
+    lat_field = min(int(lat_field), 17)
+    out = chr(a_ord + lon_field) + chr(a_ord + lat_field)
     lon_sq, lon_rest = divmod(lon_rest, 2.0)
     lat_sq, lat_rest = divmod(lat_rest, 1.0)
     out += str(int(lon_sq)) + str(int(lat_sq))

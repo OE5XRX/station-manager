@@ -1,6 +1,5 @@
 import re
 import uuid
-from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
@@ -23,15 +22,23 @@ locator_validator = RegexValidator(
 
 
 def avatar_upload_path(instance, filename):
-    """Per-user randomised storage path: avatars/<user_id>/<random>.<ext>.
+    """Per-user randomised storage path: avatars/<user_id>/<random>.jpg.
 
     Each upload produces a fresh path — old files become orphaned but
     are not auto-cleaned (Cleanup-Job out-of-scope; siehe Overview Sektion 7).
     Using a random suffix means re-uploading the same file twice doesn't
     overwrite (and doesn't break browser caching for the old URL).
+
+    Extension is hard-coded to ``.jpg`` because ``process_avatar_file``
+    (avatars.py) always re-encodes uploads as JPEG. Preserving the
+    original extension would produce filenames whose bytes do not
+    match (e.g. ``foo.png`` containing JPEG bytes), which breaks
+    Content-Type inference in CDNs and storage backends. The ``filename``
+    parameter is part of Django's ``upload_to`` callable contract but
+    is intentionally ignored for the extension.
     """
-    ext = Path(filename).suffix.lower() or ".jpg"
-    return f"avatars/{instance.pk or 'new'}/{uuid.uuid4().hex[:12]}{ext}"
+    del filename  # see docstring — bytes are always JPEG after processing
+    return f"avatars/{instance.pk or 'new'}/{uuid.uuid4().hex[:12]}.jpg"
 
 
 class User(AbstractUser):

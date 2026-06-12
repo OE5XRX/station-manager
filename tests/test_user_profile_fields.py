@@ -80,7 +80,14 @@ class TestLocatorValidator:
 
 
 class TestAvatarUploadPath:
-    """avatar_upload_path returns avatars/<pk-or-new>/<random>.<ext>."""
+    """avatar_upload_path returns avatars/<pk-or-new>/<random>.jpg.
+
+    Note: extension is hard-coded to ``.jpg`` because process_avatar_file
+    always re-encodes uploads as JPEG (see avatar_upload_path docstring).
+    Tests asserting extension-preservation were removed when this
+    contract changed; the old `.png`/`.PNG`/no-extension behaviour was a
+    bug surfaced in PR #69 Copilot review (Round 1).
+    """
 
     def test_known_pk_in_path(self):
         instance = SimpleNamespace(pk=42)
@@ -92,20 +99,13 @@ class TestAvatarUploadPath:
         path = avatar_upload_path(instance, "selfie.jpg")
         assert path.startswith("avatars/new/")
 
-    def test_extension_lowercased(self):
+    def test_always_jpg_extension(self):
+        """Regardless of the input filename, the output uses .jpg."""
         instance = SimpleNamespace(pk=1)
-        path = avatar_upload_path(instance, "FOO.JPG")
-        assert path.endswith(".jpg")
-
-    def test_extension_fallback_jpg(self):
-        instance = SimpleNamespace(pk=1)
-        path = avatar_upload_path(instance, "noext")
-        assert path.endswith(".jpg")
-
-    def test_png_extension_preserved(self):
-        instance = SimpleNamespace(pk=1)
-        path = avatar_upload_path(instance, "icon.PNG")
-        assert path.endswith(".png")
+        # Any input — different ext, no ext, weird ext — yields .jpg
+        for filename in ["FOO.JPG", "icon.PNG", "weird.webp", "noext", "img.bmp"]:
+            path = avatar_upload_path(instance, filename)
+            assert path.endswith(".jpg"), f"got {path} for input {filename}"
 
     def test_unique_random_suffix(self):
         instance = SimpleNamespace(pk=1)

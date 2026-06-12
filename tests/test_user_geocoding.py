@@ -8,8 +8,9 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import requests
+from django.test import override_settings
 
-from apps.accounts.geocoding import geocode_address
+from apps.accounts.geocoding import DEFAULT_USER_AGENT, geocode_address
 
 
 class TestGeocodeAddress:
@@ -99,3 +100,76 @@ class TestGeocodeAddress:
 
         geocode_address("Some place")
         mock_sleep.assert_called_once_with(1)
+
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_user_agent_default_is_generic(self, mock_get, _mock_sleep):
+        """Default User-Agent carries the project name only, no personal email."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = [{"lat": "0", "lon": "0"}]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        geocode_address("Any address")
+        ua = mock_get.call_args.kwargs["headers"]["User-Agent"]
+        assert ua == DEFAULT_USER_AGENT
+        # PII guard: a personal email must NOT show up in the default UA.
+        assert "@" not in ua
+
+    @override_settings(NOMINATIM_USER_AGENT="MyClub/2.0 (admin@example.org)")
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_user_agent_setting_overrides_default(self, mock_get, _mock_sleep):
+        """Deployments can inject contact info via NOMINATIM_USER_AGENT."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = [{"lat": "0", "lon": "0"}]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        geocode_address("Any address")
+        ua = mock_get.call_args.kwargs["headers"]["User-Agent"]
+        assert ua == "MyClub/2.0 (admin@example.org)"
+
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_invalid_decimal_in_response_returns_none(self, mock_get, _mock_sleep):
+        """Nominatim returning a non-numeric lat/lon must not propagate
+        InvalidOperation — the function fails closed to None.
+        """
+        mock_response = MagicMock()
+        mock_response.json.return_value = [{"lat": "not_a_number", "lon": "0"}]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        assert geocode_address("Some place") is None
+
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_null_lat_in_response_returns_none(self, mock_get, _mock_sleep):
+        """Nominatim returning lat/lon=null triggers TypeError on Decimal(None),
+        which must be caught and fail closed.
+        """
+        mock_response = MagicMock()
+        mock_response.json.return_value = [{"lat": None, "lon": "0"}]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        assert geocode_address("Some place") is None
+
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_failure_log_does_not_leak_address(self, mock_get, _mock_sleep, caplog):
+        """Privacy: the warning log on geocode failure must not contain
+        the raw address (PII)."""
+        import logging
+
+        mock_get.side_effect = requests.HTTPError("500 Server Error")
+
+        sensitive = "Geheimstraße 7, 4020 Linz"
+        with caplog.at_level(logging.WARNING, logger="apps.accounts.geocoding"):
+            result = geocode_address(sensitive)
+        assert result is None
+        # The address itself must not appear anywhere in the log records.
+        for record in caplog.records:
+            assert sensitive not in record.getMessage()
+            assert "Geheimstraße" not in record.getMessage()

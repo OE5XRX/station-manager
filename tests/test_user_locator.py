@@ -48,3 +48,15 @@ class TestMaidenheadLocator:
     def test_default_precision_is_6(self):
         result = lat_lon_to_locator(48.30694, 14.28583)
         assert len(result) == 6
+
+    def test_boundary_north_east_stays_in_a_to_r(self):
+        """At lat=90 / lon=180 the divmod result reaches 18, which would
+        produce 'S' without the clamp. The clamp keeps the field within
+        A-R as required by LOCATOR_REGEX.
+        """
+        result = lat_lon_to_locator(90.0, 180.0)
+        # First two letters MUST be in A-R (LOCATOR_REGEX accepts only that range).
+        assert "A" <= result[0] <= "R"
+        assert "A" <= result[1] <= "R"
+        # Concretely: clamped to (17, 17) → 'R', 'R'.
+        assert result.startswith("RR")
