@@ -13,6 +13,28 @@ from .forms import LoginForm, ProfileForm, UserChangeForm, UserCreationForm
 
 User = get_user_model()
 
+# Set of User fields whose changes are tracked in USER_UPDATED audit
+# entries (form_valid diffs form.changed_data against this set). Geocoding-
+# derived fields (latitude/longitude) are intentionally NOT tracked — they
+# are recomputed from `address`, not user-edited.
+TRACKED_USER_FIELDS = frozenset(
+    {
+        "username",
+        "email",
+        "first_name",
+        "last_name",
+        "language",
+        "bio",
+        "avatar",
+        "qth_name",
+        "qrz_url",
+        "phone",
+        "address",
+        "locator",
+        "is_directory_visible",
+    }
+)
+
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Mixin that restricts access to users with admin role."""
