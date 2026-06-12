@@ -2,6 +2,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse_lazy
@@ -42,12 +43,70 @@ class ProfileView(LoginRequiredMixin, UpdateView):
         return super().form_valid(form)
 
 
-class UserListView(AdminRequiredMixin, ListView):
+class UserListView(LoginRequiredMixin, ListView):
+    """Audience-aware list. Admin sees everyone (incl. Applicants),
+    Member sees everyone except Applicants, Applicants get 404.
+    Filter-bar params (q, role, status) are applied on the audience-filtered
+    queryset.
+    """
+
     model = User
     template_name = "accounts/user_list.html"
     context_object_name = "users"
     paginate_by = 25
-    queryset = User.objects.order_by("username")
+
+    def dispatch(self, request, *args, **kwargs):
+        from .visibility import user_can_view_directory
+
+        # Let LoginRequiredMixin handle anonymous (redirect to login)
+        # before evaluating the directory gate.
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        if not user_can_view_directory(request.user):
+            raise Http404()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        qs = User.objects.order_by("username")
+        if not self.request.user.is_admin:
+            qs = qs.exclude(membership_level=User.MembershipLevel.APPLICANT)
+
+        q = self.request.GET.get("q", "").strip()
+        if q:
+            qs = qs.filter(
+                Q(username__icontains=q)
+                | Q(email__icontains=q)
+                | Q(first_name__icontains=q)
+                | Q(last_name__icontains=q)
+            )
+
+        role = self.request.GET.get("role", "")
+        valid_roles = {x.value for x in User.MembershipLevel}
+        if not self.request.user.is_admin:
+            valid_roles -= {User.MembershipLevel.APPLICANT.value}
+        if role in valid_roles:
+            qs = qs.filter(membership_level=role)
+
+        if self.request.user.is_admin:
+            status = self.request.GET.get("status", "")
+            if status == "active":
+                qs = qs.filter(is_active=True)
+            elif status == "inactive":
+                qs = qs.filter(is_active=False)
+
+        return qs.prefetch_related(
+            "region_assignments__region",
+            "station_assignments__station",
+        )
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["is_admin_view"] = self.request.user.is_admin
+        ctx["is_member_view"] = not self.request.user.is_admin
+        ctx["filter_q"] = self.request.GET.get("q", "")
+        ctx["filter_role"] = self.request.GET.get("role", "")
+        ctx["filter_status"] = self.request.GET.get("status", "")
+        return ctx
 
 
 class UserCreateView(AdminRequiredMixin, CreateView):

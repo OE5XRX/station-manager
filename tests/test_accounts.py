@@ -70,10 +70,18 @@ class TestLoginView:
 
 @pytest.mark.django_db
 class TestUserManagement:
-    def test_user_list_requires_admin(self, client, member_user):
+    def test_user_list_gates_applicants(self, client, applicant_user):
+        # Sub-Spec 1b: UserListView is now an audience-aware Member-Directory.
+        # Members + Staff + Admin can access; Applicants get 404 (no
+        # existence-leak). This replaces the old Admin-only check.
+        client.force_login(applicant_user)
+        response = client.get(reverse("accounts:user_list"))
+        assert response.status_code == 404
+
+    def test_user_list_member_access(self, client, member_user):
         client.force_login(member_user)
         response = client.get(reverse("accounts:user_list"))
-        assert response.status_code == 403
+        assert response.status_code == 200
 
     def test_user_list_admin_access(self, client, admin_user):
         client.force_login(admin_user)
