@@ -17,6 +17,8 @@ from django.views.generic import (
     UpdateView,
 )
 
+from apps.stations.models import StationAssignment
+
 from .forms import (
     LoginForm,
     PasswordChangeForm,
@@ -396,10 +398,36 @@ class UserDeleteView(AdminRequiredMixin, DeleteView):
     success_url = reverse_lazy("accounts:user_list")
     context_object_name = "target_user"
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.object
+        ctx["n_station_assignments"] = user.station_assignments.count()
+        ctx["n_region_assignments"] = user.region_assignments.count()
+        ctx["station_admin_assignments"] = list(
+            user.station_assignments.filter(role=StationAssignment.Role.ADMIN).select_related(
+                "station"
+            )
+        )
+        ctx["n_sso_grants"] = user.app_grants.count() if hasattr(user, "app_grants") else 0
+        ctx["n_active_sessions"] = (
+            user.token_sessions.filter(revoked_at__isnull=True).count()
+            if hasattr(user, "token_sessions")
+            else 0
+        )
+        ctx["n_group_memberships"] = user.groups.count()
+        return ctx
+
     def form_valid(self, form):
         if self.get_object() == self.request.user:
             messages.error(self.request, _("You cannot delete your own account."))
             return redirect(self.success_url)
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_DELETED,
+            actor=self.request.user,
+            target_user=self.object,
+            message=f"{self.object.username} <{self.object.email}>",
+            ip_address=_client_ip(self.request),
+        )
         messages.success(self.request, _("User deleted successfully."))
         return super().form_valid(form)
 
