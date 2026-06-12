@@ -66,6 +66,12 @@ class AuditLogFilterMixin:
         date_to = params.get("date_to")
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
+        # Per-user filter — consumed by the "Open in global audit log" link
+        # from the UserDetailView audit-tab. Both AccountAuditLog and
+        # SsoAuditLog expose a target_user FK.
+        target_user = params.get("target_user")
+        if target_user:
+            queryset = queryset.filter(target_user_id=target_user)
         return queryset
 
 
