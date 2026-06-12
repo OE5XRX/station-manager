@@ -162,4 +162,90 @@ class UserDetailView(LoginRequiredMixin, DetailView):
         ctx["is_self_view"] = aud in (Audience.SELF, Audience.APPLICANT)
         ctx["is_member_view"] = aud == Audience.MEMBER
         ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
+
+        if aud == Audience.ADMIN:
+            ctx.update(self._admin_context_data())
+        elif aud in (Audience.SELF, Audience.APPLICANT):
+            ctx.update(self._self_context_data())
+
+        # Assignment-Pills für Topology-Tab (alle Audiences, sofern Felder visible).
+        if "region_assignments" in ctx["visible_fields"]:
+            ctx["region_assignment_pills"] = self.object.region_assignments.select_related(
+                "region"
+            )
+        if "station_assignments" in ctx["visible_fields"]:
+            ctx["station_assignment_pills"] = self.object.station_assignments.select_related(
+                "station"
+            )
+
+        # Audit-Tab nur für Self + Admin.
+        if aud in (Audience.ADMIN, Audience.SELF, Audience.APPLICANT):
+            ctx["user_audit_entries"] = self._build_user_audit(self.object)
+
         return ctx
+
+    def _admin_context_data(self):
+        """Admin sees the full management context — equivalent of the
+        old UserUpdateView.get_context_data (which itself moves to a
+        slim form-only context in a later task).
+        """
+        from django.contrib.auth.models import Group
+
+        from apps.sso.views import _active_sessions_for, _build_grants_for_user
+        from apps.stations.models import Region, Station
+
+        ctx = {
+            "app_grants_list": _build_grants_for_user(self.object),
+            "user_sessions": _active_sessions_for(self.object),
+            "membership_level_choices": User.MembershipLevel.choices,
+        }
+        member_ids = set(self.object.groups.values_list("pk", flat=True))
+        ctx["tag_entries"] = [
+            {"group": g, "is_member": g.pk in member_ids} for g in Group.objects.order_by("name")
+        ]
+
+        existing_ra = list(self.object.region_assignments.select_related("region"))
+        ctx["existing_region_assignments"] = existing_ra
+        assigned_region_ids = {ra.region_id for ra in existing_ra}
+        ctx["available_regions"] = Region.objects.exclude(pk__in=assigned_region_ids).order_by(
+            "name"
+        )
+        ctx["existing_station_assignments"] = list(
+            self.object.station_assignments.select_related("station")
+        )
+        ctx["all_stations"] = Station.objects.order_by("name")
+        return ctx
+
+    def _self_context_data(self):
+        """Self only needs own SSO sessions (so the template can show
+        the Self-Sessions card with revoke-own).
+        """
+        from apps.sso.views import _active_sessions_for
+
+        return {"user_sessions": _active_sessions_for(self.object)}
+
+    def _build_user_audit(self, target_user):
+        """Merge AccountAuditLog (target_user=...) + SsoAuditLog
+        (target_user OR actor matches) into a (category, entry)
+        list sorted by created_at desc, capped at the top 50.
+        """
+        from django.db.models import Q
+
+        from apps.accounts.models import AccountAuditLog
+        from apps.sso.models import SsoAuditLog
+
+        MAX_PER_SOURCE = 500  # noqa: N806 — intentional UPPER_CASE inline constant
+
+        account_qs = (
+            AccountAuditLog.objects.filter(target_user=target_user)
+            .select_related("actor", "region")
+            .order_by("-created_at")[:MAX_PER_SOURCE]
+        )
+        sso_qs = (
+            SsoAuditLog.objects.filter(Q(target_user=target_user) | Q(actor=target_user))
+            .select_related("actor", "target_user", "application")
+            .order_by("-created_at")[:MAX_PER_SOURCE]
+        )
+        merged = [("account", e) for e in account_qs] + [("sso", e) for e in sso_qs]
+        merged.sort(key=lambda pair: pair[1].created_at, reverse=True)
+        return merged[:50]

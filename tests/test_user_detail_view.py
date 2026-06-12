@@ -136,3 +136,136 @@ class TestUserDetailViewAudienceFlags:
         assert "username" in resp.context["visible_fields"]
         # Member does NOT see private fields of other members.
         assert "phone" not in resp.context["visible_fields"]
+
+
+@pytest.mark.django_db
+class TestUserDetailViewContextLoading:
+    """Admin gets the full management context; Self gets only own helpers."""
+
+    def url(self, target):
+        return reverse("accounts:user_detail", kwargs={"pk": target.pk})
+
+    def test_admin_context_has_membership_choices(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        assert "membership_level_choices" in resp.context
+
+    def test_admin_context_has_region_assignments(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        assert "existing_region_assignments" in resp.context
+        assert "available_regions" in resp.context
+
+    def test_admin_context_has_station_assignments(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        assert "existing_station_assignments" in resp.context
+        assert "all_stations" in resp.context
+
+    def test_admin_context_has_sso_helpers(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        assert "app_grants_list" in resp.context
+        assert "user_sessions" in resp.context
+        assert "tag_entries" in resp.context
+
+    def test_self_context_omits_admin_only(self, client, member):
+        client.force_login(member)
+        resp = client.get(self.url(member))
+        # Self does NOT need the admin-only management context
+        assert "available_regions" not in resp.context
+        assert "all_stations" not in resp.context
+        assert "app_grants_list" not in resp.context
+        assert "tag_entries" not in resp.context
+
+    def test_self_context_has_own_sessions(self, client, member):
+        client.force_login(member)
+        resp = client.get(self.url(member))
+        # Self can see own sessions (for self-revoke)
+        assert "user_sessions" in resp.context
+
+    def test_member_context_minimal(self, client, member, other_member):
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        # Cross-member view has no Admin or SSO helpers
+        assert "available_regions" not in resp.context
+        assert "app_grants_list" not in resp.context
+        assert "user_sessions" not in resp.context
+        assert "tag_entries" not in resp.context
+
+    def test_assignment_pills_for_admin(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        # Pills available for the topology tab (read-only display)
+        assert "region_assignment_pills" in resp.context
+        assert "station_assignment_pills" in resp.context
+
+    def test_assignment_pills_for_member_when_target_visible(self, client, member, other_member):
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        # PUBLIC set includes "region_assignments" + "station_assignments"
+        assert "region_assignment_pills" in resp.context
+        assert "station_assignment_pills" in resp.context
+
+    def test_no_assignment_pills_for_invisible_target(self, client, member, other_member):
+        other_member.is_directory_visible = False
+        other_member.save()
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        # MINIMAL_DIRECTORY_FIELDS does not include assignments → no pills
+        assert "region_assignment_pills" not in resp.context
+        assert "station_assignment_pills" not in resp.context
+
+
+@pytest.mark.django_db
+class TestUserDetailViewAuditEntries:
+    """Audit-Tab entries — Admin + Self get them, Member does not."""
+
+    def url(self, target):
+        return reverse("accounts:user_detail", kwargs={"pk": target.pk})
+
+    def test_admin_gets_audit_entries(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        assert "user_audit_entries" in resp.context
+        # Empty list is OK; the key must exist for the template tab.
+        assert resp.context["user_audit_entries"] == [] or isinstance(
+            resp.context["user_audit_entries"], list
+        )
+
+    def test_self_gets_own_audit_entries(self, client, member):
+        client.force_login(member)
+        resp = client.get(self.url(member))
+        assert "user_audit_entries" in resp.context
+
+    def test_member_does_not_get_audit_entries(self, client, member, other_member):
+        client.force_login(member)
+        resp = client.get(self.url(other_member))
+        assert "user_audit_entries" not in resp.context
+
+    def test_audit_entries_account_and_sso_merged(self, client, admin, member):
+        """AccountAuditLog entries on target_user + SsoAuditLog entries
+        on target_user or actor are merged and sorted by created_at desc.
+        """
+        from apps.accounts.models import AccountAuditLog
+        from apps.sso.models import SsoAuditLog
+
+        # Mix of entries
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_CREATED,
+            target_user=member,
+            message="created",
+        )
+        SsoAuditLog.log(
+            event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
+            target_user=member,
+            message="login",
+        )
+
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        entries = resp.context["user_audit_entries"]
+        assert len(entries) == 2
+        # Each entry is a (category, log_obj) tuple
+        categories = {cat for cat, _ in entries}
+        assert categories == {"account", "sso"}
