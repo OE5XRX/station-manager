@@ -18,7 +18,8 @@ MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB
 def validate_avatar_upload(file):
     """Raises ValidationError if `file` is not a valid avatar upload.
 
-    Checks: not None → exists; size ≤ 2 MB; Pillow recognises as an image.
+    Checks: not None → exists; size ≤ 2 MB; Pillow recognises as an image
+    and the image isn't a decompression bomb (small file, huge dimensions).
     Resets the file cursor to 0 after Pillow consumed bytes.
     """
     if file is None:
@@ -32,6 +33,12 @@ def validate_avatar_upload(file):
     try:
         img = Image.open(file)
         img.verify()
+    except Image.DecompressionBombError as exc:
+        # Decompression bomb: small encoded file with enormous pixel
+        # dimensions that would blow up memory on decode. Pillow raises
+        # this before we ever materialise the pixels. Convert to a
+        # user-visible validation error so the upload fails safely.
+        raise ValidationError(_("Bild ist zu groß (zu viele Pixel).")) from exc
     except (UnidentifiedImageError, OSError) as exc:
         raise ValidationError(_("Datei ist kein gültiges Bild.")) from exc
     finally:

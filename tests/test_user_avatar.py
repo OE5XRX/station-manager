@@ -70,6 +70,29 @@ class TestValidateAvatarUpload:
         # After validate, the file should be re-seekable to start
         assert f.tell() == 0
 
+    def test_decompression_bomb_raises_validation_error(self):
+        """A crafted image with huge declared dimensions but small payload
+        is a classic decompression bomb. Pillow raises
+        Image.DecompressionBombError on open/verify when the pixel count
+        exceeds the threshold; we must convert that to ValidationError
+        so the upload fails safely (rather than 500-ing the form view).
+        """
+        # Default MAX_IMAGE_PIXELS in Pillow is ~178 956 970 (≈ 0.5 GB
+        # at 3 bytes/px). Build a 20 000 × 20 000 PNG header (4×10^8
+        # pixels) which is well above the threshold. The image content
+        # is tiny because it's a solid colour, so file.size stays
+        # under MAX_AVATAR_BYTES.
+        img = Image.new("RGB", (20000, 20000), color=(255, 0, 0))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        buf.seek(0)
+        # Sanity: we want this within the 2 MB limit so we test the
+        # decompression-bomb path, not the size-limit path.
+        assert len(buf.getvalue()) < MAX_AVATAR_BYTES
+        f = SimpleUploadedFile("bomb.png", buf.read(), content_type="image/png")
+        with pytest.raises(ValidationError):
+            validate_avatar_upload(f)
+
 
 class TestProcessAvatarFile:
     """process_avatar_file resizes + re-encodes the file in-place."""
