@@ -344,6 +344,32 @@ class TestUserDetailViewTemplateRendering:
         # Membership pill and username still show
         assert other_member.username in body
 
+    def test_admin_self_view_membership_picker_is_readonly(self, client, admin):
+        """Admin viewing own detail page sees the membership pill but NO
+        writable picker. Self-promote/demote is blocked server-side
+        (MembershipSetView), so showing a writable picker would be
+        misleading. Restores the contract from the pre-1b user_form.html
+        test that was removed in Task 7."""
+        client.force_login(admin)
+        resp = client.get(self.url(admin))
+        body = resp.content.decode()
+        # The Membership-Card title renders (pill view), but the
+        # "Set membership level" form does NOT.
+        assert "Vereins-Rolle" in body
+        assert "Set membership level" not in body
+        # And the HTMX-POST endpoint URL is not rendered for self
+        assert reverse("accounts:membership_set", kwargs={"pk": admin.pk}) not in body
+
+    def test_admin_other_view_membership_picker_is_writable(self, client, admin, member):
+        """Admin viewing a DIFFERENT user's detail page DOES see the
+        writable membership picker. Sanity check against over-zealous
+        readonly gating."""
+        client.force_login(admin)
+        resp = client.get(self.url(member))
+        body = resp.content.decode()
+        assert "Set membership level" in body
+        assert reverse("accounts:membership_set", kwargs={"pk": member.pk}) in body
+
 
 @pytest.mark.django_db
 class TestUserFormCardCleanup:

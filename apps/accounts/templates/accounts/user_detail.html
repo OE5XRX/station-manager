@@ -238,7 +238,10 @@
 </div>
 
 <div data-tab-panel="topology" hidden>
-  {% if is_admin_view %}
+  {# Admin gets writable cards only on OTHER users' pages. Admin viewing own
+     page sees readonly cards — self-promote/demote is blocked server-side
+     anyway (MembershipSetView), so a writable picker would be misleading. #}
+  {% if is_admin_view and object.pk != request.user.pk %}
     {% include "accounts/_membership_card.html" with readonly=False %}
     <div class="grid grid-main">
       {% include "accounts/_region_assignments_card.html" with readonly=False %}
