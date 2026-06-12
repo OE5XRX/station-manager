@@ -161,8 +161,11 @@ def test_user_detail_renders_membership_card_for_admin(client, admin_user):
 
 # NOTE: The old "test_user_form_does_not_render_membership_card_on_self" test
 # (admin viewing own user_edit page must not show membership picker) was
-# removed as part of Sub-Spec 1b/Task 7. UI cards moved to user_detail.html,
-# where the admin sees the writable picker on its own detail-page too — the
-# self-promote/demote guard is enforced server-side in MembershipSetView
-# (see test_self_demote_blocked above). UI-side hiding for that case may
-# come back in a future task; the server-side guard is the source of truth.
+# removed as part of Sub-Spec 1b/Task 7. UI cards moved to user_detail.html.
+# The membership picker is now rendered in readonly mode (label-only, no
+# form) when an admin views their own detail page — the writable picker is
+# gated on `object.pk != request.user.pk` (see user_detail.html topology
+# branch + test_admin_self_view_membership_picker_is_readonly in
+# tests/test_user_detail_view.py). The server-side self-demote guard in
+# MembershipSetView (test_self_demote_blocked above) remains the
+# authoritative source of truth.
