@@ -77,6 +77,61 @@ class User(AbstractUser):
         default=MembershipLevel.APPLICANT,
     )
 
+    # === Profile fields (added in Sub-Spec 1a Foundation) ===
+    # Self-Description, max 500 chars
+    bio = models.TextField(_("bio"), max_length=500, blank=True)
+
+    # Profile picture; resized to max 512x512 JPEG by ProfileForm.save() in 1c
+    avatar = models.ImageField(
+        _("avatar"),
+        upload_to=avatar_upload_path,
+        null=True,
+        blank=True,
+    )
+
+    # Amateur-radio standortlabel ("QTH" = ham slang for location)
+    qth_name = models.CharField(_("QTH name"), max_length=128, blank=True)
+
+    # Public QRZ.com profile URL — convenience deep-link
+    qrz_url = models.URLField(_("QRZ URL"), max_length=200, blank=True)
+
+    # Postal address as free text (multi-line). Geocoding consumes this.
+    address = models.TextField(_("address"), blank=True)
+
+    # Phone, free format (international)
+    phone = models.CharField(_("phone"), max_length=32, blank=True)
+
+    # Geographic coordinates from geocoding `address`. Not user-edited directly.
+    latitude = models.DecimalField(
+        _("latitude"),
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    longitude = models.DecimalField(
+        _("longitude"),
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+
+    # Maidenhead 6-char locator, computed from lat/lon OR user-set override
+    locator = models.CharField(
+        _("Maidenhead locator"),
+        max_length=6,
+        blank=True,
+        validators=[locator_validator],
+    )
+
+    # Master directory-visibility switch. When False, other members see
+    # only callsign + membership pill + avatar.
+    is_directory_visible = models.BooleanField(
+        _("visible in member directory"),
+        default=True,
+    )
+
     objects = UserManager()
 
     class Meta:

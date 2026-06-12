@@ -101,3 +101,88 @@ class TestAvatarUploadPath:
         paths = {avatar_upload_path(instance, "x.jpg") for _ in range(50)}
         # 50 random suffixes should all be unique (12 hex chars = 48 bits)
         assert len(paths) == 50
+
+
+@pytest.mark.django_db
+class TestUserProfileFieldDefaults:
+    """Newly added profile fields exist with the expected defaults."""
+
+    def test_bio_default_empty(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.bio == ""
+
+    def test_avatar_default_none(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        # ImageField when no file: falsy, often .name == ""
+        assert not user.avatar
+
+    def test_qth_name_default_empty(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.qth_name == ""
+
+    def test_qrz_url_default_empty(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.qrz_url == ""
+
+    def test_address_default_empty(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.address == ""
+
+    def test_phone_default_empty(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.phone == ""
+
+    def test_latitude_default_none(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.latitude is None
+
+    def test_longitude_default_none(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.longitude is None
+
+    def test_locator_default_empty(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.locator == ""
+
+    def test_is_directory_visible_default_true(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        assert user.is_directory_visible is True
+
+
+@pytest.mark.django_db
+class TestUserLocatorValidator:
+    """User.locator field uses locator_validator."""
+
+    def test_valid_locator_saves(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        user.locator = "JN78DH"
+        user.full_clean()  # runs validators
+        user.save()
+        user.refresh_from_db()
+        assert user.locator == "JN78DH"
+
+    def test_invalid_locator_raises_validation_error(self):
+        from django.core.exceptions import ValidationError
+
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        user.locator = "INVALID"
+        with pytest.raises(ValidationError):
+            user.full_clean()
+
+    def test_empty_locator_allowed(self):
+        from apps.accounts.models import User
+        user = User.objects.create_user(username="OE5TEST", password="x")
+        user.locator = ""
+        user.full_clean()  # should not raise
