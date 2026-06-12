@@ -7,6 +7,7 @@ from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from django.views import View
 from django.views.generic import (
     CreateView,
     DeleteView,
@@ -205,6 +206,32 @@ class ProfileView(LoginRequiredMixin, TemplateView):
             "qth_missing": not user.qth_name,
             "address_missing": not user.address,
         }
+
+
+class ProfilePasswordChangeView(LoginRequiredMixin, View):
+    """Self-only password change endpoint posted from the Profile page."""
+
+    http_method_names = ["post"]
+
+    def post(self, request):
+        from django.contrib.auth import update_session_auth_hash
+
+        form = PasswordChangeForm(user=request.user, data=request.POST)
+        if form.is_valid():
+            user = form.save()
+            update_session_auth_hash(request, user)
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.PASSWORD_CHANGED,
+                actor=request.user,
+                target_user=request.user,
+                message="self-edit changed: password",
+                ip_address=_client_ip(request),
+            )
+            messages.success(request, _("Password updated successfully."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
 
 
 class UserListView(LoginRequiredMixin, ListView):
