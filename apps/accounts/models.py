@@ -1,10 +1,37 @@
+import re
+import uuid
+from pathlib import Path
+
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import RegexValidator
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
 from .managers import UserManager
+
+# Maidenhead 6-character grid locator: 2 letters (field, A-R) + 2 digits
+# (square, 0-9) + 2 letters (subsquare, A-X). The Maidenhead system is
+# defined for amateur radio location reporting.
+LOCATOR_REGEX = re.compile(r"^[A-R]{2}[0-9]{2}[A-X]{2}$")
+
+locator_validator = RegexValidator(
+    regex=LOCATOR_REGEX,
+    message=_("Maidenhead locator must be 2 letters + 2 digits + 2 letters (e.g. JN78AB)."),
+)
+
+
+def _avatar_upload_path(instance, filename):
+    """Per-user randomised storage path: avatars/<user_id>/<random>.<ext>.
+
+    Each upload produces a fresh path — old files become orphaned but
+    are not auto-cleaned (Cleanup-Job out-of-scope; siehe Overview Sektion 7).
+    Using a random suffix means re-uploading the same file twice doesn't
+    overwrite (and doesn't break browser caching for the old URL).
+    """
+    ext = Path(filename).suffix.lower() or ".jpg"
+    return f"avatars/{instance.pk or 'new'}/{uuid.uuid4().hex[:12]}{ext}"
 
 
 class User(AbstractUser):
