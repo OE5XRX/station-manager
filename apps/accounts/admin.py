@@ -11,7 +11,27 @@ class UserAdmin(BaseUserAdmin):
     list_filter = ("language", "is_active", "is_staff", "groups")
     search_fields = ("username", "email", "first_name", "last_name")
 
-    fieldsets = BaseUserAdmin.fieldsets + ((_("Station Manager"), {"fields": ("language",)}),)
+    fieldsets = BaseUserAdmin.fieldsets + (
+        (_("Station Manager"), {"fields": ("language",)}),
+        (
+            _("Profile"),
+            {
+                "fields": ("avatar", "bio", "qth_name", "qrz_url", "phone"),
+            },
+        ),
+        (
+            _("Address & Location"),
+            {
+                "fields": ("address", "latitude", "longitude", "locator"),
+            },
+        ),
+        (
+            _("Directory"),
+            {
+                "fields": ("is_directory_visible",),
+            },
+        ),
+    )
 
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
         (_("Station Manager"), {"fields": ("language",)}),

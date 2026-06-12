@@ -1,10 +1,44 @@
+import re
+import uuid
+
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
 from .managers import UserManager
+
+# Maidenhead 6-character grid locator: 2 letters (field, A-R) + 2 digits
+# (square, 0-9) + 2 letters (subsquare, A-X). The Maidenhead system is
+# defined for amateur radio location reporting.
+LOCATOR_REGEX = re.compile(r"^[A-R]{2}[0-9]{2}[A-X]{2}\Z")
+
+locator_validator = RegexValidator(
+    regex=LOCATOR_REGEX,
+    message=_("Maidenhead locator must be 2 letters + 2 digits + 2 letters (e.g. JN78AB)."),
+)
+
+
+def avatar_upload_path(instance, filename):
+    """Per-user randomised storage path: avatars/<user_id>/<random>.jpg.
+
+    Each upload produces a fresh path — old files become orphaned but
+    are not auto-cleaned (Cleanup-Job out-of-scope; siehe Overview Sektion 7).
+    Using a random suffix means re-uploading the same file twice doesn't
+    overwrite (and doesn't break browser caching for the old URL).
+
+    Extension is hard-coded to ``.jpg`` because ``process_avatar_file``
+    (avatars.py) always re-encodes uploads as JPEG. Preserving the
+    original extension would produce filenames whose bytes do not
+    match (e.g. ``foo.png`` containing JPEG bytes), which breaks
+    Content-Type inference in CDNs and storage backends. The ``filename``
+    parameter is part of Django's ``upload_to`` callable contract but
+    is intentionally ignored for the extension.
+    """
+    del filename  # see docstring — bytes are always JPEG after processing
+    return f"avatars/{instance.pk or 'new'}/{uuid.uuid4().hex[:12]}.jpg"
 
 
 class User(AbstractUser):
@@ -48,6 +82,64 @@ class User(AbstractUser):
         max_length=10,
         choices=MembershipLevel.choices,
         default=MembershipLevel.APPLICANT,
+    )
+
+    # === Profile fields (added in Sub-Spec 1a Foundation) ===
+    # Self-Description, max 500 chars
+    bio = models.TextField(_("bio"), max_length=500, blank=True)
+
+    # Profile picture; resized to max 512x512 JPEG by ProfileForm.save() in 1c
+    avatar = models.ImageField(
+        _("avatar"),
+        upload_to=avatar_upload_path,
+        null=True,
+        blank=True,
+    )
+
+    # Amateur-radio standortlabel ("QTH" = ham slang for location)
+    qth_name = models.CharField(_("QTH name"), max_length=128, blank=True)
+
+    # Public QRZ.com profile URL — convenience deep-link
+    qrz_url = models.URLField(_("QRZ URL"), max_length=200, blank=True)
+
+    # Postal address as free text (multi-line). Geocoding consumes this.
+    address = models.TextField(_("address"), blank=True)
+
+    # Phone, free format (international)
+    phone = models.CharField(_("phone"), max_length=32, blank=True)
+
+    # Geographic coordinates from geocoding `address`. Not user-edited directly.
+    # Range validators run on full_clean(); existing NULL rows are unaffected.
+    latitude = models.DecimalField(
+        _("latitude"),
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(-90), MaxValueValidator(90)],
+    )
+    longitude = models.DecimalField(
+        _("longitude"),
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(-180), MaxValueValidator(180)],
+    )
+
+    # Maidenhead 6-char locator, computed from lat/lon OR user-set override
+    locator = models.CharField(
+        _("Maidenhead locator"),
+        max_length=6,
+        blank=True,
+        validators=[locator_validator],
+    )
+
+    # Master directory-visibility switch. When False, other members see
+    # only callsign + membership pill + avatar.
+    is_directory_visible = models.BooleanField(
+        _("visible in member directory"),
+        default=True,
     )
 
     objects = UserManager()
@@ -163,6 +255,7 @@ class AccountAuditLog(models.Model):
     """
 
     class EventType(models.TextChoices):
+        # === Existing (do not reorder) ===
         MEMBERSHIP_PROMOTED = "membership_promoted", _("Membership Promoted")
         MEMBERSHIP_DEMOTED = "membership_demoted", _("Membership Demoted")
         REGION_ASSIGNMENT_CREATED = "region_assignment_created", _("Region Assignment Created")
@@ -170,6 +263,15 @@ class AccountAuditLog(models.Model):
         REGION_CREATED = "region_created", _("Region Created")
         REGION_UPDATED = "region_updated", _("Region Updated")
         REGION_DELETED = "region_deleted", _("Region Deleted")
+        # === Added in Sub-Spec 1a Foundation ===
+        USER_CREATED = "user_created", _("User Created")
+        USER_UPDATED = "user_updated", _("User Updated")
+        USER_DELETED = "user_deleted", _("User Deleted")
+        USER_ACTIVATED = "user_activated", _("User Activated")
+        USER_DEACTIVATED = "user_deactivated", _("User Deactivated")
+        PASSWORD_CHANGED = "password_changed", _("Password Changed")
+        STATION_ASSIGNMENT_CREATED = "station_assignment_created", _("Station Assignment Created")
+        STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked", _("Station Assignment Revoked")
 
     event_type = models.CharField(
         _("event type"),
