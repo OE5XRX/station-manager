@@ -10,8 +10,22 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
 
 from .forms import LoginForm, ProfileForm, UserChangeForm, UserCreationForm
+from .geocoding import geocode_address, lat_lon_to_locator
+from .models import AccountAuditLog
 
 User = get_user_model()
+
+
+def _client_ip(request):
+    """Lazy wrapper around `apps.accounts.views_membership._get_client_ip`.
+
+    Imported lazily to avoid a circular import — views_membership pulls
+    `AdminRequiredMixin` from this module at import time.
+    """
+    from .views_membership import _get_client_ip
+
+    return _get_client_ip(request)
+
 
 # Set of User fields whose changes are tracked in USER_UPDATED audit
 # entries (form_valid diffs form.changed_data against this set). Geocoding-
@@ -140,8 +154,16 @@ class UserCreateView(AdminRequiredMixin, CreateView):
         return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
+        response = super().form_valid(form)
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_CREATED,
+            actor=self.request.user,
+            target_user=self.object,
+            message=f"{self.object.username} <{self.object.email}>",
+            ip_address=_client_ip(self.request),
+        )
         messages.success(self.request, _("User created successfully."))
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -158,8 +180,54 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
+        changed_fields = set(form.changed_data)
+        response = super().form_valid(form)
+        self._maybe_geocode(self.object, changed_fields)
+
+        tracked = changed_fields & TRACKED_USER_FIELDS
+        if tracked:
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_UPDATED,
+                actor=self.request.user,
+                target_user=self.object,
+                message=f"changed: {', '.join(sorted(tracked))}",
+                ip_address=_client_ip(self.request),
+            )
+        if "is_active" in changed_fields:
+            event = (
+                AccountAuditLog.EventType.USER_ACTIVATED
+                if self.object.is_active
+                else AccountAuditLog.EventType.USER_DEACTIVATED
+            )
+            AccountAuditLog.log(
+                event_type=event,
+                actor=self.request.user,
+                target_user=self.object,
+                message="",
+                ip_address=_client_ip(self.request),
+            )
+
         messages.success(self.request, _("User updated successfully."))
-        return super().form_valid(form)
+        return response
+
+    def _maybe_geocode(self, user, changed_fields):
+        if "address" not in changed_fields:
+            return
+        if not user.address:
+            user.latitude = None
+            user.longitude = None
+            if "locator" not in changed_fields:
+                user.locator = ""
+            user.save(update_fields=["latitude", "longitude", "locator"])
+            return
+        coords = geocode_address(user.address)
+        if coords:
+            lat, lon = coords
+            user.latitude = lat
+            user.longitude = lon
+            if "locator" not in changed_fields:
+                user.locator = lat_lon_to_locator(float(lat), float(lon))
+            user.save(update_fields=["latitude", "longitude", "locator"])
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
