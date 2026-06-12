@@ -13,15 +13,24 @@ class UserAdmin(BaseUserAdmin):
 
     fieldsets = BaseUserAdmin.fieldsets + (
         (_("Station Manager"), {"fields": ("language",)}),
-        (_("Profile"), {
-            "fields": ("avatar", "bio", "qth_name", "qrz_url", "phone"),
-        }),
-        (_("Address & Location"), {
-            "fields": ("address", "latitude", "longitude", "locator"),
-        }),
-        (_("Directory"), {
-            "fields": ("is_directory_visible",),
-        }),
+        (
+            _("Profile"),
+            {
+                "fields": ("avatar", "bio", "qth_name", "qrz_url", "phone"),
+            },
+        ),
+        (
+            _("Address & Location"),
+            {
+                "fields": ("address", "latitude", "longitude", "locator"),
+            },
+        ),
+        (
+            _("Directory"),
+            {
+                "fields": ("is_directory_visible",),
+            },
+        ),
     )
 
     add_fieldsets = BaseUserAdmin.add_fieldsets + (

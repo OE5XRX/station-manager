@@ -33,16 +33,19 @@ class TestLocatorRegex:
         # Last pair: A-X only
         assert not LOCATOR_REGEX.match("JN78YY")
 
-    @pytest.mark.parametrize("bad", [
-        "",
-        " JN78AB",
-        "JN78AB ",
-        "JN78AB\n",
-        "Jn78ab",
-        "JN78ABCD",
-        "JN78-B",
-        "JN78A!",
-    ])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "",
+            " JN78AB",
+            "JN78AB ",
+            "JN78AB\n",
+            "Jn78ab",
+            "JN78ABCD",
+            "JN78-B",
+            "JN78A!",
+        ],
+    )
     def test_invalid_locator_edge_cases(self, bad):
         assert not LOCATOR_REGEX.match(bad)
 
@@ -52,12 +55,14 @@ class TestLocatorValidator:
 
     def test_valid_passes(self):
         from apps.accounts.models import locator_validator
+
         locator_validator("JN78AB")  # no raise
 
     def test_invalid_raises(self):
         from django.core.exceptions import ValidationError
 
         from apps.accounts.models import locator_validator
+
         with pytest.raises(ValidationError):
             locator_validator("INVALID")
 
@@ -67,36 +72,42 @@ class TestAvatarUploadPath:
 
     def test_known_pk_in_path(self):
         from apps.accounts.models import avatar_upload_path
+
         instance = SimpleNamespace(pk=42)
         path = avatar_upload_path(instance, "selfie.jpg")
         assert path.startswith("avatars/42/")
 
     def test_no_pk_uses_new(self):
         from apps.accounts.models import avatar_upload_path
+
         instance = SimpleNamespace(pk=None)
         path = avatar_upload_path(instance, "selfie.jpg")
         assert path.startswith("avatars/new/")
 
     def test_extension_lowercased(self):
         from apps.accounts.models import avatar_upload_path
+
         instance = SimpleNamespace(pk=1)
         path = avatar_upload_path(instance, "FOO.JPG")
         assert path.endswith(".jpg")
 
     def test_extension_fallback_jpg(self):
         from apps.accounts.models import avatar_upload_path
+
         instance = SimpleNamespace(pk=1)
         path = avatar_upload_path(instance, "noext")
         assert path.endswith(".jpg")
 
     def test_png_extension_preserved(self):
         from apps.accounts.models import avatar_upload_path
+
         instance = SimpleNamespace(pk=1)
         path = avatar_upload_path(instance, "icon.PNG")
         assert path.endswith(".png")
 
     def test_unique_random_suffix(self):
         from apps.accounts.models import avatar_upload_path
+
         instance = SimpleNamespace(pk=1)
         paths = {avatar_upload_path(instance, "x.jpg") for _ in range(50)}
         # 50 random suffixes should all be unique (12 hex chars = 48 bits)
@@ -109,52 +120,62 @@ class TestUserProfileFieldDefaults:
 
     def test_bio_default_empty(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.bio == ""
 
     def test_avatar_default_none(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         # ImageField when no file: falsy, often .name == ""
         assert not user.avatar
 
     def test_qth_name_default_empty(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.qth_name == ""
 
     def test_qrz_url_default_empty(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.qrz_url == ""
 
     def test_address_default_empty(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.address == ""
 
     def test_phone_default_empty(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.phone == ""
 
     def test_latitude_default_none(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.latitude is None
 
     def test_longitude_default_none(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.longitude is None
 
     def test_locator_default_empty(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.locator == ""
 
     def test_is_directory_visible_default_true(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         assert user.is_directory_visible is True
 
@@ -165,6 +186,7 @@ class TestUserLocatorValidator:
 
     def test_valid_locator_saves(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         user.locator = "JN78DH"
         user.full_clean()  # runs validators
@@ -176,6 +198,7 @@ class TestUserLocatorValidator:
         from django.core.exceptions import ValidationError
 
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         user.locator = "INVALID"
         with pytest.raises(ValidationError):
@@ -183,6 +206,7 @@ class TestUserLocatorValidator:
 
     def test_empty_locator_allowed(self):
         from apps.accounts.models import User
+
         user = User.objects.create_user(username="OE5TEST", password="x")
         user.locator = ""
         user.full_clean()  # should not raise
@@ -227,9 +251,7 @@ class TestUserAdminFieldsets:
         from apps.accounts.models import User
 
         admin_instance = admin.site._registry.get(User)
-        profile_fieldset = next(
-            fs for fs in admin_instance.fieldsets if str(fs[0]) == "Profile"
-        )
+        profile_fieldset = next(fs for fs in admin_instance.fieldsets if str(fs[0]) == "Profile")
         fields = profile_fieldset[1]["fields"]
         assert "avatar" in fields
         assert "bio" in fields
@@ -258,7 +280,5 @@ class TestUserAdminFieldsets:
         from apps.accounts.models import User
 
         admin_instance = admin.site._registry.get(User)
-        dir_fieldset = next(
-            fs for fs in admin_instance.fieldsets if str(fs[0]) == "Directory"
-        )
+        dir_fieldset = next(fs for fs in admin_instance.fieldsets if str(fs[0]) == "Directory")
         assert "is_directory_visible" in dir_fieldset[1]["fields"]
