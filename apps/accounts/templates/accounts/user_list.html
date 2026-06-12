@@ -1,55 +1,111 @@
 {% extends "base.html" %}
 {% load i18n %}
 
-{% block title %}{% trans "Users" %} · OE5XRX{% endblock %}
+{% block title %}
+  {% if is_member_view %}{% trans "Mitglieder" %}{% else %}{% trans "Users" %}{% endif %} · OE5XRX
+{% endblock %}
 
 {% block breadcrumbs %}
   <a href="{% url 'dashboard:index' %}">OE5XRX</a>
   <span class="sep">/</span>
-  <span class="cur">{% trans "Users" %}</span>
+  <span class="cur">
+    {% if is_member_view %}{% trans "Mitglieder" %}{% else %}{% trans "Users" %}{% endif %}
+  </span>
 {% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div class="page-head-main">
-    <div class="page-eyebrow">{% trans "Administration" %} · {% trans "People" %}</div>
-    <h1 class="page-title">{% trans "Users" %}</h1>
-    <p class="page-sub">{% trans "Admins can add, edit, and remove member, staff, and admin accounts." %}</p>
+    <div class="page-eyebrow">
+      {% if is_admin_view %}
+        {% trans "Administration" %} · {% trans "People" %}
+      {% else %}
+        {% trans "Verein" %} · {% trans "Mitgliederverzeichnis" %}
+      {% endif %}
+    </div>
+    <h1 class="page-title">
+      {% if is_admin_view %}{% trans "Users" %}{% else %}{% trans "Mitglieder" %}{% endif %}
+    </h1>
+    <p class="page-sub">
+      {% if is_admin_view %}
+        {% trans "Add, view, edit, and remove member, staff, and admin accounts." %}
+      {% else %}
+        {% trans "Vereinsmitglieder mit Kontaktdaten und Funktionen." %}
+      {% endif %}
+    </p>
   </div>
+  {% if is_admin_view %}
   <div class="page-head-actions">
     <a href="{% url 'accounts:user_create' %}" class="btn btn-primary">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       {% trans "New user" %}
     </a>
   </div>
+  {% endif %}
 </div>
+
+<form method="get" class="filter-bar mb-24">
+  <input type="search" name="q" value="{{ filter_q }}"
+         placeholder="{% trans 'Search callsign, email, name' %}"
+         class="form-control">
+  <select name="role" class="form-select">
+    <option value="">{% trans "All roles" %}</option>
+    {% if is_admin_view %}
+      <option value="applicant" {% if filter_role == "applicant" %}selected{% endif %}>{% trans "Vereins-Bewerber" %}</option>
+    {% endif %}
+    <option value="member" {% if filter_role == "member" %}selected{% endif %}>{% trans "Vereins-Mitglied" %}</option>
+    <option value="staff" {% if filter_role == "staff" %}selected{% endif %}>{% trans "Vereins-Staff" %}</option>
+    <option value="admin" {% if filter_role == "admin" %}selected{% endif %}>{% trans "Vereins-Admin" %}</option>
+  </select>
+  {% if is_admin_view %}
+    <select name="status" class="form-select">
+      <option value="">{% trans "All status" %}</option>
+      <option value="active" {% if filter_status == "active" %}selected{% endif %}>{% trans "Active" %}</option>
+      <option value="inactive" {% if filter_status == "inactive" %}selected{% endif %}>{% trans "Inactive" %}</option>
+    </select>
+  {% endif %}
+  <button type="submit" class="btn btn-primary btn-sm">{% trans "Filter" %}</button>
+  {% if filter_q or filter_role or filter_status %}
+    <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost btn-sm">{% trans "Reset" %}</a>
+  {% endif %}
+</form>
 
 <div class="table-wrap" data-mobile-cards>
   <table class="t-table">
     <thead>
       <tr>
         <th>{% trans "User" %}</th>
-        <th>{% trans "Email" %}</th>
         <th>{% trans "Role" %}</th>
-        <th>{% trans "Language" %}</th>
-        <th>{% trans "Active" %}</th>
-        <th>{% trans "Last login" %}</th>
+        <th>{% trans "Email" %}</th>
+        {% if is_member_view %}<th>QTH</th>{% endif %}
+        <th>{% trans "Topology" %}</th>
+        {% if is_admin_view %}
+          <th>{% trans "Last login" %}</th>
+          <th>{% trans "Status" %}</th>
+        {% endif %}
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for u in users %}
+      {% with is_visible=u.is_directory_visible %}
       <tr>
         <td data-primary>
-          <div class="row-gap-8">
-            <div class="sb-avatar">{{ u.username|slice:":1"|upper }}</div>
-            <div class="stack-gap-2">
-              <span style="font-weight:600;color:var(--ink-0);">{{ u.username }}</span>
-              <span class="t-mono-sm t-muted">{{ u.get_full_name|default:"" }}</span>
+          <a href="{% url 'accounts:user_detail' u.pk %}" style="color:inherit;text-decoration:none;">
+            <div class="row-gap-8">
+              <div class="sb-avatar">
+                {% if u.avatar %}<img src="{{ u.avatar.url }}" alt="{{ u.username }}">
+                {% else %}{{ u.username|slice:":1"|upper }}{% endif %}
+              </div>
+              <div class="stack-gap-2">
+                <span style="font-weight:600;color:var(--ink-0);">{{ u.username }}</span>
+                {% if is_admin_view or is_visible %}
+                  <span class="t-mono-sm t-muted">{{ u.get_full_name|default:"" }}</span>
+                {% endif %}
+              </div>
             </div>
-          </div>
+          </a>
         </td>
-        <td class="t-mono" data-label="{% trans 'Email' %}">{{ u.email|default:"—" }}</td>
         <td data-label="{% trans 'Role' %}">
           {% if u.membership_level == "admin" %}
             <span class="pill pill-accent">{{ u.get_membership_level_display }}</span>
@@ -61,19 +117,39 @@
             <span class="pill pill-muted">{{ u.get_membership_level_display }}</span>
           {% endif %}
         </td>
-        <td class="t-mono" data-label="{% trans 'Language' %}">{{ u.get_language_display }}</td>
-        <td data-label="{% trans 'Active' %}">
-          {% if u.is_active %}<span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
-          {% else %}<span class="pill pill-offline">INACTIVE</span>{% endif %}
+        <td class="t-mono" data-label="{% trans 'Email' %}">
+          {% if is_admin_view or is_visible %}{{ u.email|default:"—" }}{% else %}—{% endif %}
         </td>
-        <td class="t-mono-sm t-muted" data-label="{% trans 'Last login' %}">{{ u.last_login|date:"Y-m-d H:i"|default:"never" }}</td>
+        {% if is_member_view %}
+        <td class="t-mono" data-label="QTH">
+          {% if is_visible %}{{ u.qth_name|default:"—" }}{% else %}—{% endif %}
+        </td>
+        {% endif %}
+        <td data-label="{% trans 'Topology' %}">
+          {% if is_admin_view or is_visible %}
+            <span class="pill pill-muted">{{ u.region_assignments.count }}·{{ u.station_assignments.count }}</span>
+          {% else %}—{% endif %}
+        </td>
+        {% if is_admin_view %}
+          <td class="t-mono-sm t-muted" data-label="{% trans 'Last login' %}">
+            {{ u.last_login|date:"Y-m-d H:i"|default:"never" }}
+          </td>
+          <td data-label="{% trans 'Status' %}">
+            {% if u.is_active %}<span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
+            {% else %}<span class="pill pill-offline">INACTIVE</span>{% endif %}
+          </td>
+        {% endif %}
         <td class="actions">
-          <a href="{% url 'accounts:user_edit' u.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
-          {% if u.pk != user.pk %}
-          <a href="{% url 'accounts:user_delete' u.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+          <a href="{% url 'accounts:user_detail' u.pk %}" class="btn btn-sm btn-primary">{% trans "View" %}</a>
+          {% if is_admin_view %}
+            <a href="{% url 'accounts:user_edit' u.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+            {% if u.pk != user.pk %}
+            <a href="{% url 'accounts:user_delete' u.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+            {% endif %}
           {% endif %}
         </td>
       </tr>
+      {% endwith %}
       {% endfor %}
     </tbody>
   </table>

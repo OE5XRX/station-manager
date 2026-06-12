@@ -144,3 +144,59 @@ class TestUserListAudienceFilter:
         # other_member.is_active=False but is_directory_visible=True →
         # still appears for member (status filter not applied).
         assert other_member.username in usernames
+
+
+@pytest.mark.django_db
+class TestUserListTemplate:
+    def url(self, **params):
+        u = reverse("accounts:user_list")
+        if params:
+            from urllib.parse import urlencode
+
+            u += "?" + urlencode(params)
+        return u
+
+    def test_admin_sees_new_user_button(self, client, admin):
+        client.force_login(admin)
+        resp = client.get(self.url())
+        body = resp.content.decode()
+        assert reverse("accounts:user_create") in body
+
+    def test_member_does_not_see_new_user_button(self, client, member):
+        client.force_login(member)
+        resp = client.get(self.url())
+        body = resp.content.decode()
+        assert reverse("accounts:user_create") not in body
+
+    def test_member_sees_only_view_button(self, client, member, other_member):
+        client.force_login(member)
+        resp = client.get(self.url())
+        body = resp.content.decode()
+        assert reverse("accounts:user_detail", kwargs={"pk": other_member.pk}) in body
+        assert reverse("accounts:user_edit", kwargs={"pk": other_member.pk}) not in body
+        assert reverse("accounts:user_delete", kwargs={"pk": other_member.pk}) not in body
+
+    def test_admin_sees_view_edit_delete(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(self.url())
+        body = resp.content.decode()
+        assert reverse("accounts:user_detail", kwargs={"pk": member.pk}) in body
+        assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) in body
+        assert reverse("accounts:user_delete", kwargs={"pk": member.pk}) in body
+
+    def test_filter_bar_role_options_admin(self, client, admin):
+        client.force_login(admin)
+        resp = client.get(self.url())
+        body = resp.content.decode()
+        # Admin sees Applicant option in role select
+        assert "applicant" in body.lower() or "Bewerber" in body
+
+    def test_member_view_hides_invisible_other_fields(self, client, member, other_member):
+        other_member.email = "secret@example.org"
+        other_member.is_directory_visible = False
+        other_member.save()
+        client.force_login(member)
+        resp = client.get(self.url())
+        body = resp.content.decode()
+        # Email of an invisible member must NOT show up in the list table
+        assert "secret@example.org" not in body
