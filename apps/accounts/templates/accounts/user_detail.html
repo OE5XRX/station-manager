@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ object.username }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  {% if is_member_view %}
+    <a href="{% url 'accounts:user_list' %}">{% trans "Mitglieder" %}</a>
+  {% else %}
+    <a href="{% url 'accounts:user_list' %}">{% trans "Users" %}</a>
+  {% endif %}
+  <span class="sep">/</span>
+  <span class="cur">{{ object.username }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">
+      {% if is_member_view %}
+        {% trans "Verein" %} · {% trans "Mitglied" %}
+      {% else %}
+        {% trans "User" %} · #{{ object.pk|stringformat:"03d" }}
+      {% endif %}
+    </div>
+    <h1 class="page-title">
+      <div class="sb-avatar" style="width:48px;height:48px;line-height:48px;font-size:20px;">
+        {% if object.avatar %}<img src="{{ object.avatar.url }}" alt="{{ object.username }}">
+        {% else %}{{ object.username|slice:":1"|upper }}{% endif %}
+      </div>
+      <span>{{ object.username }}</span>
+      {% comment %}
+        Real name only when first_name or last_name is in visible_fields —
+        a Member viewing an is_directory_visible=False target gets the
+        MINIMAL field set, so we must not leak the name here.
+      {% endcomment %}
+      {% if "first_name" in visible_fields or "last_name" in visible_fields %}
+        <span class="t-muted" style="font-family:var(--font-body);font-weight:500;">
+          {{ object.get_full_name|default:"—" }}
+        </span>
+      {% endif %}
+    </h1>
+    <div class="row-gap-8 mt-10">
+      {# Membership pill: always #}
+      {% if object.membership_level == "admin" %}
+        <span class="pill pill-accent">{{ object.get_membership_level_display }}</span>
+      {% elif object.membership_level == "staff" %}
+        <span class="pill pill-violet">{{ object.get_membership_level_display }}</span>
+      {% elif object.membership_level == "member" %}
+        <span class="pill">{{ object.get_membership_level_display }}</span>
+      {% else %}
+        <span class="pill pill-muted">{{ object.get_membership_level_display }}</span>
+      {% endif %}
+      {# is_active pill — Admin or Self, and only when not active #}
+      {% if not object.is_active and is_admin_view or not object.is_active and is_self_view %}
+        <span class="pill pill-offline">INACTIVE</span>
+      {% endif %}
+      {# language pill — Self + Admin #}
+      {% if is_admin_view or is_self_view %}
+        <span class="pill pill-muted">{{ object.get_language_display }}</span>
+      {% endif %}
+      {# qth pill if visible + set #}
+      {% if "qth_name" in visible_fields and object.qth_name %}
+        <span class="pill pill-muted">QTH {{ object.qth_name }}</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="page-head-actions">
+    {% if is_admin_view and object.pk != request.user.pk %}
+      <a href="{% url 'accounts:user_edit' object.pk %}" class="btn btn-ghost">{% trans "Edit identity" %}</a>
+      <a href="{% url 'accounts:user_delete' object.pk %}" class="btn btn-danger">{% trans "Delete" %}</a>
+    {% elif is_self_view %}
+      <a href="{% url 'accounts:profile' %}" class="btn btn-ghost">{% trans "Edit profile" %}</a>
+    {% endif %}
+  </div>
+</div>
+
+{# Empty-state shortcut for Member-viewing-invisible-target #}
+{% if is_member_view and not object.is_directory_visible %}
+  <section class="panel">
+    <div class="panel-body">
+      <div class="empty">
+        <div class="empty-title">
+          {% trans "Dieses Mitglied hat sein Profil im Verzeichnis verborgen." %}
+        </div>
+      </div>
+    </div>
+  </section>
+{% else %}
+
+<div class="summary-bar mb-24">
+  {% if "email" in visible_fields and object.email %}
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Email" %}</div>
+      <div class="summary-val mono">{{ object.email }}</div>
+    </div>
+  {% endif %}
+  {% if "locator" in visible_fields and object.locator %}
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Locator" %}</div>
+      <div class="summary-val mono">{{ object.locator }}</div>
+    </div>
+  {% endif %}
+  {% if "qth_name" in visible_fields and object.qth_name %}
+    <div class="summary-item">
+      <div class="summary-key">QTH</div>
+      <div class="summary-val mono">{{ object.qth_name }}</div>
+    </div>
+  {% endif %}
+  {% if "date_joined_year" in visible_fields %}
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Mitglied seit" %}</div>
+      <div class="summary-val mono">{{ object.date_joined|date:"Y" }}</div>
+    </div>
+  {% endif %}
+  {% if is_admin_view and object.last_login %}
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Last login" %}</div>
+      <div class="summary-val mono">{{ object.last_login|date:"Y-m-d H:i" }}</div>
+    </div>
+  {% endif %}
+</div>
+
+<div data-tabs>
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="overview" aria-selected="true">
+      {% trans "Overview" %}
+    </button>
+    <button type="button" class="tab" data-tab="topology" aria-selected="false">
+      {% trans "Rollen & Topologie" %}
+    </button>
+    {% if is_admin_view or is_self_view %}
+      <button type="button" class="tab" data-tab="sso" aria-selected="false">
+        {% trans "Single Sign-On" %}
+      </button>
+      <button type="button" class="tab" data-tab="audit" aria-selected="false">
+        {% trans "Audit" %}
+      </button>
+    {% endif %}
+  </div>
+</div>
+
+<div data-tab-panel="overview">
+  <div class="grid grid-main">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div>
+      </div>
+      <div class="panel-body">
+        <dl class="dlist">
+          <dt>{% trans "Callsign" %}</dt><dd class="t-mono">{{ object.username }}</dd>
+          {% if "first_name" in visible_fields or "last_name" in visible_fields %}
+            <dt>{% trans "Name" %}</dt><dd>{{ object.get_full_name|default:"—" }}</dd>
+          {% endif %}
+          {% if "bio" in visible_fields and object.bio %}
+            <dt>{% trans "Bio" %}</dt><dd>{{ object.bio|linebreaksbr }}</dd>
+          {% endif %}
+          {% if "email" in visible_fields and object.email %}
+            <dt>{% trans "Email" %}</dt><dd class="t-mono">{{ object.email }}</dd>
+          {% endif %}
+          {% if "phone" in visible_fields and object.phone %}
+            <dt>{% trans "Phone" %}</dt><dd class="t-mono">{{ object.phone }}</dd>
+          {% endif %}
+          {% if "address" in visible_fields and object.address %}
+            <dt>{% trans "Address" %}</dt><dd>{{ object.address|linebreaksbr }}</dd>
+          {% endif %}
+          {% if "qth_name" in visible_fields and object.qth_name %}
+            <dt>QTH</dt><dd>{{ object.qth_name }}</dd>
+          {% endif %}
+          {% if "locator" in visible_fields and object.locator %}
+            <dt>{% trans "Locator" %}</dt><dd class="t-mono">{{ object.locator }}</dd>
+          {% endif %}
+          {% if "qrz_url" in visible_fields and object.qrz_url %}
+            <dt>QRZ</dt><dd><a href="{{ object.qrz_url }}" target="_blank" rel="noopener">{{ object.qrz_url }}</a></dd>
+          {% endif %}
+          {% if "language" in visible_fields %}
+            <dt>{% trans "Language" %}</dt><dd>{{ object.get_language_display }}</dd>
+          {% endif %}
+          {% if "date_joined_year" in visible_fields %}
+            <dt>{% trans "Mitglied seit" %}</dt><dd class="t-mono">{{ object.date_joined|date:"Y" }}</dd>
+          {% endif %}
+          {% if "last_login" in visible_fields and object.last_login %}
+            <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ object.last_login|date:"Y-m-d H:i" }}</dd>
+          {% endif %}
+          {% if "is_active" in visible_fields %}
+            <dt>{% trans "Active" %}</dt>
+            <dd>
+              {% if object.is_active %}<span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
+              {% else %}<span class="pill pill-offline">INACTIVE</span>{% endif %}
+            </dd>
+          {% endif %}
+          {% if is_admin_view %}
+            {% if object.latitude is not None or object.longitude is not None %}
+              <dt>{% trans "Lat/Lon (debug)" %}</dt>
+              <dd class="t-mono-sm t-muted">{{ object.latitude }}, {{ object.longitude }}</dd>
+            {% endif %}
+          {% endif %}
+          {% if "is_directory_visible" in visible_fields %}
+            <dt>{% trans "Directory visible" %}</dt>
+            <dd>{% if object.is_directory_visible %}{% trans "yes" %}{% else %}{% trans "no" %}{% endif %}</dd>
+          {% endif %}
+        </dl>
+      </div>
+    </section>
+
+    <aside class="stack-gap-14">
+      {% if object.avatar %}
+      <section class="panel">
+        <div class="panel-body" style="text-align:center;">
+          <img src="{{ object.avatar.url }}" alt="{{ object.username }}"
+               style="max-width:128px;max-height:128px;border-radius:8px;">
+        </div>
+      </section>
+      {% endif %}
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>{% trans "Status" %}</div>
+        </div>
+        <div class="panel-body">
+          <dl class="dlist">
+            {% if region_assignment_pills is not None %}
+              <dt>{% trans "Regions" %}</dt>
+              <dd>
+                {% for ra in region_assignment_pills %}
+                  <span class="pill pill-muted">{{ ra.region.name }}</span>
+                {% empty %}—{% endfor %}
+              </dd>
+            {% endif %}
+            {% if station_assignment_pills is not None %}
+              <dt>{% trans "Stations" %}</dt>
+              <dd>
+                {% for sa in station_assignment_pills %}
+                  <span class="pill pill-muted">{{ sa.station.callsign|default:sa.station.name }} · {{ sa.get_role_display }}</span>
+                {% empty %}—{% endfor %}
+              </dd>
+            {% endif %}
+          </dl>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<div data-tab-panel="topology" hidden>
+  {% if is_admin_view %}
+    {% comment %}
+      Membership-Card: Admin viewing own page sees readonly — self-promote/
+      demote is blocked server-side by MembershipSetView, so a writable
+      picker would be misleading. Region/Station-Assignments have no
+      self-restriction, so an admin CAN manage their own topology.
+    {% endcomment %}
+    {% if object.pk != request.user.pk %}
+      {% include "accounts/_membership_card.html" with readonly=False %}
+    {% else %}
+      {% include "accounts/_membership_card.html" with readonly=True %}
+    {% endif %}
+    <div class="grid grid-main">
+      {% include "accounts/_region_assignments_card.html" with readonly=False %}
+      {% include "accounts/_station_assignments_card.html" with readonly=False %}
+    </div>
+  {% else %}
+    {% include "accounts/_membership_card.html" with readonly=True %}
+    <div class="grid grid-main">
+      {% include "accounts/_region_assignments_card.html" with readonly=True %}
+      {% include "accounts/_station_assignments_card.html" with readonly=True %}
+    </div>
+  {% endif %}
+</div>
+
+{% if is_admin_view %}
+<div data-tab-panel="sso" hidden>
+  {% include "sso/_app_grants_card.html" with target_user=object applications=app_grants_list %}
+  {% include "sso/_sessions_card.html" with target_user=object sessions=user_sessions %}
+  {% include "sso/_tags_card.html" with target_user=object tag_entries=tag_entries %}
+</div>
+{% elif is_self_view %}
+<div data-tab-panel="sso" hidden>
+  {% include "sso/_sessions_card.html" with target_user=object sessions=user_sessions readonly_self=True %}
+</div>
+{% endif %}
+
+{% if is_admin_view or is_self_view %}
+<div data-tab-panel="audit" hidden>
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot"></span>{% trans "Audit log" %}</div>
+      <span class="t-label">{{ user_audit_entries|length }} {% trans "entries shown" %}</span>
+    </div>
+    <div class="panel-body flush" data-mobile-cards>
+      {% if user_audit_entries %}
+        {% include "audit/_audit_table.html" with audit_logs=user_audit_entries hide_subject=True %}
+      {% else %}
+        <div class="empty">
+          <div class="empty-title">{% trans "No audit entries yet" %}</div>
+        </div>
+      {% endif %}
+    </div>
+    <div class="panel-foot row-split">
+      <span class="t-mono">{% trans "Top 50 events — older entries via global audit log" %}</span>
+      {% if is_admin_view %}
+        <a class="btn btn-sm btn-ghost"
+           href="{% url 'audit:audit_list' %}?target_user={{ object.pk }}">
+          {% trans "Open in global audit log" %} →
+        </a>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endif %}
+
+{% endif %}{# end of "not invisible-target for member" branch #}
+{% endblock %}

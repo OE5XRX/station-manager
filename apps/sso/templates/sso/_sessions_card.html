@@ -1,5 +1,5 @@
 {% load i18n %}
-<section class="panel" id="sessions-card" style="max-width:960px;margin-top:16px;">
+<section class="panel" id="sessions-card">
   <div class="panel-head">
     <div class="panel-title">
       <span class="dot" style="background:var(--accent);box-shadow:0 0 8px var(--accent-soft,var(--accent));"></span>
@@ -84,7 +84,11 @@
 
   <div class="panel-foot row-split">
     <span class="t-mono" style="font-size:11px;letter-spacing:0.08em;color:var(--ink-3);">
-      {% trans "SSO · live token sessions" %}
+      {% if readonly_self %}
+        {% trans "SSO · your own live token sessions" %}
+      {% else %}
+        {% trans "SSO · live token sessions" %}
+      {% endif %}
     </span>
     <a class="btn btn-sm btn-ghost" href="{% url 'sso:dashboard' %}">
       {% trans "SSO dashboard" %} →

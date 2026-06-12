@@ -1,5 +1,5 @@
 {% load i18n %}
-<section class="panel" id="membership-card" style="max-width:640px;margin-top:16px;">
+<section class="panel" id="membership-card">
   <div class="panel-head">
     <div class="panel-title"><span class="dot"></span>{% trans "Vereins-Rolle" %}</div>
   </div>
@@ -8,13 +8,14 @@
       {% trans "Current:" %}
       <strong>{{ object.get_membership_level_display }}</strong>
     </p>
+    {% if not readonly %}
     <form hx-post="{% url 'accounts:membership_set' object.pk %}"
           hx-on::after-request="if (event.detail.successful) window.location.reload()">
       {% csrf_token %}
       <label class="form-label" for="membership-level-select">
         {% trans "Set membership level" %}:
       </label>
-      <select id="membership-level-select" name="level" class="form-select" style="max-width:280px;">
+      <select id="membership-level-select" name="level" class="form-select">
         {% for value, label in membership_level_choices %}
           <option value="{{ value }}" {% if object.membership_level == value %}selected{% endif %}>
             {{ label }}
@@ -28,5 +29,6 @@
         {% trans "Demote to Vereins-Bewerber requires removing all topology assignments first." %}
       </p>
     </form>
+    {% endif %}
   </div>
 </section>

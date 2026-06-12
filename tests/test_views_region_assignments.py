@@ -111,7 +111,7 @@ class TestRegionAssignmentsCardRendering:
         Region.objects.create(name="Tirol", slug="tirol")
         Region.objects.create(name="OOe", slug="ooe")
         client.force_login(admin)
-        response = client.get(reverse("accounts:user_edit", args=[lisa.pk]))
+        response = client.get(reverse("accounts:user_detail", args=[lisa.pk]))
         body = response.content.decode()
         assert response.status_code == 200
         assert "Region-Manager" in body
@@ -127,7 +127,7 @@ class TestRegionAssignmentsCardRendering:
             user=lisa, region=r, role=RegionAssignment.Role.MANAGER
         )
         client.force_login(admin)
-        response = client.get(reverse("accounts:user_edit", args=[lisa.pk]))
+        response = client.get(reverse("accounts:user_detail", args=[lisa.pk]))
         body = response.content.decode()
         # The revoke URL is rendered as the form target
         assert reverse("accounts:region_assignment_revoke", args=[a.pk]) in body
@@ -136,7 +136,7 @@ class TestRegionAssignmentsCardRendering:
         admin = _user(User.MembershipLevel.ADMIN, "admin")
         applicant = _user(User.MembershipLevel.APPLICANT, "newbie")
         client.force_login(admin)
-        response = client.get(reverse("accounts:user_edit", args=[applicant.pk]))
+        response = client.get(reverse("accounts:user_detail", args=[applicant.pk]))
         body = response.content.decode()
         # The warning mentions the membership-level requirement
         assert "Vereins-Bewerber" in body or "applicant" in body.lower()
