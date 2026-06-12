@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
+from apps.accounts.geocoding import geocode_address
+
 
 class TestGeocodeAddress:
     """geocode_address(address) returns (Decimal, Decimal) or None."""
@@ -22,8 +24,6 @@ class TestGeocodeAddress:
         ]
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
-
-        from apps.accounts.geocoding import geocode_address
 
         result = geocode_address("Hauptstraße 1, 4020 Linz")
         assert result is not None
@@ -39,8 +39,6 @@ class TestGeocodeAddress:
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        from apps.accounts.geocoding import geocode_address
-
         geocode_address("Any address")
 
         call_kwargs = mock_get.call_args.kwargs
@@ -51,8 +49,6 @@ class TestGeocodeAddress:
     @patch("apps.accounts.geocoding.time.sleep")
     @patch("apps.accounts.geocoding.requests.get")
     def test_empty_address_returns_none_without_http_call(self, mock_get, _mock_sleep):
-        from apps.accounts.geocoding import geocode_address
-
         assert geocode_address("") is None
         assert geocode_address("   ") is None
         assert geocode_address(None) is None
@@ -66,8 +62,6 @@ class TestGeocodeAddress:
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        from apps.accounts.geocoding import geocode_address
-
         assert geocode_address("Nonsense location") is None
 
     @patch("apps.accounts.geocoding.time.sleep")
@@ -75,16 +69,12 @@ class TestGeocodeAddress:
     def test_http_error_returns_none(self, mock_get, _mock_sleep):
         mock_get.side_effect = requests.HTTPError("500 Server Error")
 
-        from apps.accounts.geocoding import geocode_address
-
         assert geocode_address("Hauptstraße 1, 4020 Linz") is None
 
     @patch("apps.accounts.geocoding.time.sleep")
     @patch("apps.accounts.geocoding.requests.get")
     def test_timeout_returns_none(self, mock_get, _mock_sleep):
         mock_get.side_effect = requests.Timeout("Connection timed out")
-
-        from apps.accounts.geocoding import geocode_address
 
         assert geocode_address("Hauptstraße 1, 4020 Linz") is None
 
@@ -97,8 +87,6 @@ class TestGeocodeAddress:
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        from apps.accounts.geocoding import geocode_address
-
         assert geocode_address("Hauptstraße 1, 4020 Linz") is None
 
     @patch("apps.accounts.geocoding.time.sleep")
@@ -108,8 +96,6 @@ class TestGeocodeAddress:
         mock_response.json.return_value = [{"lat": "0", "lon": "0"}]
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
-
-        from apps.accounts.geocoding import geocode_address
 
         geocode_address("Some place")
         mock_sleep.assert_called_once_with(1)
