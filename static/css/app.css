@@ -1860,3 +1860,21 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
    button and must stay at full contrast so it doesn't look disabled. */
 .t-table tr.is-archived td:not(.actions) { opacity: 0.55; }
 .t-table tr.is-archived td:not(.actions) .frame-id { color: var(--ink-3); }
+
+/* ---------------------------------------------------------------------------
+   Onboarding hints (Profile page, 1c) — dezenter Border-Left, mobile-tauglich
+   --------------------------------------------------------------------------- */
+.onboarding-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent-soft, var(--accent));
+  background: var(--bg-2);
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+.onboarding-hint-icon { flex: 0 0 auto; line-height: 1.4; }
+.onboarding-hint-text { flex: 1; line-height: 1.4; }

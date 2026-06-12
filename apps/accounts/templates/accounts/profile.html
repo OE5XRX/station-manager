@@ -14,46 +14,209 @@
   <div class="page-head-main">
     <div class="page-eyebrow">{% trans "Your account" %}</div>
     <h1 class="page-title">{% trans "Profile" %}</h1>
-    <p class="page-sub">{% trans "Update your email, name, and preferred UI language." %}</p>
+    <p class="page-sub">{% trans "Verwalte deine Identität, Profil, Kontaktdaten und Standort." %}</p>
   </div>
 </div>
 
 <div class="grid grid-main">
-  <form method="post" class="panel" style="max-width:640px;">
-    {% csrf_token %}
-    <div class="panel-body">
-      <div class="form-group"><label class="form-label">{% trans "Email" %}</label>{{ form.email }}{{ form.email.errors }}</div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">{% trans "First name" %}</label>{{ form.first_name }}</div>
-        <div class="form-group"><label class="form-label">{% trans "Last name" %}</label>{{ form.last_name }}</div>
-      </div>
-      <div class="form-group"><label class="form-label">{% trans "Language" %}</label>{{ form.language }}</div>
-    </div>
-    <div class="panel-foot row-gap-8">
-      <button type="submit" class="btn btn-primary">{% trans "Save profile" %}</button>
-    </div>
-  </form>
-
-  <aside class="panel">
-    <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div></div>
-    <div class="panel-body">
-      <dl class="dlist">
-        <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ user.username }}</dd>
-        <dt>{% trans "Role" %}</dt><dd>
-          {% if user.membership_level == "admin" %}
-            <span class="pill pill-accent">{{ user.get_membership_level_display }}</span>
-          {% elif user.membership_level == "staff" %}
-            <span class="pill pill-violet">{{ user.get_membership_level_display }}</span>
-          {% elif user.membership_level == "member" %}
-            <span class="pill">{{ user.get_membership_level_display }}</span>
-          {% else %}
-            <span class="pill pill-muted">{{ user.get_membership_level_display }}</span>
+  <div class="stack-gap-14">
+    {# === Identity panel === #}
+    <form method="post" action="{% url 'accounts:profile' %}">
+      {% csrf_token %}
+      <input type="hidden" name="form_name" value="identity">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div>
+        </div>
+        <div class="panel-body">
+          {% if onboarding_hints.name_missing %}
+            <div class="onboarding-hint" role="note">
+              <span class="onboarding-hint-icon">👤</span>
+              <span class="onboarding-hint-text">
+                {% trans "Trag deinen Real-Namen ein — andere Mitglieder sehen ihn im Verzeichnis." %}
+              </span>
+            </div>
           {% endif %}
-        </dd>
-        <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ user.last_login|date:"Y-m-d H:i" }}</dd>
-        <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ user.date_joined|date:"Y-m-d" }}</dd>
-      </dl>
-    </div>
+          <div class="form-group">
+            <label class="form-label">{% trans "Email" %}</label>
+            {{ identity_form.email }}
+            {% if identity_form.email.errors %}<div class="form-error">{{ identity_form.email.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">{% trans "First name" %}</label>
+              {{ identity_form.first_name }}
+            </div>
+            <div class="form-group">
+              <label class="form-label">{% trans "Last name" %}</label>
+              {{ identity_form.last_name }}
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{% trans "Language" %}</label>
+            {{ identity_form.language }}
+          </div>
+        </div>
+        <div class="panel-foot row-gap-8">
+          <button type="submit" class="btn btn-primary">{% trans "Save identity" %}</button>
+        </div>
+      </section>
+    </form>
+
+    {# === Profil panel === #}
+    <form method="post" enctype="multipart/form-data" action="{% url 'accounts:profile' %}">
+      {% csrf_token %}
+      <input type="hidden" name="form_name" value="profile">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>{% trans "Profil" %}</div>
+        </div>
+        <div class="panel-body">
+          {% if onboarding_hints.avatar_missing %}
+            <div class="onboarding-hint" role="note">
+              <span class="onboarding-hint-icon">📷</span>
+              <span class="onboarding-hint-text">{% trans "Lade ein Profilbild hoch." %}</span>
+            </div>
+          {% endif %}
+          {% if onboarding_hints.bio_missing %}
+            <div class="onboarding-hint" role="note">
+              <span class="onboarding-hint-icon">✍️</span>
+              <span class="onboarding-hint-text">{% trans "Stell dich kurz vor (max. 500 Zeichen)." %}</span>
+            </div>
+          {% endif %}
+          {% if onboarding_hints.qth_missing %}
+            <div class="onboarding-hint" role="note">
+              <span class="onboarding-hint-icon">📍</span>
+              <span class="onboarding-hint-text">{% trans "QTH-Name? Das ist dein Funker-Standort-Label." %}</span>
+            </div>
+          {% endif %}
+          <div class="form-group">
+            <label class="form-label">{% trans "Avatar" %}</label>
+            {{ profile_form.avatar }}
+            {% if profile_form.avatar.errors %}<div class="form-error">{{ profile_form.avatar.errors|join:", " }}</div>{% endif %}
+          </div>
+          <div class="form-group">
+            <label class="form-label">{% trans "Bio" %}</label>
+            {{ profile_form.bio }}
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">QTH</label>
+              {{ profile_form.qth_name }}
+            </div>
+            <div class="form-group">
+              <label class="form-label">QRZ-URL</label>
+              {{ profile_form.qrz_url }}
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{% trans "Phone" %}</label>
+            {{ profile_form.phone }}
+          </div>
+          <div class="form-group">
+            <label class="form-label">
+              {{ profile_form.is_directory_visible }}
+              {% trans "Im Mitgliederverzeichnis sichtbar" %}
+            </label>
+            <div class="form-help">
+              {% trans "Wenn aus, sehen andere Mitglieder nur Callsign + Rolle + Avatar." %}
+            </div>
+          </div>
+        </div>
+        <div class="panel-foot row-gap-8">
+          <button type="submit" class="btn btn-primary">{% trans "Save profile" %}</button>
+        </div>
+      </section>
+    </form>
+
+    {# === Adresse panel === #}
+    <form method="post" action="{% url 'accounts:profile' %}">
+      {% csrf_token %}
+      <input type="hidden" name="form_name" value="address">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>{% trans "Adresse & Standort" %}</div>
+        </div>
+        <div class="panel-body">
+          {% if onboarding_hints.address_missing %}
+            <div class="onboarding-hint" role="note">
+              <span class="onboarding-hint-icon">🏠</span>
+              <span class="onboarding-hint-text">{% trans "Trag deine Adresse ein — Locator und lat/lon werden automatisch berechnet." %}</span>
+            </div>
+          {% endif %}
+          <div class="form-group">
+            <label class="form-label">{% trans "Address" %}</label>
+            {{ address_form.address }}
+            {% if address_form.address.errors %}<div class="form-error">{{ address_form.address.errors|join:", " }}</div>{% endif %}
+          </div>
+          <p class="t-mono t-muted" style="margin:8px 0;">
+            {% trans "Locator + lat/lon werden bei Speichern aus der Adresse berechnet." %}
+          </p>
+          <div class="form-group">
+            <label class="form-label">
+              {% trans "Locator" %} ({% trans "manueller Override" %})
+            </label>
+            {{ address_form.locator }}
+            {% if address_form.locator.errors %}<div class="form-error">{{ address_form.locator.errors|join:", " }}</div>{% endif %}
+          </div>
+        </div>
+        <div class="panel-foot row-gap-8">
+          <button type="submit" class="btn btn-primary">{% trans "Save address" %}</button>
+        </div>
+      </section>
+    </form>
+
+    {# === Password panel === #}
+    <form method="post" action="{% url 'accounts:password_change' %}">
+      {% csrf_token %}
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>{% trans "Passwort ändern" %}</div>
+        </div>
+        <div class="panel-body">
+          {% for field in password_form %}
+            <div class="form-group">
+              <label class="form-label">{{ field.label }}</label>
+              {{ field }}
+              {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+              {% if field.help_text %}<div class="form-help">{{ field.help_text|safe }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+        <div class="panel-foot row-gap-8">
+          <button type="submit" class="btn btn-primary">{% trans "Change password" %}</button>
+        </div>
+      </section>
+    </form>
+  </div>
+
+  {# === Sidebar === #}
+  <aside class="stack-gap-14">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div>
+      </div>
+      <div class="panel-body">
+        <dl class="dlist">
+          <dt>{% trans "Callsign" %}</dt><dd class="t-mono">{{ user.username }}</dd>
+          <dt>{% trans "Role" %}</dt><dd>
+            {% if user.membership_level == "admin" %}
+              <span class="pill pill-accent">{{ user.get_membership_level_display }}</span>
+            {% elif user.membership_level == "staff" %}
+              <span class="pill pill-violet">{{ user.get_membership_level_display }}</span>
+            {% elif user.membership_level == "member" %}
+              <span class="pill">{{ user.get_membership_level_display }}</span>
+            {% else %}
+              <span class="pill pill-muted">{{ user.get_membership_level_display }}</span>
+            {% endif %}
+          </dd>
+          <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ user.last_login|date:"Y-m-d H:i"|default:"—" }}</dd>
+          <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ user.date_joined|date:"Y-m-d" }}</dd>
+        </dl>
+      </div>
+    </section>
+
+    {% include "sso/_sessions_card.html" with target_user=user sessions=self_sessions readonly_self=True %}
   </aside>
 </div>
 {% endblock %}
