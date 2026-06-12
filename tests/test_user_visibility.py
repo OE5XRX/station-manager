@@ -125,3 +125,118 @@ class TestAudienceFor:
         from apps.accounts.visibility import Audience, audience_for
 
         assert audience_for(staff, member) == Audience.MEMBER
+
+
+@pytest.mark.django_db
+class TestDirectoryVisibleFields:
+    """directory_visible_fields(viewer, target) returns the right set."""
+
+    def test_admin_sees_public_private_and_admin_only(self, admin, member):
+        from apps.accounts.visibility import (
+            ADMIN_ONLY_FIELDS,
+            PRIVATE_PROFILE_FIELDS,
+            PUBLIC_PROFILE_FIELDS,
+            directory_visible_fields,
+        )
+
+        fields = directory_visible_fields(admin, member)
+        assert fields >= PUBLIC_PROFILE_FIELDS
+        assert fields >= PRIVATE_PROFILE_FIELDS
+        assert fields >= ADMIN_ONLY_FIELDS
+
+    def test_self_sees_public_and_private(self, member):
+        from apps.accounts.visibility import (
+            PRIVATE_PROFILE_FIELDS,
+            PUBLIC_PROFILE_FIELDS,
+            directory_visible_fields,
+        )
+
+        fields = directory_visible_fields(member, member)
+        assert fields >= PUBLIC_PROFILE_FIELDS
+        assert fields >= PRIVATE_PROFILE_FIELDS
+
+    def test_self_sees_own_sso_sessions(self, member):
+        from apps.accounts.visibility import directory_visible_fields
+
+        fields = directory_visible_fields(member, member)
+        assert "sso_sessions_self" in fields
+
+    def test_self_does_not_see_admin_only_fields(self, member):
+        from apps.accounts.visibility import (
+            ADMIN_ONLY_FIELDS,
+            directory_visible_fields,
+        )
+
+        fields = directory_visible_fields(member, member)
+        # No admin-only sub-overlap (apart from sso_sessions_self which is
+        # explicitly not in ADMIN_ONLY_FIELDS — siehe Sektion 4.3 spec).
+        for f in ADMIN_ONLY_FIELDS:
+            assert f not in fields, f"unexpected admin-only field {f} in self set"
+
+    def test_self_sees_is_active_and_last_login(self, member):
+        """Self soll eigenen is_active und last_login sehen (Sub-Spec 1a v2)."""
+        from apps.accounts.visibility import directory_visible_fields
+
+        fields = directory_visible_fields(member, member)
+        assert "is_active" in fields
+        assert "last_login" in fields
+
+    def test_member_sees_other_member_public_only(self, member, other_member):
+        from apps.accounts.visibility import (
+            PUBLIC_PROFILE_FIELDS,
+            directory_visible_fields,
+        )
+
+        # default: target is_directory_visible=True
+        fields = directory_visible_fields(member, other_member)
+        assert fields == PUBLIC_PROFILE_FIELDS
+
+    def test_member_sees_invisible_member_minimal(self, member, other_member):
+        from apps.accounts.visibility import (
+            MINIMAL_DIRECTORY_FIELDS,
+            directory_visible_fields,
+        )
+
+        other_member.is_directory_visible = False
+        other_member.save()
+        fields = directory_visible_fields(member, other_member)
+        assert fields == MINIMAL_DIRECTORY_FIELDS
+
+    def test_no_access_returns_empty(self, applicant, member):
+        from apps.accounts.visibility import directory_visible_fields
+
+        # Applicant sieht Member nicht
+        fields = directory_visible_fields(applicant, member)
+        assert fields == frozenset()
+
+
+@pytest.mark.django_db
+class TestUserCanViewDirectory:
+    """user_can_view_directory(viewer) gates the UserListView."""
+
+    def test_admin_can(self, admin):
+        from apps.accounts.visibility import user_can_view_directory
+
+        assert user_can_view_directory(admin) is True
+
+    def test_member_can(self, member):
+        from apps.accounts.visibility import user_can_view_directory
+
+        assert user_can_view_directory(member) is True
+
+    def test_staff_can(self, staff):
+        from apps.accounts.visibility import user_can_view_directory
+
+        assert user_can_view_directory(staff) is True
+
+    def test_applicant_cannot(self, applicant):
+        from apps.accounts.visibility import user_can_view_directory
+
+        assert user_can_view_directory(applicant) is False
+
+    def test_anonymous_cannot(self):
+        from django.contrib.auth.models import AnonymousUser
+
+        from apps.accounts.visibility import user_can_view_directory
+
+        assert user_can_view_directory(AnonymousUser()) is False

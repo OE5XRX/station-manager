@@ -59,3 +59,96 @@ def audience_for(viewer, target):
         # Member sehen Applicants nicht (Bewerber bleiben „außerhalb").
         return None
     return Audience.MEMBER
+
+
+# === Field-Visibility-Sets ===========================================
+#
+# Strings here are *concept keys* the templates check, e.g.
+#   {% if "phone" in visible_fields and object.phone %}…
+# They mostly mirror User-Modell-Feldnamen, plus zusammengesetzte Keys
+# wie "region_assignments", "date_joined_year", "sso_sessions_self".
+
+# Sichtbar für jeden eingeloggten Member (wenn target.is_directory_visible).
+# Reihenfolge mirroring der Overview-Tab-Anzeige.
+PUBLIC_PROFILE_FIELDS = frozenset(
+    {
+        "username",  # = Rufzeichen / Callsign
+        "first_name",
+        "last_name",
+        "email",
+        "membership_level",
+        "avatar",
+        "bio",
+        "qth_name",
+        "locator",
+        "qrz_url",
+        "date_joined_year",  # nur Jahr, nicht das Datum
+        "region_assignments",  # Pill-Liste
+        "station_assignments",  # Pill-Liste
+    }
+)
+
+# Self + Admin sehen die. Member nicht.
+PRIVATE_PROFILE_FIELDS = frozenset(
+    {
+        "address",
+        "phone",
+        "latitude",
+        "longitude",  # numerisch, Admin-Debug-Block + Self
+        "language",
+        "last_login",  # Self sieht eigenen; Admin sieht alle
+        "is_active",  # Self sieht eigenen Aktivitätsstatus; Admin sieht alle
+        "is_directory_visible",
+    }
+)
+
+# Nur Admin sieht die.
+ADMIN_ONLY_FIELDS = frozenset(
+    {
+        "sso_grants",
+        "sso_sessions",
+        "tag_memberships",
+        "global_audit_actions",  # Promote/Demote, Region-/Station-Assignment-Mgmt
+    }
+)
+
+# Reduzierter Set, wenn target.is_directory_visible=False und viewer Member.
+MINIMAL_DIRECTORY_FIELDS = frozenset(
+    {
+        "username",
+        "membership_level",
+        "avatar",
+    }
+)
+
+
+def directory_visible_fields(viewer, target):
+    """Return the frozenset of concept-keys `viewer` may see on `target`.
+
+    Templates / serializers consume this:
+        if "phone" in visible_fields and target.phone:
+            render(target.phone)
+    """
+    aud = audience_for(viewer, target)
+    if aud is None:
+        return frozenset()
+    if aud == Audience.ADMIN:
+        return PUBLIC_PROFILE_FIELDS | PRIVATE_PROFILE_FIELDS | ADMIN_ONLY_FIELDS
+    if aud in (Audience.SELF, Audience.APPLICANT):
+        # Self/Applicant: eigene private + public Felder (read-only).
+        # ADMIN_ONLY_FIELDS bleiben außen vor; sso_sessions_self ist die
+        # Read-Only-Self-Variante des SSO-Sessions-Cards.
+        return PUBLIC_PROFILE_FIELDS | PRIVATE_PROFILE_FIELDS | frozenset({"sso_sessions_self"})
+    # Audience.MEMBER:
+    if not target.is_directory_visible:
+        return MINIMAL_DIRECTORY_FIELDS
+    return PUBLIC_PROFILE_FIELDS
+
+
+def user_can_view_directory(viewer):
+    """Gate for the UserListView. Applicants and Anonymous get 404."""
+    if not viewer.is_authenticated:
+        return False
+    if viewer.is_admin:
+        return True
+    return viewer.membership_level != User.MembershipLevel.APPLICANT
