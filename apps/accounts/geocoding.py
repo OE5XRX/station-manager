@@ -76,9 +76,21 @@ def geocode_address(address):
         TypeError,
         InvalidOperation,
     ) as exc:
-        # Do NOT log the address itself — only the exception class so the
-        # operator has a debuggable signal without leaking user PII.
-        logger.warning("Nominatim geocode failed: %s: %s", type(exc).__name__, exc)
+        # Do NOT log the address itself OR `str(exc)` — `requests.HTTPError`
+        # and friends interpolate the full request URL (which contains the
+        # address as the `q=` query parameter) into their __str__, which
+        # would silently re-leak the very PII this redaction guards.
+        # If the caller has the HTTP response, surface the status code as
+        # safe metadata; the exception class is enough for ops triage.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is not None:
+            logger.warning(
+                "Nominatim geocode failed: %s (HTTP %s)",
+                type(exc).__name__,
+                status,
+            )
+        else:
+            logger.warning("Nominatim geocode failed: %s", type(exc).__name__)
         return None
 
 

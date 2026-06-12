@@ -173,3 +173,55 @@ class TestGeocodeAddress:
         for record in caplog.records:
             assert sensitive not in record.getMessage()
             assert "Geheimstraße" not in record.getMessage()
+
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_failure_log_does_not_leak_exception_message(self, mock_get, _mock_sleep, caplog):
+        """Privacy: ``str(exc)`` from ``requests.HTTPError`` and friends
+        interpolates the full request URL — which contains the address
+        as the ``q=`` query parameter. The log MUST NOT include the
+        exception's string form, only its class name (and optionally the
+        HTTP status as safe metadata).
+        """
+        import logging
+
+        sensitive = "Geheimstraße 7, 4020 Linz"
+        # Build an HTTPError whose str() contains the URL with the
+        # address — this mirrors what requests' raise_for_status produces.
+        url_with_address = (
+            "500 Server Error: Internal Server Error for url: "
+            "https://nominatim.openstreetmap.org/search?q=Geheimstra%C3%9Fe+7"
+        )
+        mock_get.side_effect = requests.HTTPError(url_with_address)
+
+        with caplog.at_level(logging.WARNING, logger="apps.accounts.geocoding"):
+            result = geocode_address(sensitive)
+        assert result is None
+        # Neither the raw address nor the URL-encoded form may leak.
+        for record in caplog.records:
+            msg = record.getMessage()
+            assert "Geheimstra" not in msg, f"raw address leaked: {msg!r}"
+            assert "q=" not in msg, f"URL with query param leaked: {msg!r}"
+            assert "nominatim.openstreetmap.org/search?" not in msg, (
+                f"URL with query string leaked: {msg!r}"
+            )
+
+    @patch("apps.accounts.geocoding.time.sleep")
+    @patch("apps.accounts.geocoding.requests.get")
+    def test_failure_log_includes_http_status_when_available(self, mock_get, _mock_sleep, caplog):
+        """HTTP status is safe metadata and useful for operator triage —
+        log it when a response is attached to the exception.
+        """
+        import logging
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        http_error = requests.HTTPError("Service Unavailable")
+        http_error.response = mock_response
+        mock_get.side_effect = http_error
+
+        with caplog.at_level(logging.WARNING, logger="apps.accounts.geocoding"):
+            geocode_address("Some place")
+        joined = " ".join(record.getMessage() for record in caplog.records)
+        assert "503" in joined
+        assert "HTTPError" in joined
