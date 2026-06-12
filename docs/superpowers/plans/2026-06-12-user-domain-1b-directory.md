@@ -680,7 +680,7 @@ class TestTargetUserFilter:
     """?target_user=<pk> narrows the merged feed."""
 
     def url(self, target_user):
-        return reverse("audit:list") + f"?category=account&target_user={target_user.pk}"
+        return reverse("audit:audit_list") + f"?category=account&target_user={target_user.pk}"
 
     def test_account_filter_matches_target(self, client, admin, member, other_member):
         AccountAuditLog.log(
@@ -715,7 +715,7 @@ class TestTargetUserFilter:
 
         client.force_login(admin)
         resp = client.get(
-            reverse("audit:list") + f"?category=sso&target_user={member.pk}"
+            reverse("audit:audit_list") + f"?category=sso&target_user={member.pk}"
         )
         assert resp.status_code == 200
         body = resp.content.decode()
@@ -735,7 +735,7 @@ class TestTargetUserFilter:
         )
 
         client.force_login(admin)
-        resp = client.get(reverse("audit:list") + "?category=account")
+        resp = client.get(reverse("audit:audit_list") + "?category=account")
         body = resp.content.decode()
         assert "entry-a" in body
         assert "entry-b" in body
@@ -752,7 +752,7 @@ class TestAuditTableHideSubject:
             message="x",
         )
         client.force_login(admin)
-        resp = client.get(reverse("audit:list") + "?category=account")
+        resp = client.get(reverse("audit:audit_list") + "?category=account")
         # Global feed renders with hide_subject=False → "Subject" column header present
         assert "Subject" in resp.content.decode()
 ```
@@ -769,6 +769,10 @@ Find the existing `apply_shared_date_filters` method (around line 56) and add `t
 ```python
     def apply_shared_date_filters(self, queryset, params):
         """Shared date-filter helper used by all feeds except ``station``."""
+        from django.db.models import Q
+
+        from apps.sso.models import SsoAuditLog
+
         date_from = params.get("date_from")
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
@@ -776,11 +780,18 @@ Find the existing `apply_shared_date_filters` method (around line 56) and add `t
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
         # Per-user filter — consumed by the "Open in global audit log" link
-        # from the UserDetailView audit-tab. Both AccountAuditLog and
-        # SsoAuditLog expose a target_user FK.
+        # from the UserDetailView audit-tab. For AccountAuditLog the user is
+        # always the target (`target_user`). For SsoAuditLog the per-user
+        # audit-tab matches `target_user OR actor` (e.g. LOGIN_SUCCESS fires
+        # with the user as actor); the global filter mirrors that contract.
         target_user = params.get("target_user")
         if target_user:
-            queryset = queryset.filter(target_user_id=target_user)
+            if queryset.model is SsoAuditLog:
+                queryset = queryset.filter(
+                    Q(target_user_id=target_user) | Q(actor_id=target_user)
+                )
+            else:
+                queryset = queryset.filter(target_user_id=target_user)
         return queryset
 ```
 
