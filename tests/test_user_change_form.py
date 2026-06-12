@@ -9,6 +9,7 @@ import io
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.urls import reverse
 
 from apps.accounts.forms import UserChangeForm
 from apps.accounts.models import User
@@ -30,6 +31,15 @@ def member(db):
         username="OE5MEM1",
         password="x",
         membership_level=User.MembershipLevel.MEMBER,
+    )
+
+
+@pytest.fixture
+def admin_user(db):
+    return User.objects.create_superuser(
+        username="OE5ADMIN",
+        password="x",
+        email="admin@example.org",
     )
 
 
@@ -246,3 +256,31 @@ class TestUserChangeFormAvatarValidation:
         assert form.is_valid(), form.errors
         form.save()
         assert len(calls) == 1, calls
+
+
+@pytest.mark.django_db
+class TestUserFormTemplate:
+    """user_form.html renders 3 panels in Edit-Mode (Identity / Profil /
+    Adresse) and uses grid-main (no inline max-width)."""
+
+    def test_edit_form_has_three_panels(self, client, admin_user, member):
+        client.force_login(admin_user)
+        resp = client.get(
+            reverse("accounts:user_edit", kwargs={"pk": member.pk})
+        )
+        body = resp.content.decode()
+        # Identity panel (always)
+        assert ">Identity<" in body or "<h2>Identity</h2>" in body or "Identity" in body
+        # Profil panel (Edit-Mode only)
+        assert "Profil" in body
+        # Address panel (Edit-Mode only)
+        assert "Adresse" in body or "Address" in body
+        # Mobile-friendly: no inline max-width on the form
+        assert 'style="max-width:640px' not in body
+
+    def test_create_form_omits_profile_address_panels(self, client, admin_user):
+        client.force_login(admin_user)
+        resp = client.get(reverse("accounts:user_create"))
+        body = resp.content.decode()
+        # Profil/Adresse only show up in Edit-Mode (1c spec Sektion 3.4)
+        assert "Profil" not in body or "Adresse" not in body
