@@ -2,10 +2,11 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
-from django.views.generic import CreateView, DeleteView, ListView, UpdateView
+from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
 
 from .forms import LoginForm, ProfileForm, UserChangeForm, UserCreationForm
 
@@ -124,3 +125,41 @@ class UserDeleteView(AdminRequiredMixin, DeleteView):
             return redirect(self.success_url)
         messages.success(self.request, _("User deleted successfully."))
         return super().form_valid(form)
+
+
+class UserDetailView(LoginRequiredMixin, DetailView):
+    """Audience-aware detail page.
+
+    Permission flows entirely through ``apps.accounts.visibility``:
+      - Admin sees any user (incl. Applicants).
+      - Self/Applicant sees own detail.
+      - Member sees other Members (not Applicants), reduced fields when
+        the target has ``is_directory_visible=False``.
+      - Everyone else gets 404 (no existence-leak).
+    """
+
+    model = User
+    template_name = "accounts/user_detail.html"
+    context_object_name = "object"
+
+    def get_object(self, queryset=None):
+        obj = super().get_object(queryset)
+        from .visibility import audience_for
+
+        aud = audience_for(self.request.user, obj)
+        if aud is None:
+            raise Http404("User not found")
+        self._audience = aud
+        return obj
+
+    def get_context_data(self, **kwargs):
+        from .visibility import Audience, directory_visible_fields
+
+        ctx = super().get_context_data(**kwargs)
+        aud = self._audience
+        ctx["audience"] = aud.value
+        ctx["is_admin_view"] = aud == Audience.ADMIN
+        ctx["is_self_view"] = aud in (Audience.SELF, Audience.APPLICANT)
+        ctx["is_member_view"] = aud == Audience.MEMBER
+        ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
+        return ctx

@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block title %}{{ object.username }} · OE5XRX{% endblock %}
+{% block content %}
+  <h1>{{ object.username }}</h1>
+  <p>Audience: {{ audience }}</p>
+{% endblock %}
