@@ -1,5 +1,6 @@
 """Tests for User profile fields (Sub-Spec 1a Foundation)."""
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -160,6 +161,29 @@ class TestUserLocatorValidator:
     def test_empty_locator_allowed(self, user):
         user.locator = ""
         user.full_clean()  # should not raise
+
+
+@pytest.mark.django_db
+class TestUserLatLonValidators:
+    """User.latitude / User.longitude reject values outside ±90 / ±180."""
+
+    def test_latitude_out_of_range_rejected(self, user):
+        user.latitude = Decimal("95.0")
+        with pytest.raises(ValidationError):
+            user.full_clean()
+
+    def test_longitude_out_of_range_rejected(self, user):
+        user.longitude = Decimal("200.0")
+        with pytest.raises(ValidationError):
+            user.full_clean()
+
+    def test_latitude_at_boundary_accepted(self, user):
+        user.latitude = Decimal("90.0")
+        user.full_clean()  # no raise
+
+    def test_longitude_at_boundary_accepted(self, user):
+        user.longitude = Decimal("-180.0")
+        user.full_clean()  # no raise
 
 
 class TestUserAdminFieldsets:
