@@ -79,37 +79,6 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["form_title"] = _("Edit User")
-        # Local import: avoids loading apps.sso at module-load time
-        # (defensive against import-cycle surprises).
-        from django.contrib.auth.models import Group
-
-        from apps.sso.views import _active_sessions_for, _build_grants_for_user
-
-        context["app_grants_list"] = _build_grants_for_user(self.object)
-        context["user_sessions"] = _active_sessions_for(self.object)
-        # Tag-membership picker: every defined Group with current membership flag.
-        member_ids = set(self.object.groups.values_list("pk", flat=True))
-        context["tag_entries"] = [
-            {"group": g, "is_member": g.pk in member_ids} for g in Group.objects.order_by("name")
-        ]
-        # Membership-level picker uses the model's TextChoices.
-        context["membership_level_choices"] = User.MembershipLevel.choices
-
-        # Region-Assignment card.
-        from apps.stations.models import Region, Station
-
-        existing_ra = list(self.object.region_assignments.select_related("region"))
-        context["existing_region_assignments"] = existing_ra
-        assigned_region_ids = {ra.region_id for ra in existing_ra}
-        context["available_regions"] = Region.objects.exclude(pk__in=assigned_region_ids).order_by(
-            "name"
-        )
-
-        # Station-Assignment card.
-        context["existing_station_assignments"] = list(
-            self.object.station_assignments.select_related("station")
-        )
-        context["all_stations"] = Station.objects.order_by("name")
         return context
 
 

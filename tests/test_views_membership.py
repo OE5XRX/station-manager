@@ -136,14 +136,17 @@ class TestMembershipSetView:
 
 
 @pytest.mark.django_db
-def test_user_form_renders_membership_card_for_admin(client, admin_user):
-    """Admin viewing another user sees the membership picker."""
+def test_user_detail_renders_membership_card_for_admin(client, admin_user):
+    """Admin viewing another user sees the membership picker on the detail page.
+
+    Cards moved from user_form.html to user_detail.html in Sub-Spec 1b (Task 6/7).
+    """
     target = User.objects.create_user(username="hans", password="x", email="hans@x")
     target.membership_level = User.MembershipLevel.MEMBER
     target.save(update_fields=["membership_level"])
 
     client.force_login(admin_user)
-    response = client.get(reverse("accounts:user_edit", args=[target.pk]))
+    response = client.get(reverse("accounts:user_detail", args=[target.pk]))
     assert response.status_code == 200
     body = response.content.decode()
     # Section header + the dropdown
@@ -156,13 +159,10 @@ def test_user_form_renders_membership_card_for_admin(client, admin_user):
     assert "Vereins-Admin" in body
 
 
-@pytest.mark.django_db
-def test_user_form_does_not_render_membership_card_on_self(client, admin_user):
-    """Admin viewing their own edit page sees no membership picker
-    (self-promote/demote is forbidden)."""
-    client.force_login(admin_user)
-    response = client.get(reverse("accounts:user_edit", args=[admin_user.pk]))
-    body = response.content.decode()
-    # Section is hidden on self-view
-    assert "Vereins-Rolle" not in body
-    assert "Vereinsrolle" not in body
+# NOTE: The old "test_user_form_does_not_render_membership_card_on_self" test
+# (admin viewing own user_edit page must not show membership picker) was
+# removed as part of Sub-Spec 1b/Task 7. UI cards moved to user_detail.html,
+# where the admin sees the writable picker on its own detail-page too — the
+# self-promote/demote guard is enforced server-side in MembershipSetView
+# (see test_self_demote_blocked above). UI-side hiding for that case may
+# come back in a future task; the server-side guard is the source of truth.

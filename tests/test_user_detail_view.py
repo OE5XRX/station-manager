@@ -343,3 +343,20 @@ class TestUserDetailViewTemplateRendering:
         assert "Should not appear" not in body
         # Membership pill and username still show
         assert other_member.username in body
+
+
+@pytest.mark.django_db
+class TestUserFormCardCleanup:
+    """user_form.html no longer renders management cards."""
+
+    def test_edit_form_omits_cards(self, client, admin, member):
+        client.force_login(admin)
+        resp = client.get(reverse("accounts:user_edit", kwargs={"pk": member.pk}))
+        body = resp.content.decode()
+        # Cards have moved to user_detail.html.
+        assert "membership-card" not in body
+        assert "region-assignments-card" not in body
+        assert "station-assignments-card" not in body
+        assert "sso-grants-card" not in body
+        assert "sessions-card" not in body
+        assert "tags-card" not in body

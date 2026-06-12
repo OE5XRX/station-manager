@@ -128,7 +128,7 @@ class TestStationAssignmentsCardRendering:
         Station.objects.create(name="OE5A", callsign="OE5A")
         Station.objects.create(name="OE5B", callsign="OE5B")
         client.force_login(admin)
-        response = client.get(reverse("accounts:user_edit", args=[franz.pk]))
+        response = client.get(reverse("accounts:user_detail", args=[franz.pk]))
         body = response.content.decode()
         assert response.status_code == 200
         assert "Station-Zuordnungen" in body or "Station Assignments" in body
@@ -143,7 +143,7 @@ class TestStationAssignmentsCardRendering:
             user=franz, station=s, role=StationAssignment.Role.ADMIN
         )
         client.force_login(admin)
-        response = client.get(reverse("accounts:user_edit", args=[franz.pk]))
+        response = client.get(reverse("accounts:user_detail", args=[franz.pk]))
         body = response.content.decode()
         assert reverse("accounts:station_assignment_revoke", args=[a.pk]) in body
         # Display label for the role
@@ -154,7 +154,7 @@ class TestStationAssignmentsCardRendering:
         applicant = _user(User.MembershipLevel.APPLICANT, "newbie")
         Station.objects.create(name="OE5A", callsign="OE5A")
         client.force_login(admin)
-        response = client.get(reverse("accounts:user_edit", args=[applicant.pk]))
+        response = client.get(reverse("accounts:user_detail", args=[applicant.pk]))
         body = response.content.decode()
         # Match a string unique to the station-card's APPLICANT branch
         # (the region-card's APPLICANT warning also contains "Vereins-Bewerber",
