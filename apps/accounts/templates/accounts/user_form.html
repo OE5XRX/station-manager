@@ -180,14 +180,16 @@
     </section>
     {% endif %}
 
-    <div class="panel-foot row-gap-8">
-      <button type="submit" class="btn btn-primary">{% trans "Save user" %}</button>
-      {% if object %}
-        <a href="{% url 'accounts:user_detail' object.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
-      {% else %}
-        <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
-      {% endif %}
-    </div>
+    <section class="panel">
+      <div class="panel-foot row-gap-8">
+        <button type="submit" class="btn btn-primary">{% trans "Save user" %}</button>
+        {% if object %}
+          <a href="{% url 'accounts:user_detail' object.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+        {% else %}
+          <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+        {% endif %}
+      </div>
+    </section>
   </div>
 
   <aside class="stack-gap-14">

@@ -137,14 +137,16 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         return redirect("accounts:profile")
 
     def _save_address(self, request, user):
+        # Snapshot the locator from the in-memory user instance BEFORE the
+        # form runs is_valid() (which mutates `user` via _post_clean →
+        # construct_instance), so _maybe_geocode can restore it on
+        # geocode-fail. The form includes locator and would otherwise blow
+        # away a previously-stored value when the user edits address
+        # without touching locator (POST sends "").
+        pre_locator = user.locator
         form = ProfileAddressForm(request.POST, instance=user, prefix="address")
         if form.is_valid():
             changed = set(form.changed_data)
-            # Snapshot the locator BEFORE form.save() so _maybe_geocode can
-            # restore it on geocode-fail. The form includes locator and would
-            # otherwise blow away a previously-stored value when the user
-            # edits address without touching locator (POST sends "").
-            pre_locator = User.objects.values_list("locator", flat=True).get(pk=user.pk)
             form.save()
             self._maybe_geocode(user, changed, pre_locator)
             self._emit_user_updated(request, user, changed)
