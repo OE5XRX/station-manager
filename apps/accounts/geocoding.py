@@ -8,6 +8,58 @@
 Spec: docs/superpowers/specs/2026-06-12-user-domain-1a-foundation-design.md
 """
 
+import logging
+import time
+from decimal import Decimal
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_TIMEOUT = 10  # seconds
+# Nominatim Free-Tier policy requires identifying User-Agent.
+USER_AGENT = "OE5XRX-StationManager/1.0 (peter.buchegger7@gmail.com)"
+
+
+def geocode_address(address):
+    """Resolve a postal address to (latitude, longitude) via Nominatim.
+
+    Returns None on any error (network, no result, malformed response,
+    timeout). The function rate-limits itself with a 1-second sleep per
+    call to comply with the Nominatim Free-Tier policy.
+
+    NOT thread-safe across multiple concurrent calls in the same process —
+    the rate-limit pause is local. For a small Verein (≤ a few save-events
+    per minute) that's fine.
+    """
+    if not address or not address.strip():
+        return None
+
+    time.sleep(1)  # Rate-Limit-Compliance
+
+    try:
+        resp = requests.get(
+            NOMINATIM_URL,
+            params={
+                "q": address.strip(),
+                "format": "json",
+                "limit": 1,
+                "accept-language": "de,en",
+            },
+            headers={"User-Agent": USER_AGENT},
+            timeout=NOMINATIM_TIMEOUT,
+        )
+        resp.raise_for_status()
+        results = resp.json()
+        if not results:
+            return None
+        first = results[0]
+        return (Decimal(first["lat"]), Decimal(first["lon"]))
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        logger.warning("Nominatim geocode failed for address %r: %s", address, exc)
+        return None
+
 
 def lat_lon_to_locator(lat, lon, precision: int = 6) -> str:
     """Maidenhead-Locator aus (lat, lon).
