@@ -14,7 +14,7 @@ from .managers import UserManager
 # Maidenhead 6-character grid locator: 2 letters (field, A-R) + 2 digits
 # (square, 0-9) + 2 letters (subsquare, A-X). The Maidenhead system is
 # defined for amateur radio location reporting.
-LOCATOR_REGEX = re.compile(r"^[A-R]{2}[0-9]{2}[A-X]{2}$")
+LOCATOR_REGEX = re.compile(r"^[A-R]{2}[0-9]{2}[A-X]{2}\Z")
 
 locator_validator = RegexValidator(
     regex=LOCATOR_REGEX,
@@ -22,7 +22,7 @@ locator_validator = RegexValidator(
 )
 
 
-def _avatar_upload_path(instance, filename):
+def avatar_upload_path(instance, filename):
     """Per-user randomised storage path: avatars/<user_id>/<random>.<ext>.
 
     Each upload produces a fresh path — old files become orphaned but
