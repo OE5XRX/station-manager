@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
@@ -34,6 +36,8 @@ from .forms import (
 )
 from .geocoding import geocode_address, lat_lon_to_locator
 from .models import AccountAuditLog
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -1069,6 +1073,60 @@ class UserRestoreView(AdminRequiredMixin, View):
             % {"name": target.username},
         )
         return redirect("accounts:user_detail", pk=pk)
+
+
+class UserHardPurgeView(AdminRequiredMixin, View):
+    template_name = "accounts/user_confirm_hard_purge.html"
+
+    def get_object(self):
+        # Critical guard: only soft-deleted users are hard-purgeable.
+        # Active user → 404. No UI path exposes this URL for active users.
+        return get_object_or_404(
+            User,
+            pk=self.kwargs["pk"],
+            deleted_at__isnull=False,
+        )
+
+    def get(self, request, pk):
+        target = self.get_object()
+        return render(
+            request,
+            self.template_name,
+            {
+                "target_user": target,
+                "deleted_at": target.deleted_at,
+                "deleted_by": target.deleted_by,
+                "n_audit_as_actor": AccountAuditLog.objects.filter(actor=target).count(),
+                "n_audit_as_target": AccountAuditLog.objects.filter(target_user=target).count(),
+            },
+        )
+
+    def post(self, request, pk):
+        target = self.get_object()
+        # Audit BEFORE delete — target FK becomes NULL via SET_NULL after .delete()
+        username = target.username
+        email = target.email
+        deleted_at = target.deleted_at
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_HARD_PURGED,
+            actor=request.user,
+            target_user=target,
+            message=(f"{username} <{email}> (purged after soft-delete on {deleted_at:%Y-%m-%d})"),
+            ip_address=_client_ip(request),
+        )
+        # Avatar-file delete (best-effort; storage transient failures
+        # don't block the DB delete)
+        if target.avatar:
+            try:
+                target.avatar.delete(save=False)
+            except Exception:
+                logger.exception(
+                    "Avatar file delete failed for purged user %s",
+                    target.pk,
+                )
+        target.delete()
+        messages.success(request, _("User permanently purged."))
+        return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
 
 class UserDetailView(LoginRequiredMixin, DetailView):

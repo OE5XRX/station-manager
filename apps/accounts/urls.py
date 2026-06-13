@@ -37,6 +37,11 @@ urlpatterns = [
         name="user_restore",
     ),
     path(
+        "users/<int:pk>/hard-purge/",
+        views.UserHardPurgeView.as_view(),
+        name="user_hard_purge",
+    ),
+    path(
         "users/<int:pk>/membership/",
         MembershipSetView.as_view(),
         name="membership_set",
