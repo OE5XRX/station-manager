@@ -28,6 +28,8 @@ AUTH_PASSWORD_VALIDATORS = []
 # Email to console
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
+SITE_URL = "http://localhost:8000"
+
 # OIDC ID-token signing key (dev only).
 #
 # Production reads from disk and fails loudly if missing. Dev would

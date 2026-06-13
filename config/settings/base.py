@@ -253,6 +253,7 @@ EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.environ.get("EMAIL_FROM", "alerts@oe5xrx.org")
+SITE_URL = os.environ.get("SITE_URL", "https://remote.oe5xrx.org")
 
 # Alert notifications — Telegram
 ALERT_TELEGRAM_ENABLED = os.environ.get("ALERT_TELEGRAM_ENABLED", "false").lower() == "true"

@@ -1,4 +1,7 @@
+from django.contrib.auth.decorators import login_not_required
 from django.urls import path
+from django.utils.decorators import method_decorator
+from django.views.generic import RedirectView
 
 from . import views
 from .views_membership import MembershipSetView
@@ -10,6 +13,9 @@ from .views_station_assignments import (
     StationAssignmentCreateView,
     StationAssignmentRevokeView,
 )
+
+# Stubs for the email-helper to reverse() against; Tasks 8 + 13 replace them.
+_stub = method_decorator(login_not_required, name="dispatch")(RedirectView)
 
 app_name = "accounts"
 
@@ -51,5 +57,15 @@ urlpatterns = [
         "station_assignments/<int:pk>/revoke/",
         StationAssignmentRevokeView.as_view(),
         name="station_assignment_revoke",
+    ),
+    path(
+        "set-password/<str:token>/",
+        _stub.as_view(url="/", permanent=False),
+        name="set_password",
+    ),
+    path(
+        "verify-email/<str:token>/",
+        _stub.as_view(url="/", permanent=False),
+        name="verify_email",
     ),
 ]
