@@ -60,16 +60,19 @@ class Meta:
 
 `deleted_at IS NOT NULL` = "user ist soft-deleted". `deleted_by` zeigt auf den Admin der den Soft-Delete ausgelöst hat (`SET_NULL` falls dieser Admin später selbst gelöscht wird — Tombstone-Pattern).
 
-**Email kriegt kein DB-Level-Unique-Constraint** (hatte heute auch keinen) — Uniqueness wird auf Forms-Layer via `__iexact`-Lookup gemacht, der nicht-deleted User filtert.
+**Email hat einen conditional Unique-Constraint** (`accounts_user_email_ci_unique` aus Pre-2b, in 2b narrowed): die Bedingung wurde von `~Q(email="")` zu `Q(deleted_at__isnull=True) & ~Q(email="")` geändert — Uniqueness gilt jetzt nur für nicht-leere Emails von aktiven (nicht-soft-deleted) Usern. Die Forms-Layer-Checks (`UserCreationForm.clean_email` etc.) verwenden zusätzlich `User.objects.active()` für freundliche Error-Messages vor dem DB-Constraint zuschlägt.
 
-### 2.2 Migration
+### 2.2 Migrations
 
-Single migration `0XXX_user_soft_delete.py` mit zwei Operations:
+Eine Sequenz von 5 Migrations zwischen `0014` und `0018` führt das Soft-Delete-Schema ein:
 
-1. **AddField**: `deleted_at` (DateTimeField nullable, db_index) + `deleted_by` (FK self, SET_NULL).
-2. **RemoveConstraint** (implicit unique auf `username` aus `AbstractUser`) + **AddConstraint** (`unique_active_username` mit `condition=Q(deleted_at__isnull=True)`).
+1. **`0014_user_soft_delete.py`** — AddField `deleted_at` (DateTimeField nullable, db_index) + AddField `deleted_by` (FK self, SET_NULL) + AddConstraint `unique_active_username` (UniqueConstraint, condition=`Q(deleted_at__isnull=True)`).
+2. **`0015_user_username_drop_unique.py`** — AlterField username: drop unconditional `unique=True` (so the conditional constraint becomes the sole DB-level uniqueness enforcer; without this Django keeps AbstractUser's UNIQUE index and IntegrityError on callsign reuse).
+3. **`0016_user_email_active_only.py`** — AlterConstraint `accounts_user_email_ci_unique` to add `deleted_at__isnull=True` to its condition.
+4. **`0017_audit_events_for_soft_delete.py`** — Auto-emitted Choices update for `AccountAuditLog.EventType` (USER_SOFT_DELETED / USER_RESTORED / USER_HARD_PURGED). Pure model-state migration, no DDL impact.
+5. **`0018_user_username_db_index.py`** — AlterField username: add `db_index=True` so admin queries that span the full table (`?show=all`, `?show=deleted`) stay efficient; the partial UNIQUE index only covers `deleted_at IS NULL` rows.
 
-Step 2 ist Postgres-spezifisch:
+Step 2 ist Postgres-spezifisch und produziert effektiv:
 ```sql
 -- conceptually what Django emits:
 DROP INDEX accounts_user_username_key;
