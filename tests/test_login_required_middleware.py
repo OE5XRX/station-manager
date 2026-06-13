@@ -316,6 +316,33 @@ def test_login_page_anon_accessible(client):
 
 
 @pytest.mark.django_db
+def test_logout_page_anon_does_not_loop_through_login_gate(client):
+    """``LogoutView`` is marked ``@login_not_required`` so the middleware
+    doesn't intercept it. Without the decorator, an anonymous POST to
+    ``/accounts/logout/`` would be 302'd to
+    ``/accounts/login/?next=/accounts/logout/`` — and a clever user
+    following that redirect after logging in would then POST to logout
+    again, creating a confusing flap. With the decorator, LogoutView
+    handles the request itself and redirects to ``LOGOUT_REDIRECT_URL``
+    (= the login page) **without** a ``next`` pointing back at logout.
+
+    We distinguish the two outcomes by checking that ``next=`` is NOT
+    set to a logout URL in the redirect's query string. That's the
+    signature of the middleware gate having fired; LogoutView's own
+    redirect carries no ``next`` parameter."""
+    from urllib.parse import parse_qs, urlsplit
+
+    response = client.post(reverse("accounts:logout"))
+    assert response.status_code == 302
+    next_values = parse_qs(urlsplit(response.url).query).get("next", [])
+    assert not any("logout" in n for n in next_values), (
+        f"LogoutView redirect carries next={next_values!r} pointing at "
+        "logout — that's the middleware gate having fired, not LogoutView "
+        f"itself handling the request. Full URL: {response.url!r}"
+    )
+
+
+@pytest.mark.django_db
 def test_setlang_anon_accessible(client):
     """The language switcher posts to ``/i18n/setlang/`` from pre-login
     pages (login form, error pages). It must not be gated.
