@@ -423,7 +423,19 @@ class VerifyEmailView(View):
         # email).
         with transaction.atomic():
             # SELECT FOR UPDATE so two concurrent clicks serialize.
-            locked = AccountToken.objects.select_for_update().get(pk=token_row.pk)
+            # Re-apply user__is_active=True so a deactivation between
+            # the unlocked pre-lookup and the lock-acquire is caught.
+            # Catch DoesNotExist for the rare case where the row was
+            # deleted in the meantime (e.g. user hard-deleted via
+            # CASCADE) — return the same generic-invalid response
+            # instead of 500-ing.
+            try:
+                locked = AccountToken.objects.select_for_update().get(
+                    pk=token_row.pk, user__is_active=True
+                )
+            except AccountToken.DoesNotExist:
+                messages.error(request, _("Email verification link invalid or expired."))
+                return redirect("accounts:login")
             if not locked.is_active():
                 messages.error(request, _("Email verification link invalid or expired."))
                 return redirect("accounts:login")

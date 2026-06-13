@@ -32,14 +32,21 @@ def consume_token(raw, expected_type):
     """Atomically validate + mark used. Returns the token row or None.
 
     None is returned if: token doesn't exist, wrong type, already used,
-    or expired. Callers SHOULD NOT differentiate the failure cause to
-    the end-user (timing-safe error).
+    expired, or the token's user is deactivated. Callers SHOULD NOT
+    differentiate the failure cause to the end-user (timing-safe error).
+
+    The ``user__is_active=True`` filter is enforced HERE rather than
+    relying on every caller — closes a race window where an admin
+    deactivates an account between the caller's pre-lookup and the
+    consume.
     """
     secret_hash = hashlib.sha256(raw.encode()).hexdigest()
     with transaction.atomic():
         try:
             token = AccountToken.objects.select_for_update().get(
-                secret_hash=secret_hash, token_type=expected_type
+                secret_hash=secret_hash,
+                token_type=expected_type,
+                user__is_active=True,
             )
         except AccountToken.DoesNotExist:
             return None
