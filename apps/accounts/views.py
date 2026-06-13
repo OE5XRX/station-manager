@@ -985,6 +985,92 @@ class UserSoftDeleteView(AdminRequiredMixin, View):
         return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
 
+class UserRestoreView(AdminRequiredMixin, View):
+    """Restore a soft-deleted user.
+
+    POST-only. 404 if the user is not soft-deleted. Pre-commit conflict
+    checks for email + username (case-insensitive) against any active
+    user — between soft-delete and restore another account could have
+    grabbed the identifier. Topology assignments, SSO grants, group
+    memberships and account tokens are NOT restored — they were
+    revoked at soft-delete time and admin re-assigns manually.
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        target = get_object_or_404(
+            User,
+            pk=pk,
+            deleted_at__isnull=False,
+        )
+        # Email-conflict check: another active user grabbed the email?
+        clashing_email = (
+            User.objects.active().filter(email__iexact=target.email).exclude(pk=target.pk).first()
+        )
+        if clashing_email:
+            messages.error(
+                request,
+                _(
+                    "Cannot restore: another active user (%(other)s) is using "
+                    "%(email)s. Either change %(other)s's email first, or update "
+                    "%(name)s's email before restoring."
+                )
+                % {
+                    "other": clashing_email.username,
+                    "email": target.email,
+                    "name": target.username,
+                },
+            )
+            return redirect("accounts:user_detail", pk=pk)
+
+        # Username-conflict check
+        clashing_username = (
+            User.objects.active()
+            .filter(username__iexact=target.username)
+            .exclude(pk=target.pk)
+            .first()
+        )
+        if clashing_username:
+            messages.error(
+                request,
+                _(
+                    "Cannot restore: another active user is using callsign "
+                    "%(name)s. Soft-delete or rename them first."
+                )
+                % {"name": target.username},
+            )
+            return redirect("accounts:user_detail", pk=pk)
+
+        with transaction.atomic():
+            target.deleted_at = None
+            target.deleted_by = None
+            target.is_active = True
+            target.save(
+                update_fields=[
+                    "deleted_at",
+                    "deleted_by",
+                    "is_active",
+                ]
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_RESTORED,
+                actor=request.user,
+                target_user=target,
+                message=f"{target.username} <{target.email}>",
+                ip_address=_client_ip(request),
+            )
+        messages.success(
+            request,
+            _(
+                "User %(name)s restored. Topology assignments were revoked at "
+                "delete-time and need to be re-assigned."
+            )
+            % {"name": target.username},
+        )
+        return redirect("accounts:user_detail", pk=pk)
+
+
 class UserDetailView(LoginRequiredMixin, DetailView):
     """Audience-aware detail page.
 

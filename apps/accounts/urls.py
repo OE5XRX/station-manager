@@ -32,6 +32,11 @@ urlpatterns = [
         name="user_soft_delete",
     ),
     path(
+        "users/<int:pk>/restore/",
+        views.UserRestoreView.as_view(),
+        name="user_restore",
+    ),
+    path(
         "users/<int:pk>/membership/",
         MembershipSetView.as_view(),
         name="membership_set",
