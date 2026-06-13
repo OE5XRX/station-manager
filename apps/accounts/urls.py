@@ -69,6 +69,11 @@ urlpatterns = [
         name="set_password",
     ),
     path(
+        "password-reset/",
+        views.PasswordResetRequestView.as_view(),
+        name="password_reset_request",
+    ),
+    path(
         "verify-email/<str:token>/",
         _stub.as_view(url="/", permanent=False),
         name="verify_email",

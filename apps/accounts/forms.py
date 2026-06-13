@@ -259,3 +259,22 @@ class SetPasswordForm(DjangoSetPasswordForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs["class"] = "form-control"
+
+
+class PasswordResetRequestForm(forms.Form):
+    """Form on /accounts/password-reset/ — just collects an email.
+
+    No user-existence-validation here; the view decides what to do.
+    Validation in the form would leak existence via different error paths.
+    """
+
+    email = forms.EmailField(
+        label=_("Email"),
+        widget=forms.EmailInput(
+            attrs={
+                "class": "form-control",
+                "autofocus": True,
+                "autocomplete": "email",
+            }
+        ),
+    )

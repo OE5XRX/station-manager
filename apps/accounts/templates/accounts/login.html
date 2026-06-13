@@ -63,6 +63,12 @@
         </svg>
       </button>
 
+      <div style="text-align:center;margin-top:8px;">
+        <a href="{% url 'accounts:password_reset_request' %}" class="t-muted">
+          {% trans "Forgot password?" %}
+        </a>
+      </div>
+
       <div class="t-label" style="text-align:center;margin-top:4px;">
         {% trans "TLS · CSRF · Rate limited · 7d session" %}
       </div>

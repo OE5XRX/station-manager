@@ -324,6 +324,86 @@ class SetPasswordView(View):
         return redirect("accounts:login")
 
 
+@method_decorator(login_not_required, name="dispatch")
+class PasswordResetRequestView(View):
+    """Anon endpoint: 'I forgot my password, send me a reset link.'
+
+    Timing-safe and rate-limited. Always responds with the same
+    generic message (no email-enumeration). Rate-limit hits and
+    nonexistent-email hits are audit-logged for forensics.
+    """
+
+    template_name = "accounts/password_reset_request.html"
+
+    def get(self, request):
+        from .forms import PasswordResetRequestForm
+
+        return render(request, self.template_name, {"form": PasswordResetRequestForm()})
+
+    def post(self, request):
+        from django.db import transaction
+
+        from .emails import send_account_email
+        from .forms import PasswordResetRequestForm
+        from .models import AccountToken
+        from .throttle import _ip_rate_exceeded, _user_rate_exceeded
+        from .tokens import invalidate_pending_tokens, issue_token
+
+        form = PasswordResetRequestForm(request.POST)
+        if not form.is_valid():
+            return render(request, self.template_name, {"form": form})
+
+        email = form.cleaned_data["email"].strip()
+        ip = _client_ip(request)
+
+        if _ip_rate_exceeded(ip):
+            self._audit_rate_limited(request, email, ip, reason="ip")
+            return self._generic_success(request, email)
+
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            return self._generic_success(request, email)
+
+        if _user_rate_exceeded(user):
+            self._audit_rate_limited(request, email, ip, target_user=user, reason="user")
+            return self._generic_success(request, email)
+
+        with transaction.atomic():
+            invalidate_pending_tokens(user, AccountToken.TokenType.RESET)
+            raw = issue_token(user, AccountToken.TokenType.RESET, ip=ip)
+            send_account_email(user, "reset", {"raw_token": raw})
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.PASSWORD_RESET_REQUESTED,
+                actor=None,
+                target_user=user,
+                message=f"to {email} from {ip}",
+                ip_address=ip,
+            )
+
+        return self._generic_success(request, email)
+
+    def _generic_success(self, request, email):
+        messages.info(
+            request,
+            _(
+                "If %(email)s is a registered account, a password reset link "
+                "has been sent. Check your inbox."
+            )
+            % {"email": email},
+        )
+        return redirect("accounts:login")
+
+    def _audit_rate_limited(self, request, email, ip, target_user=None, reason=""):
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.PASSWORD_RESET_RATE_LIMITED,
+            actor=None,
+            target_user=target_user,
+            message=f"{reason} {email} from {ip}",
+            ip_address=ip,
+        )
+
+
 class ResendWelcomeView(AdminRequiredMixin, View):
     """Admin-only: re-issue a Welcome token + mail.
 
