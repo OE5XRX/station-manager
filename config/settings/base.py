@@ -61,6 +61,13 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Default-deny: every view is login-required unless decorated with
+    # ``django.contrib.auth.decorators.login_not_required`` or covered
+    # by our subclass's exact-path / true-prefix allow-list (OIDC
+    # public surface + i18n setlang). Must come AFTER
+    # AuthenticationMiddleware so that ``request.user`` is populated.
+    # See ``config/middleware.py`` and issue #73 for the rationale.
+    "config.middleware.LoginRequiredMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.middleware.csp.ContentSecurityPolicyMiddleware",

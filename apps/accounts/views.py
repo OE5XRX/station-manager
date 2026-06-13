@@ -1,11 +1,13 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import views as auth_views
+from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse, reverse_lazy
+from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import (
@@ -75,11 +77,18 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
         return self.request.user.is_admin
 
 
+# The login & logout pages must be reachable without a session, otherwise
+# we trap unauthenticated users in a redirect loop the moment
+# ``LoginRequiredMiddleware`` is active. ``@login_not_required`` is the
+# decorator equivalent of marking the view function for the middleware
+# to skip.
+@method_decorator(login_not_required, name="dispatch")
 class LoginView(auth_views.LoginView):
     template_name = "accounts/login.html"
     authentication_form = LoginForm
 
 
+@method_decorator(login_not_required, name="dispatch")
 class LogoutView(auth_views.LogoutView):
     pass
 

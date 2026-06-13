@@ -2,9 +2,11 @@ import io
 import logging
 import re
 
+from django.contrib.auth.decorators import login_not_required
 from django.db import transaction
 from django.http import StreamingHttpResponse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -24,6 +26,14 @@ from apps.stations.models import StationAuditLog
 logger = logging.getLogger(__name__)
 
 
+# All four views in this module authenticate via DRF's
+# ``DeviceKeyAuthentication`` (Ed25519 signature over the request body).
+# Station agents do not carry a Django session, so the global
+# ``LoginRequiredMiddleware`` would 302 them to a login form they cannot
+# follow. ``@login_not_required`` lets DRF do its own auth check.
+
+
+@method_decorator(login_not_required, name="dispatch")
 class DeploymentCheckView(APIView):
     """Station-agent polls to see if a deployment is pending for it."""
 
@@ -99,6 +109,7 @@ class DeploymentCheckView(APIView):
         return Response(data)
 
 
+@method_decorator(login_not_required, name="dispatch")
 class DeploymentStatusUpdateView(APIView):
     """Update the status of a deployment result (called by station agent)."""
 
@@ -241,6 +252,7 @@ class DeploymentStatusUpdateView(APIView):
         return Response({"status": "ok"})
 
 
+@method_decorator(login_not_required, name="dispatch")
 class DeploymentCommitView(APIView):
     """Agent confirms boot committed after successful update."""
 
@@ -387,6 +399,7 @@ class DeploymentCommitView(APIView):
         return Response({"status": "ok"})
 
 
+@method_decorator(login_not_required, name="dispatch")
 class DeploymentDownloadView(APIView):
     """Stream the deployment's image from S3 to the requesting station.
 
