@@ -16,6 +16,17 @@
 {% endblock %}
 
 {% block content %}
+{% if object.deleted_at and is_admin_view %}
+  <section class="panel mb-24" style="border-left:3px solid var(--danger);background:var(--bg-2);">
+    <div class="panel-body">
+      <strong class="t-danger">{% trans "Soft-deleted" %}</strong>
+      {% trans "on" %} <span class="t-mono">{{ object.deleted_at|date:"Y-m-d H:i" }}</span>
+      {% if object.deleted_by %}
+        {% trans "by" %} <a href="{% url 'accounts:user_detail' object.deleted_by.pk %}">{{ object.deleted_by.username }}</a>
+      {% endif %}
+    </div>
+  </section>
+{% endif %}
 <div class="page-head">
   <div class="page-head-main">
     <div class="page-eyebrow">
@@ -67,17 +78,26 @@
       {% endif %}
     </div>
   </div>
-  <div class="page-head-actions">
-    {% if is_admin_view and object.pk != request.user.pk %}
+  <div class="page-head-actions row-gap-8">
+    {% if object.deleted_at and is_admin_view %}
+      {# Soft-deleted: restore (POST) + hard-purge (confirm-page) + disabled edit hint. #}
+      <form method="post" action="{% url 'accounts:user_restore' object.pk %}" style="display:inline;margin:0;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary" data-confirm="{% trans 'Restore this user?' %}">{% trans "Restore" %}</button>
+      </form>
+      <a href="{% url 'accounts:user_hard_purge' object.pk %}" class="btn btn-danger">{% trans "Hard-purge" %}</a>
+      <span class="btn btn-ghost" title="{% trans 'Restore first' %}" style="opacity:0.5;cursor:not-allowed;" aria-disabled="true">{% trans "Edit identity" %}</span>
+    {% elif is_admin_view and object.pk != request.user.pk %}
       <a href="{% url 'accounts:user_edit' object.pk %}" class="btn btn-ghost">{% trans "Edit identity" %}</a>
       <a href="{% url 'accounts:user_soft_delete' object.pk %}" class="btn btn-danger">{% trans "Soft-delete" %}</a>
     {% elif is_self_view %}
+      {# Self-soft-delete is blocked server-side; defense in depth here — no danger button rendered. #}
       <a href="{% url 'accounts:profile' %}" class="btn btn-ghost">{% trans "Edit profile" %}</a>
     {% endif %}
   </div>
 </div>
 
-{% if request.user.is_admin and not object.has_usable_password %}
+{% if request.user.is_admin and not object.has_usable_password and not object.deleted_at %}
   <section class="panel mb-24" style="border-left:3px solid var(--warning);">
     <div class="panel-head">
       <div class="panel-title"><span class="dot"></span>{% trans "Pending Welcome" %}</div>
@@ -262,7 +282,22 @@
 </div>
 
 <div data-tab-panel="topology" hidden>
-  {% if is_admin_view %}
+  {% if object.deleted_at %}
+    {% comment %}
+      Soft-deleted: topology was auto-revoked at delete-time. Cards render readonly
+      so the (empty) state is visible, plus a clear hint that mutation is blocked.
+    {% endcomment %}
+    <section class="panel mb-24">
+      <div class="panel-body t-muted">
+        {% trans "Topology and group cards are disabled for soft-deleted users. Restore first to manage membership, assignments, and groups." %}
+      </div>
+    </section>
+    {% include "accounts/_membership_card.html" with readonly=True %}
+    <div class="grid grid-main">
+      {% include "accounts/_region_assignments_card.html" with readonly=True %}
+      {% include "accounts/_station_assignments_card.html" with readonly=True %}
+    </div>
+  {% elif is_admin_view %}
     {% comment %}
       Membership-Card: Admin viewing own page sees readonly — self-promote/
       demote is blocked server-side by MembershipSetView, so a writable
@@ -289,9 +324,17 @@
 
 {% if is_admin_view %}
 <div data-tab-panel="sso" hidden>
-  {% include "sso/_app_grants_card.html" with target_user=object applications=app_grants_list %}
-  {% include "sso/_sessions_card.html" with target_user=object sessions=user_sessions %}
-  {% include "sso/_tags_card.html" with target_user=object tag_entries=tag_entries %}
+  {% if object.deleted_at %}
+    <section class="panel">
+      <div class="panel-body t-muted">
+        {% trans "SSO grants, sessions, and group tags were revoked at soft-delete time and are not mutable until the user is restored." %}
+      </div>
+    </section>
+  {% else %}
+    {% include "sso/_app_grants_card.html" with target_user=object applications=app_grants_list %}
+    {% include "sso/_sessions_card.html" with target_user=object sessions=user_sessions %}
+    {% include "sso/_tags_card.html" with target_user=object tag_entries=tag_entries %}
+  {% endif %}
 </div>
 {% elif is_self_view %}
 <div data-tab-panel="sso" hidden>
