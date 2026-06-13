@@ -46,22 +46,22 @@
 
 {% if is_admin_view %}
 <div class="row-gap-8" style="margin:14px 0 18px;flex-wrap:wrap;">
-  <a href="?show=active{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_role %}&role={{ filter_role }}{% endif %}"
+  <a href="?show=active{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
      class="pill {% if filter_show == 'active' %}pill-online{% endif %}"
      style="text-decoration:none;">
     {% if filter_show == 'active' %}<span class="dot"></span>{% endif %}{% trans "Active" %}
   </a>
-  <a href="?show=inactive{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_role %}&role={{ filter_role }}{% endif %}"
+  <a href="?show=inactive{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
      class="pill {% if filter_show == 'inactive' %}pill-violet{% endif %}"
      style="text-decoration:none;">
     {% trans "Inactive" %}
   </a>
-  <a href="?show=deleted{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_role %}&role={{ filter_role }}{% endif %}"
+  <a href="?show=deleted{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
      class="pill {% if filter_show == 'deleted' %}pill-muted{% endif %}"
      style="text-decoration:none;">
     {% trans "Deleted" %}
   </a>
-  <a href="?show=all{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_role %}&role={{ filter_role }}{% endif %}"
+  <a href="?show=all{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
      class="pill {% if filter_show == 'all' %}pill-accent{% endif %}"
      style="text-decoration:none;">
     {% trans "All" %}
