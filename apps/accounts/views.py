@@ -4,17 +4,17 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.db import transaction
 from django.db.models import Q
-from django.http import Http404
-from django.shortcuts import redirect, render
-from django.urls import reverse, reverse_lazy
+from django.http import Http404, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import (
     CreateView,
-    DeleteView,
     DetailView,
     ListView,
     TemplateView,
@@ -849,44 +849,140 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         return context
 
 
-class UserDeleteView(AdminRequiredMixin, DeleteView):
-    model = User
-    template_name = "accounts/user_confirm_delete.html"
-    success_url = reverse_lazy("accounts:user_list")
-    context_object_name = "target_user"
+def _revoke_all_topology(request, user):
+    """Auto-revoke alle Region- + Station-Assignments des Users.
 
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        user = self.object
-        ctx["n_station_assignments"] = user.station_assignments.count()
-        ctx["n_region_assignments"] = user.region_assignments.count()
-        ctx["station_admin_assignments"] = list(
-            user.station_assignments.filter(role=StationAssignment.Role.ADMIN).select_related(
-                "station"
+    Returnt eine Liste menschenlesbarer Strings ("Station-Admin: OE5XRX")
+    die im Success-Banner gezeigt werden, damit der Admin weiß welche
+    Positionen jetzt frei sind.
+
+    Audit-emission läuft über den post_delete-Signal-Handler in
+    ``apps.stations.signals`` — wir stashen ``_revoke_reason`` +
+    ``_revoke_actor`` auf der Instance, der Signal-Handler liest die
+    Marker und schreibt ``reason=user_soft_deleted`` in die Message.
+    Doppelt-Audit wird so vermieden.
+    """
+    freed = []
+    for assignment in list(user.region_assignments.select_related("region")):
+        freed.append(f"Region-{assignment.get_role_display()}: {assignment.region.name}")
+        assignment._revoke_reason = "user_soft_deleted"
+        assignment._revoke_actor = request.user
+        assignment.delete()
+
+    for assignment in list(user.station_assignments.select_related("station")):
+        label = assignment.station.callsign or assignment.station.name
+        freed.append(f"Station-{assignment.get_role_display()}: {label}")
+        assignment._revoke_reason = "user_soft_deleted"
+        assignment._revoke_actor = request.user
+        assignment.delete()
+    return freed
+
+
+def _revoke_sso(request, user):
+    """Revoke alle SSO-Grants + Sessions des Users.
+
+    Keine per-event Audits — der USER_SOFT_DELETED-Audit plus die
+    Impact-Counts auf der Confirm-Page reichen als Forensik.
+
+    ``AppGrant`` has only ``revoked_at`` (no ``revoked_by`` — the
+    audit-trail uses ``SsoAuditLog`` for accountability). ``TokenSession``
+    has both ``revoked_at`` and ``revoked_by``.
+    """
+    now = timezone.now()
+    if hasattr(user, "app_grants"):
+        user.app_grants.filter(revoked_at__isnull=True).update(revoked_at=now)
+    if hasattr(user, "token_sessions"):
+        user.token_sessions.filter(revoked_at__isnull=True).update(
+            revoked_at=now,
+            revoked_by=request.user,
+        )
+
+
+class UserSoftDeleteView(AdminRequiredMixin, View):
+    """Soft-delete an active user.
+
+    GET shows the impact confirm-page (counts of topology assignments,
+    SSO grants, sessions, group memberships, pending tokens). POST runs
+    the atomic 6-step lifecycle: topology revoke → tokens invalidate →
+    SSO revoke → groups clear → deleted_at/deleted_by/is_active stamp →
+    USER_SOFT_DELETED audit.
+
+    A 404 is returned if the user is already soft-deleted — re-soft-
+    delete is meaningless. Restore (Task 5) is the inverse path for
+    soft-deleted users.
+    """
+
+    template_name = "accounts/user_confirm_soft_delete.html"
+
+    def get_object(self):
+        # 404 wenn schon soft-deleted — Re-Soft-Delete nicht möglich.
+        return get_object_or_404(
+            User,
+            pk=self.kwargs["pk"],
+            deleted_at__isnull=True,
+        )
+
+    def get(self, request, pk):
+        target = self.get_object()
+        ctx = {
+            "target_user": target,
+            "n_station_assignments": target.station_assignments.count(),
+            "n_region_assignments": target.region_assignments.count(),
+            "station_admin_assignments": list(
+                target.station_assignments.filter(
+                    role=StationAssignment.Role.ADMIN
+                ).select_related("station")
+            ),
+            "n_sso_grants": (target.app_grants.count() if hasattr(target, "app_grants") else 0),
+            "n_active_sessions": (
+                target.token_sessions.filter(revoked_at__isnull=True).count()
+                if hasattr(target, "token_sessions")
+                else 0
+            ),
+            "n_group_memberships": target.groups.count(),
+            "n_pending_tokens": target.account_tokens.filter(used_at__isnull=True).count(),
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request, pk):
+        target = self.get_object()
+        if target == request.user:
+            messages.error(request, _("You cannot delete your own account."))
+            return redirect("accounts:user_detail", pk=pk)
+
+        with transaction.atomic():
+            freed_positions = _revoke_all_topology(request, target)
+            target.account_tokens.filter(used_at__isnull=True).update(used_at=timezone.now())
+            _revoke_sso(request, target)
+            target.groups.clear()
+            target.deleted_at = timezone.now()
+            target.deleted_by = request.user
+            target.is_active = False
+            target.save(
+                update_fields=[
+                    "deleted_at",
+                    "deleted_by",
+                    "is_active",
+                ]
             )
-        )
-        ctx["n_sso_grants"] = user.app_grants.count() if hasattr(user, "app_grants") else 0
-        ctx["n_active_sessions"] = (
-            user.token_sessions.filter(revoked_at__isnull=True).count()
-            if hasattr(user, "token_sessions")
-            else 0
-        )
-        ctx["n_group_memberships"] = user.groups.count()
-        return ctx
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_SOFT_DELETED,
+                actor=request.user,
+                target_user=target,
+                message=f"{target.username} <{target.email}>",
+                ip_address=_client_ip(request),
+            )
 
-    def form_valid(self, form):
-        if self.object == self.request.user:
-            messages.error(self.request, _("You cannot delete your own account."))
-            return redirect(self.success_url)
-        AccountAuditLog.log(
-            event_type=AccountAuditLog.EventType.USER_DELETED,
-            actor=self.request.user,
-            target_user=self.object,
-            message=f"{self.object.username} <{self.object.email}>",
-            ip_address=_client_ip(self.request),
-        )
-        messages.success(self.request, _("User deleted successfully."))
-        return super().form_valid(form)
+        if freed_positions:
+            lines = "\n".join(f"  • {p}" for p in freed_positions)
+            messages.warning(
+                request,
+                _("User soft-deleted. Free positions:\n%(lines)s\nReassign as needed.")
+                % {"lines": lines},
+            )
+        else:
+            messages.success(request, _("User soft-deleted."))
+        return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
 
 class UserDetailView(LoginRequiredMixin, DetailView):

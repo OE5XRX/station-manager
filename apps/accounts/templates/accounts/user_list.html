@@ -150,7 +150,7 @@
           {% if is_admin_view %}
             <a href="{% url 'accounts:user_edit' u.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
             {% if u.pk != user.pk %}
-            <a href="{% url 'accounts:user_delete' u.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+            <a href="{% url 'accounts:user_soft_delete' u.pk %}" class="btn btn-sm btn-danger">{% trans "Soft-delete" %}</a>
             {% endif %}
           {% endif %}
         </td>

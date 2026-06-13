@@ -363,6 +363,14 @@ class AccountAuditLog(models.Model):
         PASSWORD_SET_FROM_TOKEN = "password_set_from_token", _("Password Set From Token")
         EMAIL_VERIFY_REQUESTED = "email_verify_requested", _("Email Verify Requested")
         EMAIL_VERIFIED = "email_verified", _("Email Verified")
+        # === Added in Sub-Spec 2b Soft-Delete ===
+        # USER_DELETED above stays as deprecated marker for legacy pre-2b DB
+        # rows. After 2b the soft-delete flow emits USER_SOFT_DELETED; an
+        # explicit hard-purge from the trash bucket emits USER_HARD_PURGED;
+        # un-deleting from the trash bucket emits USER_RESTORED.
+        USER_SOFT_DELETED = "user_soft_deleted", _("User Soft-Deleted")
+        USER_RESTORED = "user_restored", _("User Restored")
+        USER_HARD_PURGED = "user_hard_purged", _("User Hard-Purged")
 
     event_type = models.CharField(
         _("event type"),

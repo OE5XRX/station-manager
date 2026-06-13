@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Soft-delete user" %}{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'accounts:user_list' %}">{% trans "Users" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Soft-delete" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow t-danger">{% trans "Soft-delete user" %}</div>
+  <h1 class="page-title">{% trans "Soft-delete user" %}</h1>
+  <p class="page-sub">
+    {% blocktrans with username=target_user.username %}Soft-delete user "{{ username }}"? This action is reversible — restore via the user list with ?show=deleted. Hard-purge is only available after a successful soft-delete.{% endblocktrans %}
+  </p>
+</div></div>
+
+<form method="post" class="panel" style="border-left:3px solid var(--danger);">
+  {% csrf_token %}
+  <div class="panel-body">
+    <dl class="dlist">
+      <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ target_user.username }}</dd>
+      <dt>{% trans "Email" %}</dt><dd class="t-mono">{{ target_user.email|default:"—" }}</dd>
+      <dt>{% trans "Role" %}</dt><dd>
+        {% if target_user.membership_level == "admin" %}
+          <span class="pill pill-accent">{{ target_user.get_membership_level_display }}</span>
+        {% elif target_user.membership_level == "staff" %}
+          <span class="pill pill-violet">{{ target_user.get_membership_level_display }}</span>
+        {% elif target_user.membership_level == "member" %}
+          <span class="pill">{{ target_user.get_membership_level_display }}</span>
+        {% else %}
+          <span class="pill pill-muted">{{ target_user.get_membership_level_display }}</span>
+        {% endif %}
+      </dd>
+      <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ target_user.date_joined|date:"Y-m-d" }}</dd>
+    </dl>
+
+    <hr style="margin:14px 0;border:0;border-top:1px solid var(--line);">
+
+    <p class="t-label" style="margin-bottom:8px;">{% trans "Auto-revoked on soft-delete:" %}</p>
+    <dl class="dlist">
+      <dt>{% trans "Station-Assignments" %}</dt>
+      <dd class="t-mono">{{ n_station_assignments }} <span class="t-muted">— {% trans "revoked, per-assignment audit emitted" %}</span></dd>
+      <dt>{% trans "Region-Assignments" %}</dt>
+      <dd class="t-mono">{{ n_region_assignments }} <span class="t-muted">— {% trans "revoked, per-assignment audit emitted" %}</span></dd>
+      <dt>{% trans "SSO Grants" %}</dt>
+      <dd class="t-mono">{{ n_sso_grants }} <span class="t-muted">— {% trans "revoked" %}</span></dd>
+      <dt>{% trans "Active SSO Sessions" %}</dt>
+      <dd class="t-mono">{{ n_active_sessions }} <span class="t-muted">— {% trans "terminated" %}</span></dd>
+      <dt>{% trans "Group Memberships" %}</dt>
+      <dd class="t-mono">{{ n_group_memberships }} <span class="t-muted">— {% trans "cleared" %}</span></dd>
+      <dt>{% trans "Pending Account Tokens" %}</dt>
+      <dd class="t-mono">{{ n_pending_tokens }} <span class="t-muted">— {% trans "invalidated" %}</span></dd>
+    </dl>
+
+    {% if station_admin_assignments %}
+      <div class="onboarding-hint" role="alert" style="border-left-color:var(--danger);margin-top:14px;">
+        <span class="onboarding-hint-icon">⚠️</span>
+        <div class="onboarding-hint-text">
+          {% trans "Attention: user is Station-Admin on these stations — the stations lose their admin:" %}
+          <ul style="margin:4px 0 0 0;padding-left:20px;">
+            {% for sa in station_admin_assignments %}
+              <li>{{ sa.station.callsign|default:sa.station.name }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+  <div class="panel-foot row-gap-8">
+    <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Soft-delete this user?' %}">{% trans "Soft-delete" %}</button>
+    <a href="{% url 'accounts:user_detail' target_user.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}

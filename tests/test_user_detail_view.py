@@ -292,7 +292,7 @@ class TestUserDetailViewTemplateRendering:
         resp = client.get(self.url(member))
         body = resp.content.decode()
         assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) in body
-        assert reverse("accounts:user_delete", kwargs={"pk": member.pk}) in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": member.pk}) in body
 
     def test_admin_self_view_omits_edit_delete(self, client, admin):
         """Admin viewing own detail page does NOT see Edit/Delete — self-edit
@@ -302,7 +302,7 @@ class TestUserDetailViewTemplateRendering:
         body = resp.content.decode()
         # The Detail-Page does not show self-Edit/Delete buttons (deferred to profile)
         assert reverse("accounts:user_edit", kwargs={"pk": admin.pk}) not in body
-        assert reverse("accounts:user_delete", kwargs={"pk": admin.pk}) not in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": admin.pk}) not in body
 
     def test_self_view_has_profile_edit_action(self, client, member):
         client.force_login(member)

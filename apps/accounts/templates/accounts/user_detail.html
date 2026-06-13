@@ -70,7 +70,7 @@
   <div class="page-head-actions">
     {% if is_admin_view and object.pk != request.user.pk %}
       <a href="{% url 'accounts:user_edit' object.pk %}" class="btn btn-ghost">{% trans "Edit identity" %}</a>
-      <a href="{% url 'accounts:user_delete' object.pk %}" class="btn btn-danger">{% trans "Delete" %}</a>
+      <a href="{% url 'accounts:user_soft_delete' object.pk %}" class="btn btn-danger">{% trans "Soft-delete" %}</a>
     {% elif is_self_view %}
       <a href="{% url 'accounts:profile' %}" class="btn btn-ghost">{% trans "Edit profile" %}</a>
     {% endif %}

@@ -174,7 +174,7 @@ class TestUserListTemplate:
         body = resp.content.decode()
         assert reverse("accounts:user_detail", kwargs={"pk": other_member.pk}) in body
         assert reverse("accounts:user_edit", kwargs={"pk": other_member.pk}) not in body
-        assert reverse("accounts:user_delete", kwargs={"pk": other_member.pk}) not in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": other_member.pk}) not in body
 
     def test_admin_sees_view_edit_delete(self, client, admin, member):
         client.force_login(admin)
@@ -182,7 +182,7 @@ class TestUserListTemplate:
         body = resp.content.decode()
         assert reverse("accounts:user_detail", kwargs={"pk": member.pk}) in body
         assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) in body
-        assert reverse("accounts:user_delete", kwargs={"pk": member.pk}) in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": member.pk}) in body
 
     def test_filter_bar_role_options_admin(self, client, admin):
         client.force_login(admin)

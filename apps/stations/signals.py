@@ -65,13 +65,21 @@ def _on_station_assignment_delete(sender, instance, **kwargs):
         message=(f"{instance.user} ({instance.get_role_display()}) entfernt"),
     )
     # NEU in 1a: zusätzlich AccountAuditLog.
+    # Sub-Spec 2b §4: callers (e.g. UserSoftDeleteView) can stash a
+    # ``_revoke_reason`` on the instance before calling .delete() so the
+    # forensic message captures WHY the assignment went away. Without
+    # the marker, the legacy message format is kept verbatim.
+    label = instance.station.callsign or instance.station.name
+    reason = getattr(instance, "_revoke_reason", None)
+    if reason:
+        message = f"reason={reason} station={label} role={instance.role}"
+    else:
+        message = f"station={label}, role={instance.get_role_display()}"
     AccountAuditLog.log(
         event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
+        actor=getattr(instance, "_revoke_actor", None),
         target_user=instance.user,
-        message=(
-            f"station={instance.station.callsign or instance.station.name}, "
-            f"role={instance.get_role_display()}"
-        ),
+        message=message,
     )
 
 
@@ -149,11 +157,20 @@ def _on_region_assignment_save(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=RegionAssignment)
 def _on_region_assignment_delete(sender, instance, **kwargs):
+    # Sub-Spec 2b §4: callers can stash ``_revoke_reason`` + ``_revoke_actor``
+    # on the instance before .delete() so soft-delete-driven revokes carry
+    # their reason in the audit message and the originating admin as actor.
+    reason = getattr(instance, "_revoke_reason", None)
+    if reason:
+        message = f"reason={reason} region={instance.region.name} role={instance.role}"
+    else:
+        message = f"role={instance.get_role_display()} entfernt"
     AccountAuditLog.log(
         event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_REVOKED,
+        actor=getattr(instance, "_revoke_actor", None),
         target_user=instance.user,
         region=instance.region,
-        message=f"role={instance.get_role_display()} entfernt",
+        message=message,
     )
 
 
