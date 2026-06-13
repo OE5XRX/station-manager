@@ -176,7 +176,7 @@
         <div class="panel-body">
           {% for field in password_form %}
             <div class="form-group">
-              <label class="form-label">{{ field.label }}</label>
+              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
               {{ field }}
               {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
               {% if field.help_text %}<div class="form-help">{{ field.help_text|safe }}</div>{% endif %}

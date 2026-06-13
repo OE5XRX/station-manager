@@ -150,20 +150,6 @@ class UserChangeForm(BaseUserChangeForm):
         return user
 
 
-class ProfileForm(forms.ModelForm):
-    """Form for users to edit their own profile."""
-
-    class Meta:
-        model = User
-        fields = ("email", "first_name", "last_name", "language")
-        widgets = {
-            "email": forms.EmailInput(attrs={"class": "form-control"}),
-            "first_name": forms.TextInput(attrs={"class": "form-control"}),
-            "last_name": forms.TextInput(attrs={"class": "form-control"}),
-            "language": forms.Select(attrs={"class": "form-select"}),
-        }
-
-
 class ProfileIdentityForm(forms.ModelForm):
     """Self-edit of identity fields (Profile page → Identity panel)."""
 

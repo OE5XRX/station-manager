@@ -420,7 +420,7 @@ class UserDeleteView(AdminRequiredMixin, DeleteView):
         return ctx
 
     def form_valid(self, form):
-        if self.get_object() == self.request.user:
+        if self.object == self.request.user:
             messages.error(self.request, _("You cannot delete your own account."))
             return redirect(self.success_url)
         AccountAuditLog.log(
