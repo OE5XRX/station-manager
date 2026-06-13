@@ -16,7 +16,7 @@
   <p class="page-sub">{% blocktrans with username=target_user.username %}Delete user "{{ username }}"? This cannot be undone.{% endblocktrans %}</p>
 </div></div>
 
-<form method="post" class="panel" style="max-width:520px;border-left:3px solid var(--danger);">
+<form method="post" class="panel" style="border-left:3px solid var(--danger);">
   {% csrf_token %}
   <div class="panel-body">
     <dl class="dlist">
@@ -33,11 +33,42 @@
           <span class="pill pill-muted">{{ target_user.get_membership_level_display }}</span>
         {% endif %}
       </dd>
+      <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ target_user.date_joined|date:"Y-m-d" }}</dd>
     </dl>
+
+    <hr style="margin:14px 0;border:0;border-top:1px solid var(--line);">
+
+    <p class="t-label" style="margin-bottom:8px;">{% trans "Mit dem User werden gelöscht:" %}</p>
+    <dl class="dlist">
+      <dt>{% trans "Station-Assignments" %}</dt>
+      <dd class="t-mono">{{ n_station_assignments }} <span class="t-muted">— {% trans "werden revoked, Audit emitted" %}</span></dd>
+      <dt>{% trans "Region-Assignments" %}</dt>
+      <dd class="t-mono">{{ n_region_assignments }} <span class="t-muted">— {% trans "werden revoked, Audit emitted" %}</span></dd>
+      <dt>{% trans "SSO Grants" %}</dt>
+      <dd class="t-mono">{{ n_sso_grants }} <span class="t-muted">— {% trans "werden revoked, Tokens invalidated" %}</span></dd>
+      <dt>{% trans "Active SSO Sessions" %}</dt>
+      <dd class="t-mono">{{ n_active_sessions }} <span class="t-muted">— {% trans "werden terminated" %}</span></dd>
+      <dt>{% trans "Group Memberships" %}</dt>
+      <dd class="t-mono">{{ n_group_memberships }} <span class="t-muted">— {% trans "werden entfernt" %}</span></dd>
+    </dl>
+
+    {% if station_admin_assignments %}
+      <div class="onboarding-hint" role="alert" style="border-left-color:var(--danger);margin-top:14px;">
+        <span class="onboarding-hint-icon">⚠️</span>
+        <div class="onboarding-hint-text">
+          {% trans "Achtung: User ist Station-Admin auf folgenden Stationen — die Stationen verlieren ihren Admin:" %}
+          <ul style="margin:4px 0 0 0;padding-left:20px;">
+            {% for sa in station_admin_assignments %}
+              <li>{{ sa.station.callsign|default:sa.station.name }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    {% endif %}
   </div>
   <div class="panel-foot row-gap-8">
     <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Delete this user?' %}">{% trans "Delete user" %}</button>
-    <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    <a href="{% url 'accounts:user_detail' target_user.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
   </div>
 </form>
 {% endblock %}

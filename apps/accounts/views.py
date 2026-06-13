@@ -7,11 +7,65 @@ from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
-from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
+from django.views import View
+from django.views.generic import (
+    CreateView,
+    DeleteView,
+    DetailView,
+    ListView,
+    TemplateView,
+    UpdateView,
+)
 
-from .forms import LoginForm, ProfileForm, UserChangeForm, UserCreationForm
+from apps.stations.models import StationAssignment
+
+from .forms import (
+    LoginForm,
+    PasswordChangeForm,
+    ProfileAddressForm,
+    ProfileIdentityForm,
+    ProfileProfileForm,
+    UserChangeForm,
+    UserCreationForm,
+)
+from .geocoding import geocode_address, lat_lon_to_locator
+from .models import AccountAuditLog
 
 User = get_user_model()
+
+
+def _client_ip(request):
+    """Lazy wrapper around `apps.accounts.views_membership._get_client_ip`.
+
+    Imported lazily to avoid a circular import — views_membership pulls
+    `AdminRequiredMixin` from this module at import time.
+    """
+    from .views_membership import _get_client_ip
+
+    return _get_client_ip(request)
+
+
+# Set of User fields whose changes are tracked in USER_UPDATED audit
+# entries (form_valid diffs form.changed_data against this set). Geocoding-
+# derived fields (latitude/longitude) are intentionally NOT tracked — they
+# are recomputed from `address`, not user-edited.
+TRACKED_USER_FIELDS = frozenset(
+    {
+        "username",
+        "email",
+        "first_name",
+        "last_name",
+        "language",
+        "bio",
+        "avatar",
+        "qth_name",
+        "qrz_url",
+        "phone",
+        "address",
+        "locator",
+        "is_directory_visible",
+    }
+)
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -30,17 +84,158 @@ class LogoutView(auth_views.LogoutView):
     pass
 
 
-class ProfileView(LoginRequiredMixin, UpdateView):
+class ProfileView(LoginRequiredMixin, TemplateView):
     template_name = "accounts/profile.html"
-    form_class = ProfileForm
-    success_url = reverse_lazy("accounts:profile")
 
-    def get_object(self, queryset=None):
-        return self.request.user
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        ctx["identity_form"] = ProfileIdentityForm(instance=user, prefix="identity")
+        ctx["profile_form"] = ProfileProfileForm(instance=user, prefix="profile")
+        ctx["address_form"] = ProfileAddressForm(instance=user, prefix="address")
+        ctx["password_form"] = PasswordChangeForm(user=user)
+        ctx["onboarding_hints"] = self._onboarding_hints(user)
+        from apps.sso.views import _active_sessions_for
 
-    def form_valid(self, form):
-        messages.success(self.request, _("Profile updated successfully."))
-        return super().form_valid(form)
+        ctx["self_sessions"] = _active_sessions_for(user)
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        form_name = request.POST.get("form_name", "")
+        user = request.user
+        if form_name == "identity":
+            return self._save_identity(request, user)
+        if form_name == "profile":
+            return self._save_profile(request, user)
+        if form_name == "address":
+            return self._save_address(request, user)
+        messages.error(request, _("Unknown form."))
+        return redirect("accounts:profile")
+
+    def _save_identity(self, request, user):
+        form = ProfileIdentityForm(request.POST, instance=user, prefix="identity")
+        if form.is_valid():
+            changed = set(form.changed_data)
+            form.save()
+            self._emit_user_updated(request, user, changed)
+            messages.success(request, _("Identity updated."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
+
+    def _save_profile(self, request, user):
+        form = ProfileProfileForm(request.POST, request.FILES, instance=user, prefix="profile")
+        if form.is_valid():
+            changed = set(form.changed_data)
+            form.save()
+            self._emit_user_updated(request, user, changed)
+            messages.success(request, _("Profile updated."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
+
+    def _save_address(self, request, user):
+        # Snapshot the locator from the in-memory user instance BEFORE the
+        # form runs is_valid() (which mutates `user` via _post_clean →
+        # construct_instance), so _maybe_geocode can restore it on
+        # geocode-fail. The form includes locator and would otherwise blow
+        # away a previously-stored value when the user edits address
+        # without touching locator (POST sends "").
+        pre_locator = user.locator
+        form = ProfileAddressForm(request.POST, instance=user, prefix="address")
+        if form.is_valid():
+            changed = set(form.changed_data)
+            form.save()
+            self._maybe_geocode(user, changed, pre_locator)
+            self._emit_user_updated(request, user, changed)
+            messages.success(request, _("Address updated."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
+
+    def _maybe_geocode(self, user, changed_fields, pre_locator=""):
+        if "address" not in changed_fields:
+            return
+        if not user.address:
+            user.latitude = None
+            user.longitude = None
+            if "locator" not in changed_fields:
+                user.locator = ""
+            user.save(update_fields=["latitude", "longitude", "locator"])
+            return
+        coords = geocode_address(user.address)
+        if coords:
+            lat, lon = coords
+            user.latitude = lat
+            user.longitude = lon
+            if "locator" not in changed_fields:
+                user.locator = lat_lon_to_locator(float(lat), float(lon))
+            user.save(update_fields=["latitude", "longitude", "locator"])
+        elif "locator" not in changed_fields and user.locator != pre_locator:
+            # Fail closed: Nominatim returned no coords. The browser-rendered
+            # form pre-populates the locator input from the instance, so a
+            # POST that leaves locator untouched arrives with the existing
+            # value and `changed_fields` does not include "locator". If for
+            # any reason form.save() still blanked it (e.g. an artificial
+            # POST without the field), restore the pre-save value so the
+            # user's existing locator isn't lost just because Nominatim was
+            # down.
+            #
+            # Manual-override path: when the user deliberately typed a value
+            # (or cleared it), "locator" IS in changed_fields → skip restore
+            # and honor the user's intent.
+            user.locator = pre_locator
+            user.save(update_fields=["locator"])
+
+    def _emit_user_updated(self, request, user, changed_fields):
+        tracked = changed_fields & TRACKED_USER_FIELDS
+        if not tracked:
+            return
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_UPDATED,
+            actor=user,
+            target_user=user,
+            message=f"self-edit changed: {', '.join(sorted(tracked))}",
+            ip_address=_client_ip(request),
+        )
+
+    def _onboarding_hints(self, user):
+        return {
+            "name_missing": not (user.first_name or user.last_name),
+            "avatar_missing": not user.avatar,
+            "bio_missing": not user.bio,
+            "qth_missing": not user.qth_name,
+            "address_missing": not user.address,
+        }
+
+
+class ProfilePasswordChangeView(LoginRequiredMixin, View):
+    """Self-only password change endpoint posted from the Profile page."""
+
+    http_method_names = ["post"]
+
+    def post(self, request):
+        from django.contrib.auth import update_session_auth_hash
+
+        form = PasswordChangeForm(user=request.user, data=request.POST)
+        if form.is_valid():
+            user = form.save()
+            update_session_auth_hash(request, user)
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.PASSWORD_CHANGED,
+                actor=request.user,
+                target_user=request.user,
+                message="self-edit changed: password",
+                ip_address=_client_ip(request),
+            )
+            messages.success(request, _("Password updated successfully."))
+        else:
+            for errors in form.errors.values():
+                messages.error(request, "; ".join(errors))
+        return redirect("accounts:profile")
 
 
 class UserListView(LoginRequiredMixin, ListView):
@@ -118,8 +313,16 @@ class UserCreateView(AdminRequiredMixin, CreateView):
         return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
+        response = super().form_valid(form)
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_CREATED,
+            actor=self.request.user,
+            target_user=self.object,
+            message=f"{self.object.username} <{self.object.email}>",
+            ip_address=_client_ip(self.request),
+        )
         messages.success(self.request, _("User created successfully."))
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -136,8 +339,54 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
+        changed_fields = set(form.changed_data)
+        response = super().form_valid(form)
+        self._maybe_geocode(self.object, changed_fields)
+
+        tracked = changed_fields & TRACKED_USER_FIELDS
+        if tracked:
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_UPDATED,
+                actor=self.request.user,
+                target_user=self.object,
+                message=f"changed: {', '.join(sorted(tracked))}",
+                ip_address=_client_ip(self.request),
+            )
+        if "is_active" in changed_fields:
+            event = (
+                AccountAuditLog.EventType.USER_ACTIVATED
+                if self.object.is_active
+                else AccountAuditLog.EventType.USER_DEACTIVATED
+            )
+            AccountAuditLog.log(
+                event_type=event,
+                actor=self.request.user,
+                target_user=self.object,
+                message="",
+                ip_address=_client_ip(self.request),
+            )
+
         messages.success(self.request, _("User updated successfully."))
-        return super().form_valid(form)
+        return response
+
+    def _maybe_geocode(self, user, changed_fields):
+        if "address" not in changed_fields:
+            return
+        if not user.address:
+            user.latitude = None
+            user.longitude = None
+            if "locator" not in changed_fields:
+                user.locator = ""
+            user.save(update_fields=["latitude", "longitude", "locator"])
+            return
+        coords = geocode_address(user.address)
+        if coords:
+            lat, lon = coords
+            user.latitude = lat
+            user.longitude = lon
+            if "locator" not in changed_fields:
+                user.locator = lat_lon_to_locator(float(lat), float(lon))
+            user.save(update_fields=["latitude", "longitude", "locator"])
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -151,10 +400,36 @@ class UserDeleteView(AdminRequiredMixin, DeleteView):
     success_url = reverse_lazy("accounts:user_list")
     context_object_name = "target_user"
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.object
+        ctx["n_station_assignments"] = user.station_assignments.count()
+        ctx["n_region_assignments"] = user.region_assignments.count()
+        ctx["station_admin_assignments"] = list(
+            user.station_assignments.filter(role=StationAssignment.Role.ADMIN).select_related(
+                "station"
+            )
+        )
+        ctx["n_sso_grants"] = user.app_grants.count() if hasattr(user, "app_grants") else 0
+        ctx["n_active_sessions"] = (
+            user.token_sessions.filter(revoked_at__isnull=True).count()
+            if hasattr(user, "token_sessions")
+            else 0
+        )
+        ctx["n_group_memberships"] = user.groups.count()
+        return ctx
+
     def form_valid(self, form):
-        if self.get_object() == self.request.user:
+        if self.object == self.request.user:
             messages.error(self.request, _("You cannot delete your own account."))
             return redirect(self.success_url)
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.USER_DELETED,
+            actor=self.request.user,
+            target_user=self.object,
+            message=f"{self.object.username} <{self.object.email}>",
+            ip_address=_client_ip(self.request),
+        )
         messages.success(self.request, _("User deleted successfully."))
         return super().form_valid(form)
 

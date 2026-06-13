@@ -10,28 +10,215 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-head"><div class="page-head-main">
-  <div class="page-eyebrow">{% trans "Administration" %}</div>
-  <h1 class="page-title">{{ form_title|default:_("Edit user") }}</h1>
-</div></div>
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Administration" %}</div>
+    <h1 class="page-title">{{ form_title|default:_("Edit user") }}</h1>
+  </div>
+</div>
 
-<form method="post" style="max-width:640px;">
+<form method="post" enctype="multipart/form-data" class="grid grid-main">
   {% csrf_token %}
-  <section class="panel">
-    <div class="panel-body">
-      {% for field in form %}
-      <div class="form-group">
-        <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
-        {{ field }}
-        {% if field.help_text %}<div class="form-help">{{ field.help_text|safe }}</div>{% endif %}
-        {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+
+  <div class="stack-gap-14">
+    {# Identity panel — always #}
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Identity" %}</div>
       </div>
-      {% endfor %}
-    </div>
-    <div class="panel-foot row-gap-8">
-      <button type="submit" class="btn btn-primary">{% trans "Save user" %}</button>
-      <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
-    </div>
-  </section>
+      <div class="panel-body">
+        {% with field=form.username %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+        {% with field=form.email %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+        <div class="form-row">
+          {% with field=form.first_name %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+          {% with field=form.last_name %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+        </div>
+        <div class="form-row">
+          {% with field=form.language %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+          {% if form.is_active %}
+          {% with field=form.is_active %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+          {% endif %}
+        </div>
+        {% if form.is_directory_visible %}
+        {% with field=form.is_directory_visible %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+        </div>
+        {% endwith %}
+        {% endif %}
+        {% if form.password1 %}
+        <div class="form-row">
+          {% with field=form.password1 %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+          {% with field=form.password2 %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if form.avatar %}
+    {# Profil panel — Edit-Mode only (UserCreationForm doesn't carry these) #}
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Profil" %}</div>
+      </div>
+      <div class="panel-body">
+        {% with field=form.avatar %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+        {% with field=form.bio %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+        <div class="form-row">
+          {% with field=form.qth_name %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+          {% with field=form.qrz_url %}
+          <div class="form-group">
+            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+          </div>
+          {% endwith %}
+        </div>
+        {% with field=form.phone %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if form.address %}
+    {# Adresse & Standort panel — Edit-Mode only #}
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Adresse & Standort" %}</div>
+      </div>
+      <div class="panel-body">
+        {% with field=form.address %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+        <p class="t-mono t-muted" style="margin:8px 0;">
+          {% trans "Locator + lat/lon werden bei Speichern aus der Adresse berechnet." %}
+        </p>
+        {% with field=form.locator %}
+        <div class="form-group">
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }} ({% trans "manueller Override" %})</label>
+          {{ field }}
+          {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
+        </div>
+        {% endwith %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <div class="panel-foot row-gap-8">
+        <button type="submit" class="btn btn-primary">{% trans "Save user" %}</button>
+        {% if object %}
+          <a href="{% url 'accounts:user_detail' object.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+        {% else %}
+          <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  <aside class="stack-gap-14">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>
+          {% if object %}{% trans "User-Info" %}{% else %}{% trans "Hinweis" %}{% endif %}
+        </div>
+      </div>
+      <div class="panel-body">
+        {% if object %}
+          <dl class="dlist">
+            <dt>{% trans "ID" %}</dt><dd class="t-mono">#{{ object.pk }}</dd>
+            <dt>{% trans "Joined" %}</dt><dd class="t-mono-sm">{{ object.date_joined|date:"Y-m-d H:i" }}</dd>
+            {% if object.last_login %}
+            <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ object.last_login|date:"Y-m-d H:i" }}</dd>
+            {% endif %}
+            <dt>{% trans "Role" %}</dt><dd>{{ object.get_membership_level_display }}</dd>
+            {% if object.latitude is not None or object.longitude is not None %}
+            <dt>{% trans "Lat/Lon" %}</dt><dd class="t-mono-sm t-muted">{{ object.latitude }}, {{ object.longitude }}</dd>
+            {% endif %}
+          </dl>
+        {% else %}
+          <p class="t-muted">
+            {% trans "Profil-Daten ergänzt der User selbst über sein Profil." %}
+          </p>
+        {% endif %}
+      </div>
+    </section>
+  </aside>
 </form>
 {% endblock %}
