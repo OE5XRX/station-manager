@@ -531,11 +531,13 @@ class PasswordResetRequestView(View):
         except User.DoesNotExist:
             return self._generic_success(request, email)
         except User.MultipleObjectsReturned:
-            # email isn't UNIQUE at the DB level; if duplicates exist
-            # (historical data or a race) we fail-closed with the same
-            # generic-success response and skip token-issue. The audit
-            # path uses the email column on the audit row + IP log to
-            # surface the case for an operator.
+            # Defensive fail-closed path. accounts.User has a
+            # case-insensitive UniqueConstraint on email (migration
+            # 0013_user_email_ci_unique) so duplicates should be
+            # impossible in steady state — but keep this branch for
+            # legacy data and partially-applied-migration cases. Same
+            # generic-success response so we don't leak the anomaly
+            # to the caller.
             return self._generic_success(request, email)
 
         if _user_rate_exceeded(user):
