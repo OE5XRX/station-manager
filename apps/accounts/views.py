@@ -62,11 +62,7 @@ def _session_backend_path():
     from django.conf import settings
 
     return next(
-        (
-            b
-            for b in settings.AUTHENTICATION_BACKENDS
-            if not b.startswith("axes.")
-        ),
+        (b for b in settings.AUTHENTICATION_BACKENDS if not b.startswith("axes.")),
         settings.AUTHENTICATION_BACKENDS[0],
     )
 
