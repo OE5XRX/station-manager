@@ -4,6 +4,43 @@ import django.db.models.functions.text
 from django.db import migrations, models
 
 
+def _check_email_duplicates(apps, schema_editor):
+    """Pre-check for case-insensitive email duplicates.
+
+    The AddConstraint below would otherwise fail with a low-level DB
+    error like 'UNIQUE constraint failed: accounts_user.email'. Detect
+    the duplicates here and raise a clear, actionable error so an
+    operator can deduplicate before re-running the migration.
+
+    Empty emails are excluded (the constraint allows them).
+    """
+    User = apps.get_model("accounts", "User")
+    qs = User.objects.exclude(email="").extra(
+        select={"_lower_email": "LOWER(email)"}
+    )
+    seen = {}
+    duplicates = {}
+    for pk, lower_email in qs.values_list("pk", "_lower_email"):
+        if lower_email in seen:
+            duplicates.setdefault(lower_email, [seen[lower_email]]).append(pk)
+        else:
+            seen[lower_email] = pk
+    if duplicates:
+        sample = list(duplicates.items())[:5]
+        lines = [f"  {email!r}: user PKs {pks}" for email, pks in sample]
+        raise RuntimeError(
+            "Cannot add accounts_user_email_ci_unique constraint: "
+            "duplicate case-insensitive emails found. Deduplicate "
+            "before re-running migrate.\n"
+            f"Found {len(duplicates)} duplicate group(s). "
+            f"First {len(sample)}:\n" + "\n".join(lines)
+        )
+
+
+def _noop(apps, schema_editor):
+    """Reverse is a no-op — the constraint removal happens via AddConstraint's reverse."""
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -12,6 +49,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(_check_email_duplicates, _noop),
         migrations.AddConstraint(
             model_name='user',
             constraint=models.UniqueConstraint(django.db.models.functions.text.Lower('email'), condition=models.Q(('email', ''), _negated=True), name='accounts_user_email_ci_unique'),

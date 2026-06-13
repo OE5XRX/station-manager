@@ -178,6 +178,12 @@ class ProfileIdentityForm(forms.ModelForm):
 
     def clean_email(self):
         email = self.cleaned_data["email"].strip()
+        # Empty emails are allowed by the DB constraint
+        # (UniqueConstraint excludes condition ~Q(email="")), so skip
+        # the cross-user uniqueness check — otherwise a second user
+        # with a blank email would always fail validation.
+        if not email:
+            return email
         if User.objects.exclude(pk=self.instance.pk).filter(email__iexact=email).exists():
             raise forms.ValidationError(_("Another user already has this email."))
         return email
