@@ -6,7 +6,7 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
@@ -1086,24 +1086,44 @@ class UserRestoreView(AdminRequiredMixin, View):
             )
             return redirect("accounts:user_detail", pk=pk)
 
-        with transaction.atomic():
-            target.deleted_at = None
-            target.deleted_by = None
-            target.is_active = True
-            target.save(
-                update_fields=[
-                    "deleted_at",
-                    "deleted_by",
-                    "is_active",
-                ]
+        try:
+            with transaction.atomic():
+                target.deleted_at = None
+                target.deleted_by = None
+                target.is_active = True
+                target.save(
+                    update_fields=[
+                        "deleted_at",
+                        "deleted_by",
+                        "is_active",
+                    ]
+                )
+                AccountAuditLog.log(
+                    event_type=AccountAuditLog.EventType.USER_RESTORED,
+                    actor=request.user,
+                    target_user=target,
+                    message=f"{target.username} <{target.email}>",
+                    ip_address=_client_ip(request),
+                )
+        except IntegrityError:
+            # Race fallback: between our pre-checks above and the save(),
+            # another admin may have created/restored a user with the
+            # same callsign or email, tripping the conditional UNIQUE
+            # constraints. Surface a user-facing error instead of 500ing.
+            logger.warning(
+                "Restore failed for user %s due to UNIQUE-conflict race",
+                target.pk,
             )
-            AccountAuditLog.log(
-                event_type=AccountAuditLog.EventType.USER_RESTORED,
-                actor=request.user,
-                target_user=target,
-                message=f"{target.username} <{target.email}>",
-                ip_address=_client_ip(request),
+            messages.error(
+                request,
+                _(
+                    "Cannot restore %(name)s: a conflicting active user was "
+                    "created in the meantime. Refresh the page to see the "
+                    "current state."
+                )
+                % {"name": target.username},
             )
+            return redirect("accounts:user_detail", pk=pk)
         messages.success(
             request,
             _(
@@ -1142,24 +1162,35 @@ class UserHardPurgeView(AdminRequiredMixin, View):
         )
 
     def post(self, request, pk):
-        target = self.get_object()
-        # Capture identifiers before delete — target FK becomes NULL via
-        # SET_NULL after .delete(), but the audit row's message string
-        # must preserve username/email for forensic continuity.
-        username = target.username
-        email = target.email
-        deleted_at = target.deleted_at
-        target_pk = target.pk
-        # Capture avatar storage + name BEFORE delete so we can schedule
-        # cleanup via on_commit (target.avatar is no longer addressable
-        # after target.delete()).
-        avatar_storage = None
-        avatar_name = None
-        if target.avatar:
-            avatar_storage = target.avatar.storage
-            avatar_name = target.avatar.name
-
         with transaction.atomic():
+            # Re-fetch under SELECT FOR UPDATE so a concurrent
+            # UserRestoreView can't flip deleted_at back to NULL between
+            # our get_object() pre-check and the delete. Re-assert the
+            # guard at delete-time — if a restore committed since the
+            # confirm-page rendered, we'd see deleted_at IS NULL and
+            # must refuse rather than purge an active user.
+            target = get_object_or_404(
+                User.objects.select_for_update(),
+                pk=pk,
+                deleted_at__isnull=False,
+            )
+
+            # Capture identifiers before delete — target FK becomes NULL
+            # via SET_NULL after .delete(), but the audit row's message
+            # string must preserve username/email for forensic continuity.
+            username = target.username
+            email = target.email
+            deleted_at = target.deleted_at
+            target_pk = target.pk
+            # Capture avatar storage + name BEFORE delete so we can
+            # schedule cleanup via on_commit (target.avatar is no longer
+            # addressable after target.delete()).
+            avatar_storage = None
+            avatar_name = None
+            if target.avatar:
+                avatar_storage = target.avatar.storage
+                avatar_name = target.avatar.name
+
             # Audit + delete in one atomic block. If .delete() fails
             # partway through cascade/SET_NULL updates, the audit row is
             # rolled back too — no orphan "purged" entry for a still-
