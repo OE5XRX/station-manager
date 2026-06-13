@@ -396,12 +396,14 @@ class VerifyEmailView(View):
 
         # Lookup WITHOUT consuming: if the race-guard fails, the user can
         # click again later (e.g. once the conflicting email is freed).
+        # Also filter deactivated users — consistent with SetPasswordView.
         secret_hash = hashlib.sha256(token.encode()).hexdigest()
         token_row = AccountToken.objects.filter(
             secret_hash=secret_hash,
             token_type=AccountToken.TokenType.VERIFY,
             used_at__isnull=True,
             expires_at__gt=timezone.now(),
+            user__is_active=True,
         ).first()
         if token_row is None:
             messages.error(request, _("Email verification link invalid or expired."))
@@ -413,30 +415,33 @@ class VerifyEmailView(View):
             messages.error(request, _("Email verification token has no target address."))
             return redirect("accounts:login")
 
-        # Race-guard: another account may have grabbed this email since the
-        # verify-request was issued. Token is NOT yet consumed.
-        if User.objects.exclude(pk=token_row.user.pk).filter(email__iexact=new_email).exists():
-            messages.error(
-                request,
-                _("Cannot verify: another account is already using %(email)s.")
-                % {"email": new_email},
-            )
-            target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
-            return redirect(target)
-
-        # Commit: consume + swap + audit in one transaction. If any step
-        # raises, the token stays unused.
+        # Commit: race-check + consume + swap + audit all in one transaction.
+        # The race-check INSIDE the lock closes the window between the
+        # pre-check and the swap. Token is only marked used AFTER the
+        # email swap commits, so the user can re-click if the conflict
+        # was a false positive (e.g. the conflicting user releases the
+        # email).
         with transaction.atomic():
-            # Re-fetch with SELECT FOR UPDATE so two concurrent clicks
-            # serialize.
+            # SELECT FOR UPDATE so two concurrent clicks serialize.
             locked = AccountToken.objects.select_for_update().get(pk=token_row.pk)
             if not locked.is_active():
                 messages.error(request, _("Email verification link invalid or expired."))
                 return redirect("accounts:login")
-            locked.used_at = timezone.now()
-            locked.save(update_fields=["used_at"])
+            # Race-guard inside the transaction: another account may have
+            # grabbed the target email since the verify-request was issued
+            # OR since our unlocked pre-fetch above.
+            if User.objects.exclude(pk=locked.user.pk).filter(email__iexact=new_email).exists():
+                messages.error(
+                    request,
+                    _("Cannot verify: another account is already using %(email)s.")
+                    % {"email": new_email},
+                )
+                target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
+                return redirect(target)
             locked.user.email = new_email
             locked.user.save(update_fields=["email"])
+            locked.used_at = timezone.now()
+            locked.save(update_fields=["used_at"])
             AccountAuditLog.log(
                 event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
                 actor=locked.user,
@@ -455,8 +460,13 @@ class PasswordResetRequestView(View):
     """Anon endpoint: 'I forgot my password, send me a reset link.'
 
     Timing-safe and rate-limited. Always responds with the same
-    generic message (no email-enumeration). Rate-limit hits and
-    nonexistent-email hits are audit-logged for forensics.
+    generic message (no email-enumeration). Rate-limit hits are
+    audit-logged (PASSWORD_RESET_RATE_LIMITED, target_user=None
+    when email is unknown). Successful issue is audit-logged
+    (PASSWORD_RESET_REQUESTED). Plain unknown-email requests are
+    NOT audit-logged — that would flood the audit feed and serve
+    no forensic purpose beyond what the web-server access log
+    already shows.
     """
 
     template_name = "accounts/password_reset_request.html"
@@ -489,6 +499,13 @@ class PasswordResetRequestView(View):
         try:
             user = User.objects.get(email__iexact=email, is_active=True)
         except User.DoesNotExist:
+            return self._generic_success(request, email)
+        except User.MultipleObjectsReturned:
+            # email isn't UNIQUE at the DB level; if duplicates exist
+            # (historical data or a race) we fail-closed with the same
+            # generic-success response and skip token-issue. The audit
+            # path uses the email column on the audit row + IP log to
+            # surface the case for an operator.
             return self._generic_success(request, email)
 
         if _user_rate_exceeded(user):
