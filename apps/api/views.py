@@ -1,7 +1,9 @@
 import logging
 
+from django.contrib.auth.decorators import login_not_required
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -16,8 +18,13 @@ from apps.stations.models import Station, StationInventory
 logger = logging.getLogger(__name__)
 
 
+@method_decorator(login_not_required, name="dispatch")
 class HealthCheckView(APIView):
-    """Public health-check endpoint."""
+    """Public health-check endpoint.
+
+    Bypasses ``LoginRequiredMiddleware`` so uptime monitors can poll
+    without credentials. The view itself accepts AllowAny.
+    """
 
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -27,8 +34,14 @@ class HealthCheckView(APIView):
         return Response(serializer.data)
 
 
+@method_decorator(login_not_required, name="dispatch")
 class HeartbeatView(APIView):
-    """Receives periodic heartbeat data from station agents."""
+    """Receives periodic heartbeat data from station agents.
+
+    Bypasses ``LoginRequiredMiddleware`` because authentication happens
+    in DRF's ``DeviceKeyAuthentication`` (Ed25519 signature over the
+    request body). Agents do not carry a Django session.
+    """
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
