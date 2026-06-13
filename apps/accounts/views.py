@@ -959,7 +959,14 @@ class UserSoftDeleteView(AdminRequiredMixin, View):
                     role=StationAssignment.Role.ADMIN
                 ).select_related("station")
             ),
-            "n_sso_grants": (target.app_grants.count() if hasattr(target, "app_grants") else 0),
+            # Only count ACTIVE grants — those are the ones the soft-delete
+            # flow will revoke. Counting already-revoked grants would
+            # over-report the impact.
+            "n_sso_grants": (
+                target.app_grants.filter(revoked_at__isnull=True).count()
+                if hasattr(target, "app_grants")
+                else 0
+            ),
             "n_active_sessions": (
                 target.token_sessions.filter(revoked_at__isnull=True).count()
                 if hasattr(target, "token_sessions")
