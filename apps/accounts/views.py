@@ -49,6 +49,28 @@ def _client_ip(request):
     return _get_client_ip(request)
 
 
+def _session_backend_path():
+    """Pick a session-compatible auth backend from settings.
+
+    ``django.contrib.auth.login()`` complains when multiple
+    AUTHENTICATION_BACKENDS are configured and the user wasn't fetched
+    via ``authenticate()`` — typical for token-driven flows. We need
+    an explicit backend path; skip ``axes.*`` backends since axes only
+    intercepts authenticate() and isn't a session-creating backend.
+    Falls back to the first listed backend if none match.
+    """
+    from django.conf import settings
+
+    return next(
+        (
+            b
+            for b in settings.AUTHENTICATION_BACKENDS
+            if not b.startswith("axes.")
+        ),
+        settings.AUTHENTICATION_BACKENDS[0],
+    )
+
+
 # Set of User fields whose changes are tracked in USER_UPDATED audit
 # entries (form_valid diffs form.changed_data against this set). Geocoding-
 # derived fields (latitude/longitude) are intentionally NOT tracked — they
@@ -340,11 +362,7 @@ class SetPasswordView(View):
                     message=f"via {token_row.token_type}",
                     ip_address=_client_ip(request),
                 )
-            auth_login(
-                request,
-                token_row.user,
-                backend="django.contrib.auth.backends.ModelBackend",
-            )
+            auth_login(request, token_row.user, backend=_session_backend_path())
             messages.success(request, _("Password set. Welcome to OE5XRX."))
             return redirect("accounts:profile")
         return render(request, self.template_name, {"form": form, "token": token})
@@ -591,8 +609,12 @@ class ResendWelcomeView(AdminRequiredMixin, View):
     """Admin-only: re-issue a Welcome token + mail.
 
     Useful when the original Welcome-Mail expired (7d) or got lost.
-    Refuses if the user already has a usable password (no point
-    re-sending a Welcome to an active account).
+    Refuses if:
+    - the user already has a usable password (no point),
+    - the user is deactivated (token would be unusable — consume_token
+      filters user__is_active=True),
+    - the user has no email set (mail-send would fail or land in
+      a black hole).
     """
 
     http_method_names = ["post"]
@@ -608,6 +630,18 @@ class ResendWelcomeView(AdminRequiredMixin, View):
         user = get_object_or_404(User, pk=pk)
         if user.has_usable_password():
             messages.error(request, _("User already has a password set."))
+            return redirect("accounts:user_detail", pk=pk)
+        if not user.is_active:
+            messages.error(
+                request,
+                _("Cannot resend Welcome: user is deactivated. Re-activate first."),
+            )
+            return redirect("accounts:user_detail", pk=pk)
+        if not user.email:
+            messages.error(
+                request,
+                _("Cannot resend Welcome: user has no email address. Set one first."),
+            )
             return redirect("accounts:user_detail", pk=pk)
         with transaction.atomic():
             invalidate_pending_tokens(user, AccountToken.TokenType.WELCOME)
