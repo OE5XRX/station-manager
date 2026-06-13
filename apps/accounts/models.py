@@ -6,6 +6,8 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
+from django.db.models import Q
+from django.db.models.functions import Lower
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
@@ -150,6 +152,18 @@ class User(AbstractUser):
         verbose_name = _("user")
         verbose_name_plural = _("users")
         ordering = ["username"]
+        constraints = [
+            # Case-insensitive uniqueness on email at the DB layer.
+            # Backstops the per-form `email__iexact` validators and
+            # closes the race window in the email-verify swap where
+            # two concurrent verify-clicks could otherwise commit the
+            # same email to two users.
+            models.UniqueConstraint(
+                Lower("email"),
+                condition=~Q(email=""),
+                name="accounts_user_email_ci_unique",
+            ),
+        ]
 
     def __str__(self):
         return self.username

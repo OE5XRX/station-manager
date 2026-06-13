@@ -451,7 +451,25 @@ class VerifyEmailView(View):
                 target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
                 return redirect(target)
             locked.user.email = new_email
-            locked.user.save(update_fields=["email"])
+            # The DB-level case-insensitive unique constraint on
+            # accounts.User.email is the final backstop against two
+            # parallel verify-clicks claiming the same email — if
+            # both passed the race-guard above (rare but possible),
+            # exactly one save() commits and the other raises
+            # IntegrityError, which we translate to a user-facing
+            # "another account uses this email" message.
+            from django.db import IntegrityError
+
+            try:
+                locked.user.save(update_fields=["email"])
+            except IntegrityError:
+                messages.error(
+                    request,
+                    _("Cannot verify: another account is already using %(email)s.")
+                    % {"email": new_email},
+                )
+                target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
+                return redirect(target)
             locked.used_at = timezone.now()
             locked.save(update_fields=["used_at"])
             AccountAuditLog.log(
