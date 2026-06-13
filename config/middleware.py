@@ -44,11 +44,19 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     pages) — stay gated, so an anon visitor cannot enumerate registered
     OAuth clients or active tokens.
 
-    ``request.path`` is the post-locale-strip path because the public
-    OIDC endpoints are mounted *outside* ``i18n_patterns`` in
-    ``config/urls.py`` (RFC 8414 well-known URLs must not carry a locale
-    prefix). Sites that move public endpoints inside i18n_patterns will
-    need locale-aware matching here.
+    ``request.path`` carries no locale prefix on the matched URLs
+    because the public OIDC endpoints are mounted *outside*
+    ``i18n_patterns`` in ``config/urls.py`` (RFC 8414 well-known URLs
+    must not carry a locale prefix). Note that Django itself does NOT
+    strip locale prefixes from ``request.path`` / ``request.path_info``
+    — locale-prefix handling happens at URL-resolution time via
+    ``LocalePrefixPattern`` and never writes back to the request
+    object. So if a future change ever re-mounted public endpoints
+    inside ``i18n_patterns``, every locale-prefixed variant
+    (``/de/sso/token/``, ``/en/sso/token/``, …) would have to be added
+    to the allow-list — or the matching here would need to be made
+    locale-aware. The companion test
+    ``test_locale_prefixed_sso_is_gated`` codifies the current contract.
     """
 
     #: Path prefixes that bypass the login gate.
