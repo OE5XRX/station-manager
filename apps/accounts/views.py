@@ -324,6 +324,50 @@ class SetPasswordView(View):
         return redirect("accounts:login")
 
 
+class ResendWelcomeView(AdminRequiredMixin, View):
+    """Admin-only: re-issue a Welcome token + mail.
+
+    Useful when the original Welcome-Mail expired (7d) or got lost.
+    Refuses if the user already has a usable password (no point
+    re-sending a Welcome to an active account).
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        from django.db import transaction
+        from django.shortcuts import get_object_or_404
+
+        from .emails import send_account_email
+        from .models import AccountToken
+        from .tokens import invalidate_pending_tokens, issue_token
+
+        user = get_object_or_404(User, pk=pk)
+        if user.has_usable_password():
+            messages.error(request, _("User already has a password set."))
+            return redirect("accounts:user_detail", pk=pk)
+        with transaction.atomic():
+            invalidate_pending_tokens(user, AccountToken.TokenType.WELCOME)
+            raw = issue_token(user, AccountToken.TokenType.WELCOME, ip=_client_ip(request))
+            send_account_email(
+                user,
+                "welcome",
+                {
+                    "raw_token": raw,
+                    "actor": request.user.username,
+                },
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.WELCOME_TOKEN_SENT,
+                actor=request.user,
+                target_user=user,
+                message=f"resend to {user.email}",
+                ip_address=_client_ip(request),
+            )
+        messages.success(request, _("Welcome link re-sent."))
+        return redirect("accounts:user_detail", pk=pk)
+
+
 class UserListView(LoginRequiredMixin, ListView):
     """Audience-aware list. Admin sees everyone (incl. Applicants),
     Member sees everyone except Applicants, Applicants get 404.

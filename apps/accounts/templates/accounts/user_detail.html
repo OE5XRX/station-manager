@@ -77,6 +77,23 @@
   </div>
 </div>
 
+{% if request.user.is_admin and not object.has_usable_password %}
+  <section class="panel mb-24" style="border-left:3px solid var(--warning);">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot"></span>{% trans "Pending Welcome" %}</div>
+    </div>
+    <div class="panel-body">
+      <p class="t-muted">{% trans "This user has not set a password yet. The Welcome link expires 7 days after issue." %}</p>
+    </div>
+    <div class="panel-foot row-gap-8">
+      <form method="post" action="{% url 'accounts:resend_welcome' object.pk %}" style="margin:0;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-warning">{% trans "Resend Welcome Mail" %}</button>
+      </form>
+    </div>
+  </section>
+{% endif %}
+
 {# Empty-state shortcut for Member-viewing-invisible-target #}
 {% if is_member_view and not object.is_directory_visible %}
   <section class="panel">

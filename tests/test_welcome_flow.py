@@ -251,3 +251,88 @@ class TestSetPasswordViewWelcome:
         ).latest("created_at")
         assert "welcome" in entry.message
         assert entry.actor == user
+
+
+@pytest.mark.django_db
+class TestResendWelcomeView:
+    def test_resend_invalidates_previous_and_issues_new(self, client, admin):
+        import hashlib
+
+        from apps.accounts.models import AccountToken
+        from apps.accounts.tokens import issue_token
+
+        user = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        user.set_unusable_password()
+        user.save()
+        old_raw = issue_token(user, AccountToken.TokenType.WELCOME)
+
+        client.force_login(admin)
+        resp = client.post(reverse("accounts:resend_welcome", kwargs={"pk": user.pk}))
+        assert resp.status_code == 302
+
+        old_hash = hashlib.sha256(old_raw.encode()).hexdigest()
+        assert AccountToken.objects.get(secret_hash=old_hash).used_at is not None
+        # Exactly one fresh unused welcome token exists
+        assert (
+            AccountToken.objects.filter(
+                user=user,
+                token_type=AccountToken.TokenType.WELCOME,
+                used_at__isnull=True,
+            ).count()
+            == 1
+        )
+
+    def test_resend_sends_mail_to_user(self, client, admin):
+        from django.core import mail
+
+        user = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        user.set_unusable_password()
+        user.save()
+        client.force_login(admin)
+        client.post(reverse("accounts:resend_welcome", kwargs={"pk": user.pk}))
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["n@example.org"]
+
+    def test_resend_rejects_user_with_usable_password(self, client, admin, db):
+        from apps.accounts.models import AccountToken
+
+        user = User.objects.create_user(
+            username="OE5ACT",
+            email="a@example.org",
+            password="alreadySet",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        client.force_login(admin)
+        resp = client.post(reverse("accounts:resend_welcome", kwargs={"pk": user.pk}))
+        assert resp.status_code == 302
+        assert not AccountToken.objects.filter(user=user).exists()
+
+    def test_resend_requires_admin(self, client, db):
+        from apps.accounts.models import AccountToken
+
+        member = User.objects.create_user(
+            username="OE5MEM",
+            email="mem@example.org",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        target = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        target.set_unusable_password()
+        target.save()
+        client.force_login(member)
+        resp = client.post(reverse("accounts:resend_welcome", kwargs={"pk": target.pk}))
+        # AdminRequiredMixin → 302 or 403; in any case no token
+        assert resp.status_code in (302, 403)
+        assert not AccountToken.objects.filter(user=target).exists()

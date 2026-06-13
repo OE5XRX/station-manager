@@ -59,6 +59,11 @@ urlpatterns = [
         name="station_assignment_revoke",
     ),
     path(
+        "users/<int:pk>/welcome/",
+        views.ResendWelcomeView.as_view(),
+        name="resend_welcome",
+    ),
+    path(
         "set-password/<str:token>/",
         views.SetPasswordView.as_view(),
         name="set_password",
