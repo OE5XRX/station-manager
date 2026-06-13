@@ -263,3 +263,26 @@ class TestVerifyEmailClick:
         )
         assert active.count() == 1
         assert active.first().payload == {"new_email": "new2@example.org"}
+
+    def test_race_guard_does_not_consume_token(self, client, member, db):
+        from apps.accounts.tokens import issue_token
+
+        raw = issue_token(
+            member,
+            AccountToken.TokenType.VERIFY,
+            payload={"new_email": "new@example.org"},
+        )
+        # Another user grabs the target email
+        User.objects.create_user(
+            username="OTHER",
+            email="new@example.org",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        client.get(reverse("accounts:verify_email", kwargs={"token": raw}))
+
+        # Token should NOT have been consumed — user can retry later
+        import hashlib
+
+        h = hashlib.sha256(raw.encode()).hexdigest()
+        assert AccountToken.objects.get(secret_hash=h).used_at is None

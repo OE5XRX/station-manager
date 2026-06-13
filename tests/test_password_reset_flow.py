@@ -243,3 +243,27 @@ class TestSetPasswordViewReset:
             target_user=member,
         ).latest("created_at")
         assert "reset" in entry.message
+
+
+@pytest.mark.django_db
+class TestPasswordResetRejectsInactiveUser:
+    def test_reset_request_for_inactive_user_returns_generic_success_no_mail(self, client, db):
+        from django.core import mail
+
+        user = User.objects.create_user(
+            username="OE5BLOCKED",
+            email="b@example.org",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        user.is_active = False
+        user.save()
+        resp = client.post(
+            reverse("accounts:password_reset_request"),
+            {"email": user.email},
+        )
+        assert resp.status_code == 302
+        assert resp.url == reverse("accounts:login")
+        # No token issued, no mail sent
+        assert not AccountToken.objects.filter(user=user).exists()
+        assert len(mail.outbox) == 0

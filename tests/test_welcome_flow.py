@@ -336,3 +336,31 @@ class TestResendWelcomeView:
         # AdminRequiredMixin → 302 or 403; in any case no token
         assert resp.status_code in (302, 403)
         assert not AccountToken.objects.filter(user=target).exists()
+
+
+@pytest.mark.django_db
+class TestSetPasswordRejectsInactiveUser:
+    def test_set_password_blocked_for_inactive_user(self, client, db):
+        from apps.accounts.models import AccountToken
+        from apps.accounts.tokens import issue_token
+
+        user = User.objects.create_user(
+            username="OE5BLOCKED",
+            email="b@example.org",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        user.set_unusable_password()
+        user.is_active = False
+        user.save()
+        raw = issue_token(user, AccountToken.TokenType.WELCOME)
+
+        resp = client.get(reverse("accounts:set_password", kwargs={"token": raw}))
+        # Should redirect to login with error — lookup filtered out the token
+        assert resp.status_code == 302
+        assert resp.url == reverse("accounts:login")
+
+        # And the token must NOT have been consumed
+        import hashlib
+
+        h = hashlib.sha256(raw.encode()).hexdigest()
+        assert AccountToken.objects.get(secret_hash=h).used_at is None

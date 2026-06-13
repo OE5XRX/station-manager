@@ -317,6 +317,8 @@ class SetPasswordView(View):
         return render(request, self.template_name, {"form": form, "token": token})
 
     def post(self, request, token):
+        from django.db import transaction
+
         from .forms import SetPasswordForm
         from .tokens import consume_token
 
@@ -325,15 +327,19 @@ class SetPasswordView(View):
             return self._invalid_response(request)
         form = SetPasswordForm(user=token_row.user, data=request.POST)
         if form.is_valid():
-            consume_token(token, token_row.token_type)
-            form.save()
-            AccountAuditLog.log(
-                event_type=AccountAuditLog.EventType.PASSWORD_SET_FROM_TOKEN,
-                actor=token_row.user,
-                target_user=token_row.user,
-                message=f"via {token_row.token_type}",
-                ip_address=_client_ip(request),
-            )
+            with transaction.atomic():
+                consumed = consume_token(token, token_row.token_type)
+                if consumed is None:
+                    # Another request beat us to the consume.
+                    return self._invalid_response(request)
+                form.save()
+                AccountAuditLog.log(
+                    event_type=AccountAuditLog.EventType.PASSWORD_SET_FROM_TOKEN,
+                    actor=token_row.user,
+                    target_user=token_row.user,
+                    message=f"via {token_row.token_type}",
+                    ip_address=_client_ip(request),
+                )
             auth_login(
                 request,
                 token_row.user,
@@ -357,6 +363,7 @@ class SetPasswordView(View):
             ],
             used_at__isnull=True,
             expires_at__gt=timezone.now(),
+            user__is_active=True,  # block tokens for deactivated users
         ).first()
 
     def _invalid_response(self, request):
@@ -381,10 +388,21 @@ class VerifyEmailView(View):
     http_method_names = ["get"]
 
     def get(self, request, token):
-        from .models import AccountToken
-        from .tokens import consume_token
+        import hashlib
 
-        token_row = consume_token(token, AccountToken.TokenType.VERIFY)
+        from django.db import transaction
+
+        from .models import AccountToken
+
+        # Lookup WITHOUT consuming: if the race-guard fails, the user can
+        # click again later (e.g. once the conflicting email is freed).
+        secret_hash = hashlib.sha256(token.encode()).hexdigest()
+        token_row = AccountToken.objects.filter(
+            secret_hash=secret_hash,
+            token_type=AccountToken.TokenType.VERIFY,
+            used_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).first()
         if token_row is None:
             messages.error(request, _("Email verification link invalid or expired."))
             return redirect("accounts:login")
@@ -396,7 +414,7 @@ class VerifyEmailView(View):
             return redirect("accounts:login")
 
         # Race-guard: another account may have grabbed this email since the
-        # verify-request was issued.
+        # verify-request was issued. Token is NOT yet consumed.
         if User.objects.exclude(pk=token_row.user.pk).filter(email__iexact=new_email).exists():
             messages.error(
                 request,
@@ -406,15 +424,26 @@ class VerifyEmailView(View):
             target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
             return redirect(target)
 
-        token_row.user.email = new_email
-        token_row.user.save(update_fields=["email"])
-        AccountAuditLog.log(
-            event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
-            actor=token_row.user,
-            target_user=token_row.user,
-            message=f"{old_email} → {new_email}",
-            ip_address=_client_ip(request),
-        )
+        # Commit: consume + swap + audit in one transaction. If any step
+        # raises, the token stays unused.
+        with transaction.atomic():
+            # Re-fetch with SELECT FOR UPDATE so two concurrent clicks
+            # serialize.
+            locked = AccountToken.objects.select_for_update().get(pk=token_row.pk)
+            if not locked.is_active():
+                messages.error(request, _("Email verification link invalid or expired."))
+                return redirect("accounts:login")
+            locked.used_at = timezone.now()
+            locked.save(update_fields=["used_at"])
+            locked.user.email = new_email
+            locked.user.save(update_fields=["email"])
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
+                actor=locked.user,
+                target_user=locked.user,
+                message=f"{old_email} → {new_email}",
+                ip_address=_client_ip(request),
+            )
         messages.success(request, _("Email updated to %(email)s.") % {"email": new_email})
         if request.user.is_authenticated and request.user.pk == token_row.user.pk:
             return redirect("accounts:profile")
@@ -458,7 +487,7 @@ class PasswordResetRequestView(View):
             return self._generic_success(request, email)
 
         try:
-            user = User.objects.get(email__iexact=email)
+            user = User.objects.get(email__iexact=email, is_active=True)
         except User.DoesNotExist:
             return self._generic_success(request, email)
 
