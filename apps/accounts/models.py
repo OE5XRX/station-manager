@@ -79,6 +79,12 @@ class User(AbstractUser):
         # (unique_active_username) which uses condition=deleted_at__isnull=True.
         # This allows callsign-reuse after soft-delete.
         unique=False,
+        # db_index=True keeps lookups + ordering on the full table (not just
+        # the active slice) efficient. The unique_active_username partial
+        # index in Meta only indexes deleted_at IS NULL rows, so queries
+        # for show=all / show=deleted listings ordered by username would
+        # otherwise full-scan as the table grows.
+        db_index=True,
         help_text=_("Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."),
         validators=[username_validator],
         error_messages={
