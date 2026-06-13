@@ -253,29 +253,39 @@ def test_heartbeat_endpoint_does_not_redirect_anon(client):
 @pytest.mark.django_db
 def test_deployment_check_endpoint_does_not_redirect_anon(client):
     """``/api/v1/deployments/check/`` is the station agent's poll endpoint.
-    Same auth model as heartbeat: DeviceKey, never a Django session."""
+    Same auth model as heartbeat: DeviceKey, never a Django session.
+    Anonymous request must reach DRF's auth layer and fail with 401, NOT
+    a session 302 (which the agent can't follow) and NOT 404/5xx (which
+    would hide a regression in the @login_not_required decorator)."""
     response = client.post("/api/v1/deployments/check/", data={}, content_type="application/json")
     assert not _is_login_redirect(response)
+    assert response.status_code == 401, response.status_code
 
 
 @pytest.mark.django_db
 def test_deployment_commit_endpoint_does_not_redirect_anon(client):
+    """Same contract as deployment_check: anon must reach DRF → 401."""
     response = client.post("/api/v1/deployments/commit/", data={}, content_type="application/json")
     assert not _is_login_redirect(response)
+    assert response.status_code == 401, response.status_code
 
 
 @pytest.mark.django_db
 def test_deployment_status_update_endpoint_does_not_redirect_anon(client):
+    """Same contract as deployment_check: anon must reach DRF → 401."""
     response = client.post(
         "/api/v1/deployments/1/status/", data={}, content_type="application/json"
     )
     assert not _is_login_redirect(response)
+    assert response.status_code == 401, response.status_code
 
 
 @pytest.mark.django_db
 def test_deployment_download_endpoint_does_not_redirect_anon(client):
+    """Same contract as deployment_check: anon must reach DRF → 401."""
     response = client.get("/api/v1/deployments/1/download/")
     assert not _is_login_redirect(response)
+    assert response.status_code == 401, response.status_code
 
 
 @pytest.mark.django_db
@@ -290,13 +300,16 @@ def test_setlang_anon_accessible(client):
     """The language switcher posts to ``/i18n/setlang/`` from pre-login
     pages (login form, error pages). It must not be gated.
 
-    ``set_language`` returns 302 to the referer/next — we assert the
-    redirect target is NOT the login page."""
+    ``set_language`` returns 302 to the ``next`` URL on success. We
+    assert that 302 explicitly (not just "not a login redirect") so
+    that an unexpected 4xx/5xx in the language-switcher view doesn't
+    silently pass."""
     response = client.post(
         "/i18n/setlang/",
         {"language": "en", "next": "/"},
     )
     assert not _is_login_redirect(response)
+    assert response.status_code == 302, response.status_code
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +327,12 @@ def test_setlang_anon_accessible(client):
 def test_path_traversal_does_not_bypass_gate(client):
     """``/sso/.well-known/../applications/`` literally starts with
     ``/sso/.well-known/`` so a raw ``startswith`` check would let it
-    through. Normalised, it resolves to ``/sso/applications/`` which
-    must stay gated."""
+    through. Our middleware normalises the path first; we expect a
+    rejection (login redirect or 404) — never a 200, and never a 5xx
+    (which would indicate the normalisation crashed on a hostile path)."""
     response = client.get("/sso/.well-known/../applications/")
-    # Django's CommonMiddleware will normalise and redirect (301/302) or
-    # the resolver routes the normalised path; either way the visible
-    # outcome from an anonymous request must NOT be 200 (would imply
-    # we bypassed the gate to the applications view).
-    assert response.status_code != 200
-    # If it redirects, it should be either a normalisation 301 or a
-    # login 302 — never a token/.well-known view's 2xx.
+    assert response.status_code != 200, response.status_code
+    assert response.status_code < 500, response.status_code
 
 
 @pytest.mark.django_db
@@ -335,19 +344,22 @@ def test_locale_prefixed_sso_is_gated(client):
     proxy or a future i18n re-mounting from accidentally opening a hole."""
     response = client.get("/de/sso/token/")
     # Either gated by middleware (302 to login) or simply 404 — both are
-    # fine outcomes; the only outcome we want to prevent is an anon 200.
-    assert response.status_code != 200
+    # fine outcomes; the only outcome we want to prevent is an anon 200,
+    # and a 5xx would mask a real bug in the normalisation logic.
+    assert response.status_code != 200, response.status_code
+    assert response.status_code < 500, response.status_code
 
 
 @pytest.mark.django_db
 def test_double_slash_does_not_change_gate_decision(client):
     """``//sso//token//`` collapses to ``/sso/token/`` after
     normalisation. The middleware must still apply the allow-list to
-    the normalised form, not the literal one."""
+    the normalised form, not the literal one. Token endpoint with empty
+    body returns 4xx from oauth2_provider — we assert the specific 4xx
+    range so an unexpected 5xx doesn't slip through."""
     response = client.post("//sso//token//", {})
-    # Token endpoint with empty body → 400 from oauth2_provider. The
-    # key assertion is "not a login redirect" — we got past the gate.
     assert not _is_login_redirect(response)
+    assert 400 <= response.status_code < 500, response.status_code
 
 
 def test_normalisation_helper_blocks_traversal_to_gated_path():

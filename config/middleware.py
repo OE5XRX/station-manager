@@ -81,9 +81,13 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     #: requests without a session to be redirected to the post-logout
     #: URI; the view must run to honour that contract.
     #:
-    #: ``/sso/device-authorization/`` — OAuth 2.0 Device Authorization
-    #: Grant (RFC 8628) request endpoint. Anonymous; the device
-    #: authenticates by client credentials in the body.
+    #: Not on this list: OAuth 2.0 Device Authorization Grant
+    #: (RFC 8628) endpoints (``device-authorization/``, ``device/``,
+    #: ``device-confirm/``, ``device-grant-status/``). The grant is
+    #: shipped by ``django-oauth-toolkit`` but is not configured or
+    #: used by any current RP. The principle is "no anonymous surface
+    #: we don't actively use" — add the relevant entries (with a
+    #: companion test) the moment the device flow goes live.
     PUBLIC_PATH_PREFIXES: Final[tuple[str, ...]] = (
         "/i18n/setlang/",
         "/sso/.well-known/",
@@ -92,7 +96,6 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
         "/sso/introspect/",
         "/sso/userinfo/",
         "/sso/logout/",
-        "/sso/device-authorization/",
     )
 
     @classmethod
@@ -102,11 +105,14 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
         Defense-in-depth: we normalise the path with ``posixpath.normpath``
         before matching so that traversal sequences like
         ``/sso/token/../applications/`` don't slip through the prefix
-        check. Django's URL resolver already routes the normalised path
-        to the real view, so an attacker would gain no access — but a
-        confused-deputy bypass is exactly the kind of bug a future
-        catch-all view in the allow-listed prefix would turn into a real
-        exploit. Reject pre-emptively.
+        check. Note that Django's URL resolver matches against the raw
+        ``PATH_INFO`` and does NOT perform dot-segment normalisation —
+        whether such a path resolves to ``/sso/applications/``, returns
+        404, or is rewritten by an upstream reverse proxy depends on
+        the deployment. Our normalisation here is therefore the only
+        guaranteed defense against an attacker using ``..`` to flip the
+        gate decision; we do not rely on Django to re-route the request
+        after the fact.
 
         ``posixpath.normpath`` collapses ``..`` segments and removes
         duplicate inner slashes. Two gotchas to handle:
