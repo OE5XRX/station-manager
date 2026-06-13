@@ -81,6 +81,7 @@ class TestHardPurge:
         assert "OE5DEAD" in audit.message
 
     def test_post_deletes_avatar_file(self, client, admin, deleted_member, tmp_path, settings):
+        from django.test import TestCase
         from PIL import Image
 
         settings.MEDIA_ROOT = str(tmp_path)
@@ -100,7 +101,12 @@ class TestHardPurge:
         assert os.path.exists(avatar_path)
 
         client.force_login(admin)
-        client.post(reverse("accounts:user_hard_purge", kwargs={"pk": deleted_member.pk}))
+        # Avatar cleanup is deferred via transaction.on_commit() so it
+        # only runs after a successful commit. In pytest-django the
+        # outer transaction is rolled back, so callbacks must be flushed
+        # explicitly via captureOnCommitCallbacks(execute=True).
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            client.post(reverse("accounts:user_hard_purge", kwargs={"pk": deleted_member.pk}))
 
         assert not os.path.exists(avatar_path)
 

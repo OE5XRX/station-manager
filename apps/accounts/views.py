@@ -1136,28 +1136,54 @@ class UserHardPurgeView(AdminRequiredMixin, View):
 
     def post(self, request, pk):
         target = self.get_object()
-        # Audit BEFORE delete — target FK becomes NULL via SET_NULL after .delete()
+        # Capture identifiers before delete — target FK becomes NULL via
+        # SET_NULL after .delete(), but the audit row's message string
+        # must preserve username/email for forensic continuity.
         username = target.username
         email = target.email
         deleted_at = target.deleted_at
-        AccountAuditLog.log(
-            event_type=AccountAuditLog.EventType.USER_HARD_PURGED,
-            actor=request.user,
-            target_user=target,
-            message=(f"{username} <{email}> (purged after soft-delete on {deleted_at:%Y-%m-%d})"),
-            ip_address=_client_ip(request),
-        )
-        # Avatar-file delete (best-effort; storage transient failures
-        # don't block the DB delete)
+        target_pk = target.pk
+        # Capture avatar storage + name BEFORE delete so we can schedule
+        # cleanup via on_commit (target.avatar is no longer addressable
+        # after target.delete()).
+        avatar_storage = None
+        avatar_name = None
         if target.avatar:
-            try:
-                target.avatar.delete(save=False)
-            except Exception:
-                logger.exception(
-                    "Avatar file delete failed for purged user %s",
-                    target.pk,
-                )
-        target.delete()
+            avatar_storage = target.avatar.storage
+            avatar_name = target.avatar.name
+
+        with transaction.atomic():
+            # Audit + delete in one atomic block. If .delete() fails
+            # partway through cascade/SET_NULL updates, the audit row is
+            # rolled back too — no orphan "purged" entry for a still-
+            # existing user.
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_HARD_PURGED,
+                actor=request.user,
+                target_user=target,
+                message=(
+                    f"{username} <{email}> "
+                    f"(purged after soft-delete on {deleted_at:%Y-%m-%d})"
+                ),
+                ip_address=_client_ip(request),
+            )
+            target.delete()
+
+            # Defer avatar-file delete until commit — storage cleanup
+            # must not run if the transaction rolls back, otherwise we
+            # could lose the file while the DB row still exists.
+            if avatar_storage is not None and avatar_name:
+                def _purge_avatar():
+                    try:
+                        avatar_storage.delete(avatar_name)
+                    except Exception:
+                        logger.exception(
+                            "Avatar file delete failed for purged user %s",
+                            target_pk,
+                        )
+
+                transaction.on_commit(_purge_avatar)
+
         messages.success(request, _("User permanently purged."))
         return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
