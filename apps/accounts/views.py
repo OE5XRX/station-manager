@@ -1031,9 +1031,20 @@ class UserRestoreView(AdminRequiredMixin, View):
             deleted_at__isnull=False,
         )
         # Email-conflict check: another active user grabbed the email?
-        clashing_email = (
-            User.objects.active().filter(email__iexact=target.email).exclude(pk=target.pk).first()
-        )
+        # Skip when target.email is empty — the DB unique constraint
+        # explicitly excludes empty emails (~Q(email="")), so two users
+        # with blank emails coexist legally. Without this guard, the
+        # ProfileIdentityForm.clean_email check + restore would block
+        # any restore on a no-email user whenever any other active user
+        # also has a blank email (which is common for legacy rows).
+        clashing_email = None
+        if target.email:
+            clashing_email = (
+                User.objects.active()
+                .filter(email__iexact=target.email)
+                .exclude(pk=target.pk)
+                .first()
+            )
         if clashing_email:
             messages.error(
                 request,

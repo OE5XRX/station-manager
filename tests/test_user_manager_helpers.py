@@ -68,3 +68,51 @@ class TestUsernameReuseAfterSoftDelete:
         User.objects.create_user(username="OE5DUP", password="x")
         with pytest.raises(IntegrityError):
             User.objects.create_user(username="OE5DUP", password="x")
+
+
+@pytest.mark.django_db
+class TestLoginAfterCallsignReuse:
+    def test_active_user_can_login_with_recycled_callsign(self, client):
+        """After soft-delete + reuse, the active user must still log in.
+
+        Without ``get_by_natural_key`` override, Django's ModelBackend
+        calls ``get(username=...)`` and raises MultipleObjectsReturned
+        because both the active and the soft-deleted row share the
+        callsign. The override filters on ``deleted_at__isnull=True``
+        so resolution is unambiguous.
+        """
+        from django.urls import reverse
+
+        old = User.objects.create_user(username="OE5LOGIN", password="old_pw")
+        old.deleted_at = timezone.now()
+        old.is_active = False
+        old.save()
+
+        new = User.objects.create_user(username="OE5LOGIN", password="new_pw")
+        assert new.pk != old.pk
+
+        resp = client.post(
+            reverse("accounts:login"),
+            {"username": "OE5LOGIN", "password": "new_pw"},
+            follow=False,
+        )
+        # Successful login redirects (302); failed login re-renders (200)
+        assert resp.status_code == 302, (
+            f"Login failed after callsign-reuse — possible MultipleObjectsReturned. "
+            f"Got status {resp.status_code}."
+        )
+
+    def test_get_by_natural_key_resolves_active(self):
+        """Direct test of the manager method, independent of the auth backend."""
+        from apps.accounts.models import User as UserModel
+
+        old = UserModel.objects.create_user(username="OE5NK", password="x")
+        old.deleted_at = timezone.now()
+        old.is_active = False
+        old.save()
+
+        new = UserModel.objects.create_user(username="OE5NK", password="x")
+
+        resolved = UserModel.objects.get_by_natural_key("OE5NK")
+        assert resolved.pk == new.pk
+        assert resolved.deleted_at is None

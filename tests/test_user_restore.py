@@ -79,3 +79,27 @@ class TestRestore:
         assert audit is not None
         assert audit.actor == admin
         assert "OE5DEAD" in audit.message
+
+    def test_restore_with_empty_email_not_blocked_by_other_empty_email_user(
+        self, client, admin,
+    ):
+        """The email-conflict guard must skip empty-email targets.
+
+        DB uniqueness explicitly excludes empty emails via ~Q(email="").
+        Without the empty-string short-circuit, a deleted user with no
+        email would be blocked from restoration whenever any active
+        user also has a blank email (common for legacy rows).
+        """
+        # Active user with no email
+        User.objects.create_user(username="OE5NOMAIL_ACTIVE", password="x")
+        # Soft-deleted user, also no email
+        deleted = User.objects.create_user(username="OE5NOMAIL_DEAD", password="x")
+        deleted.deleted_at = timezone.now()
+        deleted.is_active = False
+        deleted.save()
+
+        client.force_login(admin)
+        client.post(reverse("accounts:user_restore", kwargs={"pk": deleted.pk}))
+        deleted.refresh_from_db()
+        assert deleted.deleted_at is None  # restore succeeded
+        assert deleted.is_active is True
