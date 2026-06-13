@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # ``LoginRequiredMiddleware`` would 302 them to a login form they cannot
 # follow. ``@login_not_required`` lets DRF do its own auth check.
 
+
 @method_decorator(login_not_required, name="dispatch")
 class DeploymentCheckView(APIView):
     """Station-agent polls to see if a deployment is pending for it."""

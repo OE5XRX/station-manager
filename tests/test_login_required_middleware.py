@@ -28,8 +28,7 @@ def _middleware_index(suffix: str) -> int:
         if mw.endswith(suffix):
             return i
     raise AssertionError(
-        f"No middleware ending with {suffix!r} found in MIDDLEWARE: "
-        f"{settings.MIDDLEWARE}"
+        f"No middleware ending with {suffix!r} found in MIDDLEWARE: {settings.MIDDLEWARE}"
     )
 
 
@@ -71,9 +70,7 @@ def test_middleware_redirects_a_naked_anonymous_view():
 
     # Find the registered LoginRequiredMiddleware so we test exactly the
     # middleware in MIDDLEWARE (subclass or vanilla — both are valid).
-    dotted = next(
-        mw for mw in settings.MIDDLEWARE if mw.endswith("LoginRequiredMiddleware")
-    )
+    dotted = next(mw for mw in settings.MIDDLEWARE if mw.endswith("LoginRequiredMiddleware"))
     module_path, cls_name = dotted.rsplit(".", 1)
     mw_cls = getattr(import_module(module_path), cls_name)
     mw = mw_cls(get_response=lambda r: None)
@@ -225,9 +222,9 @@ def test_admin_login_anon_accessible(client):
     response = client.get("/admin/login/", follow=True)
     assert response.status_code == 200
     # redirect_chain is a list of (url, status_code) tuples.
-    assert not any(
-        "/accounts/login/" in url for url, _ in response.redirect_chain
-    ), f"admin login was redirected to /accounts/login/: {response.redirect_chain!r}"
+    assert not any("/accounts/login/" in url for url, _ in response.redirect_chain), (
+        f"admin login was redirected to /accounts/login/: {response.redirect_chain!r}"
+    )
 
 
 @pytest.mark.django_db
@@ -246,9 +243,7 @@ def test_heartbeat_endpoint_does_not_redirect_anon(client):
     """Station-agent heartbeats authenticate via ``DeviceKeyAuthentication``.
     A request without the device-key headers must be rejected by DRF (401),
     not 302'd to a login form the agent can't follow."""
-    response = client.post(
-        reverse("api:heartbeat"), data={}, content_type="application/json"
-    )
+    response = client.post(reverse("api:heartbeat"), data={}, content_type="application/json")
     assert not _is_login_redirect(response)
     # DRF returns 401 for unauthenticated requests when the only auth
     # class (DeviceKeyAuthentication) rejects.
@@ -259,17 +254,13 @@ def test_heartbeat_endpoint_does_not_redirect_anon(client):
 def test_deployment_check_endpoint_does_not_redirect_anon(client):
     """``/api/v1/deployments/check/`` is the station agent's poll endpoint.
     Same auth model as heartbeat: DeviceKey, never a Django session."""
-    response = client.post(
-        "/api/v1/deployments/check/", data={}, content_type="application/json"
-    )
+    response = client.post("/api/v1/deployments/check/", data={}, content_type="application/json")
     assert not _is_login_redirect(response)
 
 
 @pytest.mark.django_db
 def test_deployment_commit_endpoint_does_not_redirect_anon(client):
-    response = client.post(
-        "/api/v1/deployments/commit/", data={}, content_type="application/json"
-    )
+    response = client.post("/api/v1/deployments/commit/", data={}, content_type="application/json")
     assert not _is_login_redirect(response)
 
 
