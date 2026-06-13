@@ -174,21 +174,21 @@ class ProfileView(LoginRequiredMixin, TemplateView):
             if "locator" not in changed_fields:
                 user.locator = lat_lon_to_locator(float(lat), float(lon))
             user.save(update_fields=["latitude", "longitude", "locator"])
-        else:
-            # Fail closed: keep existing coords/locator. The form already
-            # wrote the user-submitted locator (potentially empty); restore
-            # the pre-save value so the user's existing data isn't lost
-            # just because Nominatim was down.
+        elif "locator" not in changed_fields and user.locator != pre_locator:
+            # Fail closed: Nominatim returned no coords. The browser-rendered
+            # form pre-populates the locator input from the instance, so a
+            # POST that leaves locator untouched arrives with the existing
+            # value and `changed_fields` does not include "locator". If for
+            # any reason form.save() still blanked it (e.g. an artificial
+            # POST without the field), restore the pre-save value so the
+            # user's existing locator isn't lost just because Nominatim was
+            # down.
             #
-            # Trade-off: a user who *deliberately* clears their locator in
-            # the same submit as an address that fails to geocode will see
-            # the clear silently reverted. We prefer that over wiping good
-            # data on a transient Nominatim outage. To intentionally clear
-            # the locator, the user can submit address+locator empty (no
-            # geocode runs) or clear locator after a successful save.
-            if user.locator != pre_locator:
-                user.locator = pre_locator
-                user.save(update_fields=["locator"])
+            # Manual-override path: when the user deliberately typed a value
+            # (or cleared it), "locator" IS in changed_fields → skip restore
+            # and honor the user's intent.
+            user.locator = pre_locator
+            user.save(update_fields=["locator"])
 
     def _emit_user_updated(self, request, user, changed_fields):
         tracked = changed_fields & TRACKED_USER_FIELDS

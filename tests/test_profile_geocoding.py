@@ -69,12 +69,15 @@ class TestProfileAddressGeocoding:
         member.locator = "JN78AB"
         member.save()
         client.force_login(member)
+        # The browser-rendered form pre-populates the locator input from the
+        # instance, so a POST that only changes address sends the existing
+        # locator value back unchanged. Simulate that here.
         client.post(
             reverse("accounts:profile"),
             {
                 "form_name": "address",
                 "address-address": "Geocoding will fail for this",
-                "address-locator": "",
+                "address-locator": "JN78AB",
             },
         )
         member.refresh_from_db()
@@ -82,3 +85,25 @@ class TestProfileAddressGeocoding:
         # "fail closed: leave existing values, user can manual-override".
         assert member.latitude == Decimal("48.3")
         assert member.locator == "JN78AB"
+
+    @patch("apps.accounts.views.geocode_address")
+    def test_geocode_failure_honors_manual_locator_override(
+        self, mock_geocode, client, member
+    ):
+        """If user explicitly types a new locator in the same submit as a
+        failing address, the manual override wins (no restore)."""
+        mock_geocode.return_value = None
+        member.locator = "JN78AB"
+        member.save()
+        client.force_login(member)
+        client.post(
+            reverse("accounts:profile"),
+            {
+                "form_name": "address",
+                "address-address": "Geocoding will fail for this",
+                "address-locator": "JO45AB",
+            },
+        )
+        member.refresh_from_db()
+        # User's typed override wins even though geocode failed.
+        assert member.locator == "JO45AB"

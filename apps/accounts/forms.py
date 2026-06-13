@@ -20,6 +20,23 @@ from .models import LOCATOR_REGEX
 User = get_user_model()
 
 
+def _maybe_resize_avatar(user):
+    """Run ``process_avatar_file`` on the stored avatar when the backend
+    supports filesystem paths. Non-FS storages (S3Boto3Storage,
+    InMemoryStorage) raise ``NotImplementedError`` from ``FieldFile.path``;
+    treat that as "skip in-place resize" rather than crash the save. When we
+    later move to S3 we'll need a storage-agnostic resize pipeline; until
+    then this gate keeps the form-save robust across storage backends.
+    """
+    if not user.avatar:
+        return
+    try:
+        path = user.avatar.path
+    except NotImplementedError:
+        return
+    process_avatar_file(path)
+
+
 class LoginForm(AuthenticationForm):
     """Login form with Bootstrap styling."""
 
@@ -111,7 +128,11 @@ class UserChangeForm(BaseUserChangeForm):
 
     def clean_avatar(self):
         f = self.cleaned_data.get("avatar")
-        validate_avatar_upload(f)
+        # Only validate on a fresh upload (or a clear) — re-validating the
+        # already-stored FieldFile on every unrelated form submit costs an
+        # extra Pillow open + verify for no benefit.
+        if "avatar" in self.files:
+            validate_avatar_upload(f)
         return f
 
     def clean_locator(self):
@@ -124,8 +145,8 @@ class UserChangeForm(BaseUserChangeForm):
 
     def save(self, commit=True):
         user = super().save(commit=commit)
-        if commit and "avatar" in self.changed_data and user.avatar:
-            process_avatar_file(user.avatar.path)
+        if commit and "avatar" in self.changed_data:
+            _maybe_resize_avatar(user)
         return user
 
 
@@ -183,13 +204,17 @@ class ProfileProfileForm(forms.ModelForm):
 
     def clean_avatar(self):
         f = self.cleaned_data.get("avatar")
-        validate_avatar_upload(f)
+        # Only validate on a fresh upload (or a clear) — re-validating the
+        # already-stored FieldFile on every unrelated form submit costs an
+        # extra Pillow open + verify for no benefit.
+        if "avatar" in self.files:
+            validate_avatar_upload(f)
         return f
 
     def save(self, commit=True):
         user = super().save(commit=commit)
-        if commit and "avatar" in self.changed_data and user.avatar:
-            process_avatar_file(user.avatar.path)
+        if commit and "avatar" in self.changed_data:
+            _maybe_resize_avatar(user)
         return user
 
 
