@@ -410,10 +410,13 @@ class VerifyEmailView(View):
             return redirect("accounts:login")
 
         new_email = token_row.payload.get("new_email", "")
-        old_email = token_row.user.email
         if not new_email:
             messages.error(request, _("Email verification token has no target address."))
             return redirect("accounts:login")
+        # NOTE: do NOT capture old_email here — it's read again under the
+        # lock below so the audit message reflects the actual transition
+        # (an admin could have edited user.email between this point and
+        # the lock-acquire).
 
         # Commit: race-check + consume + swap + audit all in one transaction.
         # The race-check INSIDE the lock closes the window between the
@@ -439,6 +442,11 @@ class VerifyEmailView(View):
             if not locked.is_active():
                 messages.error(request, _("Email verification link invalid or expired."))
                 return redirect("accounts:login")
+            # Capture the actual old email UNDER the lock so the audit
+            # message reflects the real transition even if an admin
+            # edited user.email between the unlocked pre-fetch and the
+            # lock-acquire.
+            old_email = locked.user.email
             # Race-guard inside the transaction: another account may have
             # grabbed the target email since the verify-request was issued
             # OR since our unlocked pre-fetch above.
