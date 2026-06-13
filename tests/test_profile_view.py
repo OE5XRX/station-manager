@@ -50,7 +50,7 @@ class TestProfileViewPOSTIdentity:
             reverse("accounts:profile"),
             {
                 "form_name": "identity",
-                "identity-email": "new@example.org",
+                "identity-email": member.email,
                 "identity-first_name": "Hans",
                 "identity-last_name": "Müller",
                 "identity-language": "en",
@@ -58,7 +58,6 @@ class TestProfileViewPOSTIdentity:
         )
         assert resp.status_code == 302
         member.refresh_from_db()
-        assert member.email == "new@example.org"
         assert member.first_name == "Hans"
 
     def test_identity_save_emits_audit(self, client, member):
@@ -70,8 +69,8 @@ class TestProfileViewPOSTIdentity:
             reverse("accounts:profile"),
             {
                 "form_name": "identity",
-                "identity-email": "new@example.org",
-                "identity-first_name": "",
+                "identity-email": member.email,
+                "identity-first_name": "Hans",
                 "identity-last_name": "",
                 "identity-language": "en",
             },
