@@ -146,6 +146,30 @@ class User(AbstractUser):
         default=True,
     )
 
+    # === Sub-Spec 2b Soft-Delete ===
+    # NULL = active user. NOT NULL = soft-deleted; the soft-delete flow
+    # also flips ``is_active`` to False so login/middleware paths reject
+    # the row. The conditional UniqueConstraint on ``username`` below
+    # (``unique_active_username``) keeps the callsign available for
+    # reuse once a row is soft-deleted.
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_(
+            "Soft-delete timestamp. NULL = active user. NOT NULL = soft-deleted, "
+            "is_active is False, login blocked."
+        ),
+    )
+    deleted_by = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="deleted_users",
+        help_text=_("Admin who triggered the soft-delete (SET_NULL on cascade)."),
+    )
+
     objects = UserManager()
 
     class Meta:
@@ -162,6 +186,20 @@ class User(AbstractUser):
                 Lower("email"),
                 condition=~Q(email=""),
                 name="accounts_user_email_ci_unique",
+            ),
+            # Sub-Spec 2b Soft-Delete: callsign-reuse after soft-delete.
+            # AbstractUser declares ``username`` as ``unique=True`` (full
+            # uniqueness across all rows). The partial UNIQUE-Index here
+            # narrows that to active rows only, so when a user is
+            # soft-deleted (``deleted_at`` set), the same callsign can
+            # be issued to a fresh row. The AbstractUser-level uniqueness
+            # is intentionally left in place — Django still enforces it
+            # at form/admin layer; this constraint is the DB-level
+            # backstop for the *active* slice.
+            models.UniqueConstraint(
+                fields=["username"],
+                condition=Q(deleted_at__isnull=True),
+                name="unique_active_username",
             ),
         ]
 
