@@ -71,10 +71,11 @@ def _on_station_assignment_delete(sender, instance, **kwargs):
     # the marker, the legacy message format is kept verbatim.
     label = instance.station.callsign or instance.station.name
     reason = getattr(instance, "_revoke_reason", None)
+    role_display = instance.get_role_display()
     if reason:
-        message = f"reason={reason} station={label} role={instance.role}"
+        message = f"reason={reason} station={label} role={role_display}"
     else:
-        message = f"station={label}, role={instance.get_role_display()}"
+        message = f"station={label}, role={role_display}"
     AccountAuditLog.log(
         event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
         actor=getattr(instance, "_revoke_actor", None),
@@ -161,10 +162,11 @@ def _on_region_assignment_delete(sender, instance, **kwargs):
     # on the instance before .delete() so soft-delete-driven revokes carry
     # their reason in the audit message and the originating admin as actor.
     reason = getattr(instance, "_revoke_reason", None)
+    role_display = instance.get_role_display()
     if reason:
-        message = f"reason={reason} region={instance.region.name} role={instance.role}"
+        message = f"reason={reason} region={instance.region.name} role={role_display}"
     else:
-        message = f"role={instance.get_role_display()} entfernt"
+        message = f"role={role_display} entfernt"
     AccountAuditLog.log(
         event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_REVOKED,
         actor=getattr(instance, "_revoke_actor", None),

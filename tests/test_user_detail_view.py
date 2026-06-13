@@ -483,3 +483,51 @@ class TestSuccessRedirects:
         )
         assert resp.status_code == 302
         assert resp.url == reverse("accounts:user_detail", kwargs={"pk": member.pk})
+
+
+@pytest.mark.django_db
+class TestSoftDeletedAccessGate:
+    """Soft-deleted users must not be discoverable via the detail page
+    by non-admin audiences. Admin can still see them (renders the
+    restore/hard-purge UI)."""
+
+    def test_member_gets_404_on_soft_deleted_user(self, client):
+        from django.utils import timezone
+
+        member = User.objects.create_user(
+            username="OE5MEM1",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        deleted = User.objects.create_user(
+            username="OE5DEAD",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        deleted.deleted_at = timezone.now()
+        deleted.is_active = False
+        deleted.save()
+
+        client.force_login(member)
+        resp = client.get(reverse("accounts:user_detail", kwargs={"pk": deleted.pk}))
+        assert resp.status_code == 404
+
+    def test_admin_can_see_soft_deleted_user(self, client):
+        from django.utils import timezone
+
+        admin = User.objects.create_user(
+            username="OE5ADMIN",
+            password="x",
+            membership_level=User.MembershipLevel.ADMIN,
+        )
+        deleted = User.objects.create_user(
+            username="OE5DEAD",
+            password="x",
+        )
+        deleted.deleted_at = timezone.now()
+        deleted.is_active = False
+        deleted.save()
+
+        client.force_login(admin)
+        resp = client.get(reverse("accounts:user_detail", kwargs={"pk": deleted.pk}))
+        assert resp.status_code == 200

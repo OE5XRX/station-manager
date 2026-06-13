@@ -1243,11 +1243,19 @@ class UserDetailView(LoginRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         obj = super().get_object(queryset)
-        from .visibility import audience_for
+        from .visibility import Audience, audience_for
 
         aud = audience_for(self.request.user, obj)
         if aud is None:
             raise Http404("User not found")
+
+        # Soft-deleted users are admin-only. Non-admin audiences must not
+        # be able to enumerate or view them via direct /accounts/users/<pk>/
+        # URLs — the lifecycle filter on UserListView pins them to active,
+        # and the detail page must enforce the same boundary.
+        if obj.deleted_at is not None and aud != Audience.ADMIN:
+            raise Http404("User not found")
+
         self._audience = aud
         return obj
 
