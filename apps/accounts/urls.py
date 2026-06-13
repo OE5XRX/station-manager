@@ -60,7 +60,7 @@ urlpatterns = [
     ),
     path(
         "set-password/<str:token>/",
-        _stub.as_view(url="/", permanent=False),
+        views.SetPasswordView.as_view(),
         name="set_password",
     ),
     path(

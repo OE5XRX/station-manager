@@ -155,3 +155,99 @@ class TestUserCreateViewWelcome:
         )
         assert AccountAuditLog.EventType.USER_CREATED in events
         assert AccountAuditLog.EventType.WELCOME_TOKEN_SENT in events
+
+
+@pytest.mark.django_db
+class TestSetPasswordViewWelcome:
+    def test_get_with_valid_welcome_token_renders_form(self, client, db):
+        from apps.accounts.models import AccountToken
+        from apps.accounts.tokens import issue_token
+
+        user = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        user.set_unusable_password()
+        user.save()
+        raw = issue_token(user, AccountToken.TokenType.WELCOME)
+
+        resp = client.get(reverse("accounts:set_password", kwargs={"token": raw}))
+        assert resp.status_code == 200
+        assert b"new_password1" in resp.content
+
+    def test_post_valid_sets_password_and_logs_in(self, client, db):
+        from apps.accounts.models import AccountToken
+        from apps.accounts.tokens import issue_token
+
+        user = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        user.set_unusable_password()
+        user.save()
+        raw = issue_token(user, AccountToken.TokenType.WELCOME)
+
+        resp = client.post(
+            reverse("accounts:set_password", kwargs={"token": raw}),
+            {"new_password1": "VerySecret1!", "new_password2": "VerySecret1!"},
+        )
+        assert resp.status_code == 302
+        user.refresh_from_db()
+        assert user.has_usable_password()
+        assert user.check_password("VerySecret1!")
+
+    def test_post_valid_consumes_token(self, client, db):
+        import hashlib
+
+        from apps.accounts.models import AccountToken
+        from apps.accounts.tokens import issue_token
+
+        user = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        user.set_unusable_password()
+        user.save()
+        raw = issue_token(user, AccountToken.TokenType.WELCOME)
+
+        client.post(
+            reverse("accounts:set_password", kwargs={"token": raw}),
+            {"new_password1": "VerySecret1!", "new_password2": "VerySecret1!"},
+        )
+        h = hashlib.sha256(raw.encode()).hexdigest()
+        assert AccountToken.objects.get(secret_hash=h).used_at is not None
+
+    def test_get_with_invalid_token_redirects_to_login_with_error(self, client, db):
+        resp = client.get(
+            reverse("accounts:set_password", kwargs={"token": "garbage"}),
+            follow=False,
+        )
+        assert resp.status_code == 302
+        assert resp.url == reverse("accounts:login")
+
+    def test_emits_password_set_from_token_audit(self, client, db):
+        from apps.accounts.models import AccountAuditLog, AccountToken
+        from apps.accounts.tokens import issue_token
+
+        user = User.objects.create_user(
+            username="OE5NEW",
+            email="n@example.org",
+            membership_level=User.MembershipLevel.APPLICANT,
+        )
+        user.set_unusable_password()
+        user.save()
+        raw = issue_token(user, AccountToken.TokenType.WELCOME)
+
+        client.post(
+            reverse("accounts:set_password", kwargs={"token": raw}),
+            {"new_password1": "VerySecret1!", "new_password2": "VerySecret1!"},
+        )
+        entry = AccountAuditLog.objects.filter(
+            event_type=AccountAuditLog.EventType.PASSWORD_SET_FROM_TOKEN,
+            target_user=user,
+        ).latest("created_at")
+        assert "welcome" in entry.message
+        assert entry.actor == user

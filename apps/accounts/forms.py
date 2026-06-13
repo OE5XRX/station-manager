@@ -7,6 +7,9 @@ from django.contrib.auth.forms import (
     PasswordChangeForm as DjangoPasswordChangeForm,
 )
 from django.contrib.auth.forms import (
+    SetPasswordForm as DjangoSetPasswordForm,
+)
+from django.contrib.auth.forms import (
     UserChangeForm as BaseUserChangeForm,
 )
 from django.utils.translation import gettext_lazy as _
@@ -237,6 +240,19 @@ class PasswordChangeForm(DjangoPasswordChangeForm):
 
     Re-Auth via the inherited ``old_password`` field; ProfilePasswordChangeView
     calls ``update_session_auth_hash`` after save() so the user stays logged in.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = "form-control"
+
+
+class SetPasswordForm(DjangoSetPasswordForm):
+    """Bootstrap-styled overlay over Django's SetPasswordForm.
+
+    Django's class validates ``new_password1`` matches ``new_password2``
+    AND runs all ``AUTH_PASSWORD_VALIDATORS``. Save sets the hash.
     """
 
     def __init__(self, *args, **kwargs):

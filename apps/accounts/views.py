@@ -1,12 +1,14 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.http import Http404
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -245,6 +247,81 @@ class ProfilePasswordChangeView(LoginRequiredMixin, View):
             for errors in form.errors.values():
                 messages.error(request, "; ".join(errors))
         return redirect("accounts:profile")
+
+
+@method_decorator(login_not_required, name="dispatch")
+class SetPasswordView(View):
+    """Consume a WELCOME or RESET token and set a fresh password.
+
+    GET-Phase: looks up the token but does NOT mark used (so Outlook
+    Safe-Links + similar email-scanners don't consume it on link preview).
+    POST-Phase: validates password form, then consumes token, then sets
+    password, then auto-logs-in.
+    """
+
+    template_name = "accounts/set_password.html"
+
+    def get(self, request, token):
+        from .forms import SetPasswordForm
+
+        token_row = self._lookup(token)
+        if token_row is None:
+            return self._invalid_response(request)
+        form = SetPasswordForm(user=token_row.user)
+        return render(request, self.template_name, {"form": form, "token": token})
+
+    def post(self, request, token):
+        from .forms import SetPasswordForm
+        from .tokens import consume_token
+
+        token_row = self._lookup(token)
+        if token_row is None:
+            return self._invalid_response(request)
+        form = SetPasswordForm(user=token_row.user, data=request.POST)
+        if form.is_valid():
+            consume_token(token, token_row.token_type)
+            form.save()
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.PASSWORD_SET_FROM_TOKEN,
+                actor=token_row.user,
+                target_user=token_row.user,
+                message=f"via {token_row.token_type}",
+                ip_address=_client_ip(request),
+            )
+            auth_login(
+                request,
+                token_row.user,
+                backend="django.contrib.auth.backends.ModelBackend",
+            )
+            messages.success(request, _("Password set. Welcome to OE5XRX."))
+            return redirect("accounts:profile")
+        return render(request, self.template_name, {"form": form, "token": token})
+
+    def _lookup(self, raw):
+        import hashlib
+
+        from .models import AccountToken
+
+        secret_hash = hashlib.sha256(raw.encode()).hexdigest()
+        return AccountToken.objects.filter(
+            secret_hash=secret_hash,
+            token_type__in=[
+                AccountToken.TokenType.WELCOME,
+                AccountToken.TokenType.RESET,
+            ],
+            used_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).first()
+
+    def _invalid_response(self, request):
+        messages.error(
+            request,
+            _(
+                "Link invalid or expired. Ask an admin for a new Welcome link, "
+                "or request a password reset."
+            ),
+        )
+        return redirect("accounts:login")
 
 
 class UserListView(LoginRequiredMixin, ListView):
