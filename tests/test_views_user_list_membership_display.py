@@ -44,8 +44,8 @@ def test_profile_page_renders_membership_pill(client, member_user):
 
 
 @pytest.mark.django_db
-def test_user_confirm_delete_renders_membership_pill(client, admin_user, member_user):
-    """The delete-confirm page shows the target user's membership-level pill."""
+def test_user_confirm_soft_delete_renders_membership_pill(client, admin_user, member_user):
+    """The soft-delete confirm page shows the target user's membership-level pill."""
     client.force_login(admin_user)
     response = client.get(reverse("accounts:user_soft_delete", args=[member_user.pk]))
 

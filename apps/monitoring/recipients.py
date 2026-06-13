@@ -46,11 +46,11 @@ def recipients_for_station_alert(station):
     )
 
     # .active() excludes soft-deleted users (deleted_at IS NOT NULL).
-    # Soft-deleted users have is_active=False too (Sub-Spec 2b sets both),
-    # so the is_active=False exclude below already catches them — but we
-    # filter on deleted_at explicitly as defense-in-depth so notification
-    # routing doesn't silently break if the soft-delete flow ever changes
-    # to keep is_active=True (e.g. for restore-window UX).
+    # The subsequent .exclude(is_active=False) is a SEPARATE gate for
+    # deactivated-but-not-deleted users (admin disabled an account but
+    # didn't soft-delete it). Don't conflate the two — removing .active()
+    # would let soft-deleted rows leak into the recipient set whenever a
+    # future flow keeps is_active=True after soft-delete.
     return (
         User.objects.active()
         .filter(q)

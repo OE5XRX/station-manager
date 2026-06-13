@@ -736,7 +736,12 @@ class UserListView(LoginRequiredMixin, ListView):
         ctx["is_member_view"] = not self.request.user.is_admin
         ctx["filter_q"] = self.request.GET.get("q", "")
         ctx["filter_role"] = self.request.GET.get("role", "")
-        ctx["filter_show"] = self.request.GET.get("show", "active")
+        # Mirror get_queryset's hard-pinning for non-admin viewers so the
+        # template's active-pill state matches the actual queryset.
+        if self.request.user.is_admin:
+            ctx["filter_show"] = self.request.GET.get("show", "active")
+        else:
+            ctx["filter_show"] = "active"
         return ctx
 
 
