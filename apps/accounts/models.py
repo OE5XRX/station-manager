@@ -1,10 +1,14 @@
 import re
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
+from django.db.models import Q
+from django.db.models.functions import Lower
+from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
@@ -148,6 +152,18 @@ class User(AbstractUser):
         verbose_name = _("user")
         verbose_name_plural = _("users")
         ordering = ["username"]
+        constraints = [
+            # Case-insensitive uniqueness on email at the DB layer.
+            # Backstops the per-form `email__iexact` validators and
+            # closes the race window in the email-verify swap where
+            # two concurrent verify-clicks could otherwise commit the
+            # same email to two users.
+            models.UniqueConstraint(
+                Lower("email"),
+                condition=~Q(email=""),
+                name="accounts_user_email_ci_unique",
+            ),
+        ]
 
     def __str__(self):
         return self.username
@@ -272,6 +288,16 @@ class AccountAuditLog(models.Model):
         PASSWORD_CHANGED = "password_changed", _("Password Changed")
         STATION_ASSIGNMENT_CREATED = "station_assignment_created", _("Station Assignment Created")
         STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked", _("Station Assignment Revoked")
+        # === Added in Sub-Spec 2a Token-Email-Flows ===
+        WELCOME_TOKEN_SENT = "welcome_token_sent", _("Welcome Token Sent")
+        PASSWORD_RESET_REQUESTED = "password_reset_requested", _("Password Reset Requested")
+        PASSWORD_RESET_RATE_LIMITED = (
+            "password_reset_rate_limited",
+            _("Password Reset Rate Limited"),
+        )
+        PASSWORD_SET_FROM_TOKEN = "password_set_from_token", _("Password Set From Token")
+        EMAIL_VERIFY_REQUESTED = "email_verify_requested", _("Email Verify Requested")
+        EMAIL_VERIFIED = "email_verified", _("Email Verified")
 
     event_type = models.CharField(
         _("event type"),
@@ -338,3 +364,51 @@ class AccountAuditLog(models.Model):
             message=message,
             ip_address=ip_address,
         )
+
+
+class AccountToken(models.Model):
+    """Single-use, time-limited token for Welcome / Reset / Verify flows.
+
+    The raw token is generated via ``secrets.token_urlsafe(32)`` and is
+    only ever returned from ``issue_token``; the DB stores only the
+    SHA-256 hash. Consumption is atomic: ``consume_token`` does a
+    SELECT FOR UPDATE on the row and sets ``used_at`` in the same
+    transaction, so a parallel request cannot redeem the same token.
+    """
+
+    class TokenType(models.TextChoices):
+        WELCOME = "welcome", _("Welcome (set initial password)")
+        RESET = "reset", _("Password reset")
+        VERIFY = "verify", _("Email verification")
+
+    EXPIRY = {
+        TokenType.WELCOME: timedelta(days=7),
+        TokenType.RESET: timedelta(hours=24),
+        TokenType.VERIFY: timedelta(hours=24),
+    }
+
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="account_tokens",
+    )
+    token_type = models.CharField(
+        max_length=16,
+        choices=TokenType.choices,
+        db_index=True,
+    )
+    secret_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    ip_created = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "token_type", "used_at"]),
+            models.Index(fields=["secret_hash"]),
+        ]
+
+    def is_active(self):
+        return self.used_at is None and self.expires_at > timezone.now()

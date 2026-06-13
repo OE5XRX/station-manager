@@ -7,10 +7,10 @@ from django.contrib.auth.forms import (
     PasswordChangeForm as DjangoPasswordChangeForm,
 )
 from django.contrib.auth.forms import (
-    UserChangeForm as BaseUserChangeForm,
+    SetPasswordForm as DjangoSetPasswordForm,
 )
 from django.contrib.auth.forms import (
-    UserCreationForm as BaseUserCreationForm,
+    UserChangeForm as BaseUserChangeForm,
 )
 from django.utils.translation import gettext_lazy as _
 
@@ -50,16 +50,14 @@ class LoginForm(AuthenticationForm):
     )
 
 
-class UserCreationForm(BaseUserCreationForm):
+class UserCreationForm(forms.ModelForm):
     """Form for admins to create new users.
 
-    Identity fields only. ``membership_level`` defaults to APPLICANT
-    on creation (set in apps/accounts/models.py); the admin promotes
-    the user via the membership-card on the edit page after creation.
-    Topology assignments (Region-Manager, Station-Admin/Maintainer)
-    are managed from the same edit page once the user is at least
-    Vereins-Mitglied — the ``_ApplicantForbiddenMixin`` invariant
-    rejects assignments for applicants.
+    NO password fields — the new user gets a Welcome mail with a
+    Set-Password link. Until they click it, ``user.has_usable_password()``
+    is False and login is impossible.
+
+    The Welcome-Mail-Trigger lives in UserCreateView.form_valid, not here.
     """
 
     class Meta:
@@ -73,10 +71,20 @@ class UserCreationForm(BaseUserCreationForm):
             "language": forms.Select(attrs={"class": "form-select"}),
         }
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["password1"].widget.attrs["class"] = "form-control"
-        self.fields["password2"].widget.attrs["class"] = "form-control"
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip()
+        if not email:
+            raise forms.ValidationError(_("Email is required for the Welcome link."))
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError(_("A user with this email already exists."))
+        return email
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.set_unusable_password()
+        if commit:
+            user.save()
+        return user
 
 
 class UserChangeForm(BaseUserChangeForm):
@@ -151,7 +159,12 @@ class UserChangeForm(BaseUserChangeForm):
 
 
 class ProfileIdentityForm(forms.ModelForm):
-    """Self-edit of identity fields (Profile page → Identity panel)."""
+    """Self-edit of identity fields (Profile page → Identity panel).
+
+    Email-changes are NOT persisted here — the view picks up
+    ``"email" in form.changed_data`` and triggers a verify-mail flow
+    instead. Other fields save normally.
+    """
 
     class Meta:
         model = User
@@ -162,6 +175,29 @@ class ProfileIdentityForm(forms.ModelForm):
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
             "language": forms.Select(attrs={"class": "form-select"}),
         }
+
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip()
+        # Empty emails are allowed by the DB constraint
+        # (UniqueConstraint excludes condition ~Q(email="")), so skip
+        # the cross-user uniqueness check — otherwise a second user
+        # with a blank email would always fail validation.
+        if not email:
+            return email
+        if User.objects.exclude(pk=self.instance.pk).filter(email__iexact=email).exists():
+            raise forms.ValidationError(_("Another user already has this email."))
+        return email
+
+    def save(self, commit=True):
+        if "email" in self.changed_data:
+            # ModelForm._post_clean set self.instance.email = new_email
+            # during is_valid(). Revert so super().save() doesn't write it.
+            # Use the module-level User (not type(self.instance)) — when the
+            # form was constructed with request.user, instance is a
+            # SimpleLazyObject whose type lacks the manager.
+            old_email = User.objects.values_list("email", flat=True).get(pk=self.instance.pk)
+            self.instance.email = old_email
+        return super().save(commit=commit)
 
 
 class ProfileProfileForm(forms.ModelForm):
@@ -238,3 +274,35 @@ class PasswordChangeForm(DjangoPasswordChangeForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs["class"] = "form-control"
+
+
+class SetPasswordForm(DjangoSetPasswordForm):
+    """Bootstrap-styled overlay over Django's SetPasswordForm.
+
+    Django's class validates ``new_password1`` matches ``new_password2``
+    AND runs all ``AUTH_PASSWORD_VALIDATORS``. Save sets the hash.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = "form-control"
+
+
+class PasswordResetRequestForm(forms.Form):
+    """Form on /accounts/password-reset/ — just collects an email.
+
+    No user-existence-validation here; the view decides what to do.
+    Validation in the form would leak existence via different error paths.
+    """
+
+    email = forms.EmailField(
+        label=_("Email"),
+        widget=forms.EmailInput(
+            attrs={
+                "class": "form-control",
+                "autofocus": True,
+                "autocomplete": "email",
+            }
+        ),
+    )

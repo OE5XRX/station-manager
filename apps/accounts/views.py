@@ -1,12 +1,14 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.http import Http404
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -45,6 +47,24 @@ def _client_ip(request):
     from .views_membership import _get_client_ip
 
     return _get_client_ip(request)
+
+
+def _session_backend_path():
+    """Pick a session-compatible auth backend from settings.
+
+    ``django.contrib.auth.login()`` complains when multiple
+    AUTHENTICATION_BACKENDS are configured and the user wasn't fetched
+    via ``authenticate()`` — typical for token-driven flows. We need
+    an explicit backend path; skip ``axes.*`` backends since axes only
+    intercepts authenticate() and isn't a session-creating backend.
+    Falls back to the first listed backend if none match.
+    """
+    from django.conf import settings
+
+    return next(
+        (b for b in settings.AUTHENTICATION_BACKENDS if not b.startswith("axes.")),
+        settings.AUTHENTICATION_BACKENDS[0],
+    )
 
 
 # Set of User fields whose changes are tracked in USER_UPDATED audit
@@ -125,13 +145,59 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         form = ProfileIdentityForm(request.POST, instance=user, prefix="identity")
         if form.is_valid():
             changed = set(form.changed_data)
+            new_email = form.cleaned_data.get("email") if "email" in changed else None
             form.save()
-            self._emit_user_updated(request, user, changed)
-            messages.success(request, _("Identity updated."))
+            # USER_UPDATED audit excludes "email" — that change is still pending.
+            self._emit_user_updated(request, user, changed - {"email"})
+            if new_email:
+                self._trigger_email_verify(request, user, new_email)
+                messages.info(
+                    request,
+                    _(
+                        "Confirmation link sent to %(new)s. "
+                        "Until you click it, %(old)s stays active."
+                    )
+                    % {"new": new_email, "old": user.email},
+                )
+            if changed - {"email"}:
+                messages.success(request, _("Identity updated."))
         else:
             for errors in form.errors.values():
                 messages.error(request, "; ".join(errors))
         return redirect("accounts:profile")
+
+    def _trigger_email_verify(self, request, user, new_email):
+        from django.db import transaction
+
+        from .emails import send_account_email
+        from .models import AccountToken
+        from .tokens import invalidate_pending_tokens, issue_token
+
+        with transaction.atomic():
+            invalidate_pending_tokens(user, AccountToken.TokenType.VERIFY)
+            raw = issue_token(
+                user,
+                AccountToken.TokenType.VERIFY,
+                payload={"new_email": new_email},
+                ip=_client_ip(request),
+            )
+            send_account_email(
+                user,
+                "verify",
+                {
+                    "raw_token": raw,
+                    "new_email": new_email,
+                    "old_email": user.email,
+                    "override_to": new_email,
+                },
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.EMAIL_VERIFY_REQUESTED,
+                actor=user,
+                target_user=user,
+                message=f"{user.email} → {new_email}",
+                ip_address=_client_ip(request),
+            )
 
     def _save_profile(self, request, user):
         form = ProfileProfileForm(request.POST, request.FILES, instance=user, prefix="profile")
@@ -247,6 +313,354 @@ class ProfilePasswordChangeView(LoginRequiredMixin, View):
         return redirect("accounts:profile")
 
 
+@method_decorator(login_not_required, name="dispatch")
+class SetPasswordView(View):
+    """Consume a WELCOME or RESET token and set a fresh password.
+
+    GET-Phase: looks up the token but does NOT mark used (so Outlook
+    Safe-Links + similar email-scanners don't consume it on link preview).
+    POST-Phase: validates password form, then consumes token, then sets
+    password, then auto-logs-in.
+    """
+
+    template_name = "accounts/set_password.html"
+
+    def get(self, request, token):
+        from .forms import SetPasswordForm
+
+        token_row = self._lookup(token)
+        if token_row is None:
+            return self._invalid_response(request)
+        form = SetPasswordForm(user=token_row.user)
+        return render(request, self.template_name, {"form": form, "token": token})
+
+    def post(self, request, token):
+        from django.db import transaction
+
+        from .forms import SetPasswordForm
+        from .tokens import consume_token
+
+        token_row = self._lookup(token)
+        if token_row is None:
+            return self._invalid_response(request)
+        form = SetPasswordForm(user=token_row.user, data=request.POST)
+        if form.is_valid():
+            with transaction.atomic():
+                consumed = consume_token(token, token_row.token_type)
+                if consumed is None:
+                    # Another request beat us to the consume.
+                    return self._invalid_response(request)
+                form.save()
+                AccountAuditLog.log(
+                    event_type=AccountAuditLog.EventType.PASSWORD_SET_FROM_TOKEN,
+                    actor=token_row.user,
+                    target_user=token_row.user,
+                    message=f"via {token_row.token_type}",
+                    ip_address=_client_ip(request),
+                )
+            auth_login(request, token_row.user, backend=_session_backend_path())
+            messages.success(request, _("Password set. Welcome to OE5XRX."))
+            return redirect("accounts:profile")
+        return render(request, self.template_name, {"form": form, "token": token})
+
+    def _lookup(self, raw):
+        import hashlib
+
+        from .models import AccountToken
+
+        secret_hash = hashlib.sha256(raw.encode()).hexdigest()
+        return AccountToken.objects.filter(
+            secret_hash=secret_hash,
+            token_type__in=[
+                AccountToken.TokenType.WELCOME,
+                AccountToken.TokenType.RESET,
+            ],
+            used_at__isnull=True,
+            expires_at__gt=timezone.now(),
+            user__is_active=True,  # block tokens for deactivated users
+        ).first()
+
+    def _invalid_response(self, request):
+        messages.error(
+            request,
+            _(
+                "Link invalid or expired. Ask an admin for a new Welcome link, "
+                "or request a password reset."
+            ),
+        )
+        return redirect("accounts:login")
+
+
+@method_decorator(login_not_required, name="dispatch")
+class VerifyEmailView(View):
+    """GET-only: swap the user's email to the pending verified address.
+
+    Idempotent in the sense that a second click on the same link shows
+    an "invalid or expired" message — the token is single-use.
+    """
+
+    http_method_names = ["get"]
+
+    def get(self, request, token):
+        import hashlib
+
+        from django.db import transaction
+
+        from .models import AccountToken
+
+        # Lookup WITHOUT consuming: if the race-guard fails, the user can
+        # click again later (e.g. once the conflicting email is freed).
+        # Also filter deactivated users — consistent with SetPasswordView.
+        secret_hash = hashlib.sha256(token.encode()).hexdigest()
+        token_row = AccountToken.objects.filter(
+            secret_hash=secret_hash,
+            token_type=AccountToken.TokenType.VERIFY,
+            used_at__isnull=True,
+            expires_at__gt=timezone.now(),
+            user__is_active=True,
+        ).first()
+        if token_row is None:
+            messages.error(request, _("Email verification link invalid or expired."))
+            return redirect("accounts:login")
+
+        new_email = token_row.payload.get("new_email", "")
+        if not new_email:
+            messages.error(request, _("Email verification token has no target address."))
+            return redirect("accounts:login")
+        # NOTE: do NOT capture old_email here — it's read again under the
+        # lock below so the audit message reflects the actual transition
+        # (an admin could have edited user.email between this point and
+        # the lock-acquire).
+
+        # Commit: race-check + consume + swap + audit all in one transaction.
+        # The race-check INSIDE the lock closes the window between the
+        # pre-check and the swap. Token is only marked used AFTER the
+        # email swap commits, so the user can re-click if the conflict
+        # was a false positive (e.g. the conflicting user releases the
+        # email).
+        with transaction.atomic():
+            # SELECT FOR UPDATE so two concurrent clicks serialize.
+            # Re-apply user__is_active=True so a deactivation between
+            # the unlocked pre-lookup and the lock-acquire is caught.
+            # Catch DoesNotExist for the rare case where the row was
+            # deleted in the meantime (e.g. user hard-deleted via
+            # CASCADE) — return the same generic-invalid response
+            # instead of 500-ing.
+            try:
+                locked = AccountToken.objects.select_for_update().get(
+                    pk=token_row.pk, user__is_active=True
+                )
+            except AccountToken.DoesNotExist:
+                messages.error(request, _("Email verification link invalid or expired."))
+                return redirect("accounts:login")
+            if not locked.is_active():
+                messages.error(request, _("Email verification link invalid or expired."))
+                return redirect("accounts:login")
+            # Capture the actual old email UNDER the lock so the audit
+            # message reflects the real transition even if an admin
+            # edited user.email between the unlocked pre-fetch and the
+            # lock-acquire.
+            old_email = locked.user.email
+            # Race-guard inside the transaction: another account may have
+            # grabbed the target email since the verify-request was issued
+            # OR since our unlocked pre-fetch above.
+            if User.objects.exclude(pk=locked.user.pk).filter(email__iexact=new_email).exists():
+                messages.error(
+                    request,
+                    _("Cannot verify: another account is already using %(email)s.")
+                    % {"email": new_email},
+                )
+                target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
+                return redirect(target)
+            locked.user.email = new_email
+            # The DB-level case-insensitive unique constraint on
+            # accounts.User.email is the final backstop against two
+            # parallel verify-clicks claiming the same email — if
+            # both passed the race-guard above (rare but possible),
+            # exactly one save() commits and the other raises
+            # IntegrityError, which we translate to a user-facing
+            # "another account uses this email" message.
+            from django.db import IntegrityError
+
+            try:
+                locked.user.save(update_fields=["email"])
+            except IntegrityError:
+                messages.error(
+                    request,
+                    _("Cannot verify: another account is already using %(email)s.")
+                    % {"email": new_email},
+                )
+                target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
+                return redirect(target)
+            locked.used_at = timezone.now()
+            locked.save(update_fields=["used_at"])
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
+                actor=locked.user,
+                target_user=locked.user,
+                message=f"{old_email} → {new_email}",
+                ip_address=_client_ip(request),
+            )
+        messages.success(request, _("Email updated to %(email)s.") % {"email": new_email})
+        if request.user.is_authenticated and request.user.pk == token_row.user.pk:
+            return redirect("accounts:profile")
+        return redirect("accounts:login")
+
+
+@method_decorator(login_not_required, name="dispatch")
+class PasswordResetRequestView(View):
+    """Anon endpoint: 'I forgot my password, send me a reset link.'
+
+    Timing-safe and rate-limited. Always responds with the same
+    generic message (no email-enumeration). Rate-limit hits are
+    audit-logged (PASSWORD_RESET_RATE_LIMITED, target_user=None
+    when email is unknown). Successful issue is audit-logged
+    (PASSWORD_RESET_REQUESTED). Plain unknown-email requests are
+    NOT audit-logged — that would flood the audit feed and serve
+    no forensic purpose beyond what the web-server access log
+    already shows.
+    """
+
+    template_name = "accounts/password_reset_request.html"
+
+    def get(self, request):
+        from .forms import PasswordResetRequestForm
+
+        return render(request, self.template_name, {"form": PasswordResetRequestForm()})
+
+    def post(self, request):
+        from django.db import transaction
+
+        from .emails import send_account_email
+        from .forms import PasswordResetRequestForm
+        from .models import AccountToken
+        from .throttle import _ip_rate_exceeded, _user_rate_exceeded
+        from .tokens import invalidate_pending_tokens, issue_token
+
+        form = PasswordResetRequestForm(request.POST)
+        if not form.is_valid():
+            return render(request, self.template_name, {"form": form})
+
+        email = form.cleaned_data["email"].strip()
+        ip = _client_ip(request)
+
+        if _ip_rate_exceeded(ip):
+            self._audit_rate_limited(request, email, ip, reason="ip")
+            return self._generic_success(request, email)
+
+        try:
+            user = User.objects.get(email__iexact=email, is_active=True)
+        except User.DoesNotExist:
+            return self._generic_success(request, email)
+        except User.MultipleObjectsReturned:
+            # Defensive fail-closed path. accounts.User has a
+            # case-insensitive UniqueConstraint on email (migration
+            # 0013_user_email_ci_unique) so duplicates should be
+            # impossible in steady state — but keep this branch for
+            # legacy data and partially-applied-migration cases. Same
+            # generic-success response so we don't leak the anomaly
+            # to the caller.
+            return self._generic_success(request, email)
+
+        if _user_rate_exceeded(user):
+            self._audit_rate_limited(request, email, ip, target_user=user, reason="user")
+            return self._generic_success(request, email)
+
+        with transaction.atomic():
+            invalidate_pending_tokens(user, AccountToken.TokenType.RESET)
+            raw = issue_token(user, AccountToken.TokenType.RESET, ip=ip)
+            send_account_email(user, "reset", {"raw_token": raw})
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.PASSWORD_RESET_REQUESTED,
+                actor=None,
+                target_user=user,
+                message=f"to {email} from {ip}",
+                ip_address=ip,
+            )
+
+        return self._generic_success(request, email)
+
+    def _generic_success(self, request, email):
+        messages.info(
+            request,
+            _(
+                "If %(email)s is a registered account, a password reset link "
+                "has been sent. Check your inbox."
+            )
+            % {"email": email},
+        )
+        return redirect("accounts:login")
+
+    def _audit_rate_limited(self, request, email, ip, target_user=None, reason=""):
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.PASSWORD_RESET_RATE_LIMITED,
+            actor=None,
+            target_user=target_user,
+            message=f"{reason} {email} from {ip}",
+            ip_address=ip,
+        )
+
+
+class ResendWelcomeView(AdminRequiredMixin, View):
+    """Admin-only: re-issue a Welcome token + mail.
+
+    Useful when the original Welcome-Mail expired (7d) or got lost.
+    Refuses if:
+    - the user already has a usable password (no point),
+    - the user is deactivated (token would be unusable — consume_token
+      filters user__is_active=True),
+    - the user has no email set (mail-send would fail or land in
+      a black hole).
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        from django.db import transaction
+        from django.shortcuts import get_object_or_404
+
+        from .emails import send_account_email
+        from .models import AccountToken
+        from .tokens import invalidate_pending_tokens, issue_token
+
+        user = get_object_or_404(User, pk=pk)
+        if user.has_usable_password():
+            messages.error(request, _("User already has a password set."))
+            return redirect("accounts:user_detail", pk=pk)
+        if not user.is_active:
+            messages.error(
+                request,
+                _("Cannot resend Welcome: user is deactivated. Re-activate first."),
+            )
+            return redirect("accounts:user_detail", pk=pk)
+        if not user.email:
+            messages.error(
+                request,
+                _("Cannot resend Welcome: user has no email address. Set one first."),
+            )
+            return redirect("accounts:user_detail", pk=pk)
+        with transaction.atomic():
+            invalidate_pending_tokens(user, AccountToken.TokenType.WELCOME)
+            raw = issue_token(user, AccountToken.TokenType.WELCOME, ip=_client_ip(request))
+            send_account_email(
+                user,
+                "welcome",
+                {
+                    "raw_token": raw,
+                    "actor": request.user.username,
+                },
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.WELCOME_TOKEN_SENT,
+                actor=request.user,
+                target_user=user,
+                message=f"resend to {user.email}",
+                ip_address=_client_ip(request),
+            )
+        messages.success(request, _("Welcome link re-sent."))
+        return redirect("accounts:user_detail", pk=pk)
+
+
 class UserListView(LoginRequiredMixin, ListView):
     """Audience-aware list. Admin sees everyone (incl. Applicants),
     Member sees everyone except Applicants, Applicants get 404.
@@ -322,16 +736,48 @@ class UserCreateView(AdminRequiredMixin, CreateView):
         return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
-        response = super().form_valid(form)
-        AccountAuditLog.log(
-            event_type=AccountAuditLog.EventType.USER_CREATED,
-            actor=self.request.user,
-            target_user=self.object,
-            message=f"{self.object.username} <{self.object.email}>",
-            ip_address=_client_ip(self.request),
+        from django.db import transaction
+
+        from .emails import send_account_email
+        from .models import AccountToken
+        from .tokens import issue_token
+
+        with transaction.atomic():
+            user = form.save(commit=False)
+            user.save()
+            self.object = user
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_CREATED,
+                actor=self.request.user,
+                target_user=user,
+                message=f"{user.username} <{user.email}>",
+                ip_address=_client_ip(self.request),
+            )
+            raw = issue_token(
+                user,
+                AccountToken.TokenType.WELCOME,
+                ip=_client_ip(self.request),
+            )
+            send_account_email(
+                user,
+                "welcome",
+                {
+                    "raw_token": raw,
+                    "actor": self.request.user.username,
+                },
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.WELCOME_TOKEN_SENT,
+                actor=self.request.user,
+                target_user=user,
+                message=f"to {user.email}",
+                ip_address=_client_ip(self.request),
+            )
+        messages.success(
+            self.request,
+            _("User created. Welcome link sent to %(email)s.") % {"email": user.email},
         )
-        messages.success(self.request, _("User created successfully."))
-        return response
+        return redirect(self.get_success_url())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

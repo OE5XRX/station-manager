@@ -1,0 +1,16 @@
+Hi {{ user.first_name|default:user.username }},
+
+You requested to change your OE5XRX account email
+from {{ old_email }} to {{ new_email }}.
+
+Confirm the change:
+{{ link }}
+
+This link is valid for 24 hours. Until you click it, your old address
+({{ old_email }}) remains active for login and notifications.
+
+If you didn't request this, ignore this email — no change will happen.
+
+73,
+The OE5XRX team
+{{ site_url }}

@@ -52,4 +52,24 @@ urlpatterns = [
         StationAssignmentRevokeView.as_view(),
         name="station_assignment_revoke",
     ),
+    path(
+        "users/<int:pk>/welcome/",
+        views.ResendWelcomeView.as_view(),
+        name="resend_welcome",
+    ),
+    path(
+        "set-password/<str:token>/",
+        views.SetPasswordView.as_view(),
+        name="set_password",
+    ),
+    path(
+        "password-reset/",
+        views.PasswordResetRequestView.as_view(),
+        name="password_reset_request",
+    ),
+    path(
+        "verify-email/<str:token>/",
+        views.VerifyEmailView.as_view(),
+        name="verify_email",
+    ),
 ]

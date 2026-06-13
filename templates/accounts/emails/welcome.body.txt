@@ -1,0 +1,13 @@
+Hi {{ user.first_name|default:user.username }},
+
+{{ actor|default:"An admin" }} just created your OE5XRX account.
+
+Set your password and start using the station-manager:
+{{ link }}
+
+This link is valid for 7 days. If you didn't expect this email, you can
+safely ignore it.
+
+73,
+The OE5XRX team
+{{ site_url }}

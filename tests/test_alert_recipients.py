@@ -27,8 +27,13 @@ from apps.stations.models import (
 )
 
 
-def _user(level, email="x@example.com", username=None):
+def _user(level, email=None, username=None):
     username = username or f"u{User.objects.count()}"
+    # Default to a per-user-distinct email so the case-insensitive
+    # uniqueness constraint on accounts.User.email doesn't trip when
+    # a test creates multiple fixture users.
+    if email is None:
+        email = f"{username}@example.com"
     u = User.objects.create_user(username=username, password="x", email=email)
     u.membership_level = level
     u.save(update_fields=["membership_level"])

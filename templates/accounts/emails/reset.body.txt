@@ -1,0 +1,13 @@
+Hi {{ user.first_name|default:user.username }},
+
+Someone requested a password reset for your account on OE5XRX.
+
+Set a new password here:
+{{ link }}
+
+This link is valid for 24 hours. If you didn't request this, you can
+ignore this email — your current password stays unchanged.
+
+73,
+The OE5XRX team
+{{ site_url }}
