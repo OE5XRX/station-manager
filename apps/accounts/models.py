@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
@@ -63,6 +64,27 @@ class User(AbstractUser):
     promotion happens via Django Admin until the dedicated UI lands
     in PR-2.
     """
+
+    # Sub-Spec 2b Soft-Delete: override AbstractUser.username with unique=False
+    # so the conditional UniqueConstraint (unique_active_username) in Meta
+    # becomes the sole DB-level enforcer. Without this override, Django keeps
+    # AbstractUser's unconditional UNIQUE index on username and callsign-reuse
+    # after soft-delete fails with IntegrityError.
+    username_validator = UnicodeUsernameValidator()
+
+    username = models.CharField(
+        _("username"),
+        max_length=150,
+        # unique=False — DB-level uniqueness is enforced via Meta.constraints
+        # (unique_active_username) which uses condition=deleted_at__isnull=True.
+        # This allows callsign-reuse after soft-delete.
+        unique=False,
+        help_text=_("Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."),
+        validators=[username_validator],
+        error_messages={
+            "unique": _("A user with that username already exists."),
+        },
+    )
 
     class Language(models.TextChoices):
         ENGLISH = "en", _("English")
@@ -192,10 +214,10 @@ class User(AbstractUser):
             # uniqueness across all rows). The partial UNIQUE-Index here
             # narrows that to active rows only, so when a user is
             # soft-deleted (``deleted_at`` set), the same callsign can
-            # be issued to a fresh row. The AbstractUser-level uniqueness
-            # is intentionally left in place — Django still enforces it
-            # at form/admin layer; this constraint is the DB-level
-            # backstop for the *active* slice.
+            # be issued to a fresh row. The AbstractUser-level
+            # ``unique=True`` on ``username`` is explicitly relaxed in
+            # the field override above; this partial constraint is now
+            # the sole DB-level uniqueness enforcer for the active slice.
             models.UniqueConstraint(
                 fields=["username"],
                 condition=Q(deleted_at__isnull=True),

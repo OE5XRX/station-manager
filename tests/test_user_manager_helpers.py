@@ -40,3 +40,31 @@ class TestUserManagerHelpers:
         all_users = list(User.objects.all().values_list("username", flat=True))
         assert "OE5ALICE" in all_users
         assert "OE5BOB" in all_users
+
+
+@pytest.mark.django_db
+class TestUsernameReuseAfterSoftDelete:
+    def test_can_create_new_user_with_soft_deleted_username(self):
+        """A soft-deleted user's username can be reused by a fresh active user.
+
+        Verifies the conditional UniqueConstraint is actually enforcing
+        uniqueness only on non-deleted rows (no unconditional unique index
+        left over from AbstractUser).
+        """
+        old = User.objects.create_user(username="OE5RECYC", password="x")
+        old.deleted_at = timezone.now()
+        old.is_active = False
+        old.save()
+
+        # Must not raise IntegrityError
+        new = User.objects.create_user(username="OE5RECYC", password="x")
+        assert new.pk != old.pk
+        assert User.objects.filter(username="OE5RECYC").count() == 2
+
+    def test_two_active_users_with_same_username_blocked(self):
+        """The conditional constraint still blocks two ACTIVE users with same username."""
+        from django.db import IntegrityError
+
+        User.objects.create_user(username="OE5DUP", password="x")
+        with pytest.raises(IntegrityError):
+            User.objects.create_user(username="OE5DUP", password="x")
