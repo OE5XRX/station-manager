@@ -56,7 +56,6 @@ def test_login_required_middleware_runs_after_authentication_middleware():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
 def test_middleware_redirects_a_naked_anonymous_view():
     """The whole point of the middleware: a *future* view that forgets
     ``LoginRequiredMixin`` must still be inaccessible to anon users.
@@ -65,12 +64,24 @@ def test_middleware_redirects_a_naked_anonymous_view():
     already has its mixin. Instead, we feed a synthetic view function
     (no ``login_required = False``, no mixin) through the middleware
     directly and assert it produces a redirect for an anon request.
+
+    Pure unit test — no DB access — so the ``django_db`` marker is
+    deliberately omitted to keep the suite fast and the scope obvious.
     """
     from django.contrib.auth.models import AnonymousUser
 
     # Find the registered LoginRequiredMiddleware so we test exactly the
     # middleware in MIDDLEWARE (subclass or vanilla — both are valid).
-    dotted = next(mw for mw in settings.MIDDLEWARE if mw.endswith("LoginRequiredMiddleware"))
+    # An explicit AssertionError beats ``next()``'s ``StopIteration`` if
+    # the middleware is missing from a trimmed settings module: the
+    # error message tells the reader exactly what's wrong.
+    matches = [mw for mw in settings.MIDDLEWARE if mw.endswith("LoginRequiredMiddleware")]
+    assert matches, (
+        "No LoginRequiredMiddleware found in settings.MIDDLEWARE. "
+        "test_login_required_middleware_is_registered would normally catch "
+        f"this; current MIDDLEWARE: {settings.MIDDLEWARE!r}"
+    )
+    dotted = matches[0]
     module_path, cls_name = dotted.rsplit(".", 1)
     mw_cls = getattr(import_module(module_path), cls_name)
     mw = mw_cls(get_response=lambda r: None)
@@ -386,3 +397,29 @@ def test_normalisation_helper_blocks_traversal_to_gated_path():
     assert Mw._is_public_path("/sso/.well-known/../applications/") is False
     # Double slashes collapse but resolve to the same public path → True.
     assert Mw._is_public_path("//sso//token//") is True
+
+
+def test_exact_match_entries_do_not_act_as_prefixes():
+    """Defense-in-depth: entries in :pyattr:`PUBLIC_EXACT_PATHS`
+    (``/sso/token/``, ``/sso/userinfo/``, …) must match the path
+    exactly. A future view added under one of these — e.g. a
+    hypothetical ``/sso/token/audit/`` — must NOT inherit anonymous
+    access by virtue of the parent being public.
+
+    Only :pyattr:`PUBLIC_PATH_PREFIXES` (currently just
+    ``/sso/.well-known/``) carries true-prefix semantics."""
+    from config.middleware import LoginRequiredMiddleware as Mw
+
+    # Exact paths: parent matches, sub-path does NOT.
+    assert Mw._is_public_path("/sso/token/") is True
+    assert Mw._is_public_path("/sso/token/audit/") is False
+    assert Mw._is_public_path("/sso/userinfo/") is True
+    assert Mw._is_public_path("/sso/userinfo/details/") is False
+    assert Mw._is_public_path("/i18n/setlang/") is True
+    assert Mw._is_public_path("/i18n/setlang/admin/") is False
+
+    # True prefix: spec-bounded ``.well-known`` registry stays open
+    # to sub-paths so future OIDC well-known URIs work out of the box.
+    assert Mw._is_public_path("/sso/.well-known/openid-configuration/") is True
+    assert Mw._is_public_path("/sso/.well-known/jwks.json/") is True
+    assert Mw._is_public_path("/sso/.well-known/openid-federation/") is True

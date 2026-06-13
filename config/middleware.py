@@ -59,19 +59,18 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     ``test_locale_prefixed_sso_is_gated`` codifies the current contract.
     """
 
-    #: Path prefixes that bypass the login gate.
+    #: **Exact-match** public paths. Each entry maps 1:1 to a single
+    #: view; a hypothetical sub-path (``/sso/token/foo/``) is **not**
+    #: covered, so a future view added beneath one of these prefixes
+    #: would still be gated by default. That's the intended security
+    #: posture — explicit additions only.
     #:
-    #: **Invariant:** every entry MUST end with ``/``. Without the
-    #: trailing slash, ``/sso/token`` would also match a hypothetical
-    #: ``/sso/tokenfoo/`` — boundary-sensitive prefix matching is the
-    #: whole point of the allow-list.
+    #: **Invariant:** every entry MUST end with ``/`` to match the
+    #: post-normalisation form produced by :pymeth:`_is_public_path`.
     #:
     #: ``/i18n/setlang/`` — Django's language switcher posts here. The
     #: login form itself offers the switcher, so it must be reachable
     #: pre-authentication.
-    #:
-    #: ``/sso/.well-known/`` — OIDC Discovery & JWKS endpoints; RPs
-    #: read these to bootstrap before any user is involved.
     #:
     #: ``/sso/token/`` — OAuth 2.0 token endpoint (RFC 6749 §3.2). The
     #: client authenticates via the request body, not a Django session.
@@ -96,15 +95,32 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     #: used by any current RP. The principle is "no anonymous surface
     #: we don't actively use" — add the relevant entries (with a
     #: companion test) the moment the device flow goes live.
-    PUBLIC_PATH_PREFIXES: Final[tuple[str, ...]] = (
-        "/i18n/setlang/",
-        "/sso/.well-known/",
-        "/sso/token/",
-        "/sso/revoke_token/",
-        "/sso/introspect/",
-        "/sso/userinfo/",
-        "/sso/logout/",
+    PUBLIC_EXACT_PATHS: Final[frozenset[str]] = frozenset(
+        {
+            "/i18n/setlang/",
+            "/sso/token/",
+            "/sso/revoke_token/",
+            "/sso/introspect/",
+            "/sso/userinfo/",
+            "/sso/logout/",
+        }
     )
+
+    #: **True-prefix** public paths. Anything *beneath* the entry is
+    #: covered too — used only for genuine registries whose member URIs
+    #: are bounded by an external spec (so the surface doesn't sprawl
+    #: silently).
+    #:
+    #: **Invariant:** every entry MUST end with ``/``. Without the
+    #: trailing slash, ``/sso/.well-known`` would also match a
+    #: hypothetical ``/sso/.well-knownfoo/`` — boundary-sensitive
+    #: matching is the whole point.
+    #:
+    #: ``/sso/.well-known/`` — RFC 8615 "well-known URIs" registry.
+    #: Covers ``openid-configuration`` (OIDC Discovery), ``jwks.json``,
+    #: and any future spec-defined ``.well-known`` entry. RPs read
+    #: these to bootstrap before any user is involved.
+    PUBLIC_PATH_PREFIXES: Final[tuple[str, ...]] = ("/sso/.well-known/",)
 
     @classmethod
     def _is_public_path(cls, path: str) -> bool:
@@ -130,8 +146,8 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
           ``//sso//token//`` normalises to ``//sso/token``. We collapse
           all leading slashes to a single ``/`` before matching.
         * It drops a trailing ``/``, which would cause an exact-match
-          path like ``/sso/token/`` to fail the
-          ``startswith('/sso/token/')`` check. We re-append the slash
+          path like ``/sso/token/`` to fail the lookup against
+          :pyattr:`PUBLIC_EXACT_PATHS`. We re-append the slash
           afterwards.
         """
         normalised = posixpath.normpath(path)
@@ -139,6 +155,8 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
         normalised = "/" + normalised.lstrip("/")
         if not normalised.endswith("/"):
             normalised += "/"
+        if normalised in cls.PUBLIC_EXACT_PATHS:
+            return True
         return normalised.startswith(cls.PUBLIC_PATH_PREFIXES)
 
     def process_view(self, request, view_func, view_args, view_kwargs):
