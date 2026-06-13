@@ -108,13 +108,22 @@ def test_middleware_redirects_a_naked_anonymous_view():
 def test_dashboard_redirects_anonymous_user_to_login(client):
     """Per acceptance criteria: ``GET /dashboard/`` (here: ``GET /``,
     routed to ``dashboard:index``) as anon returns 302 → login with the
-    intended ``next`` query parameter."""
+    intended ``next`` query parameter pointing back at the original
+    request — that's what lets the post-login flow land the user
+    where they were trying to go, which the acceptance criterion calls
+    out explicitly."""
+    from urllib.parse import parse_qs, urlsplit
+
     target = reverse("dashboard:index")
     response = client.get(target)
     assert response.status_code == 302
     # Locale prefix may sit in front of /accounts/login/, so we substring-check.
     assert "/accounts/login/" in response.url
-    assert "next=" in response.url
+    next_values = parse_qs(urlsplit(response.url).query).get("next", [])
+    assert next_values == [target], (
+        f"Expected next={target!r} in login redirect, got {next_values!r} "
+        f"(full redirect URL: {response.url!r})"
+    )
 
 
 @pytest.mark.django_db
@@ -371,12 +380,24 @@ def test_locale_prefixed_sso_is_gated(client):
 
 @pytest.mark.django_db
 def test_double_slash_does_not_change_gate_decision(client):
-    """``//sso//token//`` collapses to ``/sso/token/`` after
-    normalisation. The middleware must still apply the allow-list to
-    the normalised form, not the literal one. Token endpoint with empty
-    body returns 4xx from oauth2_provider — we assert the specific 4xx
-    range so an unexpected 5xx doesn't slip through."""
-    response = client.post("//sso//token//", {})
+    """``/sso//token/`` (a double slash *inside* the path) collapses to
+    ``/sso/token/`` after normalisation. The middleware must still apply
+    the allow-list to the normalised form, not the literal one. Token
+    endpoint with empty body returns 4xx from oauth2_provider — we
+    assert the specific 4xx range so an unexpected 5xx doesn't slip
+    through.
+
+    Why not ``//sso//token//`` with a leading double slash? ``urlsplit``
+    interprets a leading ``//`` as a scheme-relative URL, so the test
+    client treats ``sso`` as the netloc and only ``//token//`` makes it
+    into ``PATH_INFO``. That accidentally tests a non-matching path
+    (whatever resolves at ``//token//``, typically a 404). Single
+    leading slash + internal double slash is the unambiguous form —
+    and the exotic ``//sso//token//`` input is still exercised at the
+    helper level by ``test_normalisation_helper_blocks_traversal_to_gated_path``,
+    which feeds the raw string straight into ``_is_public_path`` without
+    going through ``urlsplit``."""
+    response = client.post("/sso//token/", {})
     assert not _is_login_redirect(response)
     assert 400 <= response.status_code < 500, response.status_code
 

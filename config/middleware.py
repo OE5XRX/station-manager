@@ -2,8 +2,8 @@
 
 Currently houses ``LoginRequiredMiddleware``, our subclass of Django 5.1+'s
 ``django.contrib.auth.middleware.LoginRequiredMiddleware`` that bolts a
-path-prefix allow-list onto the framework's default-deny gate. See the
-docstring on the class for the rationale.
+two-part allow-list (exact paths + true prefixes) onto the framework's
+default-deny gate. See the docstring on the class for the rationale.
 """
 
 import posixpath
@@ -27,7 +27,18 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     re-implementations of one-liners (token, revoke, introspect,
     userinfo, RP-initiated logout, JWKS / discovery).
 
-    Instead we maintain a path-prefix allow-list here. The trade-offs:
+    Instead we maintain a two-part allow-list here:
+
+    * :pyattr:`PUBLIC_EXACT_PATHS` — exact-match entries for
+      single-endpoint exemptions (``/sso/token/``, ``/sso/userinfo/``,
+      …). A future view added beneath one of these (e.g.
+      ``/sso/token/audit/``) does **not** silently inherit anonymous
+      access.
+    * :pyattr:`PUBLIC_PATH_PREFIXES` — true-prefix entries reserved
+      for genuine registries whose member URIs are bounded by an
+      external spec (currently only ``/sso/.well-known/``).
+
+    Trade-offs:
 
     * Pro: a *single* place in the code base declares which OIDC/OAuth
       paths are public. Adding a new public endpoint is one line.
@@ -35,9 +46,9 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
       django-oauth-toolkit refactor can land without touching us.
     * Con: tightly coupled to ``apps.sso``'s URL mounting (``/sso/``).
       If you ever re-mount oauth2_provider under a different prefix,
-      update :pyattr:`PUBLIC_PATH_PREFIXES` to match. The companion
-      regression tests in ``tests/test_login_required_middleware.py``
-      catch a stale allow-list immediately.
+      update both attributes to match. The companion regression tests
+      in ``tests/test_login_required_middleware.py`` catch a stale
+      allow-list immediately.
 
     Paths NOT on the allow-list — including ``/sso/applications/`` and
     ``/sso/authorized_tokens/`` (django-oauth-toolkit's admin-style
