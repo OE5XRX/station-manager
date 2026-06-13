@@ -204,9 +204,14 @@ class User(AbstractUser):
             # closes the race window in the email-verify swap where
             # two concurrent verify-clicks could otherwise commit the
             # same email to two users.
+            #
+            # Sub-Spec 2b Soft-Delete: narrowed to the active slice
+            # (``deleted_at IS NULL``) so a soft-deleted user's email
+            # can be re-issued to a fresh active user — mirrors the
+            # ``unique_active_username`` constraint below.
             models.UniqueConstraint(
                 Lower("email"),
-                condition=~Q(email=""),
+                condition=Q(deleted_at__isnull=True) & ~Q(email=""),
                 name="accounts_user_email_ci_unique",
             ),
             # Sub-Spec 2b Soft-Delete: callsign-reuse after soft-delete.
