@@ -127,13 +127,59 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         form = ProfileIdentityForm(request.POST, instance=user, prefix="identity")
         if form.is_valid():
             changed = set(form.changed_data)
+            new_email = form.cleaned_data.get("email") if "email" in changed else None
             form.save()
-            self._emit_user_updated(request, user, changed)
-            messages.success(request, _("Identity updated."))
+            # USER_UPDATED audit excludes "email" — that change is still pending.
+            self._emit_user_updated(request, user, changed - {"email"})
+            if new_email:
+                self._trigger_email_verify(request, user, new_email)
+                messages.info(
+                    request,
+                    _(
+                        "Confirmation link sent to %(new)s. "
+                        "Until you click it, %(old)s stays active."
+                    )
+                    % {"new": new_email, "old": user.email},
+                )
+            if changed - {"email"}:
+                messages.success(request, _("Identity updated."))
         else:
             for errors in form.errors.values():
                 messages.error(request, "; ".join(errors))
         return redirect("accounts:profile")
+
+    def _trigger_email_verify(self, request, user, new_email):
+        from django.db import transaction
+
+        from .emails import send_account_email
+        from .models import AccountToken
+        from .tokens import invalidate_pending_tokens, issue_token
+
+        with transaction.atomic():
+            invalidate_pending_tokens(user, AccountToken.TokenType.VERIFY)
+            raw = issue_token(
+                user,
+                AccountToken.TokenType.VERIFY,
+                payload={"new_email": new_email},
+                ip=_client_ip(request),
+            )
+            send_account_email(
+                user,
+                "verify",
+                {
+                    "raw_token": raw,
+                    "new_email": new_email,
+                    "old_email": user.email,
+                    "override_to": new_email,
+                },
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.EMAIL_VERIFY_REQUESTED,
+                actor=user,
+                target_user=user,
+                message=f"{user.email} → {new_email}",
+                ip_address=_client_ip(request),
+            )
 
     def _save_profile(self, request, user):
         form = ProfileProfileForm(request.POST, request.FILES, instance=user, prefix="profile")
@@ -321,6 +367,57 @@ class SetPasswordView(View):
                 "or request a password reset."
             ),
         )
+        return redirect("accounts:login")
+
+
+@method_decorator(login_not_required, name="dispatch")
+class VerifyEmailView(View):
+    """GET-only: swap the user's email to the pending verified address.
+
+    Idempotent in the sense that a second click on the same link shows
+    an "invalid or expired" message — the token is single-use.
+    """
+
+    http_method_names = ["get"]
+
+    def get(self, request, token):
+        from .models import AccountToken
+        from .tokens import consume_token
+
+        token_row = consume_token(token, AccountToken.TokenType.VERIFY)
+        if token_row is None:
+            messages.error(request, _("Email verification link invalid or expired."))
+            return redirect("accounts:login")
+
+        new_email = token_row.payload.get("new_email", "")
+        old_email = token_row.user.email
+        if not new_email:
+            messages.error(request, _("Email verification token has no target address."))
+            return redirect("accounts:login")
+
+        # Race-guard: another account may have grabbed this email since the
+        # verify-request was issued.
+        if User.objects.exclude(pk=token_row.user.pk).filter(email__iexact=new_email).exists():
+            messages.error(
+                request,
+                _("Cannot verify: another account is already using %(email)s.")
+                % {"email": new_email},
+            )
+            target = "accounts:profile" if request.user.is_authenticated else "accounts:login"
+            return redirect(target)
+
+        token_row.user.email = new_email
+        token_row.user.save(update_fields=["email"])
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
+            actor=token_row.user,
+            target_user=token_row.user,
+            message=f"{old_email} → {new_email}",
+            ip_address=_client_ip(request),
+        )
+        messages.success(request, _("Email updated to %(email)s.") % {"email": new_email})
+        if request.user.is_authenticated and request.user.pk == token_row.user.pk:
+            return redirect("accounts:profile")
         return redirect("accounts:login")
 
 

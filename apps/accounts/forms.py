@@ -159,7 +159,12 @@ class UserChangeForm(BaseUserChangeForm):
 
 
 class ProfileIdentityForm(forms.ModelForm):
-    """Self-edit of identity fields (Profile page → Identity panel)."""
+    """Self-edit of identity fields (Profile page → Identity panel).
+
+    Email-changes are NOT persisted here — the view picks up
+    ``"email" in form.changed_data`` and triggers a verify-mail flow
+    instead. Other fields save normally.
+    """
 
     class Meta:
         model = User
@@ -170,6 +175,23 @@ class ProfileIdentityForm(forms.ModelForm):
             "last_name": forms.TextInput(attrs={"class": "form-control"}),
             "language": forms.Select(attrs={"class": "form-select"}),
         }
+
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip()
+        if User.objects.exclude(pk=self.instance.pk).filter(email__iexact=email).exists():
+            raise forms.ValidationError(_("Another user already has this email."))
+        return email
+
+    def save(self, commit=True):
+        if "email" in self.changed_data:
+            # ModelForm._post_clean set self.instance.email = new_email
+            # during is_valid(). Revert so super().save() doesn't write it.
+            # Use the module-level User (not type(self.instance)) — when the
+            # form was constructed with request.user, instance is a
+            # SimpleLazyObject whose type lacks the manager.
+            old_email = User.objects.values_list("email", flat=True).get(pk=self.instance.pk)
+            self.instance.email = old_email
+        return super().save(commit=commit)
 
 
 class ProfileProfileForm(forms.ModelForm):
