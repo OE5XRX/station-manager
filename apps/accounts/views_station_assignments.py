@@ -39,7 +39,10 @@ User = get_user_model()
 
 class StationAssignmentCreateView(AdminRequiredMixin, View):
     def post(self, request, user_pk):
-        target = get_object_or_404(User, pk=user_pk)
+        # 2b: refuse mutation on soft-deleted targets. The UI marks the
+        # station-assignments card as readonly, but a hand-rolled POST
+        # would otherwise bypass that invariant.
+        target = get_object_or_404(User, pk=user_pk, deleted_at__isnull=True)
         station_pk = request.POST.get("station")
         station = get_object_or_404(Station, pk=station_pk)
 

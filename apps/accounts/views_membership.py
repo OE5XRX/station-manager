@@ -50,7 +50,10 @@ MEMBERSHIP_ORDER = [
 
 class MembershipSetView(AdminRequiredMixin, View):
     def post(self, request, pk):
-        target = get_object_or_404(User, pk=pk)
+        # 2b: soft-deleted users are off-limits to mutation endpoints.
+        # The UI disables the membership card for them, but a hand-rolled
+        # POST would otherwise bypass the lifecycle invariant.
+        target = get_object_or_404(User, pk=pk, deleted_at__isnull=True)
         if target.pk == request.user.pk:
             return HttpResponseBadRequest(_("Cannot change your own membership level."))
 
