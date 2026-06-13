@@ -340,14 +340,22 @@ def test_locale_prefixed_sso_is_gated(client):
     """OIDC public endpoints are mounted OUTSIDE ``i18n_patterns`` so
     they never carry a locale prefix. ``/de/sso/token/`` is therefore
     NOT the token endpoint — it's an unrelated URL that should not
-    inherit the allow-list. Confirming gated keeps a sloppy reverse
-    proxy or a future i18n re-mounting from accidentally opening a hole."""
+    inherit the allow-list. Confirming this protects against a sloppy
+    reverse proxy or a future i18n re-mounting from accidentally
+    opening a hole.
+
+    Empirically (Django 6.0 + our current ``config/urls.py``), the URL
+    resolver fails to match a locale-prefixed ``/sso/`` path and short-
+    circuits to 404 before our middleware's ``process_view`` runs.
+    If the resolver were ever to map a locale-prefixed URL to the real
+    token view (e.g. ``/sso/`` mounted inside ``i18n_patterns``), the
+    middleware would 302 to login because ``request.path`` retains the
+    locale prefix (LocaleMiddleware does NOT strip it — we verified by
+    inspecting ``request.path`` from inside a view). Either outcome
+    (404 or 302) is acceptable; the failure mode we're guarding
+    against is a 200 (allow-list bypass) or a 5xx (crash)."""
     response = client.get("/de/sso/token/")
-    # Either gated by middleware (302 to login) or simply 404 — both are
-    # fine outcomes; the only outcome we want to prevent is an anon 200,
-    # and a 5xx would mask a real bug in the normalisation logic.
-    assert response.status_code != 200, response.status_code
-    assert response.status_code < 500, response.status_code
+    assert response.status_code in (302, 404), response.status_code
 
 
 @pytest.mark.django_db
