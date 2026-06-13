@@ -8,7 +8,7 @@
     </div>
     <div class="pager-links">
       {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}{% if request.GET.tag %}&tag={{ request.GET.tag }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">&larr;</a>
+        <a href="?page={{ page_obj.previous_page_number }}{% if request.GET.q %}&q={{ request.GET.q|urlencode }}{% endif %}{% if request.GET.tag %}&tag={{ request.GET.tag|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.show %}&show={{ request.GET.show|urlencode }}{% endif %}{% if request.GET.role %}&role={{ request.GET.role|urlencode }}{% endif %}">&larr;</a>
       {% else %}
         <span class="t-muted">&larr;</span>
       {% endif %}
@@ -17,12 +17,12 @@
         {% if n == page_obj.number %}
           <span class="current">{{ n }}</span>
         {% elif n > page_obj.number|add:"-3" and n < page_obj.number|add:"3" %}
-          <a href="?page={{ n }}{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}{% if request.GET.tag %}&tag={{ request.GET.tag }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">{{ n }}</a>
+          <a href="?page={{ n }}{% if request.GET.q %}&q={{ request.GET.q|urlencode }}{% endif %}{% if request.GET.tag %}&tag={{ request.GET.tag|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.show %}&show={{ request.GET.show|urlencode }}{% endif %}{% if request.GET.role %}&role={{ request.GET.role|urlencode }}{% endif %}">{{ n }}</a>
         {% endif %}
       {% endfor %}
 
       {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}{% if request.GET.tag %}&tag={{ request.GET.tag }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">&rarr;</a>
+        <a href="?page={{ page_obj.next_page_number }}{% if request.GET.q %}&q={{ request.GET.q|urlencode }}{% endif %}{% if request.GET.tag %}&tag={{ request.GET.tag|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.show %}&show={{ request.GET.show|urlencode }}{% endif %}{% if request.GET.role %}&role={{ request.GET.role|urlencode }}{% endif %}">&rarr;</a>
       {% else %}
         <span class="t-muted">&rarr;</span>
       {% endif %}
