@@ -45,8 +45,15 @@ def recipients_for_station_alert(station):
         station_assignments__role__in=["admin", "maintainer"],
     )
 
+    # .active() excludes soft-deleted users (deleted_at IS NOT NULL).
+    # Soft-deleted users have is_active=False too (Sub-Spec 2b sets both),
+    # so the is_active=False exclude below already catches them — but we
+    # filter on deleted_at explicitly as defense-in-depth so notification
+    # routing doesn't silently break if the soft-delete flow ever changes
+    # to keep is_active=True (e.g. for restore-window UX).
     return (
-        User.objects.filter(q)
+        User.objects.active()
+        .filter(q)
         .exclude(email="")
         .exclude(is_active=False)
         .exclude(membership_level=User.MembershipLevel.APPLICANT)
