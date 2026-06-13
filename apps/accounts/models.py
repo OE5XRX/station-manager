@@ -1,10 +1,12 @@
 import re
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
+from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
@@ -338,3 +340,51 @@ class AccountAuditLog(models.Model):
             message=message,
             ip_address=ip_address,
         )
+
+
+class AccountToken(models.Model):
+    """Single-use, time-limited token for Welcome / Reset / Verify flows.
+
+    The raw token is generated via ``secrets.token_urlsafe(32)`` and is
+    only ever returned from ``issue_token``; the DB stores only the
+    SHA-256 hash. Consumption is atomic: ``consume_token`` does a
+    SELECT FOR UPDATE on the row and sets ``used_at`` in the same
+    transaction, so a parallel request cannot redeem the same token.
+    """
+
+    class TokenType(models.TextChoices):
+        WELCOME = "welcome", _("Welcome (set initial password)")
+        RESET = "reset", _("Password reset")
+        VERIFY = "verify", _("Email verification")
+
+    EXPIRY = {
+        TokenType.WELCOME: timedelta(days=7),
+        TokenType.RESET: timedelta(hours=24),
+        TokenType.VERIFY: timedelta(hours=24),
+    }
+
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="account_tokens",
+    )
+    token_type = models.CharField(
+        max_length=16,
+        choices=TokenType.choices,
+        db_index=True,
+    )
+    secret_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    ip_created = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "token_type", "used_at"]),
+            models.Index(fields=["secret_hash"]),
+        ]
+
+    def is_active(self):
+        return self.used_at is None and self.expires_at > timezone.now()
