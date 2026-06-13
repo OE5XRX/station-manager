@@ -87,9 +87,7 @@ class TestProfileAddressGeocoding:
         assert member.locator == "JN78AB"
 
     @patch("apps.accounts.views.geocode_address")
-    def test_geocode_failure_honors_manual_locator_override(
-        self, mock_geocode, client, member
-    ):
+    def test_geocode_failure_honors_manual_locator_override(self, mock_geocode, client, member):
         """If user explicitly types a new locator in the same submit as a
         failing address, the manual override wins (no restore)."""
         mock_geocode.return_value = None
