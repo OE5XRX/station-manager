@@ -9,9 +9,6 @@ from django.contrib.auth.forms import (
 from django.contrib.auth.forms import (
     UserChangeForm as BaseUserChangeForm,
 )
-from django.contrib.auth.forms import (
-    UserCreationForm as BaseUserCreationForm,
-)
 from django.utils.translation import gettext_lazy as _
 
 from .avatars import process_avatar_file, validate_avatar_upload
@@ -50,16 +47,14 @@ class LoginForm(AuthenticationForm):
     )
 
 
-class UserCreationForm(BaseUserCreationForm):
+class UserCreationForm(forms.ModelForm):
     """Form for admins to create new users.
 
-    Identity fields only. ``membership_level`` defaults to APPLICANT
-    on creation (set in apps/accounts/models.py); the admin promotes
-    the user via the membership-card on the edit page after creation.
-    Topology assignments (Region-Manager, Station-Admin/Maintainer)
-    are managed from the same edit page once the user is at least
-    Vereins-Mitglied — the ``_ApplicantForbiddenMixin`` invariant
-    rejects assignments for applicants.
+    NO password fields — the new user gets a Welcome mail with a
+    Set-Password link. Until they click it, ``user.has_usable_password()``
+    is False and login is impossible.
+
+    The Welcome-Mail-Trigger lives in UserCreateView.form_valid, not here.
     """
 
     class Meta:
@@ -73,10 +68,20 @@ class UserCreationForm(BaseUserCreationForm):
             "language": forms.Select(attrs={"class": "form-select"}),
         }
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["password1"].widget.attrs["class"] = "form-control"
-        self.fields["password2"].widget.attrs["class"] = "form-control"
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip()
+        if not email:
+            raise forms.ValidationError(_("Email is required for the Welcome link."))
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError(_("A user with this email already exists."))
+        return email
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.set_unusable_password()
+        if commit:
+            user.save()
+        return user
 
 
 class UserChangeForm(BaseUserChangeForm):

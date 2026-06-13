@@ -322,16 +322,48 @@ class UserCreateView(AdminRequiredMixin, CreateView):
         return reverse("accounts:user_detail", kwargs={"pk": self.object.pk})
 
     def form_valid(self, form):
-        response = super().form_valid(form)
-        AccountAuditLog.log(
-            event_type=AccountAuditLog.EventType.USER_CREATED,
-            actor=self.request.user,
-            target_user=self.object,
-            message=f"{self.object.username} <{self.object.email}>",
-            ip_address=_client_ip(self.request),
+        from django.db import transaction
+
+        from .emails import send_account_email
+        from .models import AccountToken
+        from .tokens import issue_token
+
+        with transaction.atomic():
+            user = form.save(commit=False)
+            user.save()
+            self.object = user
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_CREATED,
+                actor=self.request.user,
+                target_user=user,
+                message=f"{user.username} <{user.email}>",
+                ip_address=_client_ip(self.request),
+            )
+            raw = issue_token(
+                user,
+                AccountToken.TokenType.WELCOME,
+                ip=_client_ip(self.request),
+            )
+            send_account_email(
+                user,
+                "welcome",
+                {
+                    "raw_token": raw,
+                    "actor": self.request.user.username,
+                },
+            )
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.WELCOME_TOKEN_SENT,
+                actor=self.request.user,
+                target_user=user,
+                message=f"to {user.email}",
+                ip_address=_client_ip(self.request),
+            )
+        messages.success(
+            self.request,
+            _("User created. Welcome link sent to %(email)s.") % {"email": user.email},
         )
-        messages.success(self.request, _("User created successfully."))
-        return response
+        return redirect(self.get_success_url())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
