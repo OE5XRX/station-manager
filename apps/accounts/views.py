@@ -905,9 +905,17 @@ def _revoke_sso(request, user):
     if hasattr(user, "app_grants"):
         user.app_grants.filter(revoked_at__isnull=True).update(revoked_at=now)
     if hasattr(user, "token_sessions"):
+        # Carry the revoke_reason explicitly. The post_save signal that
+        # would normally set USER_DEACTIVATED runs AFTER this update, but
+        # by then revoked_at is non-NULL and the signal's idempotent
+        # filter skips these rows — without this kwarg the reason would
+        # stay blank and we lose forensic continuity.
+        from apps.sso.models import TokenSession
+
         user.token_sessions.filter(revoked_at__isnull=True).update(
             revoked_at=now,
             revoked_by=request.user,
+            revoke_reason=TokenSession.RevokeReason.USER_DEACTIVATED,
         )
 
 
