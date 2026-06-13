@@ -693,6 +693,22 @@ class UserListView(LoginRequiredMixin, ListView):
         if not self.request.user.is_admin:
             qs = qs.exclude(membership_level=User.MembershipLevel.APPLICANT)
 
+        # Show-filter: lifecycle bucket (active/inactive/deleted/all).
+        # Default "active" hides soft-deleted AND deactivated users.
+        # Non-admin viewers never see deleted/inactive — hard-pinned to active.
+        if self.request.user.is_admin:
+            show = self.request.GET.get("show", "active")
+        else:
+            show = "active"
+        if show == "deleted":
+            qs = qs.filter(deleted_at__isnull=False)
+        elif show == "inactive":
+            qs = qs.filter(deleted_at__isnull=True, is_active=False)
+        elif show == "all":
+            pass
+        else:
+            qs = qs.filter(deleted_at__isnull=True, is_active=True)
+
         q = self.request.GET.get("q", "").strip()
         if q:
             qs = qs.filter(
@@ -709,13 +725,6 @@ class UserListView(LoginRequiredMixin, ListView):
         if role in valid_roles:
             qs = qs.filter(membership_level=role)
 
-        if self.request.user.is_admin:
-            status = self.request.GET.get("status", "")
-            if status == "active":
-                qs = qs.filter(is_active=True)
-            elif status == "inactive":
-                qs = qs.filter(is_active=False)
-
         return qs.prefetch_related(
             "region_assignments__region",
             "station_assignments__station",
@@ -727,7 +736,7 @@ class UserListView(LoginRequiredMixin, ListView):
         ctx["is_member_view"] = not self.request.user.is_admin
         ctx["filter_q"] = self.request.GET.get("q", "")
         ctx["filter_role"] = self.request.GET.get("role", "")
-        ctx["filter_status"] = self.request.GET.get("status", "")
+        ctx["filter_show"] = self.request.GET.get("show", "active")
         return ctx
 
 

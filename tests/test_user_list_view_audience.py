@@ -125,25 +125,27 @@ class TestUserListAudienceFilter:
         usernames = [u.username for u in resp.context["users"]]
         assert member.username in usernames
 
-    def test_admin_status_filter_inactive(self, client, admin, member, other_member):
+    def test_admin_show_filter_inactive(self, client, admin, member, other_member):
+        """Admin filters via ?show=inactive (replaces legacy ?status=inactive)."""
         other_member.is_active = False
         other_member.save()
         client.force_login(admin)
-        resp = client.get(self.url(status="inactive"))
+        resp = client.get(self.url(show="inactive"))
         usernames = [u.username for u in resp.context["users"]]
         assert other_member.username in usernames
         assert member.username not in usernames
 
-    def test_member_status_param_ignored(self, client, member, other_member):
-        """Member tries ?status=inactive — the param is ignored (no admin)."""
+    def test_member_show_param_ignored(self, client, member, other_member):
+        """Member tries ?show=inactive — the param is pinned to 'active' for
+        non-admins, so the lifecycle bucket never widens."""
         other_member.is_active = False
         other_member.save()
         client.force_login(member)
-        resp = client.get(self.url(status="inactive"))
+        resp = client.get(self.url(show="inactive"))
         usernames = [u.username for u in resp.context["users"]]
-        # other_member.is_active=False but is_directory_visible=True →
-        # still appears for member (status filter not applied).
-        assert other_member.username in usernames
+        # Member view ignores show=, pins to active → inactive other_member
+        # must NOT appear.
+        assert other_member.username not in usernames
 
 
 @pytest.mark.django_db
@@ -168,7 +170,9 @@ class TestUserListTemplate:
         body = resp.content.decode()
         assert reverse("accounts:user_create") not in body
 
-    def test_member_sees_only_view_button(self, client, member, other_member):
+    def test_member_row_links_to_detail(self, client, member, other_member):
+        """Per-row inline action buttons (Edit / Soft-delete) were removed in
+        sub-spec 2b §7.1. The username link still goes to the detail page."""
         client.force_login(member)
         resp = client.get(self.url())
         body = resp.content.decode()
@@ -176,13 +180,16 @@ class TestUserListTemplate:
         assert reverse("accounts:user_edit", kwargs={"pk": other_member.pk}) not in body
         assert reverse("accounts:user_soft_delete", kwargs={"pk": other_member.pk}) not in body
 
-    def test_admin_sees_view_edit_delete(self, client, admin, member):
+    def test_admin_row_links_to_detail_only(self, client, admin, member):
+        """Admin row also drops inline Edit/Soft-delete — those are
+        consolidated on UserDetailView. Username remains a link to detail."""
         client.force_login(admin)
         resp = client.get(self.url())
         body = resp.content.decode()
         assert reverse("accounts:user_detail", kwargs={"pk": member.pk}) in body
-        assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) in body
-        assert reverse("accounts:user_soft_delete", kwargs={"pk": member.pk}) in body
+        # Inline action buttons removed in §7.1 — actions live on detail page.
+        assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) not in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": member.pk}) not in body
 
     def test_filter_bar_role_options_admin(self, client, admin):
         client.force_login(admin)
