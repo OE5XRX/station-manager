@@ -75,9 +75,15 @@ class UserCreationForm(forms.ModelForm):
         email = self.cleaned_data["email"].strip()
         if not email:
             raise forms.ValidationError(_("Email is required for the Welcome link."))
-        if User.objects.filter(email__iexact=email).exists():
+        if User.objects.active().filter(email__iexact=email).exists():
             raise forms.ValidationError(_("A user with this email already exists."))
         return email
+
+    def clean_username(self):
+        username = self.cleaned_data["username"].strip()
+        if User.objects.active().filter(username__iexact=username).exists():
+            raise forms.ValidationError(_("A user with this username already exists."))
+        return username
 
     def save(self, commit=True):
         user = super().save(commit=False)
@@ -184,7 +190,7 @@ class ProfileIdentityForm(forms.ModelForm):
         # with a blank email would always fail validation.
         if not email:
             return email
-        if User.objects.exclude(pk=self.instance.pk).filter(email__iexact=email).exists():
+        if User.objects.active().exclude(pk=self.instance.pk).filter(email__iexact=email).exists():
             raise forms.ValidationError(_("Another user already has this email."))
         return email
 

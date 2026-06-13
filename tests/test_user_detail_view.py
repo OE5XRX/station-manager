@@ -292,7 +292,7 @@ class TestUserDetailViewTemplateRendering:
         resp = client.get(self.url(member))
         body = resp.content.decode()
         assert reverse("accounts:user_edit", kwargs={"pk": member.pk}) in body
-        assert reverse("accounts:user_delete", kwargs={"pk": member.pk}) in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": member.pk}) in body
 
     def test_admin_self_view_omits_edit_delete(self, client, admin):
         """Admin viewing own detail page does NOT see Edit/Delete — self-edit
@@ -302,7 +302,7 @@ class TestUserDetailViewTemplateRendering:
         body = resp.content.decode()
         # The Detail-Page does not show self-Edit/Delete buttons (deferred to profile)
         assert reverse("accounts:user_edit", kwargs={"pk": admin.pk}) not in body
-        assert reverse("accounts:user_delete", kwargs={"pk": admin.pk}) not in body
+        assert reverse("accounts:user_soft_delete", kwargs={"pk": admin.pk}) not in body
 
     def test_self_view_has_profile_edit_action(self, client, member):
         client.force_login(member)
@@ -483,3 +483,51 @@ class TestSuccessRedirects:
         )
         assert resp.status_code == 302
         assert resp.url == reverse("accounts:user_detail", kwargs={"pk": member.pk})
+
+
+@pytest.mark.django_db
+class TestSoftDeletedAccessGate:
+    """Soft-deleted users must not be discoverable via the detail page
+    by non-admin audiences. Admin can still see them (renders the
+    restore/hard-purge UI)."""
+
+    def test_member_gets_404_on_soft_deleted_user(self, client):
+        from django.utils import timezone
+
+        member = User.objects.create_user(
+            username="OE5MEM1",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        deleted = User.objects.create_user(
+            username="OE5DEAD",
+            password="x",
+            membership_level=User.MembershipLevel.MEMBER,
+        )
+        deleted.deleted_at = timezone.now()
+        deleted.is_active = False
+        deleted.save()
+
+        client.force_login(member)
+        resp = client.get(reverse("accounts:user_detail", kwargs={"pk": deleted.pk}))
+        assert resp.status_code == 404
+
+    def test_admin_can_see_soft_deleted_user(self, client):
+        from django.utils import timezone
+
+        admin = User.objects.create_user(
+            username="OE5ADMIN",
+            password="x",
+            membership_level=User.MembershipLevel.ADMIN,
+        )
+        deleted = User.objects.create_user(
+            username="OE5DEAD",
+            password="x",
+        )
+        deleted.deleted_at = timezone.now()
+        deleted.is_active = False
+        deleted.save()
+
+        client.force_login(admin)
+        resp = client.get(reverse("accounts:user_detail", kwargs={"pk": deleted.pk}))
+        assert resp.status_code == 200

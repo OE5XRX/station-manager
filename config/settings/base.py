@@ -113,6 +113,14 @@ DATABASES = {
 # Auth
 AUTH_USER_MODEL = "accounts.User"
 
+# Sub-Spec 2b Soft-Delete: accounts.User.username is intentionally
+# unique=False at the field level. DB-level uniqueness is enforced via a
+# conditional UniqueConstraint (unique_active_username) that only applies
+# to non-soft-deleted rows. Django's auth.W004 system check does not see
+# the conditional constraint and warns about USERNAME_FIELD not being
+# unique — the warning is a false positive in this setup.
+SILENCED_SYSTEM_CHECKS = ["auth.W004"]
+
 AUTHENTICATION_BACKENDS = [
     "axes.backends.AxesStandaloneBackend",
     "django.contrib.auth.backends.ModelBackend",

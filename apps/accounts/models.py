@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
@@ -63,6 +64,33 @@ class User(AbstractUser):
     promotion happens via Django Admin until the dedicated UI lands
     in PR-2.
     """
+
+    # Sub-Spec 2b Soft-Delete: override AbstractUser.username with unique=False
+    # so the conditional UniqueConstraint (unique_active_username) in Meta
+    # becomes the sole DB-level enforcer. Without this override, Django keeps
+    # AbstractUser's unconditional UNIQUE index on username and callsign-reuse
+    # after soft-delete fails with IntegrityError.
+    username_validator = UnicodeUsernameValidator()
+
+    username = models.CharField(
+        _("username"),
+        max_length=150,
+        # unique=False — DB-level uniqueness is enforced via Meta.constraints
+        # (unique_active_username) which uses condition=deleted_at__isnull=True.
+        # This allows callsign-reuse after soft-delete.
+        unique=False,
+        # db_index=True keeps lookups + ordering on the full table (not just
+        # the active slice) efficient. The unique_active_username partial
+        # index in Meta only indexes deleted_at IS NULL rows, so queries
+        # for show=all / show=deleted listings ordered by username would
+        # otherwise full-scan as the table grows.
+        db_index=True,
+        help_text=_("Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."),
+        validators=[username_validator],
+        error_messages={
+            "unique": _("A user with that username already exists."),
+        },
+    )
 
     class Language(models.TextChoices):
         ENGLISH = "en", _("English")
@@ -146,6 +174,30 @@ class User(AbstractUser):
         default=True,
     )
 
+    # === Sub-Spec 2b Soft-Delete ===
+    # NULL = active user. NOT NULL = soft-deleted; the soft-delete flow
+    # also flips ``is_active`` to False so login/middleware paths reject
+    # the row. The conditional UniqueConstraint on ``username`` below
+    # (``unique_active_username``) keeps the callsign available for
+    # reuse once a row is soft-deleted.
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_(
+            "Soft-delete timestamp. NULL = active user. NOT NULL = soft-deleted, "
+            "is_active is False, login blocked."
+        ),
+    )
+    deleted_by = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="deleted_users",
+        help_text=_("Admin who triggered the soft-delete (SET_NULL on cascade)."),
+    )
+
     objects = UserManager()
 
     class Meta:
@@ -158,10 +210,29 @@ class User(AbstractUser):
             # closes the race window in the email-verify swap where
             # two concurrent verify-clicks could otherwise commit the
             # same email to two users.
+            #
+            # Sub-Spec 2b Soft-Delete: narrowed to the active slice
+            # (``deleted_at IS NULL``) so a soft-deleted user's email
+            # can be re-issued to a fresh active user — mirrors the
+            # ``unique_active_username`` constraint below.
             models.UniqueConstraint(
                 Lower("email"),
-                condition=~Q(email=""),
+                condition=Q(deleted_at__isnull=True) & ~Q(email=""),
                 name="accounts_user_email_ci_unique",
+            ),
+            # Sub-Spec 2b Soft-Delete: callsign-reuse after soft-delete.
+            # AbstractUser declares ``username`` as ``unique=True`` (full
+            # uniqueness across all rows). The partial UNIQUE-Index here
+            # narrows that to active rows only, so when a user is
+            # soft-deleted (``deleted_at`` set), the same callsign can
+            # be issued to a fresh row. The AbstractUser-level
+            # ``unique=True`` on ``username`` is explicitly relaxed in
+            # the field override above; this partial constraint is now
+            # the sole DB-level uniqueness enforcer for the active slice.
+            models.UniqueConstraint(
+                fields=["username"],
+                condition=Q(deleted_at__isnull=True),
+                name="unique_active_username",
             ),
         ]
 
@@ -298,6 +369,14 @@ class AccountAuditLog(models.Model):
         PASSWORD_SET_FROM_TOKEN = "password_set_from_token", _("Password Set From Token")
         EMAIL_VERIFY_REQUESTED = "email_verify_requested", _("Email Verify Requested")
         EMAIL_VERIFIED = "email_verified", _("Email Verified")
+        # === Added in Sub-Spec 2b Soft-Delete ===
+        # USER_DELETED above stays as deprecated marker for legacy pre-2b DB
+        # rows. After 2b the soft-delete flow emits USER_SOFT_DELETED; an
+        # explicit hard-purge from the trash bucket emits USER_HARD_PURGED;
+        # un-deleting from the trash bucket emits USER_RESTORED.
+        USER_SOFT_DELETED = "user_soft_deleted", _("User Soft-Deleted")
+        USER_RESTORED = "user_restored", _("User Restored")
+        USER_HARD_PURGED = "user_hard_purged", _("User Hard-Purged")
 
     event_type = models.CharField(
         _("event type"),

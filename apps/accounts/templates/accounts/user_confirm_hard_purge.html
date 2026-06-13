@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Hard-purge user" %}{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'accounts:user_list' %}?show=deleted">{% trans "Deleted users" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Hard-purge" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow t-danger">{% trans "Hard-purge — irreversible" %}</div>
+  <h1 class="page-title">{% trans "Permanently purge user" %}</h1>
+  <p class="page-sub">
+    {% blocktrans with username=target_user.username %}Permanently delete user "{{ username }}"? This cannot be undone.{% endblocktrans %}
+  </p>
+</div></div>
+
+<form method="post" class="panel" style="border-left:3px solid var(--danger);">
+  {% csrf_token %}
+  <div class="panel-body">
+    <dl class="dlist">
+      <dt>{% trans "Username" %}</dt><dd class="t-mono">{{ target_user.username }}</dd>
+      <dt>{% trans "Email" %}</dt><dd class="t-mono">{{ target_user.email|default:"—" }}</dd>
+      <dt>{% trans "Soft-deleted on" %}</dt><dd class="t-mono-sm">{{ deleted_at|date:"Y-m-d H:i" }}</dd>
+      <dt>{% trans "Soft-deleted by" %}</dt><dd>{{ deleted_by.username|default:"(unknown)" }}</dd>
+    </dl>
+
+    <hr style="margin:14px 0;border:0;border-top:1px solid var(--line);">
+
+    <p class="t-label" style="margin-bottom:8px;">{% trans "Audit rows turn into tombstones (FK SET_NULL, message strings preserved):" %}</p>
+    <dl class="dlist">
+      <dt>{% trans "Audit rows as actor" %}</dt>
+      <dd class="t-mono">{{ n_audit_as_actor }} <span class="t-muted">— {% trans "actor FK becomes NULL" %}</span></dd>
+      <dt>{% trans "Audit rows as target" %}</dt>
+      <dd class="t-mono">{{ n_audit_as_target }} <span class="t-muted">— {% trans "target FK becomes NULL" %}</span></dd>
+    </dl>
+
+    <div class="onboarding-hint" role="alert" style="border-left-color:var(--danger);margin-top:14px;">
+      <span class="onboarding-hint-icon">⚠️</span>
+      <div class="onboarding-hint-text">
+        {% trans "Once purged: account_tokens are dropped (CASCADE), avatar file is removed, all FK references become NULL. Audit message-strings preserve username/email for historical readability, but the user row is gone." %}
+      </div>
+    </div>
+  </div>
+  <div class="panel-foot row-gap-8">
+    <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Permanently purge this user?' %}">{% trans "Permanently purge" %}</button>
+    <a href="{% url 'accounts:user_detail' target_user.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}

@@ -44,7 +44,33 @@
   {% endif %}
 </div>
 
+{% if is_admin_view %}
+<div class="row-gap-8" style="margin:14px 0 18px;flex-wrap:wrap;">
+  <a href="?show=active{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
+     class="pill {% if filter_show == 'active' %}pill-online{% endif %}"
+     style="text-decoration:none;">
+    {% if filter_show == 'active' %}<span class="dot"></span>{% endif %}{% trans "Active" %}
+  </a>
+  <a href="?show=inactive{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
+     class="pill {% if filter_show == 'inactive' %}pill-violet{% endif %}"
+     style="text-decoration:none;">
+    {% trans "Inactive" %}
+  </a>
+  <a href="?show=deleted{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
+     class="pill {% if filter_show == 'deleted' %}pill-muted{% endif %}"
+     style="text-decoration:none;">
+    {% trans "Deleted" %}
+  </a>
+  <a href="?show=all{% if filter_q %}&q={{ filter_q|urlencode }}{% endif %}{% if filter_role %}&role={{ filter_role|urlencode }}{% endif %}"
+     class="pill {% if filter_show == 'all' %}pill-accent{% endif %}"
+     style="text-decoration:none;">
+    {% trans "All" %}
+  </a>
+</div>
+{% endif %}
+
 <form method="get" class="filter-bar mb-24">
+  {% if is_admin_view %}<input type="hidden" name="show" value="{{ filter_show }}">{% endif %}
   <input type="search" name="q" value="{{ filter_q }}"
          placeholder="{% trans 'Search callsign, email, name' %}"
          class="form-control">
@@ -57,16 +83,9 @@
     <option value="staff" {% if filter_role == "staff" %}selected{% endif %}>{% trans "Vereins-Staff" %}</option>
     <option value="admin" {% if filter_role == "admin" %}selected{% endif %}>{% trans "Vereins-Admin" %}</option>
   </select>
-  {% if is_admin_view %}
-    <select name="status" class="form-select">
-      <option value="">{% trans "All status" %}</option>
-      <option value="active" {% if filter_status == "active" %}selected{% endif %}>{% trans "Active" %}</option>
-      <option value="inactive" {% if filter_status == "inactive" %}selected{% endif %}>{% trans "Inactive" %}</option>
-    </select>
-  {% endif %}
   <button type="submit" class="btn btn-primary btn-sm">{% trans "Filter" %}</button>
-  {% if filter_q or filter_role or filter_status %}
-    <a href="{% url 'accounts:user_list' %}" class="btn btn-ghost btn-sm">{% trans "Reset" %}</a>
+  {% if filter_q or filter_role %}
+    <a href="{% url 'accounts:user_list' %}{% if is_admin_view and filter_show != 'active' %}?show={{ filter_show }}{% endif %}" class="btn btn-ghost btn-sm">{% trans "Reset" %}</a>
   {% endif %}
 </form>
 
@@ -83,7 +102,6 @@
           <th>{% trans "Last login" %}</th>
           <th>{% trans "Status" %}</th>
         {% endif %}
-        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -141,19 +159,15 @@
             {{ u.last_login|date:"Y-m-d H:i"|default:"never" }}
           </td>
           <td data-label="{% trans 'Status' %}">
-            {% if u.is_active %}<span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
-            {% else %}<span class="pill pill-offline">INACTIVE</span>{% endif %}
+            {% if u.deleted_at %}
+              <span class="pill pill-muted">DELETED {{ u.deleted_at|date:"Y-m-d" }}</span>
+            {% elif u.is_active %}
+              <span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
+            {% else %}
+              <span class="pill pill-violet">INACTIVE</span>
+            {% endif %}
           </td>
         {% endif %}
-        <td class="actions">
-          <a href="{% url 'accounts:user_detail' u.pk %}" class="btn btn-sm btn-primary">{% trans "View" %}</a>
-          {% if is_admin_view %}
-            <a href="{% url 'accounts:user_edit' u.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
-            {% if u.pk != user.pk %}
-            <a href="{% url 'accounts:user_delete' u.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
-            {% endif %}
-          {% endif %}
-        </td>
       </tr>
       {% endwith %}
       {% endfor %}

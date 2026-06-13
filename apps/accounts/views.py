@@ -1,20 +1,22 @@
+import logging
+
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.db import IntegrityError, transaction
 from django.db.models import Q
-from django.http import Http404
-from django.shortcuts import redirect, render
-from django.urls import reverse, reverse_lazy
+from django.http import Http404, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import (
     CreateView,
-    DeleteView,
     DetailView,
     ListView,
     TemplateView,
@@ -34,6 +36,8 @@ from .forms import (
 )
 from .geocoding import geocode_address, lat_lon_to_locator
 from .models import AccountAuditLog
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -689,6 +693,22 @@ class UserListView(LoginRequiredMixin, ListView):
         if not self.request.user.is_admin:
             qs = qs.exclude(membership_level=User.MembershipLevel.APPLICANT)
 
+        # Show-filter: lifecycle bucket (active/inactive/deleted/all).
+        # Default "active" hides soft-deleted AND deactivated users.
+        # Non-admin viewers never see deleted/inactive — hard-pinned to active.
+        if self.request.user.is_admin:
+            show = self.request.GET.get("show", "active")
+        else:
+            show = "active"
+        if show == "deleted":
+            qs = qs.filter(deleted_at__isnull=False)
+        elif show == "inactive":
+            qs = qs.filter(deleted_at__isnull=True, is_active=False)
+        elif show == "all":
+            pass
+        else:
+            qs = qs.filter(deleted_at__isnull=True, is_active=True)
+
         q = self.request.GET.get("q", "").strip()
         if q:
             qs = qs.filter(
@@ -705,13 +725,6 @@ class UserListView(LoginRequiredMixin, ListView):
         if role in valid_roles:
             qs = qs.filter(membership_level=role)
 
-        if self.request.user.is_admin:
-            status = self.request.GET.get("status", "")
-            if status == "active":
-                qs = qs.filter(is_active=True)
-            elif status == "inactive":
-                qs = qs.filter(is_active=False)
-
         return qs.prefetch_related(
             "region_assignments__region",
             "station_assignments__station",
@@ -723,7 +736,12 @@ class UserListView(LoginRequiredMixin, ListView):
         ctx["is_member_view"] = not self.request.user.is_admin
         ctx["filter_q"] = self.request.GET.get("q", "")
         ctx["filter_role"] = self.request.GET.get("role", "")
-        ctx["filter_status"] = self.request.GET.get("status", "")
+        # Mirror get_queryset's hard-pinning for non-admin viewers so the
+        # template's active-pill state matches the actual queryset.
+        if self.request.user.is_admin:
+            ctx["filter_show"] = self.request.GET.get("show", "active")
+        else:
+            ctx["filter_show"] = "active"
         return ctx
 
 
@@ -849,44 +867,363 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         return context
 
 
-class UserDeleteView(AdminRequiredMixin, DeleteView):
-    model = User
-    template_name = "accounts/user_confirm_delete.html"
-    success_url = reverse_lazy("accounts:user_list")
-    context_object_name = "target_user"
+def _revoke_all_topology(request, user):
+    """Auto-revoke alle Region- + Station-Assignments des Users.
 
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        user = self.object
-        ctx["n_station_assignments"] = user.station_assignments.count()
-        ctx["n_region_assignments"] = user.region_assignments.count()
-        ctx["station_admin_assignments"] = list(
-            user.station_assignments.filter(role=StationAssignment.Role.ADMIN).select_related(
-                "station"
+    Returnt eine Liste menschenlesbarer Strings ("Station-Admin: OE5XRX")
+    die im Success-Banner gezeigt werden, damit der Admin weiß welche
+    Positionen jetzt frei sind.
+
+    Audit-emission läuft über den post_delete-Signal-Handler in
+    ``apps.stations.signals`` — wir stashen ``_revoke_reason`` +
+    ``_revoke_actor`` auf der Instance, der Signal-Handler liest die
+    Marker und schreibt ``reason=user_soft_deleted`` in die Message.
+    Doppelt-Audit wird so vermieden.
+    """
+    freed = []
+    for assignment in list(user.region_assignments.select_related("region")):
+        freed.append(f"Region-{assignment.get_role_display()}: {assignment.region.name}")
+        assignment._revoke_reason = "user_soft_deleted"
+        assignment._revoke_actor = request.user
+        assignment.delete()
+
+    for assignment in list(user.station_assignments.select_related("station")):
+        label = assignment.station.callsign or assignment.station.name
+        freed.append(f"Station-{assignment.get_role_display()}: {label}")
+        assignment._revoke_reason = "user_soft_deleted"
+        assignment._revoke_actor = request.user
+        assignment.delete()
+    return freed
+
+
+def _revoke_sso(request, user):
+    """Revoke alle SSO-Grants + Sessions des Users.
+
+    Keine per-event Audits — der USER_SOFT_DELETED-Audit plus die
+    Impact-Counts auf der Confirm-Page reichen als Forensik.
+
+    ``AppGrant`` has only ``revoked_at`` (no ``revoked_by`` — the
+    audit-trail uses ``SsoAuditLog`` for accountability). ``TokenSession``
+    has both ``revoked_at`` and ``revoked_by``.
+    """
+    now = timezone.now()
+    if hasattr(user, "app_grants"):
+        user.app_grants.filter(revoked_at__isnull=True).update(revoked_at=now)
+    if hasattr(user, "token_sessions"):
+        # Carry the revoke_reason explicitly. The post_save signal that
+        # would normally set USER_DEACTIVATED runs AFTER this update, but
+        # by then revoked_at is non-NULL and the signal's idempotent
+        # filter skips these rows — without this kwarg the reason would
+        # stay blank and we lose forensic continuity.
+        from apps.sso.models import TokenSession
+
+        user.token_sessions.filter(revoked_at__isnull=True).update(
+            revoked_at=now,
+            revoked_by=request.user,
+            revoke_reason=TokenSession.RevokeReason.USER_DEACTIVATED,
+        )
+
+
+class UserSoftDeleteView(AdminRequiredMixin, View):
+    """Soft-delete an active user.
+
+    GET shows the impact confirm-page (counts of topology assignments,
+    SSO grants, sessions, group memberships, pending tokens). POST runs
+    the atomic 6-step lifecycle: topology revoke → tokens invalidate →
+    SSO revoke → groups clear → deleted_at/deleted_by/is_active stamp →
+    USER_SOFT_DELETED audit.
+
+    A 404 is returned if the user is already soft-deleted — re-soft-
+    delete is meaningless. Restore (Task 5) is the inverse path for
+    soft-deleted users.
+    """
+
+    template_name = "accounts/user_confirm_soft_delete.html"
+
+    def get_object(self):
+        # 404 wenn schon soft-deleted — Re-Soft-Delete nicht möglich.
+        return get_object_or_404(
+            User,
+            pk=self.kwargs["pk"],
+            deleted_at__isnull=True,
+        )
+
+    def get(self, request, pk):
+        target = self.get_object()
+        ctx = {
+            "target_user": target,
+            "n_station_assignments": target.station_assignments.count(),
+            "n_region_assignments": target.region_assignments.count(),
+            "station_admin_assignments": list(
+                target.station_assignments.filter(
+                    role=StationAssignment.Role.ADMIN
+                ).select_related("station")
+            ),
+            # Only count ACTIVE grants — those are the ones the soft-delete
+            # flow will revoke. Counting already-revoked grants would
+            # over-report the impact.
+            "n_sso_grants": (
+                target.app_grants.filter(revoked_at__isnull=True).count()
+                if hasattr(target, "app_grants")
+                else 0
+            ),
+            "n_active_sessions": (
+                target.token_sessions.filter(revoked_at__isnull=True).count()
+                if hasattr(target, "token_sessions")
+                else 0
+            ),
+            "n_group_memberships": target.groups.count(),
+            "n_pending_tokens": target.account_tokens.filter(used_at__isnull=True).count(),
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request, pk):
+        target = self.get_object()
+        if target == request.user:
+            messages.error(request, _("You cannot delete your own account."))
+            return redirect("accounts:user_detail", pk=pk)
+
+        with transaction.atomic():
+            freed_positions = _revoke_all_topology(request, target)
+            target.account_tokens.filter(used_at__isnull=True).update(used_at=timezone.now())
+            _revoke_sso(request, target)
+            target.groups.clear()
+            target.deleted_at = timezone.now()
+            target.deleted_by = request.user
+            target.is_active = False
+            target.save(
+                update_fields=[
+                    "deleted_at",
+                    "deleted_by",
+                    "is_active",
+                ]
             )
-        )
-        ctx["n_sso_grants"] = user.app_grants.count() if hasattr(user, "app_grants") else 0
-        ctx["n_active_sessions"] = (
-            user.token_sessions.filter(revoked_at__isnull=True).count()
-            if hasattr(user, "token_sessions")
-            else 0
-        )
-        ctx["n_group_memberships"] = user.groups.count()
-        return ctx
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_SOFT_DELETED,
+                actor=request.user,
+                target_user=target,
+                message=f"{target.username} <{target.email}>",
+                ip_address=_client_ip(request),
+            )
 
-    def form_valid(self, form):
-        if self.object == self.request.user:
-            messages.error(self.request, _("You cannot delete your own account."))
-            return redirect(self.success_url)
-        AccountAuditLog.log(
-            event_type=AccountAuditLog.EventType.USER_DELETED,
-            actor=self.request.user,
-            target_user=self.object,
-            message=f"{self.object.username} <{self.object.email}>",
-            ip_address=_client_ip(self.request),
+        if freed_positions:
+            lines = "\n".join(f"  • {p}" for p in freed_positions)
+            messages.warning(
+                request,
+                _("User soft-deleted. Free positions:\n%(lines)s\nReassign as needed.")
+                % {"lines": lines},
+            )
+        else:
+            messages.success(request, _("User soft-deleted."))
+        return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
+
+
+class UserRestoreView(AdminRequiredMixin, View):
+    """Restore a soft-deleted user.
+
+    POST-only. 404 if the user is not soft-deleted. Pre-commit conflict
+    checks for email + username (case-insensitive) against any active
+    user — between soft-delete and restore another account could have
+    grabbed the identifier. Topology assignments, SSO grants, group
+    memberships and account tokens are NOT restored — they were
+    revoked at soft-delete time and admin re-assigns manually.
+    """
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        target = get_object_or_404(
+            User,
+            pk=pk,
+            deleted_at__isnull=False,
         )
-        messages.success(self.request, _("User deleted successfully."))
-        return super().form_valid(form)
+        # Email-conflict check: another active user grabbed the email?
+        # Skip when target.email is empty — the DB unique constraint
+        # explicitly excludes empty emails (~Q(email="")), so two users
+        # with blank emails coexist legally. Without this guard, the
+        # ProfileIdentityForm.clean_email check + restore would block
+        # any restore on a no-email user whenever any other active user
+        # also has a blank email (which is common for legacy rows).
+        clashing_email = None
+        if target.email:
+            clashing_email = (
+                User.objects.active()
+                .filter(email__iexact=target.email)
+                .exclude(pk=target.pk)
+                .first()
+            )
+        if clashing_email:
+            messages.error(
+                request,
+                _(
+                    "Cannot restore: another active user (%(other)s) is using "
+                    "%(email)s. Either change %(other)s's email first, or update "
+                    "%(name)s's email before restoring."
+                )
+                % {
+                    "other": clashing_email.username,
+                    "email": target.email,
+                    "name": target.username,
+                },
+            )
+            return redirect("accounts:user_detail", pk=pk)
+
+        # Username-conflict check
+        clashing_username = (
+            User.objects.active()
+            .filter(username__iexact=target.username)
+            .exclude(pk=target.pk)
+            .first()
+        )
+        if clashing_username:
+            messages.error(
+                request,
+                _(
+                    "Cannot restore: another active user is using callsign "
+                    "%(name)s. Soft-delete or rename them first."
+                )
+                % {"name": target.username},
+            )
+            return redirect("accounts:user_detail", pk=pk)
+
+        try:
+            with transaction.atomic():
+                target.deleted_at = None
+                target.deleted_by = None
+                target.is_active = True
+                target.save(
+                    update_fields=[
+                        "deleted_at",
+                        "deleted_by",
+                        "is_active",
+                    ]
+                )
+                AccountAuditLog.log(
+                    event_type=AccountAuditLog.EventType.USER_RESTORED,
+                    actor=request.user,
+                    target_user=target,
+                    message=f"{target.username} <{target.email}>",
+                    ip_address=_client_ip(request),
+                )
+        except IntegrityError:
+            # Race fallback: between our pre-checks above and the save(),
+            # another admin may have created/restored a user with the
+            # same callsign or email, tripping the conditional UNIQUE
+            # constraints. Surface a user-facing error instead of 500ing.
+            logger.warning(
+                "Restore failed for user %s due to UNIQUE-conflict race",
+                target.pk,
+            )
+            messages.error(
+                request,
+                _(
+                    "Cannot restore %(name)s: a conflicting active user was "
+                    "created in the meantime. Refresh the page to see the "
+                    "current state."
+                )
+                % {"name": target.username},
+            )
+            return redirect("accounts:user_detail", pk=pk)
+        messages.success(
+            request,
+            _(
+                "User %(name)s restored. Topology assignments were revoked at "
+                "delete-time and need to be re-assigned."
+            )
+            % {"name": target.username},
+        )
+        return redirect("accounts:user_detail", pk=pk)
+
+
+class UserHardPurgeView(AdminRequiredMixin, View):
+    template_name = "accounts/user_confirm_hard_purge.html"
+
+    def get_object(self):
+        # Critical guard: only soft-deleted users are hard-purgeable.
+        # Active user → 404. No UI path exposes this URL for active users.
+        return get_object_or_404(
+            User,
+            pk=self.kwargs["pk"],
+            deleted_at__isnull=False,
+        )
+
+    def get(self, request, pk):
+        target = self.get_object()
+        return render(
+            request,
+            self.template_name,
+            {
+                "target_user": target,
+                "deleted_at": target.deleted_at,
+                "deleted_by": target.deleted_by,
+                "n_audit_as_actor": AccountAuditLog.objects.filter(actor=target).count(),
+                "n_audit_as_target": AccountAuditLog.objects.filter(target_user=target).count(),
+            },
+        )
+
+    def post(self, request, pk):
+        with transaction.atomic():
+            # Re-fetch under SELECT FOR UPDATE so a concurrent
+            # UserRestoreView can't flip deleted_at back to NULL between
+            # our get_object() pre-check and the delete. Re-assert the
+            # guard at delete-time — if a restore committed since the
+            # confirm-page rendered, we'd see deleted_at IS NULL and
+            # must refuse rather than purge an active user.
+            target = get_object_or_404(
+                User.objects.select_for_update(),
+                pk=pk,
+                deleted_at__isnull=False,
+            )
+
+            # Capture identifiers before delete — target FK becomes NULL
+            # via SET_NULL after .delete(), but the audit row's message
+            # string must preserve username/email for forensic continuity.
+            username = target.username
+            email = target.email
+            deleted_at = target.deleted_at
+            target_pk = target.pk
+            # Capture avatar storage + name BEFORE delete so we can
+            # schedule cleanup via on_commit (target.avatar is no longer
+            # addressable after target.delete()).
+            avatar_storage = None
+            avatar_name = None
+            if target.avatar:
+                avatar_storage = target.avatar.storage
+                avatar_name = target.avatar.name
+
+            # Audit + delete in one atomic block. If .delete() fails
+            # partway through cascade/SET_NULL updates, the audit row is
+            # rolled back too — no orphan "purged" entry for a still-
+            # existing user.
+            AccountAuditLog.log(
+                event_type=AccountAuditLog.EventType.USER_HARD_PURGED,
+                actor=request.user,
+                target_user=target,
+                message=(
+                    f"{username} <{email}> (purged after soft-delete on {deleted_at:%Y-%m-%d})"
+                ),
+                ip_address=_client_ip(request),
+            )
+            target.delete()
+
+            # Defer avatar-file delete until commit — storage cleanup
+            # must not run if the transaction rolls back, otherwise we
+            # could lose the file while the DB row still exists.
+            if avatar_storage is not None and avatar_name:
+
+                def _purge_avatar():
+                    try:
+                        avatar_storage.delete(avatar_name)
+                    except Exception:
+                        logger.exception(
+                            "Avatar file delete failed for purged user %s",
+                            target_pk,
+                        )
+
+                transaction.on_commit(_purge_avatar)
+
+        messages.success(request, _("User permanently purged."))
+        return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
 
 class UserDetailView(LoginRequiredMixin, DetailView):
@@ -906,11 +1243,19 @@ class UserDetailView(LoginRequiredMixin, DetailView):
 
     def get_object(self, queryset=None):
         obj = super().get_object(queryset)
-        from .visibility import audience_for
+        from .visibility import Audience, audience_for
 
         aud = audience_for(self.request.user, obj)
         if aud is None:
             raise Http404("User not found")
+
+        # Soft-deleted users are admin-only. Non-admin audiences must not
+        # be able to enumerate or view them via direct /accounts/users/<pk>/
+        # URLs — the lifecycle filter on UserListView pins them to active,
+        # and the detail page must enforce the same boundary.
+        if obj.deleted_at is not None and aud != Audience.ADMIN:
+            raise Http404("User not found")
+
         self._audience = aud
         return obj
 

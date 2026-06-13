@@ -368,3 +368,107 @@ class TestPasswordChangeForm:
         form = PasswordChangeForm(user=member)
         for field in form.fields.values():
             assert field.widget.attrs.get("class") == "form-control"
+
+
+@pytest.mark.django_db
+class TestUniquenessExcludesSoftDeleted:
+    def test_create_form_allows_email_of_soft_deleted_user(self):
+        from django.utils import timezone
+
+        from apps.accounts.forms import UserCreationForm
+
+        old = User.objects.create_user(
+            username="OE5OLD",
+            email="hans@example.org",
+            password="x",
+        )
+        old.deleted_at = timezone.now()
+        old.is_active = False
+        old.save()
+
+        form = UserCreationForm(
+            data={
+                "username": "OE5NEW",
+                "email": "hans@example.org",
+                "first_name": "",
+                "last_name": "",
+                "language": "en",
+            }
+        )
+        assert form.is_valid(), form.errors
+
+    def test_create_form_allows_username_of_soft_deleted_user(self):
+        from django.utils import timezone
+
+        from apps.accounts.forms import UserCreationForm
+
+        old = User.objects.create_user(
+            username="OE5XYZ",
+            email="old@example.org",
+            password="x",
+        )
+        old.deleted_at = timezone.now()
+        old.is_active = False
+        old.save()
+
+        form = UserCreationForm(
+            data={
+                "username": "OE5XYZ",
+                "email": "new@example.org",
+                "first_name": "",
+                "last_name": "",
+                "language": "en",
+            }
+        )
+        assert form.is_valid(), form.errors
+
+    def test_create_form_blocks_two_active_same_username(self):
+        from apps.accounts.forms import UserCreationForm
+
+        User.objects.create_user(
+            username="OE5DUP",
+            email="first@example.org",
+            password="x",
+        )
+        form = UserCreationForm(
+            data={
+                "username": "OE5DUP",
+                "email": "second@example.org",
+                "first_name": "",
+                "last_name": "",
+                "language": "en",
+            }
+        )
+        assert not form.is_valid()
+        assert "username" in form.errors
+
+    def test_profile_identity_allows_email_of_soft_deleted_user(self):
+        from django.utils import timezone
+
+        from apps.accounts.forms import ProfileIdentityForm
+
+        old = User.objects.create_user(
+            username="OE5OLD",
+            email="taken@example.org",
+            password="x",
+        )
+        old.deleted_at = timezone.now()
+        old.is_active = False
+        old.save()
+        active = User.objects.create_user(
+            username="OE5ACT",
+            email="active@example.org",
+            password="x",
+        )
+
+        form = ProfileIdentityForm(
+            data={
+                "identity-email": "taken@example.org",
+                "identity-first_name": active.first_name,
+                "identity-last_name": active.last_name,
+                "identity-language": active.language,
+            },
+            instance=active,
+            prefix="identity",
+        )
+        assert form.is_valid(), form.errors

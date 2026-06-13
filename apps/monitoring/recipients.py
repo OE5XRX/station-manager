@@ -45,8 +45,15 @@ def recipients_for_station_alert(station):
         station_assignments__role__in=["admin", "maintainer"],
     )
 
+    # .active() excludes soft-deleted users (deleted_at IS NOT NULL).
+    # The subsequent .exclude(is_active=False) is a SEPARATE gate for
+    # deactivated-but-not-deleted users (admin disabled an account but
+    # didn't soft-delete it). Don't conflate the two — removing .active()
+    # would let soft-deleted rows leak into the recipient set whenever a
+    # future flow keeps is_active=True after soft-delete.
     return (
-        User.objects.filter(q)
+        User.objects.active()
+        .filter(q)
         .exclude(email="")
         .exclude(is_active=False)
         .exclude(membership_level=User.MembershipLevel.APPLICANT)
