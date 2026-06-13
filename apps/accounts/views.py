@@ -1200,8 +1200,7 @@ class UserHardPurgeView(AdminRequiredMixin, View):
                 actor=request.user,
                 target_user=target,
                 message=(
-                    f"{username} <{email}> "
-                    f"(purged after soft-delete on {deleted_at:%Y-%m-%d})"
+                    f"{username} <{email}> (purged after soft-delete on {deleted_at:%Y-%m-%d})"
                 ),
                 ip_address=_client_ip(request),
             )
@@ -1211,6 +1210,7 @@ class UserHardPurgeView(AdminRequiredMixin, View):
             # must not run if the transaction rolls back, otherwise we
             # could lose the file while the DB row still exists.
             if avatar_storage is not None and avatar_name:
+
                 def _purge_avatar():
                     try:
                         avatar_storage.delete(avatar_name)

@@ -68,6 +68,4 @@ class UserManager(BaseUserManager):
 
         Filter on the active slice so the resolution is unambiguous.
         """
-        return self.filter(deleted_at__isnull=True).get(
-            **{self.model.USERNAME_FIELD: username}
-        )
+        return self.filter(deleted_at__isnull=True).get(**{self.model.USERNAME_FIELD: username})

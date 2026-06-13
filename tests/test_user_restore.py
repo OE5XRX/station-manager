@@ -81,7 +81,9 @@ class TestRestore:
         assert "OE5DEAD" in audit.message
 
     def test_restore_with_empty_email_not_blocked_by_other_empty_email_user(
-        self, client, admin,
+        self,
+        client,
+        admin,
     ):
         """The email-conflict guard must skip empty-email targets.
 
