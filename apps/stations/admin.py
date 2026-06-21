@@ -2,7 +2,6 @@ from django.contrib import admin
 from django.utils.translation import gettext_lazy as _
 
 from .models import (
-    ModuleType,
     Station,
     StationAuditLog,
     StationInventory,
@@ -43,7 +42,7 @@ class StationAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
-    filter_horizontal = ("installed_modules", "tags")
+    filter_horizontal = ("tags",)
     inlines = [StationPhotoInline, StationLogEntryInline]
     fieldsets = (
         (None, {"fields": ("name", "callsign", "description", "tags", "notes")}),
@@ -63,7 +62,6 @@ class StationAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "hardware_revision",
-                    "installed_modules",
                 ),
             },
         ),
@@ -91,13 +89,6 @@ class StationAdmin(admin.ModelAdmin):
 @admin.register(StationTag)
 class StationTagAdmin(admin.ModelAdmin):
     list_display = ("name", "slug", "color", "created_at")
-    prepopulated_fields = {"slug": ("name",)}
-    search_fields = ("name",)
-
-
-@admin.register(ModuleType)
-class ModuleTypeAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "firmware_flash_method")
     prepopulated_fields = {"slug": ("name",)}
     search_fields = ("name",)
 

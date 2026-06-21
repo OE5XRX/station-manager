@@ -19,7 +19,6 @@ class StationForm(forms.ModelForm):
             "altitude",
             "hardware_revision",
             "tags",
-            "installed_modules",
             "notes",
         )
         widgets = {
@@ -34,7 +33,6 @@ class StationForm(forms.ModelForm):
             "altitude": forms.NumberInput(attrs={"class": "form-control"}),
             "hardware_revision": forms.TextInput(attrs={"class": "form-control"}),
             "tags": forms.CheckboxSelectMultiple(),
-            "installed_modules": forms.CheckboxSelectMultiple(),
             "notes": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
 

@@ -97,7 +97,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
             super()
             .get_queryset()
             .select_related("device_key", "inventory", "current_image_release")
-            .prefetch_related("tags", "installed_modules", "photos", "log_entries", "audit_logs")
+            .prefetch_related("tags", "photos", "log_entries", "audit_logs")
         )
 
     def get_context_data(self, **kwargs):

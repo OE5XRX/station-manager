@@ -78,34 +78,6 @@ class StationTag(models.Model):
             raise ValidationError({"slug": _("This slug is reserved by the rollout system.")})
 
 
-class ModuleType(models.Model):
-    """Types of hardware modules (e.g., FM Transceiver, Power Board)."""
-
-    class FlashMethod(models.TextChoices):
-        USB_DFU = "usb_dfu", _("USB DFU")
-        UART = "uart", _("UART")
-        SPI = "spi", _("SPI")
-        OTHER = "other", _("Other")
-
-    name = models.CharField(_("name"), max_length=100, unique=True)
-    slug = models.SlugField(_("slug"), unique=True)
-    description = models.TextField(_("description"), blank=True)
-    firmware_flash_method = models.CharField(
-        _("firmware flash method"),
-        max_length=10,
-        choices=FlashMethod.choices,
-        default=FlashMethod.OTHER,
-    )
-
-    class Meta:
-        verbose_name = _("module type")
-        verbose_name_plural = _("module types")
-        ordering = ["name"]
-
-    def __str__(self):
-        return self.name
-
-
 class Station(models.Model):
     """A remote amateur radio station (the main entity)."""
 
@@ -144,12 +116,6 @@ class Station(models.Model):
     tags = models.ManyToManyField(
         StationTag,
         verbose_name=_("tags"),
-        blank=True,
-        related_name="stations",
-    )
-    installed_modules = models.ManyToManyField(
-        ModuleType,
-        verbose_name=_("installed modules"),
         blank=True,
         related_name="stations",
     )

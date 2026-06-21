@@ -89,7 +89,6 @@
       <button type="button" class="tab active" data-tab="overview" aria-selected="true">{% trans "Overview" %}</button>
       <button type="button" class="tab" data-tab="photos" aria-selected="false">{% trans "Photos" %} <span class="count">{{ station.photos.count }}</span></button>
       <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
-      <button type="button" class="tab" data-tab="modules" aria-selected="false">{% trans "Modules" %} <span class="count">{{ station.installed_modules.count }}</span></button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
       <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
       {% if user.is_internal %}
@@ -259,38 +258,6 @@
         </ul>
         {% else %}
         <div class="empty"><div class="empty-title">{% trans "No logbook entries yet" %}</div></div>
-        {% endif %}
-      </div>
-    </section>
-  </div>
-
-  <div data-tab-panel="modules" hidden>
-    <section class="panel">
-      <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Installed modules" %}</div></div>
-      <div class="panel-body flush" data-mobile-cards>
-        {% if station.installed_modules.all %}
-        <table class="t-table">
-          <thead>
-            <tr>
-              <th>{% trans "Module" %}</th>
-              <th>{% trans "Slug" %}</th>
-              <th>{% trans "Flash method" %}</th>
-              <th>{% trans "Description" %}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for mod in station.installed_modules.all %}
-            <tr>
-              <td data-primary><span style="font-weight:600;color:var(--ink-0);">{{ mod.name }}</span></td>
-              <td class="t-mono" data-label="{% trans 'Slug' %}">{{ mod.slug }}</td>
-              <td data-label="{% trans 'Flash method' %}"><span class="pill pill-muted">{{ mod.get_firmware_flash_method_display|upper }}</span></td>
-              <td class="t-muted" data-label="{% trans 'Description' %}">{{ mod.description|default:"—" }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="empty"><div class="empty-title">{% trans "No modules attached." %}</div></div>
         {% endif %}
       </div>
     </section>
