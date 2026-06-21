@@ -10,12 +10,9 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
-from django.core.files.uploadedfile import SimpleUploadedFile
-
 from apps.accounts.models import User
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment, DeploymentResult
-from apps.firmware.models import FirmwareArtifact
 from apps.monitoring.models import Alert, AlertRule
 from apps.stations.models import Station
 
@@ -113,25 +110,6 @@ def station_with_key(station):
         current_public_key=public_b64,
     )
     return station, private_key
-
-
-@pytest.fixture
-def firmware_artifact(db, operator_user):
-    """A FirmwareArtifact with a small dummy file."""
-    dummy_file = SimpleUploadedFile(
-        "firmware-test.bin",
-        b"\x00\x01\x02\x03" * 64,
-        content_type="application/octet-stream",
-    )
-    artifact = FirmwareArtifact(
-        name="test-firmware",
-        version="1.0.0",
-        artifact_type=FirmwareArtifact.ArtifactType.OS_IMAGE,
-        file=dummy_file,
-        uploaded_by=operator_user,
-    )
-    artifact.save()
-    return artifact
 
 
 @pytest.fixture
