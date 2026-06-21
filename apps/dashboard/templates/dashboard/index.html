@@ -62,15 +62,6 @@
 
     <div class="stat">
       <div class="stat-label">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h8"/></svg>
-        {% trans "Firmware" %}
-      </div>
-      <div class="stat-value">{{ firmware_count }}</div>
-      <div class="stat-meta"><a href="{% url 'firmware:firmware_list' %}" class="t-mono">{% trans "artifacts" %} →</a></div>
-    </div>
-
-    <div class="stat">
-      <div class="stat-label">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2v20M2 12h20"/></svg>
         {% trans "Deployments" %}
       </div>

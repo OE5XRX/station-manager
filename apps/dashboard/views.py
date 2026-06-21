@@ -7,7 +7,6 @@ from django.views.generic import TemplateView
 
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment
-from apps.firmware.models import FirmwareArtifact
 from apps.monitoring.models import Alert
 from apps.stations.models import Station, StationLogEntry
 
@@ -27,7 +26,6 @@ class IndexView(LoginRequiredMixin, TemplateView):
         context["stations_online"] = Station.objects.filter(
             last_seen__gte=online_threshold,
         ).count()
-        context["firmware_count"] = FirmwareArtifact.objects.count()
         context["recent_log_entries"] = StationLogEntry.objects.select_related("station").order_by(
             "-created_at"
         )[:5]
