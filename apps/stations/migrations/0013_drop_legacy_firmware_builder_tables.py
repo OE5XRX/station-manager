@@ -1,18 +1,23 @@
 from django.db import migrations
 
 # Die firmware/builder-Tabellen sind in Prod verifiziert leer (2026-06-21) und
-# die Apps sind entfernt. Wir droppen die orphaned Tabellen + die zugehörigen
-# django_migrations-Zeilen. firmware VOR stations_moduletype-Drop (Migration 0014),
-# weil firmware_firmwareartifact.target_module einen FK auf stations_moduletype hält
-# (daher CASCADE auf Postgres). Auf frischen DBs (SQLite-Test/CI) sind diese Tabellen
-# nie entstanden -> reiner No-op. CASCADE ist kein gültiges SQLite-Syntax, deshalb
-# läuft die SQL nur auf PostgreSQL.
+# die Apps sind entfernt. Wir droppen die orphaned Tabellen. firmware VOR
+# stations_moduletype-Drop (Migration 0014), weil firmware_firmwareartifact.
+# target_module einen FK auf stations_moduletype hält (daher CASCADE auf Postgres).
+# Auf frischen DBs (SQLite-Test/CI) sind diese Tabellen nie entstanden -> reiner
+# No-op. CASCADE ist kein gültiges SQLite-Syntax, deshalb läuft die SQL nur auf
+# PostgreSQL.
+#
+# Die zugehörigen django_migrations-Zeilen lassen wir bewusst stehen: Django
+# ignoriert Migrations-Records nicht-installierter Apps, sie sind also inert.
+# Ein DELETE in Djangos eigener Bookkeeping-Tabelle aus einer Migration heraus
+# wäre nicht-standard und kann mit migrate --fake / Squash / Migrations-Lintern
+# kollidieren — Tabellen-Drop genügt für das Aufräum-Ziel.
 LEGACY_DROP_STATEMENTS = [
     "DROP TABLE IF EXISTS builder_buildjob CASCADE",
     "DROP TABLE IF EXISTS builder_buildconfig CASCADE",
     "DROP TABLE IF EXISTS firmware_firmwaredelta CASCADE",
     "DROP TABLE IF EXISTS firmware_firmwareartifact CASCADE",
-    "DELETE FROM django_migrations WHERE app IN ('firmware', 'builder')",
 ]
 
 
