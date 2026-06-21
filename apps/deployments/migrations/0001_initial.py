@@ -10,7 +10,6 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('firmware', '0002_initial'),
         ('stations', '0003_stationauditlog'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
@@ -27,7 +26,6 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='created at')),
                 ('updated_at', models.DateTimeField(auto_now=True, verbose_name='updated at')),
                 ('created_by', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='deployments', to=settings.AUTH_USER_MODEL, verbose_name='created by')),
-                ('firmware_artifact', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='deployments', to='firmware.firmwareartifact', verbose_name='firmware artifact')),
                 ('target_station', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='targeted_deployments', to='stations.station', verbose_name='target station')),
                 ('target_tag', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='deployments', to='stations.stationtag', verbose_name='target tag')),
             ],

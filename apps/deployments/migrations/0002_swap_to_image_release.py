@@ -10,10 +10,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveField(
-            model_name="deployment",
-            name="firmware_artifact",
-        ),
         migrations.AddField(
             model_name="deployment",
             name="image_release",
