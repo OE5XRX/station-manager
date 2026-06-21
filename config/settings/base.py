@@ -41,9 +41,7 @@ INSTALLED_APPS = [
     "apps.api",
     "apps.dashboard",
     "apps.stations",
-    "apps.firmware",
     "apps.deployments",
-    "apps.builder",
     "apps.tunnel",
     "apps.audit",
     "apps.monitoring",
@@ -159,7 +157,7 @@ STORAGES = {
     },
 }
 
-# Media files (firmware artifacts, station photos)
+# Media files (station photos)
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 

@@ -39,14 +39,6 @@
 
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Fleet Updates" %}</div>
-    <a href="{% url 'firmware:firmware_list' %}"
-       class="nav-item{% if request.resolver_match.namespace == 'firmware' %} active{% endif %}"
-       {% if request.resolver_match.namespace == 'firmware' %}aria-current="page"{% endif %}>
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>
-      </svg>
-      <span class="label">{% trans "Firmware" %}</span>
-    </a>
     <a href="{% url 'deployments:deployment_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'deployments' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'deployments' %}aria-current="page"{% endif %}>
@@ -54,14 +46,6 @@
         <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
       </svg>
       <span class="label">{% trans "Deployments" %}</span>
-    </a>
-    <a href="{% url 'builder:buildconfig_list' %}"
-       class="nav-item{% if request.resolver_match.namespace == 'builder' %} active{% endif %}"
-       {% if request.resolver_match.namespace == 'builder' %}aria-current="page"{% endif %}>
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-      </svg>
-      <span class="label">{% trans "Builder" %}</span>
     </a>
     {% if user.is_admin %}
     <a href="{% url 'rollouts:upgrade_dashboard' %}"
