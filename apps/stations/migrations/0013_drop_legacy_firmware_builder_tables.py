@@ -14,6 +14,10 @@ from django.db import migrations
 # wäre nicht-standard und kann mit migrate --fake / Squash / Migrations-Lintern
 # kollidieren — Tabellen-Drop genügt für das Aufräum-Ziel.
 LEGACY_DROP_STATEMENTS = [
+    # Implizite M2M-Join-Tabelle von BuildConfig.extra_firmware. DROP ... CASCADE
+    # der Eltern-Tabelle entfernt nur deren FK-Constraint, nicht die Join-Tabelle
+    # selbst -> explizit mitdroppen, sonst bleibt sie als Orphan zurück.
+    "DROP TABLE IF EXISTS builder_buildconfig_extra_firmware CASCADE",
     "DROP TABLE IF EXISTS builder_buildjob CASCADE",
     "DROP TABLE IF EXISTS builder_buildconfig CASCADE",
     "DROP TABLE IF EXISTS firmware_firmwaredelta CASCADE",
