@@ -24,10 +24,15 @@ HF-Filter, LTE-Modem, HAMNET-Module …).
   Konsolen-PTY. Kommandobaum `sa818` (power, ptt, powerlevel, at group/volume/rssi/filters/version, status, test tone).
 - **`station_agent`** hat heute **nur Control-Plane** (ota, heartbeat, terminal, inventory, bootloader,
   http_client, config, health_check). **Kein** Radio-/Audio-/Serial-Code → die Geräteschicht ist Greenfield.
-- **`station-manager`** modelliert bereits Module: `ModuleType` (mit `firmware_flash_method`) und
-  `Station.installed_modules` (M2M). Relay-Muster erprobt: `tunnel.TerminalConsumer` (Browser-WS
+- **`station-manager`** hat ein **erprobtes Relay-Muster**: `tunnel.TerminalConsumer` (Browser-WS
   `ws/terminal/<station_id>/`, Channel-Group, max 2 Sessions), Agent-seitige Outbound-Ed25519-WS (`terminal.py`),
-  `stations.StationStatusConsumer` (Live-Status-Push).
+  `stations.StationStatusConsumer` (Live-Status-Push). **Das übernehmen wir.**
+- **Legacy-Hinweis (nicht als Fundament):** Es existieren `ModuleType` (statischer Typ-Katalog mit
+  `firmware_flash_method`) und `Station.installed_modules` (M2M, manuell per Checkbox). Sie stammen aus einer
+  früheren, weniger ausgereiften Architektur, werden **rein zur Anzeige** genutzt (forms, admin,
+  `station_detail.html`) — **keine** Programm-/Firmware-Logik hängt daran. Sie sind **kein** Fundament für die
+  Capability-Plattform (M2M-auf-Typen kann keine entdeckten, zustandsbehafteten Modul-*Instanzen* tragen).
+  → ersetzen statt erweitern (§5.5). Risikoarm, da nur Display.
 
 ### Kern-Erkenntnis (warum diese Architektur)
 Auf echter HW hängt der STM32 per **USB** am CM4 (CDC-ACM = Steuerung/Shell, USB-Audio-Class = Audio, DFU = Update).
@@ -72,8 +77,8 @@ physisch steckt, und beschreibt sich selbst.
                          │  semantisches Kommando {module, capability, op, value}
 ┌─ station-manager (Django) ── geräteagnostisch ───────────────────┐
 │  • ControlConsumer (Browser-Seite) ──relay──► Agent-WS            │
-│  • Capability-Registry: ModuleType/installed_modules + entdeckte  │
-│    Descriptors je Station (UI rendert auch wenn Station offline)  │
+│  • Capability-Registry: neues StationModule (entdeckte Instanz    │
+│    + Capability-JSON je Station; UI rendert auch wenn offline)    │
 │  • Access-Control: Topology + Membership; TX-Exklusiv-Lock        │
 └───────── Outbound Ed25519-WS (Muster terminal.py) ───────────────┘
                          │  generisches typisiertes Kommando
@@ -144,8 +149,12 @@ bandwidth    setting   enum   [12.5, 25] kHz
 - Anbindung an den Server über die etablierte **Outbound-Ed25519-WS** (Muster `terminal.py`).
 
 ### 5.5 Server (`station-manager`) — geräteagnostische Registry + Router
-- **Registry:** bestehendes `ModuleType` / `Station.installed_modules` um **entdeckte Capability-Descriptors**
-  je Station erweitern. UI kann so auch bei Offline-Station rendern.
+- **Registry (neu, ersetzt Legacy):** ein neues **`StationModule`**-Model (Instanz, FK→Station) als
+  Source-of-Truth: Identity-Felder + **Capability-Descriptor als JSON** + `online`/`last_seen`/Version,
+  **vom Agent-Discovery befüllt** (nicht manuell). UI rendert daraus auch bei Offline-Station.
+  Das Legacy-`ModuleType`/`installed_modules` (statischer Typ-Katalog, M2M, nur Display) wird **nicht erweitert**;
+  Entscheidung „als dünner Namens-/Doku-Katalog behalten **oder** entfernen" fällt im Server-Deliverable
+  (risikoarm, da keine Programm-Abhängigkeit). `firmware_flash_method` ist im Agent/OTA-Modell vermutlich obsolet.
 - **Control-Channel:** neuer `ControlConsumer` (Browser-Seite, `ws/control/<station_id>/`) + Relay zum Agent
   über Channel-Layer-Group — exakt dem `TerminalConsumer`-Muster folgend.
 - **Telemetrie:** periodischer Push (z.B. RSSI) Agent → Server → Browser, Muster `StationStatusConsumer`.
@@ -179,7 +188,7 @@ bandwidth    setting   enum   [12.5, 25] kHz
 | Bridge | Serial-over-TCP VM↔VM | Audio-Bridge (Issue #30, Netz-Audio-Transport) |
 | Firmware | generisches `describe` + SA818-Mapping | weitere Module |
 | Agent | Broker + SA818-Treiber, Schema gegen SA818 validiert | weitere Treiber, Audio-IO |
-| Server | Design dokumentiert; Registry-Erweiterung vorbereiten | Control-Consumer + Registry + TX-Lock |
+| Server | Design dokumentiert (Legacy `ModuleType` nicht Fundament) | neues `StationModule` + Control-Consumer + TX-Lock; Legacy-Entscheid |
 | UI | Design dokumentiert | generischer Renderer + Live-Telemetrie |
 
 > Diese Spec beschreibt das **Gesamtbild bis zum Web-Interface**. Der *unmittelbare* Build-Scope ist
@@ -211,11 +220,12 @@ bandwidth    setting   enum   [12.5, 25] kHz
 
 ## 10. Implementierungs-Aufteilung (grob, eigene Sessions/PRs/Issues)
 
-1. **Meta:** diese Spec (RemoteStation). ← *hier*
+1. **Meta:** diese Spec (`station-manager`, cross-cutting). ← *hier*
 2. **FW-RemoteStation:** generisches `describe`-Kommando + typisiertes Command-Mapping auf den SA818-Treiber.
 3. **linux-image / Infra:** VM↔VM Serial-over-TCP-Bridge + Doku (zweite Linux-VM für `native_sim`).
 4. **station-manager (Agent):** generischer Broker (Discovery/Validierung/Übersetzung) + SA818-Treiber.
-5. **station-manager (Server):** Capability-Registry-Erweiterung, `ControlConsumer`, TX-Lock. *(später)*
+5. **station-manager (Server):** neues `StationModule`-Instanz-Model (entdeckt, Capability-JSON), `ControlConsumer`,
+   TX-Lock; Legacy-`ModuleType`/`installed_modules` entsorgen oder zu dünnem Katalog reduzieren. *(später)*
 6. **station-manager/internal-web (UI):** generischer Renderer + Live-Telemetrie. *(später)*
 
 Jedes Folge-Deliverable durchläuft seinen eigenen spec→plan→code-Zyklus, referenziert aber die Verträge aus
