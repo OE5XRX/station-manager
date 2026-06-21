@@ -1,3 +1,10 @@
+# NOTE: This already-applied migration was deliberately edited after the fact in
+# tandem with 0001_initial: the ``RemoveField(deployment.firmware_artifact)``
+# operation was dropped because the field is no longer created in 0001 (the
+# ``firmware`` app was deleted). Safe because Django re-runs migrations by NAME,
+# not content — this never re-applies on an existing DB, and a fresh DB reaches
+# the identical end state. See the NOTE in 0001_initial.py for the full rationale.
+
 import django.db.models.deletion
 from django.db import migrations, models
 
