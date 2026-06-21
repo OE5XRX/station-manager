@@ -1,22 +1,21 @@
 from django.db import migrations
 
-# Die firmware/builder-Tabellen sind in Prod verifiziert leer (2026-06-21) und
-# die Apps sind entfernt. Wir droppen die orphaned Tabellen. firmware VOR
-# stations_moduletype-Drop (Migration 0014), weil firmware_firmwareartifact.
-# target_module einen FK auf stations_moduletype hält (daher CASCADE auf Postgres).
-# Auf frischen DBs (SQLite-Test/CI) sind diese Tabellen nie entstanden -> reiner
-# No-op. CASCADE ist kein gültiges SQLite-Syntax, deshalb läuft die SQL nur auf
-# PostgreSQL.
+# The firmware/builder tables are verified empty in prod (2026-06-21) and the
+# apps are removed. We drop the orphaned tables. firmware BEFORE the
+# stations_moduletype drop (migration 0014), because firmware_firmwareartifact.
+# target_module holds an FK to stations_moduletype (hence CASCADE on Postgres).
+# On fresh DBs (SQLite test/CI) these tables never existed -> pure no-op. CASCADE
+# is not valid SQLite syntax, so the SQL runs on PostgreSQL only.
 #
-# Die zugehörigen django_migrations-Zeilen lassen wir bewusst stehen: Django
-# ignoriert Migrations-Records nicht-installierter Apps, sie sind also inert.
-# Ein DELETE in Djangos eigener Bookkeeping-Tabelle aus einer Migration heraus
-# wäre nicht-standard und kann mit migrate --fake / Squash / Migrations-Lintern
-# kollidieren — Tabellen-Drop genügt für das Aufräum-Ziel.
+# We intentionally leave the corresponding django_migrations rows in place:
+# Django ignores migration records for uninstalled apps, so they are inert. A
+# DELETE on Django's own bookkeeping table from within a migration would be
+# non-standard and can interfere with migrate --fake / squash / migration
+# linters — dropping the tables is sufficient for the cleanup goal.
 LEGACY_DROP_STATEMENTS = [
-    # Implizite M2M-Join-Tabelle von BuildConfig.extra_firmware. DROP ... CASCADE
-    # der Eltern-Tabelle entfernt nur deren FK-Constraint, nicht die Join-Tabelle
-    # selbst -> explizit mitdroppen, sonst bleibt sie als Orphan zurück.
+    # Implicit M2M join table from BuildConfig.extra_firmware. DROP ... CASCADE on
+    # the parent table only drops its FK constraint, not the join table itself ->
+    # drop it explicitly, otherwise it would be left behind as an orphan.
     "DROP TABLE IF EXISTS builder_buildconfig_extra_firmware CASCADE",
     "DROP TABLE IF EXISTS builder_buildjob CASCADE",
     "DROP TABLE IF EXISTS builder_buildconfig CASCADE",

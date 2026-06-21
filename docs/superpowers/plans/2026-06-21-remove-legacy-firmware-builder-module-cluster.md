@@ -4,7 +4,7 @@
 
 **Goal:** Vollständig entfernen: die Django-Apps `apps.firmware` und `apps.builder` sowie `stations.ModuleType` + `Station.installed_modules` — inkl. sauberem Drop der (leeren) Tabellen auf der Prod-DB.
 
-**Architecture:** Code-Entfernung in `stations`, Komplett-Löschung der Apps `firmware`+`builder`, History-Scrub der `deployments`-Migrationen (sie hängen historisch an `firmware`, nutzen aber längst `images.ImageRelease`), plus eine idempotente RunSQL-Cleanup-Migration in `stations`, die orphaned Tabellen + `django_migrations`-Zeilen auf Prod beseitigt. Reihenfolge ist kritisch (FK `firmware_firmwareartifact.target_module → stations_moduletype`): firmware-Tabellen müssen vor `ModuleType` gedroppt werden.
+**Architecture:** Code-Entfernung in `stations`, Komplett-Löschung der Apps `firmware`+`builder`, History-Scrub der `deployments`-Migrationen (sie hängen historisch an `firmware`, nutzen aber längst `images.ImageRelease`), plus eine idempotente, vendor-guarded `RunPython`-Cleanup-Migration in `stations` (Postgres-only), die die orphaned Tabellen auf Prod droppt. Reihenfolge ist kritisch (FK `firmware_firmwareartifact.target_module → stations_moduletype`): firmware-Tabellen müssen vor `ModuleType` gedroppt werden.
 
 **Tech Stack:** Django 6.0, Python 3.14, PostgreSQL 17 (Prod), SQLite (Test-Settings), pytest (`config.settings.test`).
 
@@ -43,7 +43,7 @@
 - `tests/conftest.py` — `firmware_artifact`-Fixture + `FirmwareArtifact`-Import entfernen
 
 **Neu erstellt:**
-- `apps/stations/migrations/0013_drop_legacy_firmware_builder_tables.py` — idempotente RunSQL (Prod-Cleanup)
+- `apps/stations/migrations/0013_drop_legacy_firmware_builder_tables.py` — idempotente vendor-guarded `RunPython` (Postgres-only Prod-Cleanup)
 - `apps/stations/migrations/0014_remove_moduletype_installed_modules.py` — via `makemigrations` generiert
 
 **Reihenfolge-Begründung:** Erst Code raus (Tasks 1–4), dann deployments-History-Scrub (Task 5), dann Migrationen generieren (Task 6) — `makemigrations` lädt den Graphen nur fehlerfrei, wenn keine `firmware`-Referenzen mehr da sind. Task 7 Tests, Task 8 Verifikation.
@@ -366,28 +366,55 @@ python manage.py makemigrations stations --empty --name drop_legacy_firmware_bui
 ```
 Expected: erstellt `apps/stations/migrations/0013_drop_legacy_firmware_builder_tables.py` mit `dependencies = [("stations", "0012_extend_station_audit_event_types")]`.
 
-- [ ] **Step 2: RunSQL-Inhalt einfügen**
+- [ ] **Step 2: Drop-Inhalt einfügen**
 
-Ersetze `operations = []` in `0013_drop_legacy_firmware_builder_tables.py` durch:
+> **Hinweis (Stand der gemergten Implementierung):** `DROP … CASCADE` ist **kein gültiges SQLite-Syntax**,
+> und die Test-/CI-DB ist SQLite — ein reines `RunSQL` würde dort beim DB-Aufbau crashen. Deshalb verwendet
+> die finale Migration ein **vendor-guarded `RunPython`** (läuft nur auf PostgreSQL; auf SQLite reiner No-op,
+> da die Tabellen dort nie existierten). Außerdem: die `django_migrations`-Zeilen werden **nicht** gelöscht
+> (Records nicht-installierter Apps sind inert; ein DELETE in Djangos Bookkeeping-Tabelle aus einer Migration
+> ist non-standard), und die **implizite M2M-Join-Tabelle** `builder_buildconfig_extra_firmware` wird explizit
+> mitgedroppt (CASCADE der Eltern-Tabelle entfernt nur den FK-Constraint, nicht die Join-Tabelle).
+
+Ersetze den Body von `0013_drop_legacy_firmware_builder_tables.py` durch:
 
 ```python
+from django.db import migrations
+
+# The firmware/builder tables are verified empty in prod and the apps are removed.
+# firmware BEFORE the stations_moduletype drop (migration 0014), because
+# firmware_firmwareartifact.target_module holds an FK to stations_moduletype
+# (hence CASCADE on Postgres). On fresh DBs (SQLite test/CI) these tables never
+# existed -> pure no-op. CASCADE is not valid SQLite syntax, so the SQL runs on
+# PostgreSQL only. The django_migrations rows for the removed apps are left in
+# place (inert; Django ignores records for uninstalled apps).
+LEGACY_DROP_STATEMENTS = [
+    # Implicit M2M join table from BuildConfig.extra_firmware — CASCADE on the
+    # parent only drops its FK constraint, not the join table itself.
+    "DROP TABLE IF EXISTS builder_buildconfig_extra_firmware CASCADE",
+    "DROP TABLE IF EXISTS builder_buildjob CASCADE",
+    "DROP TABLE IF EXISTS builder_buildconfig CASCADE",
+    "DROP TABLE IF EXISTS firmware_firmwaredelta CASCADE",
+    "DROP TABLE IF EXISTS firmware_firmwareartifact CASCADE",
+]
+
+
+def drop_legacy_tables(apps, schema_editor):
+    if schema_editor.connection.vendor != "postgresql":
+        return  # fresh DBs (SQLite test/CI) never had these tables
+    with schema_editor.connection.cursor() as cursor:
+        for statement in LEGACY_DROP_STATEMENTS:
+            cursor.execute(statement)
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ("stations", "0012_extend_station_audit_event_types"),
+    ]
+
     operations = [
-        # Die firmware/builder-Tabellen sind in Prod verifiziert leer (2026-06-21)
-        # und die Apps sind entfernt. Wir droppen die orphaned Tabellen + die
-        # zugehörigen django_migrations-Zeilen idempotent. firmware vor stations_
-        # moduletype-Drop (Task 0014), weil firmware_firmwareartifact.target_module
-        # einen FK auf stations_moduletype hält. Auf frischer DB (Test/CI) sind die
-        # Tabellen nie entstanden → IF EXISTS macht no-op.
-        migrations.RunSQL(
-            sql="""
-            DROP TABLE IF EXISTS builder_buildjob CASCADE;
-            DROP TABLE IF EXISTS builder_buildconfig CASCADE;
-            DROP TABLE IF EXISTS firmware_firmwaredelta CASCADE;
-            DROP TABLE IF EXISTS firmware_firmwareartifact CASCADE;
-            DELETE FROM django_migrations WHERE app IN ('firmware', 'builder');
-            """,
-            reverse_sql=migrations.RunSQL.noop,
-        ),
+        migrations.RunPython(drop_legacy_tables, migrations.RunPython.noop),
     ]
 ```
 
