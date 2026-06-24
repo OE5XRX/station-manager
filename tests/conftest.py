@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
+
 from apps.accounts.models import User
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment, DeploymentResult
