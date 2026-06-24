@@ -181,8 +181,7 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
 
         # Sanitize filename for Content-Disposition header — the s3 key embeds
         # the user-supplied image tag, which could contain quotes or CRLF that
-        # would break the header or allow response-splitting. Matches the
-        # pattern used in apps/firmware/views.py FirmwareDownloadView.
+        # would break the header or allow response-splitting.
         raw_name = job.output_s3_key.split("/")[-1]
         filename = re.sub(r'["\r\n]', "_", raw_name) or "download.wic.bz2"
         response = StreamingHttpResponse(iterator(), content_type="application/x-bzip2")
