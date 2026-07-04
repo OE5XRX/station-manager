@@ -17,3 +17,8 @@ terminal_shell: /bin/sh
 # "auto" detects grub-editenv or fw_setenv at runtime.
 # Explicit: "grub" (x64 dev/test) or "uboot" (RPi CM4 production).
 bootloader: auto
+
+# Module slot discovery (D2). Scans slot_dev_base for slotN/control and reports
+# the described module inventory in the heartbeat. Disable on stations with no modules.
+slot_discovery_enabled: true
+slot_dev_base: /dev/oe5xrx
