@@ -9,8 +9,14 @@ def _cfg(**kw):
 
 
 def test_collect_inventory_includes_modules(monkeypatch):
-    fake = [{"slot": 1, "control": "/dev/oe5xrx/slot1/control",
-             "identity": {"type": "fm_transceiver"}, "capabilities": []}]
+    fake = [
+        {
+            "slot": 1,
+            "control": "/dev/oe5xrx/slot1/control",
+            "identity": {"type": "fm_transceiver"},
+            "capabilities": [],
+        }
+    ]
     monkeypatch.setattr("station_agent.inventory.discover_slots", lambda base, timeout=3.0: fake)
     data = inventory.collect_inventory(config=_cfg(slot_discovery_enabled=True))
     assert data["modules"] == fake
@@ -18,8 +24,10 @@ def test_collect_inventory_includes_modules(monkeypatch):
 
 def test_collect_inventory_discovery_disabled(monkeypatch):
     calls = []
-    monkeypatch.setattr("station_agent.inventory.discover_slots",
-                        lambda base, timeout=3.0: calls.append(base) or [])
+    monkeypatch.setattr(
+        "station_agent.inventory.discover_slots",
+        lambda base, timeout=3.0: calls.append(base) or [],
+    )
     data = inventory.collect_inventory(config=_cfg(slot_discovery_enabled=False))
     assert data.get("modules", []) == []
     assert calls == []  # discovery must NOT have been called when disabled
@@ -28,6 +36,7 @@ def test_collect_inventory_discovery_disabled(monkeypatch):
 def test_collect_inventory_discovery_failure_is_swallowed(monkeypatch):
     def boom(base, timeout=3.0):
         raise OSError("device gone")
+
     monkeypatch.setattr("station_agent.inventory.discover_slots", boom)
     data = inventory.collect_inventory(config=_cfg(slot_discovery_enabled=True))
     # Assert the key is present (not .get default): proves the INNER

@@ -2,8 +2,10 @@
 
 The slot contract (`/dev/oe5xrx/slotN/control`) is filled identically by udev on real
 hardware and by the sim-harness in simulation. This module only ever consumes that path;
-it never touches USB topology. See docs/superpowers/specs/2026-07-04-module-simulation-layer-design.md.
+it never touches USB topology. See the design spec:
+docs/superpowers/specs/2026-07-04-module-simulation-layer-design.md
 """
+
 from __future__ import annotations
 
 import glob
@@ -73,7 +75,7 @@ def _extract_describe(buf: bytes) -> dict | None:
         idx = line.find(_DESCRIBE_PREFIX)
         if idx == -1:
             continue
-        payload = line[idx + len(_DESCRIBE_PREFIX):].strip()
+        payload = line[idx + len(_DESCRIBE_PREFIX) :].strip()
         try:
             parsed = json.loads(payload)
         except json.JSONDecodeError:
@@ -98,12 +100,14 @@ def discover_slots(base: str = "/dev/oe5xrx", timeout: float = 3.0) -> list[dict
             described = describe_slot(control, timeout=timeout)
             if described is None:
                 continue
-            entries.append({
-                "slot": int(match.group(1)),
-                "control": control,
-                "identity": described.get("identity", {}),
-                "capabilities": described.get("capabilities", []),
-            })
+            entries.append(
+                {
+                    "slot": int(match.group(1)),
+                    "control": control,
+                    "identity": described.get("identity", {}),
+                    "capabilities": described.get("capabilities", []),
+                }
+            )
         except Exception:
             # One malformed slot must not discard the whole inventory.
             logger.debug("slot describe: skipping bad slot %s", control, exc_info=True)
