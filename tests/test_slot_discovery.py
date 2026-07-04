@@ -74,6 +74,23 @@ def test_describe_slot_missing_path_returns_none(tmp_path):
     assert slot_discovery.describe_slot(str(tmp_path / "nope"), timeout=0.5) is None
 
 
+def test_describe_slot_broken_peer_returns_none(tmp_path):
+    """Peer (firmware/native_sim) gone: describe must fail closed, never raise.
+
+    Point 'control' at the slave, then close the master before calling
+    describe_slot so the initial write hits a dead peer (EIO/BrokenPipe).
+    """
+    master_fd, slave_fd = os.openpty()
+    link = tmp_path / "control"
+    link.symlink_to(os.ttyname(slave_fd))
+    os.close(master_fd)  # kill the peer before we describe
+    try:
+        result = slot_discovery.describe_slot(str(link), timeout=0.5)
+    finally:
+        os.close(slave_fd)
+    assert result is None
+
+
 def test_discover_slots_missing_base_returns_empty(tmp_path):
     assert slot_discovery.discover_slots(str(tmp_path / "absent")) == []
 

@@ -35,7 +35,11 @@ def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
             tty.setraw(fd)
         except termios.error:
             pass  # not a tty (e.g. plain file in a test) — proceed anyway
-        os.write(fd, _DESCRIBE_CMD)
+        try:
+            os.write(fd, _DESCRIBE_CMD)
+        except OSError:
+            logger.debug("slot describe: write failed on %s", control_path)
+            return None
         buf = b""
         deadline = time.monotonic() + timeout
         while True:
