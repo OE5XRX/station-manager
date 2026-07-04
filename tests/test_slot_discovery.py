@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 
 from station_agent import slot_discovery
 
@@ -157,10 +158,15 @@ def test_discover_slots_reports_slot(tmp_path):
 
 def _fake_module_flood(master_fd, stop):
     """Continuously write bytes with no MODULE-DESCRIBE line, to exercise the
-    buffer cap. Never reads (so it never blocks) — describe_slot drains the slave."""
+    buffer cap. The master is set non-blocking so that once describe_slot stops
+    reading (after hitting the cap), a full slave buffer yields BlockingIOError
+    instead of a stuck write — the thread stays responsive to `stop`."""
+    os.set_blocking(master_fd, False)
     while not stop.is_set():
         try:
             os.write(master_fd, b"x" * 4096)
+        except BlockingIOError:
+            time.sleep(0.001)  # slave buffer full — back off briefly
         except OSError:
             break
 
