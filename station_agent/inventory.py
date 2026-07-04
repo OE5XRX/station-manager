@@ -222,7 +222,9 @@ def collect_inventory(config=None) -> dict:
 
     Returns:
         Dict with keys: cpu, ram, disk, network, os, modules.
-        All values are safe to serialize to JSON.
+        All values are safe to serialize to JSON. If inventory collection
+        itself fails unexpectedly, an empty dict ``{}`` is returned so the
+        heartbeat is never interrupted.
     """
     try:
         return {

@@ -55,7 +55,12 @@ def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            readable, _, _ = select.select([fd], [], [], remaining)
+            try:
+                readable, _, _ = select.select([fd], [], [], remaining)
+            except InterruptedError:
+                continue
+            except OSError:
+                break  # fail closed on any select error
             if not readable:
                 continue
             try:
