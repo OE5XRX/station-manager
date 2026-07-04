@@ -153,3 +153,33 @@ def test_discover_slots_reports_slot(tmp_path):
     assert len(slots) == 1
     assert slots[0]["slot"] == 1
     assert slots[0]["identity"]["type"] == "fm_transceiver"
+
+
+def _fake_module_flood(master_fd, stop):
+    """Continuously write bytes with no MODULE-DESCRIBE line, to exercise the
+    buffer cap. Never reads (so it never blocks) — describe_slot drains the slave."""
+    while not stop.is_set():
+        try:
+            os.write(master_fd, b"x" * 4096)
+        except OSError:
+            break
+
+
+def test_describe_slot_caps_runaway_buffer(tmp_path):
+    """A peer that never sends MODULE-DESCRIBE must fail closed via the byte cap,
+    returning None without unbounded memory growth (and before the timeout)."""
+    master_fd, slave_fd = os.openpty()
+    stop = threading.Event()
+    t = threading.Thread(target=_fake_module_flood, args=(master_fd, stop), daemon=True)
+    t.start()
+    try:
+        link = tmp_path / "control"
+        link.symlink_to(os.ttyname(slave_fd))
+        # Generous timeout: the cap (not the timeout) must be what returns None.
+        result = slot_discovery.describe_slot(str(link), timeout=10.0)
+    finally:
+        stop.set()
+        os.close(master_fd)
+        os.close(slave_fd)
+        t.join(timeout=1)
+    assert result is None
