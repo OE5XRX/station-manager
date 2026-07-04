@@ -22,17 +22,47 @@ Im Sim gilt dieselbe Richtung — nur das „Einstecken" ist ein **lokales Manif
 
 ## 3. Der Slot-Vertrag (Herzstück der sim↔real-Parität)
 
-Der Agent hängt **nicht** von der USB-Topologie ab, sondern von einer stabilen **Slot-Abstraktion**. Kanonische Pfade, z.B.:
+Der Agent hängt **nicht** von der USB-Topologie ab, sondern von einer stabilen **Slot-Abstraktion** — kanonische Pfade, in Sim **und** Real identisch befüllt:
 
 ```
 /dev/oe5xrx/slot1/control   /dev/oe5xrx/slot1/audio   /dev/oe5xrx/slot1/dfu
 /dev/oe5xrx/slot2/control   …
 ```
 
-- **Echte HW:** udev-Regeln mappen den **physischen Hub-Port-Pfad** (`1-1.1 … 1-1.4`, fest auf dem BusBoard) auf den Slot-Pfad — z.B. `SUBSYSTEM=="tty", KERNELS=="1-1.1", SYMLINK+="oe5xrx/slot1/control"` (Audio/DFU analog übers Parent-USB-Device). Slot = Port-Pfad, deterministisch; **zwei identische Module** werden allein über den Port-Pfad unterschieden.
-- **Sim:** ein **Sim-Harness** legt **exakt dieselben** Symlinks an, die auf die `native_sim`-pty / `snd-aloop`-Devices / `i2c-stub` zeigen.
+### 3a. Echte HW (Populator = udev, Quelle = USB-Topologie)
 
-→ **Der Agent scannt nur `/dev/oe5xrx/slot*/` — identischer Code in Sim und Real.** Einziger Unterschied: *wer* die Symlinks füllt (udev vs. Harness). `lsusb -t` bleibt die Quelle auf echter HW (über udev), wird vom Agent aber **nie direkt** aufgerufen → Sim funktioniert identisch, ohne USB zu emulieren.
+Das FM-Modul meldet sich als **USB-Composite** (CDC-ACM + USB-Audio + DFU) hinter dem **FE1.1s-Hub** auf dem BusBoard. Alle drei Interfaces sind **Kinder desselben USB-Geräts** am Hub-Port `1-1.X`. Die vier Hub-Ports sind auf dem BusBoard **fest verdrahtet** → **Port = Slot**, deterministisch (`1-1.1`→slot1 … `1-1.4`→slot4).
+
+Ein **udev-Ruleset in `linux-image`** matcht den **Parent-Port** und legt die Slot-Symlinks an:
+
+```
+SUBSYSTEM=="tty",   KERNELS=="1-1.1", SYMLINK+="oe5xrx/slot1/control"   # CDC-ACM
+SUBSYSTEM=="sound", KERNELS=="1-1.1", SYMLINK+="oe5xrx/slot1/audio"     # UAC2
+SUBSYSTEM=="usb",   KERNELS=="1-1.1", ENV{ID_DFU}=="1", SYMLINK+="oe5xrx/slot1/dfu"
+# … analog slot2..4 für 1-1.2 … 1-1.4
+```
+
+Eigenschaften:
+- **Zwei identische Module** (gleiche VID/PID/Serial) werden **allein über den Port-Pfad** unterschieden — deshalb „Slot = Port", nicht „Slot = Seriennummer".
+- **Hot-plug:** Modul ziehen/stecken → udev entfernt/legt die Slot-Symlinks an → der Agent sieht denselben Slot kommen/gehen.
+- Das udev-Ruleset (+ die deterministische Port→Slot-Tabelle) ist ein **eigenes Deliverable in `linux-image`** und ist die *echte* Hälfte des Vertrags — gleichwertig zur Sim-Hälfte.
+
+### 3b. Sim (Populator = Harness, Quelle = Manifest)
+
+Ein **Sim-Harness** (im Image, dev-only) legt **exakt dieselben** Symlinks an — sie zeigen auf die `native_sim`-pty (control), `snd-aloop`-Devices (audio) bzw. `i2c-stub` (passive Module). Quelle ist das lokale Manifest (§4).
+
+### 3c. sim↔real-Symmetrie (die geteilte Wahrheit)
+
+| Schnittstelle | Echte HW | Sim |
+|---|---|---|
+| Slot-Identität | USB-Hub-Port-Pfad `1-1.X` (fest) | Harness weist zu (Manifest) |
+| `slotN/control` | CDC-ACM (`ttyACM*`) via udev | `native_sim`-pty via Harness |
+| `slotN/audio` | USB-Audio (UAC2) via udev | `snd-aloop`-Device via Harness |
+| `slotN/dfu` | USB-DFU-Interface via udev | Binary-Swap-Service |
+| **Populator** | **udev** (aus USB-Topologie) | **Sim-Harness** (aus Manifest) |
+| Discovery + Report | Agent scannt Slots, `describe`, meldet | **identisch** |
+
+**Der Agent scannt nur `/dev/oe5xrx/slot*/` — alles unterhalb der „Populator"-Zeile ist geteilter Agent-Code.** `lsusb -t` bleibt die *Quelle* auf echter HW (über udev), wird vom Agent aber **nie direkt** aufgerufen → Sim funktioniert identisch, ohne USB zu emulieren.
 
 ## 4. Das Slot-Manifest (lokale physische Realität)
 
@@ -52,29 +82,33 @@ Ablauf: Manifest editieren (= „einstecken") → Harness materialisiert Slot-De
 
 ## 5. Modul-Klassen
 
-- **Smart / self-describing** (FM, künftig HF): MCU + Zephyr, `describe` über `slotN/control`. Sim = `native_sim`-Instanz (pty [+ Audio]).
-- **Passiv** (PowerBoard/INA226): kein `describe`; der **Agent-Treiber** beschreibt + liest (I²C). Sim = `i2c-stub`.
+- **Smart / self-describing** (FM, künftig HF): MCU + Zephyr, `describe` über `slotN/control`. Real = USB-Composite; Sim = `native_sim`-Instanz (pty [+ Audio]).
+- **Passiv** (PowerBoard/INA226): kein `describe`; der **Agent-Treiber** beschreibt + liest (I²C). Real = I²C am CM4/Bus; Sim = `i2c-stub`.
 
 Der Broker (D3) muss beide Klassen tragen (Discovery: Firmware-`describe` vs. Agent-seitige Treiber-Erkennung). → **D3-Thema, hier nur festgehalten.**
 
 ## 6. Zukünftige Module / post-camp (zum Abspeichern)
 
-- **Audio:** `snd-aloop` (same-kernel) verbindet `native_sim` ↔ Agent — das ist Issue **#30** (FW-RemoteStation). Kein Netz-Audio nötig.
-- **DFU-Sim:** „neue Firmware" = neues `native_sim`-Binary reinlegen + Prozess neu starten (kleiner sim-dfu-Service).
-- **HF-Modul:** weitere `native_sim`-Instanz auf einem freien USB-Slot.
-- **PowerBoard / INA226:** **eigener Power-Connector, kein USB** → verbraucht **keinen** der 4 Slots und ist **immer präsent** (ohne Strom keine Station). Also **fixe Onboard-Peripherie** auf I²C, außerhalb der Slot-1–4-Logik — im Manifest ein eigener „fixed"-Abschnitt, im Sim `i2c-stub` always-on.
+- **Audio:** `snd-aloop` (same-kernel) verbindet `native_sim` ↔ Agent — das ist Issue **#30** (FW-RemoteStation). Kein Netz-Audio nötig. (Real: UAC2 über USB.)
+- **DFU-Sim:** „neue Firmware" = neues `native_sim`-Binary reinlegen + Prozess neu starten (kleiner sim-dfu-Service). (Real: USB-DFU.)
+- **HF-Modul:** weitere `native_sim`-Instanz auf einem freien USB-Slot. (Real: einstecken.)
+- **PowerBoard / INA226:** **eigener Power-Connector, kein USB** → verbraucht **keinen** der 4 Slots und ist **immer präsent** (ohne Strom keine Station). Also **fixe Onboard-Peripherie** auf I²C, außerhalb der Slot-1–4-Logik — im Manifest ein eigener „fixed"-Abschnitt, im Sim `i2c-stub` always-on. Auf echter HW entsprechend eine feste udev/Discovery-Regel, kein Hub-Port.
 
 ## 7. Scope-Matrix: Camp-Slice vs. später
 
 | Aspekt | Camp-Slice (jetzt) | Post-camp |
 |---|---|---|
 | Topologie | co-located `native_sim` im Image | unverändert |
-| Slot-Vertrag | 1 Slot, FM-Serial; Harness-Default (kein Manifest nötig) | volle 1–4-Slot-Generik + Manifest |
+| Slot-Vertrag | 1 Slot, FM-Serial | volle 1–4-Slot-Generik, identische Module, Hot-plug |
+| Sim-Populator | Harness-Default (kein Manifest nötig) | Harness + Manifest |
+| **Real-Populator** | **1 FM-Modul: Agent öffnet `slot1` (bzw. direkt `ttyACM0`)** | **volles udev-Ruleset (Port→Slot 1–4)** |
 | Transport | Serial/Control (pty) | Audio (`snd-aloop`/#30), DFU-Sim |
 | Modultypen | FM (SA818) | HF, PowerBoard/INA226 (fix) |
 | Manifest-Quelle | Config-Disk/cloud-init (bzw. Default) | + optionaler station-manager-Generator |
 
-**Unmittelbarer Build-Scope (D2):** co-located `native_sim`-FM + Slot-Vertrag (Harness legt `slot1/control` an) + Agent entdeckt/öffnet es. Audio/DFU/Multi-Slot sind entworfen, aber eigene Deliverables.
+**Symmetrisches Staging:** Camp = *ein* FM-Modul auf **beiden** Seiten (Sim: Harness-Default; Real: das eine `ttyACM`/`slot1`). Die volle Slot-Generik (udev-Ruleset ↔ Manifest, 1–4, identische Module, Hot-plug) ist **auf beiden Seiten** post-camp.
+
+**Unmittelbarer Build-Scope (D2):** co-located `native_sim`-FM + Slot-Vertrag (Harness legt `slot1/control` an) + Agent entdeckt/öffnet es. Das Real-HW-udev-Ruleset ist mit-entworfen (§3a), wird aber als eigenes `linux-image`-Deliverable gebaut. Audio/DFU/Multi-Slot sind entworfen, aber eigene Deliverables.
 
 ## 8. Datenfluss (Camp-Slice)
 
@@ -83,11 +117,13 @@ Der Broker (D3) muss beide Klassen tragen (Discovery: Firmware-`describe` vs. Ag
 3. Agent meldet das Inventar an den station-manager (Muster wie bestehende Outbound-WS).
 4. Später: Control-Kommandos (D3+) fließen `slot1/control` → `native_sim` → SA818-Treiber.
 
+*Auf echter HW ist der Ablauf ab Schritt 2 identisch — nur `slot1/control` wird von udev statt vom Harness angelegt.*
+
 ## 9. Definition-of-Done (D2 Camp-Slice)
 
 - linux-image startet `native_sim`-FM als Dienst im Guest; Slot-Vertrag `slot1/control` wird materialisiert.
 - Agent-Seite kann das Slot-Device öffnen und ein `describe` durchführen (End-to-End gegen `native_sim`, ohne HW).
-- Der agent-zugewandte Pfad ist identisch zu dem, den udev auf echter HW liefern würde (sim↔real-Parität dokumentiert/geprüft).
+- Der agent-zugewandte Pfad ist identisch zu dem, den udev auf echter HW liefert (sim↔real-Parität dokumentiert/geprüft; das udev-Ruleset für den Real-Fall existiert bzw. ist als Deliverable spezifiziert).
 - Doku: 2-Minuten-Anleitung „Sim-Station in Proxmox starten".
 
 ## 10. Risiken & Mitigationen
@@ -96,14 +132,27 @@ Der Broker (D3) muss beide Klassen tragen (Discovery: Firmware-`describe` vs. Ag
 |---|---|
 | `native_sim` landet in Prod-Images | dev-only Image-Feature/Overlay; klar getrennt vom Prod-Build. |
 | Slot-Vertrag driftet zwischen udev (real) und Harness (sim) | Der Vertrag (Pfad-Schema) ist **eine** dokumentierte Wahrheit; beide Seiten erfüllen ihn, ein gemeinsamer Test prüft die Pfade. |
+| Real-udev-Ruleset bleibt hinter der Sim-Seite zurück | Beide Hälften im selben Design (§3a/§3b); DoD verlangt die Real-Seite als Deliverable, nicht nur die Sim. |
 | Über-Generalisierung (Multi-Slot/Manifest vor Bedarf) | Camp-Slice = 1 Slot, Harness-Default. Generik erst wenn ein zweites Modul real wird. |
 | Passiv-Modul-Discovery unklar | Als D3-Thema markiert, nicht in D2 gelöst. |
 
 ## 11. Testing
 
 - **Unit/Integration (native_sim):** Harness legt Slot-Vertrag korrekt an; Agent entdeckt + `describe` liefert erwartete Capabilities. CI-fähig, kein HW.
+- **Real-Seite:** udev-Ruleset gegen die erwarteten Port→Slot-Symlinks prüfen (z.B. mit `udevadm test` / einem simulierten sysfs-Pfad) — ohne echtes Modul verifizierbar.
 - **Parität:** ein Test/Doc, der zeigt, dass der Agent-Pfad (`/dev/oe5xrx/slotN/...`) in Sim und Real identisch konsumiert wird.
+
+## 12. Implementierung (Prozess)
+
+Umsetzung folgt dem superpowers-/CLAUDE.md-Fluss — der Design-Schritt lief bereits über `superpowers:brainstorming` (dieses Dokument):
+
+1. `superpowers:writing-plans` — Implementierungsplan (Slot-Vertrag, Sim-Harness, udev-Ruleset, Agent-Discovery) mit Task-Checkboxen.
+2. `superpowers:subagent-driven-development` (Default; forge-Agent für linux-image/Yocto + Infra, gateway für die Agent-Seite).
+3. `superpowers:test-driven-development` — native_sim-Integrationstests + `udevadm test` für die Real-Seite.
+4. `superpowers:verification-before-completion`, dann PR + copilot-loop. `Closes #23`.
+
+Repos: v.a. `linux-image` (Sim-Harness, udev-Ruleset, dev-only Image-Feature), Agent-Discovery in `station_agent`. Ein Deliverable-Branch, ein PR.
 
 ---
 
-*Diese Spec beschreibt die co-located Modul-Simulations-Schicht bis zur Agent-Anbindung. Der unmittelbare Build-Scope ist der **FM-Serial-Slice auf einem Slot**; Audio, DFU-Sim, Multi-Slot und weitere Modultypen sind hier entworfen, werden aber als eigene Deliverables gebaut. Folgt dem Muster spec → plan → code je Deliverable.*
+*Diese Spec beschreibt die co-located Modul-Simulations-Schicht bis zur Agent-Anbindung — mit gleichwertiger Real-HW- und Sim-Hälfte des Slot-Vertrags. Der unmittelbare Build-Scope ist der **FM-Serial-Slice auf einem Slot**; Audio, DFU-Sim, Multi-Slot und weitere Modultypen sind hier entworfen, werden aber als eigene Deliverables gebaut. Folgt dem Muster spec → plan → code je Deliverable.*
