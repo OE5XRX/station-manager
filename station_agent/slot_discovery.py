@@ -87,7 +87,10 @@ def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
                 termios.tcsetattr(fd, termios.TCSANOW, saved_attrs)
             except (termios.error, OSError):
                 pass
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass  # close() can raise (e.g. EINTR) — must never raise into the heartbeat
 
 
 def _extract_describe(buf: bytes) -> dict | None:

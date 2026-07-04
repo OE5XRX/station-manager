@@ -195,7 +195,7 @@ def _get_os_info() -> dict:
     return info
 
 
-def _collect_modules(config) -> list:
+def _collect_modules(config) -> list[dict]:
     """Return module inventory from slot discovery, or [] on any failure.
 
     Returns [] when config is None or slot_discovery_enabled is False so that
