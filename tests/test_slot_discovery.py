@@ -42,6 +42,33 @@ def _pty_with_module():
     return master_fd, slave_fd, stop, t
 
 
+def _fake_module_reply(master_fd, stop, reply_line):
+    """Emit a fixed MODULE-DESCRIBE reply (e.g. a non-dict payload)."""
+    buf = b""
+    os.write(master_fd, b"fm> ")
+    while not stop.is_set():
+        try:
+            chunk = os.read(master_fd, 1024)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        if b"module fm describe" in buf:
+            os.write(master_fd, reply_line.encode())
+            buf = b""
+
+
+def _pty_with_reply(reply_line):
+    master_fd, slave_fd = os.openpty()
+    stop = threading.Event()
+    t = threading.Thread(
+        target=_fake_module_reply, args=(master_fd, stop, reply_line), daemon=True
+    )
+    t.start()
+    return master_fd, slave_fd, stop, t
+
+
 def test_describe_slot_parses_identity(tmp_path):
     master_fd, slave_fd, stop, t = _pty_with_module()
     try:
@@ -88,6 +115,22 @@ def test_describe_slot_broken_peer_returns_none(tmp_path):
         result = slot_discovery.describe_slot(str(link), timeout=0.5)
     finally:
         os.close(slave_fd)
+    assert result is None
+
+
+def test_describe_slot_non_dict_payload_returns_none(tmp_path):
+    """A syntactically-valid but non-object payload (null/number/list) must
+    yield None, honoring the 'return dict or None' contract — never a scalar."""
+    master_fd, slave_fd, stop, t = _pty_with_reply("MODULE-DESCRIBE null\r\n")
+    try:
+        link = tmp_path / "control"
+        link.symlink_to(os.ttyname(slave_fd))
+        result = slot_discovery.describe_slot(str(link), timeout=0.5)
+    finally:
+        stop.set()
+        os.close(master_fd)
+        os.close(slave_fd)
+        t.join(timeout=1)
     assert result is None
 
 

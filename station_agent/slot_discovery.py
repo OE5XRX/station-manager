@@ -75,9 +75,12 @@ def _extract_describe(buf: bytes) -> dict | None:
             continue
         payload = line[idx + len(_DESCRIBE_PREFIX):].strip()
         try:
-            return json.loads(payload)
+            parsed = json.loads(payload)
         except json.JSONDecodeError:
             continue  # line may be truncated; wait for more bytes
+        if isinstance(parsed, dict):
+            return parsed
+        # non-dict (null/number/list) → keep scanning other lines
     return None
 
 
@@ -91,13 +94,18 @@ def discover_slots(base: str = "/dev/oe5xrx", timeout: float = 3.0) -> list[dict
         match = _SLOT_RE.match(slot_dir)
         if not match:
             continue
-        described = describe_slot(control, timeout=timeout)
-        if described is None:
+        try:
+            described = describe_slot(control, timeout=timeout)
+            if described is None:
+                continue
+            entries.append({
+                "slot": int(match.group(1)),
+                "control": control,
+                "identity": described.get("identity", {}),
+                "capabilities": described.get("capabilities", []),
+            })
+        except Exception:
+            # One malformed slot must not discard the whole inventory.
+            logger.debug("slot describe: skipping bad slot %s", control, exc_info=True)
             continue
-        entries.append({
-            "slot": int(match.group(1)),
-            "control": control,
-            "identity": described.get("identity", {}),
-            "capabilities": described.get("capabilities", []),
-        })
     return entries
