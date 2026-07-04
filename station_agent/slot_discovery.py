@@ -82,7 +82,8 @@ def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
             parsed = _extract_describe(buf)
             if parsed is not None:
                 return parsed
-        logger.debug("slot describe: timeout on %s", control_path)
+        # Reached on timeout, EOF, or a read/select error — all are non-fatal here.
+        logger.debug("slot describe: no MODULE-DESCRIBE from %s", control_path)
         return None
     finally:
         # Restore the original line discipline so we don't leave the slot control
