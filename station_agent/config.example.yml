@@ -22,3 +22,11 @@ bootloader: auto
 # the described module inventory in the heartbeat. Disable on stations with no modules.
 slot_discovery_enabled: true
 slot_dev_base: /dev/oe5xrx
+
+# Persistent control channel (D3 agent broker). Off by default.
+control_enabled: false
+# PTT dead-man: auto-unkey if no keepalive within this many seconds.
+control_dead_man_timeout: 1.5
+# Telemetry subscription: default poll interval and the hard floor (ms).
+telemetry_default_interval_ms: 1000
+telemetry_min_floor_ms: 200

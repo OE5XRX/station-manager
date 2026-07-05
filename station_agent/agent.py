@@ -450,6 +450,21 @@ class StationAgent:
         else:
             logger.info("Remote terminal disabled")
 
+        # Start control client in a background thread if enabled
+        from .control_client import ControlClient  # local import: keeps agent import light
+
+        control_client = None
+        control_thread = None
+        if config.control_enabled:
+            logger.info("Control channel enabled")
+            control_client = ControlClient(config)
+            control_thread = threading.Thread(
+                target=control_client.run, name="control-client", daemon=True
+            )
+            control_thread.start()
+        else:
+            logger.info("Control channel disabled")
+
         # Main heartbeat loop
         heartbeat_count = 0
         while not self._shutdown.is_set():
@@ -470,5 +485,11 @@ class StationAgent:
             terminal_client.stop()
         if terminal_thread is not None:
             terminal_thread.join(timeout=5)
+
+        # Stop control client on shutdown
+        if control_client is not None:
+            control_client.stop()
+        if control_thread is not None:
+            control_thread.join(timeout=5)
 
         logger.info("Station Agent stopped")
