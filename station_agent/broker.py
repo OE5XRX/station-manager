@@ -310,3 +310,8 @@ class Broker:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Cancel any armed PTT dead-man timers (do NOT unkey — on_disconnect's job).
+        for entry in list(self._ptt.values()):
+            if entry["task"] is not None:
+                entry["task"].cancel()
+        self._ptt.clear()

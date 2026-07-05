@@ -544,6 +544,62 @@ def test_ws_disconnect_unkeys_active_ptt():
         fw.stop()
 
 
+def test_stop_cancels_ptt_timer_without_unkeying():
+    """stop() must cancel PTT dead-man timers; must NOT emit ptt_auto_unkey."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            dead_man_timeout=5.0,  # long enough that it won't fire on its own
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        async def scenario():
+            # Arm the PTT (ptt true).
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "s1",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "ptt",
+                    "op": "do",
+                    "value": True,
+                }
+            )
+            # Immediately stop — timer should be cancelled, NOT fired.
+            await b.stop()
+            await asyncio.sleep(0.05)
+            events = [m for m in col.sent if m.get("event") == "ptt_auto_unkey"]
+            return events
+
+        events = _run(scenario())
+        assert events == [], "stop() must not emit ptt_auto_unkey"
+        # fw ptt state stays "true" — stop() did not unkey.
+        assert fw.state["fm"]["ptt"] == "true"
+    finally:
+        fw.stop()
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()

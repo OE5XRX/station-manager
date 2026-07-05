@@ -52,7 +52,9 @@ def validate_command(cap: dict | None, op: str, value) -> None:
         raise ProtocolError(WRONG_OP, f"op {op!r} not valid for kind {kind!r}")
 
     if op == "get":
-        return  # get never carries a value
+        if value is not None:
+            raise ProtocolError(BAD_VALUE, "get takes no value")
+        return
 
     if value is None:
         raise ProtocolError(BAD_VALUE, "value required")
@@ -105,7 +107,13 @@ def format_value(cap_type: str, value) -> str:
         return str(int(value))
     if cap_type == "float":
         # Always-decimal, no exponent; matches the FW's whole-string float parse.
+        # repr() may produce scientific notation for very small/large values; reformat
+        # those without exponent so the FW token parser always sees a plain decimal.
         text = repr(float(value))
+        if "e" in text or "E" in text:
+            text = f"{float(value):.10f}".rstrip("0")
+            if text.endswith("."):
+                text += "0"
         return text
     # enum / string are passed through verbatim.
     return str(value)

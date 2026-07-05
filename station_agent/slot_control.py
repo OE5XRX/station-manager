@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import select
 import termios
 import time
@@ -24,6 +25,11 @@ from station_agent.slot_discovery import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Conservative token charset: covers bool, int, float, enum, and string values
+# produced by format_value().  Whitespace/control chars are forbidden to prevent
+# command injection at the FW line boundary.
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+/-]+$")
 
 _RESULT_PREFIX = "MODULE-RESULT "
 _TIMEOUT_RESULT = {"ok": False, "error": "timeout"}
@@ -38,6 +44,8 @@ class SlotControl:
         """Send one command, return the parsed MODULE-RESULT (or a timeout error)."""
         # Defense-in-depth: never echo an unsafe token into the shell line.
         if not _MODULE_ID_RE.match(module_id) or not _MODULE_ID_RE.match(cap):
+            return {"ok": False, "error": "bad_value"}
+        if token is not None and not _TOKEN_RE.match(token):
             return {"ok": False, "error": "bad_value"}
         parts = ["module", module_id, op, cap]
         if token is not None:

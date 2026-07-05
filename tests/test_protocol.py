@@ -55,3 +55,16 @@ def test_parse_message_rejects_missing_type():
 def test_parse_message_accepts_valid():
     out = p.parse_message(json.dumps({"v": 1, "type": "command", "request_id": "x"}))
     assert out["type"] == "command"
+
+
+# Fix 4: envelope version must be checked.
+def test_parse_message_rejects_missing_version():
+    with pytest.raises(p.ProtocolError) as exc:
+        p.parse_message(json.dumps({"type": "command"}))
+    assert exc.value.code == p.VALIDATION_FAILED
+
+
+def test_parse_message_rejects_wrong_version():
+    with pytest.raises(p.ProtocolError) as exc:
+        p.parse_message(json.dumps({"v": 2, "type": "command"}))
+    assert exc.value.code == p.VALIDATION_FAILED

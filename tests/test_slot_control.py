@@ -52,3 +52,17 @@ def test_execute_timeout_on_dead_path(tmp_path):
     sc = SlotControl(missing, timeout=0.3)
     r = sc.execute("fm", "get", "rssi")
     assert r["ok"] is False and r["error"] == "timeout"
+
+
+# Fix 3: token with unsafe chars must be rejected and must NOT mutate FW state.
+def test_execute_rejects_unsafe_token_and_does_not_mutate_fw():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        sc = SlotControl(fw.control_path, timeout=2.0)
+        r = sc.execute("fm", "set", "frequency", "1 2; rm")
+        assert r["ok"] is False
+        assert r["error"] == "bad_value"
+        assert "frequency" not in fw.state["fm"]
+    finally:
+        fw.stop()

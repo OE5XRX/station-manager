@@ -88,12 +88,15 @@ class ControlClient:
                 telemetry_min_floor_ms=getattr(self._config, "telemetry_min_floor_ms", 200),
             )
             loop = asyncio.get_running_loop()
-            try:
-                discovered = await loop.run_in_executor(
-                    None, discover_slots, self._config.slot_dev_base
-                )
-            except Exception:  # noqa: BLE001 — discovery must not break the control link
-                logger.exception("Control: slot discovery failed; reporting empty inventory")
+            if getattr(self._config, "slot_discovery_enabled", True):
+                try:
+                    discovered = await loop.run_in_executor(
+                        None, discover_slots, self._config.slot_dev_base
+                    )
+                except Exception:  # noqa: BLE001 — discovery must not break the control link
+                    logger.exception("Control: slot discovery failed; reporting empty inventory")
+                    discovered = []
+            else:
                 discovered = []
             broker.set_inventory(discovered)
             await broker.emit_inventory()

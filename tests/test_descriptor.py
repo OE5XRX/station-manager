@@ -119,3 +119,17 @@ def test_format_value_canonical_tokens():
 def test_min_interval_from_descriptor_else_default():
     assert d.min_interval_ms(caps()["rssi"], default=100) == 250
     assert d.min_interval_ms(caps()["band"], default=100) == 100
+
+
+# Fix 1: get with non-None value must be rejected.
+def test_get_with_value_raises_bad_value():
+    with pytest.raises(p.ProtocolError) as exc:
+        d.validate_command(caps()["rssi"], "get", 5)
+    assert exc.value.code == p.BAD_VALUE
+
+
+# Fix 2: format_value float must never produce scientific notation.
+def test_format_value_float_no_exponent():
+    result = d.format_value("float", 1e-06)
+    assert "e" not in result and "E" not in result
+    assert float(result) == 1e-06
