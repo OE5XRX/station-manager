@@ -170,8 +170,13 @@ def test_heartbeat_stores_module_inventory(client, station_with_key):
                 {
                     "slot": 1,
                     "control": "/dev/oe5xrx/slot1/control",
-                    "identity": {"type": "fm_transceiver", "model": "SA818-V"},
-                    "capabilities": [],
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": {"type": "fm_transceiver", "model": "SA818-V"},
+                            "capabilities": [],
+                        }
+                    ],
                 }
             ]
         },
@@ -186,4 +191,4 @@ def test_heartbeat_stores_module_inventory(client, station_with_key):
     )
     assert resp.status_code == 200
     inv = StationInventory.objects.get(station=station)
-    assert inv.data["modules"][0]["identity"]["type"] == "fm_transceiver"
+    assert inv.data["modules"][0]["modules"][0]["identity"]["type"] == "fm_transceiver"

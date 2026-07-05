@@ -13,8 +13,7 @@ def test_collect_inventory_includes_modules(monkeypatch):
         {
             "slot": 1,
             "control": "/dev/oe5xrx/slot1/control",
-            "identity": {"type": "fm_transceiver"},
-            "capabilities": [],
+            "modules": [{"id": "fm", "identity": {"type": "fm_transceiver"}, "capabilities": []}],
         }
     ]
     monkeypatch.setattr("station_agent.inventory.discover_slots", lambda base, timeout=3.0: fake)

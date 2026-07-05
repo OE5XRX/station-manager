@@ -1,9 +1,14 @@
-"""Slot discovery: scan the OE5XRX slot contract, describe smart modules, report inventory.
+"""Slot discovery: scan the OE5XRX slot contract, enumerate + describe modules, report inventory.
 
 The slot contract (`/dev/oe5xrx/slotN/control`) is filled identically by udev on real
 hardware and by the sim-harness in simulation. This module only ever consumes that path;
 it never touches USB topology. See the design spec:
 docs/superpowers/specs/2026-07-04-module-simulation-layer-design.md
+
+Per slot, the firmware is self-describing over its control serial:
+  1. ``module list``            -> ``MODULE-LIST {"modules":["fm", ...]}``  (module ids)
+  2. ``module <id> describe``   -> ``MODULE-DESCRIBE {schema, module, identity, capabilities}``
+Module ids are NOT hardcoded — we enumerate whatever the firmware reports and describe each.
 """
 
 from __future__ import annotations
@@ -20,22 +25,32 @@ import tty
 
 logger = logging.getLogger(__name__)
 
-_DESCRIBE_CMD = b"module fm describe\r\n"
+_LIST_CMD = b"module list\r\n"
+_LIST_PREFIX = "MODULE-LIST "
 _DESCRIBE_PREFIX = "MODULE-DESCRIBE "
 _SLOT_RE = re.compile(r"slot(\d+)$")
+# Module ids come from the device; only accept simple tokens before echoing one back
+# in a command, so a garbled/hostile peer can't inject control bytes into the shell.
+_MODULE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 
-# A well-formed describe reply is ~1.5 KB. Cap the retained buffer so a noisy or
-# garbled peer cannot grow memory (or the per-chunk re-scan cost) without bound
+# A well-formed list/describe reply is well under this. Cap the retained buffer so a
+# noisy or garbled peer cannot grow memory (or the per-chunk re-scan cost) without bound
 # before the timeout fires. Well above any real reply; exceeding it fails closed.
-_MAX_DESCRIBE_BYTES = 65536
+_MAX_RESPONSE_BYTES = 65536
 
 
-def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
-    """Open a slot control pty, send `describe`, return the parsed JSON or None."""
+def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
+    """Enumerate + describe every module reachable on a slot's control pty.
+
+    Sends ``module list`` then ``module <id> describe`` for each reported id, over a
+    single connection. Returns a list of ``{"id", "identity", "capabilities"}`` (possibly
+    empty if the firmware lists no modules), or ``None`` if the slot cannot be opened or
+    does not answer ``module list``. Never raises — discovery must not disrupt the heartbeat.
+    """
     try:
         fd = os.open(control_path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     except OSError as exc:
-        logger.debug("slot describe: cannot open %s: %s", control_path, exc)
+        logger.debug("slot probe: cannot open %s: %s", control_path, exc)
         return None
     saved_attrs = None
     try:
@@ -44,47 +59,35 @@ def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
             tty.setraw(fd)
         except termios.error:
             pass  # not a tty (e.g. plain file in a test) — proceed anyway
-        try:
-            os.write(fd, _DESCRIBE_CMD)
-        except OSError:
-            logger.debug("slot describe: write failed on %s", control_path)
-            return None
-        buf = b""
+
         deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                readable, _, _ = select.select([fd], [], [], remaining)
-            except InterruptedError:
+
+        listing = _command(fd, _LIST_CMD, _LIST_PREFIX, deadline, control_path)
+        if listing is None:
+            logger.debug("slot probe: no MODULE-LIST from %s", control_path)
+            return None
+        ids = listing.get("modules", [])
+        if not isinstance(ids, list):
+            return None
+
+        modules: list[dict] = []
+        for mid in ids:
+            if not isinstance(mid, str) or not _MODULE_ID_RE.match(mid):
+                logger.debug("slot probe: skipping invalid module id %r on %s", mid, control_path)
                 continue
-            except OSError:
-                break  # fail closed on any select error
-            if not readable:
+            cmd = f"module {mid} describe\r\n".encode()
+            described = _command(fd, cmd, _DESCRIBE_PREFIX, deadline, control_path)
+            if described is None:
+                logger.debug("slot probe: no describe for module %s on %s", mid, control_path)
                 continue
-            try:
-                chunk = os.read(fd, 4096)
-            except (BlockingIOError, InterruptedError):
-                continue
-            except OSError:
-                break
-            if not chunk:
-                break
-            buf += chunk
-            if len(buf) > _MAX_DESCRIBE_BYTES:
-                logger.debug(
-                    "slot describe: response exceeded %d bytes on %s",
-                    _MAX_DESCRIBE_BYTES,
-                    control_path,
-                )
-                return None
-            parsed = _extract_describe(buf)
-            if parsed is not None:
-                return parsed
-        # Reached on timeout, EOF, or a read/select error — all are non-fatal here.
-        logger.debug("slot describe: no MODULE-DESCRIBE from %s", control_path)
-        return None
+            modules.append(
+                {
+                    "id": mid,
+                    "identity": described.get("identity", {}),
+                    "capabilities": described.get("capabilities", []),
+                }
+            )
+        return modules
     finally:
         # Restore the original line discipline so we don't leave the slot control
         # device in raw mode for a subsequent reader (guarded — must never raise).
@@ -99,13 +102,55 @@ def describe_slot(control_path: str, timeout: float = 3.0) -> dict | None:
             pass  # close() can raise (e.g. EINTR) — must never raise into the heartbeat
 
 
-def _extract_describe(buf: bytes) -> dict | None:
+def _command(fd: int, cmd: bytes, prefix: str, deadline: float, control_path: str) -> dict | None:
+    """Write a shell command and read until a line carrying `prefix` parses as a JSON dict.
+
+    Returns the parsed dict, or None on write error / timeout / EOF / read error / oversize.
+    """
+    try:
+        os.write(fd, cmd)
+    except OSError:
+        logger.debug("slot probe: write failed on %s", control_path)
+        return None
+    buf = b""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            readable, _, _ = select.select([fd], [], [], remaining)
+        except InterruptedError:
+            continue
+        except OSError:
+            return None  # fail closed on any select error
+        if not readable:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except (BlockingIOError, InterruptedError):
+            continue
+        except OSError:
+            return None
+        if not chunk:
+            return None
+        buf += chunk
+        if len(buf) > _MAX_RESPONSE_BYTES:
+            logger.debug(
+                "slot probe: response exceeded %d bytes on %s", _MAX_RESPONSE_BYTES, control_path
+            )
+            return None
+        parsed = _extract_json(buf, prefix)
+        if parsed is not None:
+            return parsed
+
+
+def _extract_json(buf: bytes, prefix: str) -> dict | None:
     text = buf.decode("utf-8", errors="replace")
     for line in text.splitlines():
-        idx = line.find(_DESCRIBE_PREFIX)
+        idx = line.find(prefix)
         if idx == -1:
             continue
-        payload = line[idx + len(_DESCRIBE_PREFIX) :].strip()
+        payload = line[idx + len(prefix) :].strip()
         try:
             parsed = json.loads(payload)
         except json.JSONDecodeError:
@@ -117,7 +162,12 @@ def _extract_describe(buf: bytes) -> dict | None:
 
 
 def discover_slots(base: str = "/dev/oe5xrx", timeout: float = 3.0) -> list[dict]:
-    """Scan `base` for slotN/control, describe each, return inventory entries."""
+    """Scan `base` for slotN/control, enumerate + describe modules, return inventory entries.
+
+    Each entry is ``{"slot": N, "control": path, "modules": [{"id", "identity",
+    "capabilities"}, ...]}``. Slots that do not answer ``module list`` are omitted.
+    Returns ``[]`` if `base` does not exist. Never raises.
+    """
     if not os.path.isdir(base):
         return []
 
@@ -133,19 +183,18 @@ def discover_slots(base: str = "/dev/oe5xrx", timeout: float = 3.0) -> list[dict
         if not match:
             continue
         try:
-            described = describe_slot(control, timeout=timeout)
-            if described is None:
+            modules = probe_slot(control, timeout=timeout)
+            if modules is None:
                 continue
             entries.append(
                 {
                     "slot": int(match.group(1)),
                     "control": control,
-                    "identity": described.get("identity", {}),
-                    "capabilities": described.get("capabilities", []),
+                    "modules": modules,
                 }
             )
         except Exception:
             # One malformed slot must not discard the whole inventory.
-            logger.debug("slot describe: skipping bad slot %s", control, exc_info=True)
+            logger.debug("slot probe: skipping bad slot %s", control, exc_info=True)
             continue
     return entries
