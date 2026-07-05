@@ -177,14 +177,17 @@ class Broker:
         requested = msg.get("capabilities", []) or []
         interval_s = max((msg.get("interval_ms", 0) or 0) / 1000.0, 0.0)
 
-        valid, min_interval_s = self._telemetry_caps(slot, module, requested)
+        valid, _ = self._telemetry_caps(slot, module, requested)
         if not valid:
             return  # nothing pollable; no subscriber => no poll
-        effective = max(interval_s, min_interval_s)
 
         key = (slot, module)
         existing = self._subscriptions.get(key)
         caps = set(valid) | (existing["caps"] if existing else set())
+
+        # Clamp over the FULL merged cap set (spec §6: max across all subscribed caps).
+        _, min_interval_s = self._telemetry_caps(slot, module, caps)
+        effective = max(interval_s, min_interval_s)
         if existing and existing["task"] is not None:
             existing["task"].cancel()
             try:

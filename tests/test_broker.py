@@ -188,6 +188,60 @@ def test_no_subscriber_means_no_polling():
         fw.stop()
 
 
+def test_additive_resubscribe_clamps_to_slowest_cap():
+    """Re-subscribe adding a slower cap must raise the effective interval (spec §6)."""
+    # Local descriptor with two telemetry caps of different min_intervals.
+    TWO_CAP = {
+        "identity": {"type": "test", "model": "test", "version": "v0"},
+        "capabilities": [
+            {"name": "fast", "kind": "telemetry", "type": "int", "readonly": True,
+             "min_interval_ms": 100},
+            {"name": "slow", "kind": "telemetry", "type": "int", "readonly": True,
+             "min_interval_ms": 500},
+        ],
+    }
+
+    def make_broker():
+        col = Collector()
+        b = Broker(col, transport_factory=lambda p: None,
+                   telemetry_min_floor_ms=10, telemetry_default_interval_ms=1000,
+                   now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": "/dev/null",
+                          "modules": [{"id": "two", "identity": TWO_CAP["identity"],
+                                       "capabilities": TWO_CAP["capabilities"]}]}])
+        return b
+
+    async def scenario_fast_then_slow():
+        b = make_broker()
+        # Subscribe fast first with a very low requested interval.
+        await b.handle_subscribe({"slot": 1, "module": "two",
+                                  "capabilities": ["fast"], "interval_ms": 50})
+        # Now add slow — merged set {fast, slow} must clamp to >=500ms.
+        await b.handle_subscribe({"slot": 1, "module": "two",
+                                  "capabilities": ["slow"], "interval_ms": 50})
+        interval = b._poll_interval_s(1, "two")
+        await b.stop()
+        return interval
+
+    async def scenario_slow_then_fast():
+        b = make_broker()
+        # Subscribe slow first.
+        await b.handle_subscribe({"slot": 1, "module": "two",
+                                  "capabilities": ["slow"], "interval_ms": 50})
+        # Now add fast — merged set {fast, slow} must still clamp to >=500ms.
+        await b.handle_subscribe({"slot": 1, "module": "two",
+                                  "capabilities": ["fast"], "interval_ms": 50})
+        interval = b._poll_interval_s(1, "two")
+        await b.stop()
+        return interval
+
+    interval_a = _run(scenario_fast_then_slow())
+    interval_b = _run(scenario_slow_then_fast())
+
+    assert interval_a >= 0.5, f"fast-then-slow: expected >=0.5s, got {interval_a}"
+    assert interval_b >= 0.5, f"slow-then-fast: expected >=0.5s, got {interval_b}"
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()
