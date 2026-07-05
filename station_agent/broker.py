@@ -43,6 +43,8 @@ class Broker:
         self._controls: dict[int, str] = {}
         # (slot, module) -> {"caps": set, "interval_s": float, "task": asyncio.Task | None}
         self._subscriptions: dict[tuple[int, str], dict] = {}
+        # (slot, module) -> {"cap": capability_name, "task": asyncio.Task}
+        self._ptt: dict[tuple[int, str], dict] = {}
 
     # --- inventory cache ---------------------------------------------------
     def set_inventory(self, discovered: list) -> None:
@@ -76,6 +78,8 @@ class Broker:
             await self.handle_subscribe(msg)
         elif mtype == "unsubscribe":
             await self.handle_unsubscribe(msg)
+        elif mtype == "ptt_keepalive":
+            await self.handle_keepalive(msg)
         else:
             logger.debug("broker: ignoring message type %r", mtype)
 
@@ -111,6 +115,11 @@ class Broker:
             await self._send(
                 proto.build_state(slot, module, {capability: result.get("value")}, self._ts())
             )
+            if op == "do" and self._is_ptt_cap(cap):
+                if value is True:
+                    self._arm_dead_man(slot, module, capability)
+                elif value is False:
+                    self._disarm_dead_man(slot, module)
         else:
             err_code = result.get("error", proto.TIMEOUT)
             await self._send(proto.build_result(request_id, False, error=(err_code, "")))
@@ -242,6 +251,50 @@ class Broker:
             raise
         except Exception:
             logger.exception("broker: telemetry poll failed for slot %s module %s", slot, module)
+
+    # --- PTT dead-man ----------------------------------------------------------
+    @staticmethod
+    def _is_ptt_cap(cap: dict) -> bool:
+        # Generic: a bool action named 'ptt' in the platform vocabulary — no module id.
+        return cap.get("kind") == "action" and cap.get("type") == "bool" and cap.get("name") == "ptt"
+
+    def _arm_dead_man(self, slot, module, capability) -> None:
+        self._disarm_dead_man(slot, module)
+        task = asyncio.ensure_future(self._dead_man(slot, module, capability))
+        self._ptt[(slot, module)] = {"cap": capability, "task": task}
+
+    def _disarm_dead_man(self, slot, module) -> None:
+        entry = self._ptt.pop((slot, module), None)
+        if entry and entry["task"] is not None:
+            entry["task"].cancel()
+
+    async def _dead_man(self, slot, module, capability) -> None:
+        try:
+            await asyncio.sleep(self._dead_man_timeout)
+        except asyncio.CancelledError:
+            raise
+        self._ptt.pop((slot, module), None)
+        await self._unkey(slot, module, capability, "keepalive_timeout")
+
+    async def handle_keepalive(self, msg: dict) -> None:
+        slot, module = msg.get("slot"), msg.get("module")
+        entry = self._ptt.get((slot, module))
+        if not entry:
+            return  # nothing keyed — keepalive is a no-op
+        self._arm_dead_man(slot, module, entry["cap"])
+
+    async def _unkey(self, slot, module, capability, reason) -> None:
+        # Fail-safe: try to drive the module low, then always announce it.
+        await self._execute(slot, module, "do", capability, "false")
+        await self._send(proto.build_event(slot, module, "ptt_auto_unkey", {"reason": reason}))
+
+    async def on_disconnect(self) -> None:
+        for (slot, module), entry in list(self._ptt.items()):
+            if entry["task"] is not None:
+                entry["task"].cancel()
+            del self._ptt[(slot, module)]
+            await self._unkey(slot, module, entry["cap"], "ws_disconnect")
+        await self.stop()
 
     async def stop(self) -> None:
         tasks = []

@@ -242,6 +242,85 @@ def test_additive_resubscribe_clamps_to_slowest_cap():
     assert interval_b >= 0.5, f"slow-then-fast: expected >=0.5s, got {interval_b}"
 
 
+def test_ptt_keepalive_timeout_auto_unkeys_and_emits_event():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
+                   dead_man_timeout=0.1, now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": fw.control_path,
+                          "modules": [{"id": "fm", "identity": FM["identity"],
+                                       "capabilities": FM["capabilities"]}]}])
+
+        async def scenario():
+            await b.handle({"v": 1, "type": "command", "request_id": "k1",
+                            "slot": 1, "module": "fm", "capability": "ptt",
+                            "op": "do", "value": True})
+            await asyncio.sleep(0.3)  # miss the keepalive window
+            await b.stop()
+
+        _run(scenario())
+        events = [m for m in col.sent if m["type"] == "event" and m["event"] == "ptt_auto_unkey"]
+        assert events and events[0]["detail"]["reason"] == "keepalive_timeout"
+        assert fw.state["fm"]["ptt"] == "false"  # broker drove the unkey
+    finally:
+        fw.stop()
+
+
+def test_ptt_keepalive_keeps_tx_alive():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
+                   dead_man_timeout=0.15, now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": fw.control_path,
+                          "modules": [{"id": "fm", "identity": FM["identity"],
+                                       "capabilities": FM["capabilities"]}]}])
+
+        async def scenario():
+            await b.handle({"v": 1, "type": "command", "request_id": "k2",
+                            "slot": 1, "module": "fm", "capability": "ptt",
+                            "op": "do", "value": True})
+            for _ in range(4):
+                await asyncio.sleep(0.08)
+                await b.handle({"v": 1, "type": "ptt_keepalive", "slot": 1, "module": "fm"})
+            early_events = [m for m in col.sent if m.get("event") == "ptt_auto_unkey"]
+            await b.stop()
+            return early_events
+
+        early = _run(scenario())
+        assert early == []  # kept alive; no auto-unkey while fed
+    finally:
+        fw.stop()
+
+
+def test_ws_disconnect_unkeys_active_ptt():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
+                   dead_man_timeout=5.0, now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": fw.control_path,
+                          "modules": [{"id": "fm", "identity": FM["identity"],
+                                       "capabilities": FM["capabilities"]}]}])
+
+        async def scenario():
+            await b.handle({"v": 1, "type": "command", "request_id": "k3",
+                            "slot": 1, "module": "fm", "capability": "ptt",
+                            "op": "do", "value": True})
+            await b.on_disconnect()  # WS dropped while keyed
+
+        _run(scenario())
+        events = [m for m in col.sent if m.get("event") == "ptt_auto_unkey"]
+        assert events and events[0]["detail"]["reason"] == "ws_disconnect"
+        assert fw.state["fm"]["ptt"] == "false"
+    finally:
+        fw.stop()
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()
