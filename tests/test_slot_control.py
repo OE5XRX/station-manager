@@ -86,3 +86,12 @@ def test_execute_non_str_token_fails_closed():
     sc = SlotControl("/nonexistent/control", timeout=0.2)
     assert sc.execute("fm", "set", "frequency", 145) == {"ok": False, "error": "bad_value"}
     assert sc.execute("fm", "set", "frequency", b"145.5") == {"ok": False, "error": "bad_value"}
+
+
+def test_execute_non_str_module_or_cap_fails_closed():
+    # execute() must never raise; a non-str module_id/cap is rejected as bad_value
+    # instead of raising TypeError from _MODULE_ID_RE.match. (Underscored caps like
+    # "power_level" are valid and covered elsewhere — the regex allows underscores.)
+    sc = SlotControl("/nonexistent/control", timeout=0.2)
+    assert sc.execute(123, "get", "rssi") == {"ok": False, "error": "bad_value"}
+    assert sc.execute("fm", "get", None) == {"ok": False, "error": "bad_value"}

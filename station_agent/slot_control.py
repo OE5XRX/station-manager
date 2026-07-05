@@ -37,8 +37,11 @@ class SlotControl:
 
     def execute(self, module_id: str, op: str, cap: str, token: str | None = None) -> dict:
         """Send one command, return the parsed MODULE-RESULT (or a timeout error)."""
-        # Defense-in-depth: never echo an unsafe token into the shell line.
-        if not _MODULE_ID_RE.match(module_id) or not _MODULE_ID_RE.match(cap):
+        # Defense-in-depth: never echo an unsafe id into the shell line, and fail
+        # closed on a non-str module_id/cap so .match() can't raise TypeError.
+        if not (isinstance(module_id, str) and _MODULE_ID_RE.match(module_id)) or not (
+            isinstance(cap, str) and _MODULE_ID_RE.match(cap)
+        ):
             return {"ok": False, "error": "bad_value"}
         # This transport is the device trust boundary: reject any op outside the
         # generic FW verb set before it reaches the command line, independent of
