@@ -163,6 +163,26 @@ def test_format_value_float_tiny_no_precision_loss():
     assert float(out) == 1e-12
 
 
+# Fix (Copilot round-10): index_capabilities must tolerate malformed descriptors.
+def test_index_capabilities_tolerates_malformed():
+    # Non-list capabilities: string, dict — both must return {}.
+    assert d.index_capabilities({"capabilities": "abc"}) == {}
+    assert d.index_capabilities({"capabilities": {"x": 1}}) == {}
+    # Missing capabilities key must return {}.
+    assert d.index_capabilities({}) == {}
+    # List containing a non-dict entry alongside a valid cap: only the valid cap returned.
+    result = d.index_capabilities(
+        {
+            "capabilities": [
+                "notadict",
+                {"name": "ok", "kind": "setting", "type": "int"},
+            ]
+        }
+    )
+    assert list(result.keys()) == ["ok"]
+    assert result["ok"]["kind"] == "setting"
+
+
 # Fix 1 (Copilot round-6): TOKEN_RE — hyphen moved to front; matched set unchanged.
 def test_token_re_charset():
     valid = ["67.0", "023", "none", "145.5", "a-b", "a/b", "a+b", "a:b", "a_b", "a.b"]

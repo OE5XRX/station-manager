@@ -1082,3 +1082,50 @@ def test_subscribe_streams_state_then_unsubscribe_stops():
         assert final == streamed  # unsubscribe stopped the stream
     finally:
         fw.stop()
+
+
+def test_emit_inventory_skips_non_dict_cap_entries():
+    """emit_inventory must not raise when a capabilities list contains non-dict entries."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        b, col = _broker_with_fw(fw)
+        # Inject a non-dict entry ("junk") alongside a valid setting cap.
+        b._descriptors[(1, "fm")]["capabilities"] = [
+            "junk",
+            {
+                "name": "frequency",
+                "kind": "setting",
+                "type": "float",
+                "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}],
+            },
+        ]
+        # Seed a value for the valid cap.
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "nd0",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+        )
+        col.sent.clear()
+
+        async def scenario():
+            await b.emit_inventory()  # must not raise
+            await b.stop()
+
+        _run(scenario())
+        inv_msgs = [m for m in col.sent if m["type"] == "inventory"]
+        assert inv_msgs, "inventory must be emitted"
+        state = inv_msgs[0]["slots"][0]["modules"][0]["state"]
+        # Valid setting must appear; junk must be silently skipped.
+        assert "frequency" in state, "valid setting must appear in state snapshot"
+    finally:
+        fw.stop()

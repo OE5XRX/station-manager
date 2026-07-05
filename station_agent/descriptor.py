@@ -36,7 +36,12 @@ _WRITE_OPS = {"set", "do"}
 def index_capabilities(module_descriptor: dict) -> dict:
     """Return {capability_name: descriptor_dict} for a module's ``describe`` output."""
     out = {}
-    for cap in module_descriptor.get("capabilities", []):
+    caps = module_descriptor.get("capabilities")
+    if not isinstance(caps, list):
+        return out
+    for cap in caps:
+        if not isinstance(cap, dict):
+            continue
         name = cap.get("name")
         if isinstance(name, str):
             out[name] = cap

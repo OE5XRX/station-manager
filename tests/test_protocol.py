@@ -47,11 +47,6 @@ def test_parse_message_rejects_non_json():
     assert exc.value.code == p.VALIDATION_FAILED
 
 
-def test_parse_message_rejects_missing_type():
-    with pytest.raises(p.ProtocolError):
-        p.parse_message(json.dumps({"v": 1}))
-
-
 def test_parse_message_accepts_valid():
     out = p.parse_message(json.dumps({"v": 1, "type": "command", "request_id": "x"}))
     assert out["type"] == "command"
@@ -68,3 +63,21 @@ def test_parse_message_rejects_wrong_version():
     with pytest.raises(p.ProtocolError) as exc:
         p.parse_message(json.dumps({"v": 2, "type": "command"}))
     assert exc.value.code == p.VALIDATION_FAILED
+
+
+# Fix (Copilot round-10): parse_message must require type to be a string.
+def test_parse_message_rejects_non_string_type():
+    with pytest.raises(p.ProtocolError) as exc:
+        p.parse_message(json.dumps({"v": 1, "type": 123}))
+    assert exc.value.code == p.VALIDATION_FAILED
+
+
+def test_parse_message_rejects_missing_type():
+    with pytest.raises(p.ProtocolError) as exc:
+        p.parse_message(json.dumps({"v": 1}))
+    assert exc.value.code == p.VALIDATION_FAILED
+
+
+def test_parse_message_accepts_string_type():
+    out = p.parse_message(json.dumps({"v": 1, "type": "command", "request_id": "x"}))
+    assert out["type"] == "command"

@@ -173,8 +173,12 @@ class Broker:
             modules_out = []
             for module, descriptor in by_slot[slot]:
                 caps = descriptor.get("capabilities", [])
+                if not isinstance(caps, list):
+                    caps = []
                 state = {}
                 for cap in caps:
+                    if not isinstance(cap, dict):
+                        continue
                     if cap.get("kind") != "setting":
                         continue
                     name = cap.get("name")

@@ -65,8 +65,8 @@ def parse_message(text: str) -> dict:
         msg = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         raise ProtocolError(VALIDATION_FAILED, "message is not valid JSON")
-    if not isinstance(msg, dict) or "type" not in msg:
-        raise ProtocolError(VALIDATION_FAILED, "message missing 'type'")
+    if not isinstance(msg, dict) or not isinstance(msg.get("type"), str):
+        raise ProtocolError(VALIDATION_FAILED, "message 'type' must be a string")
     if msg.get("v") != PROTOCOL_VERSION:
         raise ProtocolError(VALIDATION_FAILED, "unsupported protocol version")
     return msg
