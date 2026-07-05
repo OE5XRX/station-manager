@@ -22,7 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements/ requirements/
 
 ARG DEV=false
-RUN if [ "$DEV" = "true" ]; then \
+# autobahn (pulled by daphne/channels) builds an optional NVX C extension from
+# its sdist. This slim image has no compiler and NVX has no arm64 support, so
+# the build fails; recent autobahn (>=26.x) then refuses to fall back to a
+# pure-Python wheel unless AUTOBAHN_USE_NVX=0 is set. Force the pure-Python wheel.
+RUN export AUTOBAHN_USE_NVX=0; \
+    if [ "$DEV" = "true" ]; then \
       pip install --no-cache-dir -r requirements/dev.txt; \
     else \
       pip install --no-cache-dir -r requirements/prod.txt; \
