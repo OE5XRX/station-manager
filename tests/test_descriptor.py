@@ -5,15 +5,25 @@ from station_agent import descriptor as d
 from station_agent import protocol as p
 
 FM = {
-    "schema": 1, "module": "fm",
+    "schema": 1,
+    "module": "fm",
     "capabilities": [
-        {"name": "frequency", "kind": "setting", "type": "float",
-         "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}]},
+        {
+            "name": "frequency",
+            "kind": "setting",
+            "type": "float",
+            "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}],
+        },
         {"name": "volume", "kind": "setting", "type": "int", "ranges": [{"min": 1, "max": 8}]},
         {"name": "power_level", "kind": "setting", "type": "enum", "values": ["low", "high"]},
         {"name": "ptt", "kind": "action", "type": "bool"},
-        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True,
-         "min_interval_ms": 250},
+        {
+            "name": "rssi",
+            "kind": "telemetry",
+            "type": "int",
+            "readonly": True,
+            "min_interval_ms": 250,
+        },
         {"name": "band", "kind": "telemetry", "type": "string", "readonly": True},
     ],
 }
@@ -37,7 +47,7 @@ def test_unknown_capability_rejected():
 
 def test_setting_accepts_set_and_get():
     d.validate_command(caps()["frequency"], "set", 145.5)  # no raise
-    d.validate_command(caps()["frequency"], "get", None)   # no raise
+    d.validate_command(caps()["frequency"], "get", None)  # no raise
 
 
 def test_setting_rejects_do_as_wrong_op():

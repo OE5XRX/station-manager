@@ -5,11 +5,16 @@ from station_agent import slot_discovery
 from tests.fake_fw import FakeFirmware, make_slot_tree
 
 FM = {
-    "schema": 1, "module": "fm",
+    "schema": 1,
+    "module": "fm",
     "identity": {"type": "fm_transceiver", "model": "SA818-V", "version": "vhf"},
     "capabilities": [
-        {"name": "frequency", "kind": "setting", "type": "float",
-         "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}]},
+        {
+            "name": "frequency",
+            "kind": "setting",
+            "type": "float",
+            "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}],
+        },
         {"name": "ptt", "kind": "action", "type": "bool"},
         {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True},
     ],
@@ -21,10 +26,13 @@ def _send(path, line):
     try:
         os.write(fd, (line + "\r\n").encode())
         import select
+
         buf = b""
-        while (b"MODULE-RESULT" not in buf
-               and b"MODULE-DESCRIBE" not in buf
-               and b"MODULE-LIST" not in buf):
+        while (
+            b"MODULE-RESULT" not in buf
+            and b"MODULE-DESCRIBE" not in buf
+            and b"MODULE-LIST" not in buf
+        ):
             r, _, _ = select.select([fd], [], [], 2.0)
             if not r:
                 break

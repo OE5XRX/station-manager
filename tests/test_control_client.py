@@ -11,13 +11,23 @@ from station_agent.control_client import ControlClient
 from tests.fake_fw import FakeFirmware, make_slot_tree
 
 FM = {
-    "schema": 1, "module": "fm",
+    "schema": 1,
+    "module": "fm",
     "identity": {"type": "fm_transceiver", "model": "SA818-V", "version": "vhf"},
     "capabilities": [
-        {"name": "frequency", "kind": "setting", "type": "float",
-         "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}]},
-        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True,
-         "min_interval_ms": 250},
+        {
+            "name": "frequency",
+            "kind": "setting",
+            "type": "float",
+            "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}],
+        },
+        {
+            "name": "rssi",
+            "kind": "telemetry",
+            "type": "int",
+            "readonly": True,
+            "min_interval_ms": 250,
+        },
     ],
 }
 
@@ -37,12 +47,16 @@ class _FakeConfig:
 def _gen_key(tmp_path):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
     key = Ed25519PrivateKey.generate()
     p = tmp_path / "agent.key"
-    p.write_bytes(key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()))
+    p.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
     return str(p)
 
 
@@ -60,9 +74,20 @@ def test_control_client_connects_sends_inventory_and_handles_command(tmp_path):
             msg = json.loads(raw)
             if msg["type"] == "inventory" and received["inventory"] is None:
                 received["inventory"] = msg
-                await ws.send(json.dumps({"v": 1, "type": "command", "request_id": "c1",
-                                          "slot": 1, "module": "fm",
-                                          "capability": "frequency", "op": "set", "value": 145.5}))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "command",
+                            "request_id": "c1",
+                            "slot": 1,
+                            "module": "fm",
+                            "capability": "frequency",
+                            "op": "set",
+                            "value": 145.5,
+                        }
+                    )
+                )
             elif msg["type"] == "result":
                 received["result"] = msg
             elif msg["type"] == "state":

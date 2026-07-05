@@ -3,7 +3,8 @@ from station_agent.slot_control import SlotControl
 from tests.fake_fw import FakeFirmware
 
 FM = {
-    "schema": 1, "module": "fm",
+    "schema": 1,
+    "module": "fm",
     "capabilities": [
         {"name": "frequency", "kind": "setting", "type": "float"},
         {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True},

@@ -51,9 +51,9 @@ class ControlClient:
     def _build_ws_url(self) -> str:
         server = self._config.server_url
         if server.startswith("https://"):
-            ws_base = "wss://" + server[len("https://"):]
+            ws_base = "wss://" + server[len("https://") :]
         elif server.startswith("http://"):
-            ws_base = "ws://" + server[len("http://"):]
+            ws_base = "ws://" + server[len("http://") :]
         else:
             ws_base = "wss://" + server
         path = f"/ws/agent/control/{self._config.station_id}/"
@@ -124,8 +124,12 @@ class ControlClient:
             except (OSError, websockets.exceptions.WebSocketException) as exc:
                 logger.warning("Control: connection error (%s), retrying in %.0fs", exc, backoff)
             except Exception as exc:  # noqa: BLE001
-                logger.error("Control: unexpected error (%s: %s), retrying in %.0fs",
-                             type(exc).__name__, exc, backoff)
+                logger.error(
+                    "Control: unexpected error (%s: %s), retrying in %.0fs",
+                    type(exc).__name__,
+                    exc,
+                    backoff,
+                )
             if self._shutdown.is_set():
                 break
             wait_end = time.monotonic() + backoff

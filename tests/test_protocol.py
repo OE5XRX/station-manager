@@ -19,8 +19,14 @@ def test_build_result_error_carries_structured_error():
 
 def test_build_state_shape():
     msg = p.build_state(1, "fm", {"frequency": 145.5}, ts=1234.0)
-    assert msg == {"v": 1, "type": "state", "slot": 1, "module": "fm",
-                   "values": {"frequency": 145.5}, "ts": 1234.0}
+    assert msg == {
+        "v": 1,
+        "type": "state",
+        "slot": 1,
+        "module": "fm",
+        "values": {"frequency": 145.5},
+        "ts": 1234.0,
+    }
 
 
 def test_build_event_shape():

@@ -157,9 +157,7 @@ class Broker:
     async def _execute(self, slot, module, op, capability, token) -> dict:
         transport = self._transport_factory(self._control_path(slot))
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, transport.execute, module, op, capability, token
-        )
+        return await loop.run_in_executor(None, transport.execute, module, op, capability, token)
 
     # --- telemetry subscription --------------------------------------------
     def _poll_interval_s(self, slot, module) -> float | None:
@@ -222,9 +220,7 @@ class Broker:
             except (asyncio.CancelledError, Exception):
                 pass
         if sub["caps"]:
-            sub["task"] = asyncio.ensure_future(
-                self._poll_loop(slot, module, sub["interval_s"])
-            )
+            sub["task"] = asyncio.ensure_future(self._poll_loop(slot, module, sub["interval_s"]))
         else:
             del self._subscriptions[key]
 
@@ -241,7 +237,9 @@ class Broker:
                     except Exception:
                         logger.exception(
                             "broker: execute error in telemetry poll for slot %s module %s cap %s",
-                            slot, module, cap_name,
+                            slot,
+                            module,
+                            cap_name,
                         )
                         continue
                     if result.get("ok"):

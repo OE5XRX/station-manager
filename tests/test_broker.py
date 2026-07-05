@@ -8,6 +8,7 @@ from tests.fake_fw import FakeFirmware
 
 class CountingTransport:
     """Transport wrapper that counts execute() calls across the whole broker."""
+
     def __init__(self, path):
         self._sc = SlotControl(path, timeout=2.0)
         CountingTransport.calls = getattr(CountingTransport, "calls", 0)
@@ -16,15 +17,26 @@ class CountingTransport:
         CountingTransport.calls += 1
         return self._sc.execute(module, op, cap, token)
 
+
 FM = {
-    "schema": 1, "module": "fm",
+    "schema": 1,
+    "module": "fm",
     "identity": {"type": "fm_transceiver", "model": "SA818-V", "version": "vhf"},
     "capabilities": [
-        {"name": "frequency", "kind": "setting", "type": "float",
-         "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}]},
+        {
+            "name": "frequency",
+            "kind": "setting",
+            "type": "float",
+            "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}],
+        },
         {"name": "ptt", "kind": "action", "type": "bool"},
-        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True,
-         "min_interval_ms": 250},
+        {
+            "name": "rssi",
+            "kind": "telemetry",
+            "type": "int",
+            "readonly": True,
+            "min_interval_ms": 250,
+        },
     ],
 }
 
@@ -40,9 +52,17 @@ class Collector:
 def _broker_with_fw(fw):
     col = Collector()
     b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0), now=lambda: 100.0)
-    b.set_inventory([{"slot": 1, "control": fw.control_path,
-                      "modules": [{"id": "fm", "identity": FM["identity"],
-                                   "capabilities": FM["capabilities"]}]}])
+    b.set_inventory(
+        [
+            {
+                "slot": 1,
+                "control": fw.control_path,
+                "modules": [
+                    {"id": "fm", "identity": FM["identity"], "capabilities": FM["capabilities"]}
+                ],
+            }
+        ]
+    )
     return b, col
 
 
@@ -55,9 +75,20 @@ def test_command_set_valid_flows_to_fw_and_reports_result_and_state():
     fw.start()
     try:
         b, col = _broker_with_fw(fw)
-        _run(b.handle({"v": 1, "type": "command", "request_id": "r1",
-                       "slot": 1, "module": "fm", "capability": "frequency",
-                       "op": "set", "value": 145.5}))
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "r1",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+        )
         results = [m for m in col.sent if m["type"] == "result"]
         states = [m for m in col.sent if m["type"] == "state"]
         assert results[0]["request_id"] == "r1" and results[0]["ok"] is True
@@ -72,9 +103,20 @@ def test_command_out_of_range_rejected_before_fw():
     fw.start()
     try:
         b, col = _broker_with_fw(fw)
-        _run(b.handle({"v": 1, "type": "command", "request_id": "r2",
-                       "slot": 1, "module": "fm", "capability": "frequency",
-                       "op": "set", "value": 200.0}))
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "r2",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 200.0,
+                }
+            )
+        )
         res = [m for m in col.sent if m["type"] == "result"][0]
         assert res["ok"] is False and res["error"]["code"] == "out_of_range"
         # Never reached the firmware.
@@ -88,9 +130,20 @@ def test_command_wrong_op_rejected_before_fw():
     fw.start()
     try:
         b, col = _broker_with_fw(fw)
-        _run(b.handle({"v": 1, "type": "command", "request_id": "r3",
-                       "slot": 1, "module": "fm", "capability": "frequency",
-                       "op": "do", "value": 145.5}))
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "r3",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "do",
+                    "value": 145.5,
+                }
+            )
+        )
         res = [m for m in col.sent if m["type"] == "result"][0]
         assert res["ok"] is False and res["error"]["code"] == "wrong_op"
     finally:
@@ -101,8 +154,19 @@ def test_command_unknown_slot():
     coll = Collector()
     b2 = Broker(coll, now=lambda: 1.0)
     b2.set_inventory([])
-    _run(b2.handle({"v": 1, "type": "command", "request_id": "r4",
-                    "slot": 9, "module": "fm", "capability": "rssi", "op": "get"}))
+    _run(
+        b2.handle(
+            {
+                "v": 1,
+                "type": "command",
+                "request_id": "r4",
+                "slot": 9,
+                "module": "fm",
+                "capability": "rssi",
+                "op": "get",
+            }
+        )
+    )
     res = [m for m in coll.sent if m["type"] == "result"][0]
     assert res["ok"] is False and res["error"]["code"] == "unknown_slot"
 
@@ -112,8 +176,19 @@ def test_command_get_reports_value():
     fw.start()
     try:
         b, col = _broker_with_fw(fw)
-        _run(b.handle({"v": 1, "type": "command", "request_id": "r5",
-                       "slot": 1, "module": "fm", "capability": "rssi", "op": "get"}))
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "r5",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "rssi",
+                    "op": "get",
+                }
+            )
+        )
         res = [m for m in col.sent if m["type"] == "result"][0]
         assert res["ok"] is True and isinstance(res["value"], int)
     finally:
@@ -126,9 +201,20 @@ def test_emit_inventory_includes_descriptors_and_settings_snapshot():
     try:
         b, col = _broker_with_fw(fw)
         # Seed a setting so the snapshot has something to read back.
-        _run(b.handle({"v": 1, "type": "command", "request_id": "r0",
-                       "slot": 1, "module": "fm", "capability": "frequency",
-                       "op": "set", "value": 145.5}))
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "r0",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+        )
         col.sent.clear()
         _run(b.emit_inventory())
         inv = [m for m in col.sent if m["type"] == "inventory"][0]
@@ -149,16 +235,34 @@ def test_subscribe_clamps_interval_to_min_interval():
     fw.start()
     try:
         col = Collector()
-        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
-                   telemetry_min_floor_ms=10, telemetry_default_interval_ms=1000, now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": fw.control_path,
-                          "modules": [{"id": "fm", "identity": FM["identity"],
-                                       "capabilities": FM["capabilities"]}]}])
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            telemetry_min_floor_ms=10,
+            telemetry_default_interval_ms=1000,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
 
         async def scenario():
             # rssi declares min_interval_ms=250; request 50ms must clamp up to 250ms.
-            await b.handle_subscribe({"slot": 1, "module": "fm",
-                                      "capabilities": ["rssi"], "interval_ms": 50})
+            await b.handle_subscribe(
+                {"slot": 1, "module": "fm", "capabilities": ["rssi"], "interval_ms": 50}
+            )
             interval = b._poll_interval_s(1, "fm")
             await b.stop()
             return interval
@@ -176,9 +280,21 @@ def test_no_subscriber_means_no_polling():
     try:
         col = Collector()
         b = Broker(col, transport_factory=CountingTransport, now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": fw.control_path,
-                          "modules": [{"id": "fm", "identity": FM["identity"],
-                                       "capabilities": FM["capabilities"]}]}])
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
 
         async def scenario():
             await asyncio.sleep(0.2)  # idle: nobody subscribed
@@ -196,31 +312,59 @@ def test_additive_resubscribe_clamps_to_slowest_cap():
     two_cap = {
         "identity": {"type": "test", "model": "test", "version": "v0"},
         "capabilities": [
-            {"name": "fast", "kind": "telemetry", "type": "int", "readonly": True,
-             "min_interval_ms": 100},
-            {"name": "slow", "kind": "telemetry", "type": "int", "readonly": True,
-             "min_interval_ms": 500},
+            {
+                "name": "fast",
+                "kind": "telemetry",
+                "type": "int",
+                "readonly": True,
+                "min_interval_ms": 100,
+            },
+            {
+                "name": "slow",
+                "kind": "telemetry",
+                "type": "int",
+                "readonly": True,
+                "min_interval_ms": 500,
+            },
         ],
     }
 
     def make_broker():
         col = Collector()
-        b = Broker(col, transport_factory=lambda p: None,
-                   telemetry_min_floor_ms=10, telemetry_default_interval_ms=1000,
-                   now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": "/dev/null",
-                          "modules": [{"id": "two", "identity": two_cap["identity"],
-                                       "capabilities": two_cap["capabilities"]}]}])
+        b = Broker(
+            col,
+            transport_factory=lambda p: None,
+            telemetry_min_floor_ms=10,
+            telemetry_default_interval_ms=1000,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": "/dev/null",
+                    "modules": [
+                        {
+                            "id": "two",
+                            "identity": two_cap["identity"],
+                            "capabilities": two_cap["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
         return b
 
     async def scenario_fast_then_slow():
         b = make_broker()
         # Subscribe fast first with a very low requested interval.
-        await b.handle_subscribe({"slot": 1, "module": "two",
-                                  "capabilities": ["fast"], "interval_ms": 50})
+        await b.handle_subscribe(
+            {"slot": 1, "module": "two", "capabilities": ["fast"], "interval_ms": 50}
+        )
         # Now add slow — merged set {fast, slow} must clamp to >=500ms.
-        await b.handle_subscribe({"slot": 1, "module": "two",
-                                  "capabilities": ["slow"], "interval_ms": 50})
+        await b.handle_subscribe(
+            {"slot": 1, "module": "two", "capabilities": ["slow"], "interval_ms": 50}
+        )
         interval = b._poll_interval_s(1, "two")
         await b.stop()
         return interval
@@ -228,11 +372,13 @@ def test_additive_resubscribe_clamps_to_slowest_cap():
     async def scenario_slow_then_fast():
         b = make_broker()
         # Subscribe slow first.
-        await b.handle_subscribe({"slot": 1, "module": "two",
-                                  "capabilities": ["slow"], "interval_ms": 50})
+        await b.handle_subscribe(
+            {"slot": 1, "module": "two", "capabilities": ["slow"], "interval_ms": 50}
+        )
         # Now add fast — merged set {fast, slow} must still clamp to >=500ms.
-        await b.handle_subscribe({"slot": 1, "module": "two",
-                                  "capabilities": ["fast"], "interval_ms": 50})
+        await b.handle_subscribe(
+            {"slot": 1, "module": "two", "capabilities": ["fast"], "interval_ms": 50}
+        )
         interval = b._poll_interval_s(1, "two")
         await b.stop()
         return interval
@@ -249,16 +395,41 @@ def test_ptt_keepalive_timeout_auto_unkeys_and_emits_event():
     fw.start()
     try:
         col = Collector()
-        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
-                   dead_man_timeout=0.1, now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": fw.control_path,
-                          "modules": [{"id": "fm", "identity": FM["identity"],
-                                       "capabilities": FM["capabilities"]}]}])
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            dead_man_timeout=0.1,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
 
         async def scenario():
-            await b.handle({"v": 1, "type": "command", "request_id": "k1",
-                            "slot": 1, "module": "fm", "capability": "ptt",
-                            "op": "do", "value": True})
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "k1",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "ptt",
+                    "op": "do",
+                    "value": True,
+                }
+            )
             await asyncio.sleep(0.3)  # miss the keepalive window
             await b.stop()
 
@@ -275,16 +446,41 @@ def test_ptt_keepalive_keeps_tx_alive():
     fw.start()
     try:
         col = Collector()
-        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
-                   dead_man_timeout=0.15, now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": fw.control_path,
-                          "modules": [{"id": "fm", "identity": FM["identity"],
-                                       "capabilities": FM["capabilities"]}]}])
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            dead_man_timeout=0.15,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
 
         async def scenario():
-            await b.handle({"v": 1, "type": "command", "request_id": "k2",
-                            "slot": 1, "module": "fm", "capability": "ptt",
-                            "op": "do", "value": True})
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "k2",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "ptt",
+                    "op": "do",
+                    "value": True,
+                }
+            )
             for _ in range(4):
                 await asyncio.sleep(0.08)
                 await b.handle({"v": 1, "type": "ptt_keepalive", "slot": 1, "module": "fm"})
@@ -303,16 +499,41 @@ def test_ws_disconnect_unkeys_active_ptt():
     fw.start()
     try:
         col = Collector()
-        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
-                   dead_man_timeout=5.0, now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": fw.control_path,
-                          "modules": [{"id": "fm", "identity": FM["identity"],
-                                       "capabilities": FM["capabilities"]}]}])
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            dead_man_timeout=5.0,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
 
         async def scenario():
-            await b.handle({"v": 1, "type": "command", "request_id": "k3",
-                            "slot": 1, "module": "fm", "capability": "ptt",
-                            "op": "do", "value": True})
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "k3",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "ptt",
+                    "op": "do",
+                    "value": True,
+                }
+            )
             await b.on_disconnect()  # WS dropped while keyed
 
         _run(scenario())
@@ -328,15 +549,33 @@ def test_subscribe_streams_state_then_unsubscribe_stops():
     fw.start()
     try:
         col = Collector()
-        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
-                   telemetry_min_floor_ms=10, telemetry_default_interval_ms=20, now=lambda: 1.0)
-        b.set_inventory([{"slot": 1, "control": fw.control_path,
-                          "modules": [{"id": "fm", "identity": FM["identity"],
-                                       "capabilities": FM["capabilities"]}]}])
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            telemetry_min_floor_ms=10,
+            telemetry_default_interval_ms=20,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
 
         async def scenario():
-            await b.handle_subscribe({"slot": 1, "module": "fm",
-                                      "capabilities": ["rssi"], "interval_ms": 20})
+            await b.handle_subscribe(
+                {"slot": 1, "module": "fm", "capabilities": ["rssi"], "interval_ms": 20}
+            )
             await asyncio.sleep(0.12)  # a few ticks
             await b.handle_unsubscribe({"slot": 1, "module": "fm", "capabilities": ["rssi"]})
             count_after_unsub = len([m for m in col.sent if m["type"] == "state"])
@@ -346,7 +585,7 @@ def test_subscribe_streams_state_then_unsubscribe_stops():
             return count_after_unsub, final
 
         streamed, final = _run(scenario())
-        assert streamed >= 1          # telemetry did stream
-        assert final == streamed      # unsubscribe stopped the stream
+        assert streamed >= 1  # telemetry did stream
+        assert final == streamed  # unsubscribe stopped the stream
     finally:
         fw.stop()
