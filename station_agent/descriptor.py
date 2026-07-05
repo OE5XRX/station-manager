@@ -77,6 +77,8 @@ def _check_value(cap: dict, value) -> None:
     if vtype == "string":
         if not isinstance(value, str):
             raise ProtocolError(BAD_VALUE, "expected string")
+        if not value or any(c.isspace() for c in value):
+            raise ProtocolError(BAD_VALUE, "string value must be non-empty and whitespace-free")
         return
     if vtype == "int":
         if not isinstance(value, int) or isinstance(value, bool):

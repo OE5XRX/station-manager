@@ -600,6 +600,94 @@ def test_stop_cancels_ptt_timer_without_unkeying():
         fw.stop()
 
 
+def test_emit_inventory_skips_malformed_cap_without_name():
+    """A cap dict missing 'name' must be silently skipped; valid caps still appear."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        b, col = _broker_with_fw(fw)
+        # Inject a malformed cap (no "name") alongside the real FM caps.
+        b._descriptors[(1, "fm")]["capabilities"] = [
+            {"kind": "setting", "type": "int"},  # malformed: no name
+            {
+                "name": "frequency",
+                "kind": "setting",
+                "type": "float",
+                "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}],
+            },
+        ]
+        # Seed a value so the get has something to return.
+        _run(
+            b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "ma0",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+        )
+        col.sent.clear()
+        # Must not raise.
+        _run(b.emit_inventory())
+        inv_msgs = [m for m in col.sent if m["type"] == "inventory"]
+        assert inv_msgs, "inventory message must be emitted"
+        state = inv_msgs[0]["slots"][0]["modules"][0]["state"]
+        assert "frequency" in state, "valid setting must appear in state snapshot"
+        # Malformed cap has no name so it cannot appear in state.
+        for key in state:
+            assert key, "all state keys must be non-empty strings"
+    finally:
+        fw.stop()
+
+
+def test_subscribe_missing_interval_ms_uses_default():
+    """Omitting interval_ms must fall back to telemetry_default_interval_ms."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            telemetry_default_interval_ms=800,
+            telemetry_min_floor_ms=10,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            # rssi has min_interval_ms=250, which is < 800ms default
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        async def scenario():
+            # No interval_ms key — must use default (800ms), not clamp to 250ms.
+            await b.handle_subscribe({"slot": 1, "module": "fm", "capabilities": ["rssi"]})
+            interval = b._poll_interval_s(1, "fm")
+            await b.stop()
+            return interval
+
+        interval = _run(scenario())
+        assert abs(interval - 0.8) < 1e-6, f"expected 0.8s, got {interval}"
+    finally:
+        fw.stop()
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()

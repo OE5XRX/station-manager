@@ -135,6 +135,21 @@ def test_format_value_float_no_exponent():
     assert float(result) == 1e-06
 
 
+def test_string_value_whitespace_and_empty_rejected():
+    """String values that are empty or contain whitespace must raise BAD_VALUE."""
+    cap = {"name": "label", "kind": "setting", "type": "string"}
+    # Valid non-empty whitespace-free string must pass.
+    d.validate_command(cap, "set", "ok")
+    # String with a space must be rejected.
+    with pytest.raises(p.ProtocolError) as exc:
+        d.validate_command(cap, "set", "a b")
+    assert exc.value.code == p.BAD_VALUE
+    # Empty string must be rejected.
+    with pytest.raises(p.ProtocolError) as exc:
+        d.validate_command(cap, "set", "")
+    assert exc.value.code == p.BAD_VALUE
+
+
 def test_format_value_float_tiny_no_precision_loss():
     # A magnitude that repr() renders in scientific notation must become a
     # lossless fixed-point token — not rounded to 0.0 by a ".10f" format.

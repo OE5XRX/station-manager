@@ -140,9 +140,12 @@ class Broker:
                 for cap in caps:
                     if cap.get("kind") != "setting":
                         continue
-                    result = await self._execute(slot, module, "get", cap["name"], None)
+                    name = cap.get("name")
+                    if not isinstance(name, str) or not name:
+                        continue
+                    result = await self._execute(slot, module, "get", name, None)
                     if result.get("ok"):
-                        state[cap["name"]] = result.get("value")
+                        state[name] = result.get("value")
                 modules_out.append(
                     {
                         "module": module,
@@ -184,7 +187,15 @@ class Broker:
     async def handle_subscribe(self, msg: dict) -> None:
         slot, module = msg.get("slot"), msg.get("module")
         requested = msg.get("capabilities", []) or []
-        interval_s = max((msg.get("interval_ms", 0) or 0) / 1000.0, 0.0)
+        raw_interval = msg.get("interval_ms")
+        if (
+            isinstance(raw_interval, bool)
+            or not isinstance(raw_interval, (int, float))
+            or raw_interval <= 0
+        ):
+            interval_s = self._telemetry_default_interval_ms / 1000.0
+        else:
+            interval_s = raw_interval / 1000.0
 
         valid, _ = self._telemetry_caps(slot, module, requested)
         if not valid:
