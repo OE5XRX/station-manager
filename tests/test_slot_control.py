@@ -78,3 +78,11 @@ def test_execute_rejects_unknown_op():
         assert "frequency" not in fw.state["fm"]  # never reached the firmware
     finally:
         fw.stop()
+
+
+def test_execute_non_str_token_fails_closed():
+    # execute() must never raise into the caller; a non-str token (int/bytes)
+    # is rejected as bad_value instead of raising TypeError from TOKEN_RE.match.
+    sc = SlotControl("/nonexistent/control", timeout=0.2)
+    assert sc.execute("fm", "set", "frequency", 145) == {"ok": False, "error": "bad_value"}
+    assert sc.execute("fm", "set", "frequency", b"145.5") == {"ok": False, "error": "bad_value"}

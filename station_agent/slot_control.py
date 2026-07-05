@@ -45,7 +45,7 @@ class SlotControl:
         # whatever the broker above happens to send.
         if op not in ("set", "get", "do"):
             return {"ok": False, "error": "bad_value"}
-        if token is not None and not TOKEN_RE.match(token):
+        if token is not None and (not isinstance(token, str) or not TOKEN_RE.match(token)):
             return {"ok": False, "error": "bad_value"}
         parts = ["module", module_id, op, cap]
         if token is not None:
