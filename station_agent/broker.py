@@ -21,6 +21,17 @@ from station_agent.slot_control import SlotControl
 logger = logging.getLogger(__name__)
 
 
+def _as_str_list(value) -> list[str]:
+    """Return a list of strings from *value*, silently dropping non-string items.
+
+    A bare string is NOT treated as an iterable of characters — it returns [].
+    Any non-list value (int, None, …) returns [].
+    """
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str)]
+
+
 class Broker:
     def __init__(
         self,
@@ -186,7 +197,7 @@ class Broker:
 
     async def handle_subscribe(self, msg: dict) -> None:
         slot, module = msg.get("slot"), msg.get("module")
-        requested = msg.get("capabilities", []) or []
+        requested = _as_str_list(msg.get("capabilities"))
         raw_interval = msg.get("interval_ms")
         if (
             isinstance(raw_interval, bool)
@@ -223,7 +234,7 @@ class Broker:
         sub = self._subscriptions.get(key)
         if not sub:
             return
-        sub["caps"] -= set(msg.get("capabilities", []) or [])
+        sub["caps"] -= set(_as_str_list(msg.get("capabilities")))
         if sub["task"] is not None:
             sub["task"].cancel()
             try:
@@ -322,7 +333,14 @@ class Broker:
             except (asyncio.CancelledError, Exception):
                 pass
         # Cancel any armed PTT dead-man timers (do NOT unkey — on_disconnect's job).
+        ptt_tasks = []
         for entry in list(self._ptt.values()):
             if entry["task"] is not None:
                 entry["task"].cancel()
+                ptt_tasks.append(entry["task"])
         self._ptt.clear()
+        for task in ptt_tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass

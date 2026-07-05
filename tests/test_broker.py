@@ -688,6 +688,149 @@ def test_subscribe_missing_interval_ms_uses_default():
         fw.stop()
 
 
+def test_subscribe_with_malformed_capabilities_does_not_raise_or_subscribe():
+    """handle_subscribe with non-list capabilities must not raise and must not subscribe."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        b, col = _broker_with_fw(fw)
+
+        async def scenario():
+            # int capabilities
+            await b.handle_subscribe(
+                {"slot": 1, "module": "fm", "capabilities": 123, "interval_ms": 100}
+            )
+            assert b._poll_interval_s(1, "fm") is None, "int caps: no subscription must be created"
+            states_int = [m for m in col.sent if m["type"] == "state"]
+            assert states_int == [], "int caps: no telemetry state must be emitted"
+            # None capabilities
+            await b.handle_subscribe(
+                {"slot": 1, "module": "fm", "capabilities": None, "interval_ms": 100}
+            )
+            assert b._poll_interval_s(1, "fm") is None, (
+                "None caps: no subscription must be created"
+            )
+            states_none = [m for m in col.sent if m["type"] == "state"]
+            assert states_none == [], "None caps: no telemetry state must be emitted"
+            await b.stop()
+
+        _run(scenario())
+    finally:
+        fw.stop()
+
+
+def test_unsubscribe_with_malformed_capabilities_does_not_raise_or_remove_real_caps():
+    """handle_unsubscribe with malformed capabilities must not raise and must leave real caps."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            telemetry_min_floor_ms=10,
+            telemetry_default_interval_ms=100,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        async def scenario():
+            # Establish a real subscription.
+            await b.handle_subscribe(
+                {"slot": 1, "module": "fm", "capabilities": ["rssi"], "interval_ms": 100}
+            )
+            assert b._poll_interval_s(1, "fm") is not None, "subscription must be active"
+            # Unsubscribe with None — must fail closed (caps unchanged).
+            await b.handle_unsubscribe({"slot": 1, "module": "fm", "capabilities": None})
+            # Real subscription must still be active.
+            assert b._poll_interval_s(1, "fm") is not None, (
+                "real subscription must survive malformed unsubscribe"
+            )
+            sub = b._subscriptions.get((1, "fm"))
+            assert sub is not None and "rssi" in sub["caps"], "rssi cap must remain subscribed"
+            await b.stop()
+
+        _run(scenario())
+    finally:
+        fw.stop()
+
+
+def test_stop_with_armed_ptt_completes_without_pending_task_warnings():
+    """stop() after arming a PTT must complete without raising or leaving pending tasks."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            dead_man_timeout=30.0,  # long: will not fire on its own
+            telemetry_min_floor_ms=10,
+            telemetry_default_interval_ms=100,
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        async def scenario():
+            # Subscribe so stop() has both a subscription task and a PTT task to clean up.
+            await b.handle_subscribe(
+                {"slot": 1, "module": "fm", "capabilities": ["rssi"], "interval_ms": 100}
+            )
+            # Arm PTT.
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "fw1",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "ptt",
+                    "op": "do",
+                    "value": True,
+                }
+            )
+            assert b._ptt.get((1, "fm")) is not None, "PTT must be armed"
+            # stop() must not raise and must drain both task sets.
+            await b.stop()
+            assert b._ptt == {}, "PTT registry must be empty after stop()"
+            assert b._subscriptions == {}, "subscriptions must be empty after stop()"
+            # No ptt_auto_unkey event — stop() must not unkey.
+            events = [m for m in col.sent if m.get("event") == "ptt_auto_unkey"]
+            assert events == [], "stop() must not emit ptt_auto_unkey"
+
+        _run(scenario())
+    finally:
+        fw.stop()
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()
