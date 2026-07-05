@@ -453,7 +453,7 @@ class StationAgent:
         # Main heartbeat loop
         heartbeat_count = 0
         while not self._shutdown.is_set():
-            send_heartbeat(http_client)
+            send_heartbeat(http_client, config=config)
             heartbeat_count += 1
 
             # Check for OTA updates at the configured interval

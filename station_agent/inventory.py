@@ -10,6 +10,8 @@ import os
 import re
 import socket
 
+from station_agent.slot_discovery import discover_slots
+
 logger = logging.getLogger(__name__)
 
 _OS_RELEASE_PATH = "/etc/os-release"
@@ -193,12 +195,36 @@ def _get_os_info() -> dict:
     return info
 
 
-def collect_inventory() -> dict:
+def _collect_modules(config) -> list[dict]:
+    """Return module inventory from slot discovery, or [] on any failure.
+
+    Returns [] when config is None or slot_discovery_enabled is False so that
+    the heartbeat loop is never disrupted by discovery errors.
+    """
+    if config is None or not getattr(config, "slot_discovery_enabled", False):
+        return []
+    try:
+        return discover_slots(config.slot_dev_base)
+    except Exception:  # noqa: BLE001 — discovery must never break the heartbeat
+        logger.exception("slot discovery failed")
+        return []
+
+
+def collect_inventory(config=None) -> dict:
     """Collect complete hardware inventory.
 
+    Args:
+        config: Optional AgentConfig. When provided and slot_discovery_enabled
+            is True, module inventory is collected from the slot contract and
+            included under the ``"modules"`` key.  When absent or discovery
+            fails, ``"modules"`` is an empty list — the heartbeat is never
+            interrupted by discovery errors.
+
     Returns:
-        Dict with keys: cpu, ram, disk, network, os.
-        All values are safe to serialize to JSON.
+        Dict with keys: cpu, ram, disk, network, os, modules.
+        All values are safe to serialize to JSON. If inventory collection
+        itself fails unexpectedly, an empty dict ``{}`` is returned so the
+        heartbeat is never interrupted.
     """
     try:
         return {
@@ -207,6 +233,7 @@ def collect_inventory() -> dict:
             "disk": _get_disk_info(),
             "network": _get_network_info(),
             "os": _get_os_info(),
+            "modules": _collect_modules(config),
         }
     except Exception as exc:
         logger.error("Inventory collection failed: %s", exc)

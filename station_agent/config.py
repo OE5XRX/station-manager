@@ -26,6 +26,8 @@ class AgentConfig:
     terminal_enabled: bool = False
     terminal_shell: str = "/bin/sh"
     bootloader: str = "auto"
+    slot_discovery_enabled: bool = True
+    slot_dev_base: str = "/dev/oe5xrx"
 
     def validate(self):
         """Validate that required fields are present."""
@@ -73,6 +75,8 @@ def load_config() -> AgentConfig:
         terminal_enabled=bool(data.get("terminal_enabled", False)),
         terminal_shell=str(data.get("terminal_shell", "/bin/sh")),
         bootloader=str(data.get("bootloader", "auto")),
+        slot_discovery_enabled=bool(data.get("slot_discovery_enabled", True)),
+        slot_dev_base=str(data.get("slot_dev_base", "/dev/oe5xrx")),
     )
     config.validate()
     return config

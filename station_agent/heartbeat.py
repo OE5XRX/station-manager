@@ -62,8 +62,13 @@ def get_module_versions() -> dict:
     return {}
 
 
-def collect_system_info() -> dict:
-    """Collect all system information for the heartbeat payload."""
+def collect_system_info(config=None) -> dict:
+    """Collect all system information for the heartbeat payload.
+
+    Args:
+        config: Optional AgentConfig. Forwarded to ``collect_inventory`` so
+            that slot discovery is enabled/disabled per configuration.
+    """
     return {
         "hostname": get_hostname(),
         "os_version": get_os_version(),
@@ -71,21 +76,23 @@ def collect_system_info() -> dict:
         "ip_address": get_ip_address(),
         "agent_version": __version__,
         "module_versions": get_module_versions(),
-        "inventory": collect_inventory(),
+        "inventory": collect_inventory(config=config),
         "timestamp": time.time(),
     }
 
 
-def send_heartbeat(http_client: HttpClient) -> bool:
+def send_heartbeat(http_client: HttpClient, config=None) -> bool:
     """Send a heartbeat to the Station Manager server.
 
     Args:
         http_client: Authenticated HTTP client.
+        config: Optional AgentConfig. Forwarded to ``collect_system_info`` so
+            that slot discovery is enabled/disabled per configuration.
 
     Returns:
         True if the heartbeat was sent successfully, False otherwise.
     """
-    payload = collect_system_info()
+    payload = collect_system_info(config=config)
 
     response = http_client.request("POST", "/api/v1/heartbeat/", json_data=payload)
     if response is None:

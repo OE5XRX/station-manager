@@ -153,3 +153,42 @@ class TestInventoryView:
             reverse("api:station_inventory", kwargs={"station_id": station.pk}),
         )
         assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_heartbeat_stores_module_inventory(client, station_with_key):
+    """Heartbeat with inventory.modules is persisted into StationInventory.data['modules']."""
+    station, private_key = station_with_key
+    payload = {
+        "hostname": "sim",
+        "os_version": "Yocto 4.0",
+        "uptime": 3600.0,
+        "ip_address": "192.168.1.100",
+        "module_versions": {},
+        "inventory": {
+            "modules": [
+                {
+                    "slot": 1,
+                    "control": "/dev/oe5xrx/slot1/control",
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": {"type": "fm_transceiver", "model": "SA818-V"},
+                            "capabilities": [],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = device_auth_headers(private_key, station.pk, body)
+    resp = client.post(
+        reverse("api:heartbeat"),
+        data=body,
+        content_type="application/json",
+        **headers,
+    )
+    assert resp.status_code == 200
+    inv = StationInventory.objects.get(station=station)
+    assert inv.data["modules"][0]["modules"][0]["identity"]["type"] == "fm_transceiver"
