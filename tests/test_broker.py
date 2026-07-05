@@ -906,6 +906,137 @@ def test_keepalive_malformed_module_type_is_noop():
     _run(scenario())
 
 
+def test_command_missing_or_invalid_request_id_drops_silently():
+    """handle_command with no/None request_id must drop silently — no result, no state."""
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        b, col = _broker_with_fw(fw)
+
+        async def scenario():
+            # No request_id key at all.
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+            # Explicit None request_id.
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": None,
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+            # Broker must still be usable.
+            await b.handle(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": "ok1",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+            )
+            await b.stop()
+
+        _run(scenario())
+        results = [m for m in col.sent if m["type"] == "result"]
+        states = [m for m in col.sent if m["type"] == "state"]
+        # Only the valid command should produce output.
+        assert len(results) == 1, f"expected 1 result, got {len(results)}"
+        assert results[0]["request_id"] == "ok1"
+        assert results[0]["ok"] is True
+        assert len(states) == 1, f"expected 1 state, got {len(states)}"
+    finally:
+        fw.stop()
+
+
+def test_unsubscribe_recomputes_interval_over_remaining_caps():
+    """Removing the slowest cap must lower the effective poll interval (spec §6)."""
+    two_cap = {
+        "identity": {"type": "test", "model": "test", "version": "v0"},
+        "capabilities": [
+            {
+                "name": "fast",
+                "kind": "telemetry",
+                "type": "int",
+                "readonly": True,
+                "min_interval_ms": 100,
+            },
+            {
+                "name": "slow",
+                "kind": "telemetry",
+                "type": "int",
+                "readonly": True,
+                "min_interval_ms": 500,
+            },
+        ],
+    }
+
+    col = Collector()
+    b = Broker(
+        col,
+        transport_factory=lambda p: None,
+        telemetry_min_floor_ms=10,
+        telemetry_default_interval_ms=1000,
+        now=lambda: 1.0,
+    )
+    b.set_inventory(
+        [
+            {
+                "slot": 1,
+                "control": "/dev/null",
+                "modules": [
+                    {
+                        "id": "two",
+                        "identity": two_cap["identity"],
+                        "capabilities": two_cap["capabilities"],
+                    }
+                ],
+            }
+        ]
+    )
+
+    async def scenario():
+        # Subscribe to both with a tiny interval well below either min.
+        await b.handle_subscribe(
+            {"slot": 1, "module": "two", "capabilities": ["fast", "slow"], "interval_ms": 10}
+        )
+        # Both subscribed: clamped to the slowest min (500ms).
+        assert abs(b._poll_interval_s(1, "two") - 0.5) < 1e-6, (
+            f"both caps: expected 0.5s, got {b._poll_interval_s(1, 'two')}"
+        )
+
+        # Remove the slow cap: remaining {fast} has min_interval_ms=100.
+        await b.handle_unsubscribe({"slot": 1, "module": "two", "capabilities": ["slow"]})
+        assert abs(b._poll_interval_s(1, "two") - 0.1) < 1e-6, (
+            f"after unsub slow: expected 0.1s, got {b._poll_interval_s(1, 'two')}"
+        )
+
+        # Remove the fast cap too: subscription must be gone.
+        await b.handle_unsubscribe({"slot": 1, "module": "two", "capabilities": ["fast"]})
+        assert b._poll_interval_s(1, "two") is None, "all caps removed: subscription must be gone"
+
+        await b.stop()
+
+    _run(scenario())
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()

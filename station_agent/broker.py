@@ -101,6 +101,15 @@ class Broker:
 
     async def handle_command(self, msg: dict) -> None:
         request_id = msg.get("request_id")
+        # Fix 1: fail closed on missing/invalid request_id (spec §7).
+        # A valid correlation token is a non-empty string or a non-bool integer.
+        _rid_valid = (isinstance(request_id, str) and request_id) or (
+            isinstance(request_id, int) and not isinstance(request_id, bool)
+        )
+        if not _rid_valid:
+            logger.debug("broker: dropping command with invalid request_id %r", request_id)
+            return
+
         slot = msg.get("slot")
         module = msg.get("module")
         capability = msg.get("capability")
@@ -239,6 +248,7 @@ class Broker:
         caps = set(valid) | (existing["caps"] if existing else set())
 
         # Clamp over the FULL merged cap set (spec §6: max across all subscribed caps).
+        # Store the raw requested_s (before clamp) so unsubscribe can recompute correctly.
         _, min_interval_s = self._telemetry_caps(slot, module, caps)
         effective = max(interval_s, min_interval_s)
         if existing and existing["task"] is not None:
@@ -248,7 +258,12 @@ class Broker:
             except (asyncio.CancelledError, Exception):
                 pass
         task = asyncio.ensure_future(self._poll_loop(slot, module, effective))
-        self._subscriptions[key] = {"caps": caps, "interval_s": effective, "task": task}
+        self._subscriptions[key] = {
+            "caps": caps,
+            "requested_s": interval_s,
+            "interval_s": effective,
+            "task": task,
+        }
 
     async def handle_unsubscribe(self, msg: dict) -> None:
         slot, module = msg.get("slot"), msg.get("module")
@@ -269,7 +284,11 @@ class Broker:
             except (asyncio.CancelledError, Exception):
                 pass
         if sub["caps"]:
-            sub["task"] = asyncio.ensure_future(self._poll_loop(slot, module, sub["interval_s"]))
+            # Fix 2+3: recompute effective interval over the REMAINING cap set (spec §6).
+            _, min_interval_s = self._telemetry_caps(slot, module, sorted(sub["caps"]))
+            effective = max(sub["requested_s"], min_interval_s)
+            sub["interval_s"] = effective
+            sub["task"] = asyncio.ensure_future(self._poll_loop(slot, module, effective))
         else:
             del self._subscriptions[key]
 
