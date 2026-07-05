@@ -77,7 +77,13 @@ Imperative Kommandos **+** voller Ist-Zustand-Push. Nach jedem Command meldet de
 
 ## 9. Transport
 
-Ein **Control-WS pro Station**, über das etablierte **Outbound-Ed25519-WS-Muster** (`station_agent/terminal.py` ↔ `tunnel`/`stations`-Consumer). Der Agent baut die Verbindung nach außen auf (kein Inbound). Auth/Signatur wie beim Terminal-Kanal.
+Heute: **Heartbeat = HTTP-Poll** (`heartbeat.py`/`http_client.py`) — Präsenz/Status, aber ungeeignet für bidirektionales Echtzeit-Control. **Terminal = Outbound-Ed25519-WS** (`terminal.py`, `/ws/agent/terminal/<id>/`), aber **on-demand**. Kein persistenter Control-Kanal.
+
+→ **Eine neue, dedizierte, persistente Control-WS: `/ws/agent/control/<station_id>/`** (eigener `ControlClient`). **Nicht** der HTTP-Heartbeat, **nicht** die Terminal-WS.
+- **Wiederverwendet das erprobte Outbound-Ed25519-Muster aus `terminal.py`** (signierte Auth per Timestamp+Body-Hash, Reconnect-Backoff) — Agent verbindet nach außen (kein Inbound, NAT-freundlich).
+- **Persistent, solange die Station online ist** (Connect beim Agent-Start, Reconnect bei Drop) — anders als die on-demand Terminal-WS. Server kann jederzeit `command`/`subscribe` pushen, Agent proaktiv `inventory`/`state` melden.
+- **Liveness = Dead-Man-Quelle:** der Disconnect dieser WS löst den PTT-Dead-Man (§8) **sofort** aus — nicht erst ein verpasster HTTP-Heartbeat.
+- Heartbeat bleibt vorerst HTTP; spätere Präsenz-Konsolidierung über denselben Link ist möglich, nicht nötig.
 
 ## 10. Versionierung & Fehler
 
