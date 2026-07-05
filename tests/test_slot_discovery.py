@@ -174,14 +174,26 @@ def test_probe_slot_empty_module_list(tmp_path):
 
 
 def test_probe_slot_timeout_returns_none(tmp_path):
-    master_fd, slave_fd = os.openpty()  # nobody answers `module list`
+    # Master stays open but idle (never answers `module list`) — deterministic timeout.
+    master_fd, slave_fd = os.openpty()
     try:
         link = tmp_path / "control"
-        link.symlink_to(os.ttyname(master_fd))
+        link.symlink_to(os.ttyname(slave_fd))
         assert slot_discovery.probe_slot(str(link), timeout=0.5) is None
     finally:
         os.close(master_fd)
         os.close(slave_fd)
+
+
+def test_probe_slot_missing_modules_key_returns_none(tmp_path):
+    # A MODULE-LIST object without the required `modules` key is malformed → fail closed.
+    master_fd, slave_fd, stop, t = _pty_with_firmware({}, list_line="MODULE-LIST {}")
+    try:
+        link = tmp_path / "control"
+        link.symlink_to(os.ttyname(slave_fd))
+        assert slot_discovery.probe_slot(str(link), timeout=0.5) is None
+    finally:
+        _teardown(master_fd, slave_fd, stop, t)
 
 
 def test_probe_slot_missing_path_returns_none(tmp_path):

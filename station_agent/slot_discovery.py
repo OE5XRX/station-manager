@@ -66,7 +66,9 @@ def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
         if listing is None:
             logger.debug("slot probe: no MODULE-LIST from %s", control_path)
             return None
-        ids = listing.get("modules", [])
+        # Fail closed if `modules` is missing or not a list; a present empty list
+        # legitimately means "firmware responded, no modules".
+        ids = listing.get("modules")
         if not isinstance(ids, list):
             return None
 
