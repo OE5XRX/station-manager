@@ -41,6 +41,8 @@ class Broker:
         # (slot, module) -> descriptor dict; slot -> control path
         self._descriptors: dict[tuple[int, str], dict] = {}
         self._controls: dict[int, str] = {}
+        # (slot, module) -> {"caps": set, "interval_s": float, "task": asyncio.Task | None}
+        self._subscriptions: dict[tuple[int, str], dict] = {}
 
     # --- inventory cache ---------------------------------------------------
     def set_inventory(self, discovered: list) -> None:
@@ -70,6 +72,10 @@ class Broker:
         mtype = msg.get("type")
         if mtype == "command":
             await self.handle_command(msg)
+        elif mtype == "subscribe":
+            await self.handle_subscribe(msg)
+        elif mtype == "unsubscribe":
+            await self.handle_unsubscribe(msg)
         else:
             logger.debug("broker: ignoring message type %r", mtype)
 
@@ -143,3 +149,106 @@ class Broker:
         return await loop.run_in_executor(
             None, transport.execute, module, op, capability, token
         )
+
+    # --- telemetry subscription --------------------------------------------
+    def _poll_interval_s(self, slot, module) -> float | None:
+        sub = self._subscriptions.get((slot, module))
+        return sub["interval_s"] if sub else None
+
+    def _telemetry_caps(self, slot, module, requested):
+        descriptor = self._descriptor(slot, module)
+        if descriptor is None:
+            return {}, self._telemetry_min_floor_ms / 1000.0
+        caps = desc.index_capabilities(descriptor)
+        valid, min_interval_ms = {}, self._telemetry_min_floor_ms
+        for name in requested:
+            cap = caps.get(name)
+            if cap is None or cap.get("kind") != "telemetry":
+                logger.debug("broker: ignoring non-telemetry subscribe cap %r", name)
+                continue
+            valid[name] = cap
+            min_interval_ms = max(
+                min_interval_ms, desc.min_interval_ms(cap, self._telemetry_default_interval_ms)
+            )
+        return valid, min_interval_ms / 1000.0
+
+    async def handle_subscribe(self, msg: dict) -> None:
+        slot, module = msg.get("slot"), msg.get("module")
+        requested = msg.get("capabilities", []) or []
+        interval_s = max((msg.get("interval_ms", 0) or 0) / 1000.0, 0.0)
+
+        valid, min_interval_s = self._telemetry_caps(slot, module, requested)
+        if not valid:
+            return  # nothing pollable; no subscriber => no poll
+        effective = max(interval_s, min_interval_s)
+
+        key = (slot, module)
+        existing = self._subscriptions.get(key)
+        caps = set(valid) | (existing["caps"] if existing else set())
+        if existing and existing["task"] is not None:
+            existing["task"].cancel()
+            try:
+                await existing["task"]
+            except (asyncio.CancelledError, Exception):
+                pass
+        task = asyncio.ensure_future(self._poll_loop(slot, module, effective))
+        self._subscriptions[key] = {"caps": caps, "interval_s": effective, "task": task}
+
+    async def handle_unsubscribe(self, msg: dict) -> None:
+        slot, module = msg.get("slot"), msg.get("module")
+        key = (slot, module)
+        sub = self._subscriptions.get(key)
+        if not sub:
+            return
+        sub["caps"] -= set(msg.get("capabilities", []) or [])
+        if sub["task"] is not None:
+            sub["task"].cancel()
+            try:
+                await sub["task"]
+            except (asyncio.CancelledError, Exception):
+                pass
+        if sub["caps"]:
+            sub["task"] = asyncio.ensure_future(
+                self._poll_loop(slot, module, sub["interval_s"])
+            )
+        else:
+            del self._subscriptions[key]
+
+    async def _poll_loop(self, slot, module, interval_s: float) -> None:
+        try:
+            while True:
+                sub = self._subscriptions.get((slot, module))
+                if not sub or not sub["caps"]:
+                    return
+                values = {}
+                for cap_name in sorted(sub["caps"]):
+                    try:
+                        result = await self._execute(slot, module, "get", cap_name, None)
+                    except Exception:
+                        logger.exception(
+                            "broker: execute error in telemetry poll for slot %s module %s cap %s",
+                            slot, module, cap_name,
+                        )
+                        continue
+                    if result.get("ok"):
+                        values[cap_name] = result.get("value")
+                if values:
+                    await self._send(proto.build_state(slot, module, values, self._ts()))
+                await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("broker: telemetry poll failed for slot %s module %s", slot, module)
+
+    async def stop(self) -> None:
+        tasks = []
+        for sub in list(self._subscriptions.values()):
+            if sub["task"] is not None:
+                sub["task"].cancel()
+                tasks.append(sub["task"])
+        self._subscriptions.clear()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass

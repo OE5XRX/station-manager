@@ -4,6 +4,17 @@ from station_agent.broker import Broker
 from station_agent.slot_control import SlotControl
 from tests.fake_fw import FakeFirmware
 
+
+class CountingTransport:
+    """Transport wrapper that counts execute() calls across the whole broker."""
+    def __init__(self, path):
+        self._sc = SlotControl(path, timeout=2.0)
+        CountingTransport.calls = getattr(CountingTransport, "calls", 0)
+
+    def execute(self, module, op, cap, token=None):
+        CountingTransport.calls += 1
+        return self._sc.execute(module, op, cap, token)
+
 FM = {
     "schema": 1, "module": "fm",
     "identity": {"type": "fm_transceiver", "model": "SA818-V", "version": "vhf"},
@@ -127,5 +138,80 @@ def test_emit_inventory_includes_descriptors_and_settings_snapshot():
         # frequency (a setting) is in the snapshot; rssi (telemetry) is not.
         assert "frequency" in mod["state"]
         assert "rssi" not in mod["state"]
+    finally:
+        fw.stop()
+
+
+def test_subscribe_clamps_interval_to_min_interval():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
+                   telemetry_min_floor_ms=10, telemetry_default_interval_ms=1000, now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": fw.control_path,
+                          "modules": [{"id": "fm", "identity": FM["identity"],
+                                       "capabilities": FM["capabilities"]}]}])
+
+        async def scenario():
+            # rssi declares min_interval_ms=250; request 50ms must clamp up to 250ms.
+            await b.handle_subscribe({"slot": 1, "module": "fm",
+                                      "capabilities": ["rssi"], "interval_ms": 50})
+            interval = b._poll_interval_s(1, "fm")
+            await b.stop()
+            return interval
+
+        interval = _run(scenario())
+        assert abs(interval - 0.250) < 1e-6
+    finally:
+        fw.stop()
+
+
+def test_no_subscriber_means_no_polling():
+    CountingTransport.calls = 0
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(col, transport_factory=CountingTransport, now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": fw.control_path,
+                          "modules": [{"id": "fm", "identity": FM["identity"],
+                                       "capabilities": FM["capabilities"]}]}])
+
+        async def scenario():
+            await asyncio.sleep(0.2)  # idle: nobody subscribed
+            await b.stop()
+
+        _run(scenario())
+        assert CountingTransport.calls == 0
+    finally:
+        fw.stop()
+
+
+def test_subscribe_streams_state_then_unsubscribe_stops():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(col, transport_factory=lambda p: SlotControl(p, timeout=2.0),
+                   telemetry_min_floor_ms=10, telemetry_default_interval_ms=20, now=lambda: 1.0)
+        b.set_inventory([{"slot": 1, "control": fw.control_path,
+                          "modules": [{"id": "fm", "identity": FM["identity"],
+                                       "capabilities": FM["capabilities"]}]}])
+
+        async def scenario():
+            await b.handle_subscribe({"slot": 1, "module": "fm",
+                                      "capabilities": ["rssi"], "interval_ms": 20})
+            await asyncio.sleep(0.12)  # a few ticks
+            await b.handle_unsubscribe({"slot": 1, "module": "fm", "capabilities": ["rssi"]})
+            count_after_unsub = len([m for m in col.sent if m["type"] == "state"])
+            await asyncio.sleep(0.12)  # no more ticks should arrive
+            final = len([m for m in col.sent if m["type"] == "state"])
+            await b.stop()
+            return count_after_unsub, final
+
+        streamed, final = _run(scenario())
+        assert streamed >= 1          # telemetry did stream
+        assert final == streamed      # unsubscribe stopped the stream
     finally:
         fw.stop()
