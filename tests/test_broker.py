@@ -1,5 +1,6 @@
 # tests/test_broker.py
 import asyncio
+
 from station_agent.broker import Broker
 from station_agent.slot_control import SlotControl
 from tests.fake_fw import FakeFirmware
@@ -22,7 +23,8 @@ FM = {
         {"name": "frequency", "kind": "setting", "type": "float",
          "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}]},
         {"name": "ptt", "kind": "action", "type": "bool"},
-        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True, "min_interval_ms": 250},
+        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True,
+         "min_interval_ms": 250},
     ],
 }
 
@@ -191,7 +193,7 @@ def test_no_subscriber_means_no_polling():
 def test_additive_resubscribe_clamps_to_slowest_cap():
     """Re-subscribe adding a slower cap must raise the effective interval (spec §6)."""
     # Local descriptor with two telemetry caps of different min_intervals.
-    TWO_CAP = {
+    two_cap = {
         "identity": {"type": "test", "model": "test", "version": "v0"},
         "capabilities": [
             {"name": "fast", "kind": "telemetry", "type": "int", "readonly": True,
@@ -207,8 +209,8 @@ def test_additive_resubscribe_clamps_to_slowest_cap():
                    telemetry_min_floor_ms=10, telemetry_default_interval_ms=1000,
                    now=lambda: 1.0)
         b.set_inventory([{"slot": 1, "control": "/dev/null",
-                          "modules": [{"id": "two", "identity": TWO_CAP["identity"],
-                                       "capabilities": TWO_CAP["capabilities"]}]}])
+                          "modules": [{"id": "two", "identity": two_cap["identity"],
+                                       "capabilities": two_cap["capabilities"]}]}])
         return b
 
     async def scenario_fast_then_slow():

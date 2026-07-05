@@ -1,5 +1,6 @@
 # tests/test_descriptor.py
 import pytest
+
 from station_agent import descriptor as d
 from station_agent import protocol as p
 
@@ -11,7 +12,8 @@ FM = {
         {"name": "volume", "kind": "setting", "type": "int", "ranges": [{"min": 1, "max": 8}]},
         {"name": "power_level", "kind": "setting", "type": "enum", "values": ["low", "high"]},
         {"name": "ptt", "kind": "action", "type": "bool"},
-        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True, "min_interval_ms": 250},
+        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True,
+         "min_interval_ms": 250},
         {"name": "band", "kind": "telemetry", "type": "string", "readonly": True},
     ],
 }

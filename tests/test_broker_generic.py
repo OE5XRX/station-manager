@@ -1,5 +1,6 @@
 # tests/test_broker_generic.py
 import asyncio
+
 from station_agent.broker import Broker
 from station_agent.slot_control import SlotControl
 from tests.fake_fw import FakeFirmware
@@ -11,7 +12,8 @@ BEACON = {
     "capabilities": [
         {"name": "interval", "kind": "setting", "type": "int", "ranges": [{"min": 1, "max": 60}]},
         {"name": "ptt", "kind": "action", "type": "bool"},
-        {"name": "temperature", "kind": "telemetry", "type": "int", "readonly": True, "min_interval_ms": 100},
+        {"name": "temperature", "kind": "telemetry", "type": "int", "readonly": True,
+         "min_interval_ms": 100},
     ],
 }
 
@@ -41,9 +43,11 @@ def test_second_module_flows_through_broker_unchanged(tmp_path):
             await b.emit_inventory()
             # 2) valid set + 3) range reject, both without any 'fm'/'beacon' special-casing
             await b.handle({"v": 1, "type": "command", "request_id": "g1", "slot": 2,
-                            "module": "beacon", "capability": "interval", "op": "set", "value": 10})
+                            "module": "beacon", "capability": "interval",
+                            "op": "set", "value": 10})
             await b.handle({"v": 1, "type": "command", "request_id": "g2", "slot": 2,
-                            "module": "beacon", "capability": "interval", "op": "set", "value": 99})
+                            "module": "beacon", "capability": "interval",
+                            "op": "set", "value": 99})
             # 4) telemetry subscription streams, then unsubscribe
             await b.handle_subscribe({"slot": 2, "module": "beacon",
                                       "capabilities": ["temperature"], "interval_ms": 20})

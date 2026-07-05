@@ -1,6 +1,7 @@
 # tests/test_control_client.py
 import asyncio
 import json
+
 import pytest
 
 pytest.importorskip("websockets")
@@ -15,7 +16,8 @@ FM = {
     "capabilities": [
         {"name": "frequency", "kind": "setting", "type": "float",
          "ranges": [{"name": "vhf", "min": 134.0, "max": 174.0}]},
-        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True, "min_interval_ms": 250},
+        {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True,
+         "min_interval_ms": 250},
     ],
 }
 
@@ -33,8 +35,8 @@ class _FakeConfig:
 
 
 def _gen_key(tmp_path):
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     key = Ed25519PrivateKey.generate()
     p = tmp_path / "agent.key"
     p.write_bytes(key.private_bytes(

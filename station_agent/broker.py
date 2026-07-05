@@ -94,7 +94,9 @@ class Broker:
         descriptor = self._descriptor(slot, module)
         if descriptor is None:
             code = proto.UNKNOWN_SLOT if slot not in self._controls else proto.UNKNOWN_MODULE
-            await self._send(proto.build_result(request_id, False, error=(code, f"{slot}/{module}")))
+            await self._send(
+                proto.build_result(request_id, False, error=(code, f"{slot}/{module}"))
+            )
             return
 
         caps = desc.index_capabilities(descriptor)
@@ -256,7 +258,9 @@ class Broker:
     @staticmethod
     def _is_ptt_cap(cap: dict) -> bool:
         # Generic: a bool action named 'ptt' in the platform vocabulary — no module id.
-        return cap.get("kind") == "action" and cap.get("type") == "bool" and cap.get("name") == "ptt"
+        return (
+            cap.get("kind") == "action" and cap.get("type") == "bool" and cap.get("name") == "ptt"
+        )
 
     def _arm_dead_man(self, slot, module, capability) -> None:
         self._disarm_dead_man(slot, module)

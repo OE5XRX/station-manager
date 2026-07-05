@@ -1,5 +1,6 @@
 # tests/test_fake_fw.py
 import os
+
 from station_agent import slot_discovery
 from tests.fake_fw import FakeFirmware, make_slot_tree
 
@@ -21,7 +22,9 @@ def _send(path, line):
         os.write(fd, (line + "\r\n").encode())
         import select
         buf = b""
-        while b"MODULE-RESULT" not in buf and b"MODULE-DESCRIBE" not in buf and b"MODULE-LIST" not in buf:
+        while (b"MODULE-RESULT" not in buf
+               and b"MODULE-DESCRIBE" not in buf
+               and b"MODULE-LIST" not in buf):
             r, _, _ = select.select([fd], [], [], 2.0)
             if not r:
                 break
