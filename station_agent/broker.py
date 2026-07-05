@@ -109,6 +109,34 @@ class Broker:
             err_code = result.get("error", proto.TIMEOUT)
             await self._send(proto.build_result(request_id, False, error=(err_code, "")))
 
+    async def emit_inventory(self) -> None:
+        slots_out = []
+        # Deterministic order: sort by slot number.
+        by_slot: dict[int, list] = {}
+        for (slot, module), descriptor in self._descriptors.items():
+            by_slot.setdefault(slot, []).append((module, descriptor))
+        for slot in sorted(by_slot):
+            modules_out = []
+            for module, descriptor in by_slot[slot]:
+                caps = descriptor.get("capabilities", [])
+                state = {}
+                for cap in caps:
+                    if cap.get("kind") != "setting":
+                        continue
+                    result = await self._execute(slot, module, "get", cap["name"], None)
+                    if result.get("ok"):
+                        state[cap["name"]] = result.get("value")
+                modules_out.append(
+                    {
+                        "module": module,
+                        "identity": descriptor.get("identity", {}),
+                        "capabilities": caps,
+                        "state": state,
+                    }
+                )
+            slots_out.append({"slot": slot, "modules": modules_out})
+        await self._send(proto.build_inventory(slots_out))
+
     async def _execute(self, slot, module, op, capability, token) -> dict:
         transport = self._transport_factory(self._control_path(slot))
         loop = asyncio.get_running_loop()

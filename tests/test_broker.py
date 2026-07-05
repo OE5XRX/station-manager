@@ -105,3 +105,27 @@ def test_command_get_reports_value():
         assert res["ok"] is True and isinstance(res["value"], int)
     finally:
         fw.stop()
+
+
+def test_emit_inventory_includes_descriptors_and_settings_snapshot():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        b, col = _broker_with_fw(fw)
+        # Seed a setting so the snapshot has something to read back.
+        _run(b.handle({"v": 1, "type": "command", "request_id": "r0",
+                       "slot": 1, "module": "fm", "capability": "frequency",
+                       "op": "set", "value": 145.5}))
+        col.sent.clear()
+        _run(b.emit_inventory())
+        inv = [m for m in col.sent if m["type"] == "inventory"][0]
+        slot = inv["slots"][0]
+        assert slot["slot"] == 1
+        mod = slot["modules"][0]
+        assert mod["module"] == "fm"
+        assert any(c["name"] == "frequency" for c in mod["capabilities"])
+        # frequency (a setting) is in the snapshot; rssi (telemetry) is not.
+        assert "frequency" in mod["state"]
+        assert "rssi" not in mod["state"]
+    finally:
+        fw.stop()
