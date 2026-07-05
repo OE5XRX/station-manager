@@ -313,11 +313,18 @@ class Broker:
         await self._send(proto.build_event(slot, module, "ptt_auto_unkey", {"reason": reason}))
 
     async def on_disconnect(self) -> None:
+        cancelled_tasks = []
         for (slot, module), entry in list(self._ptt.items()):
             if entry["task"] is not None:
                 entry["task"].cancel()
+                cancelled_tasks.append(entry["task"])
             del self._ptt[(slot, module)]
             await self._unkey(slot, module, entry["cap"], "ws_disconnect")
+        for task in cancelled_tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         await self.stop()
 
     async def stop(self) -> None:

@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import select
 import termios
 import time
 import tty
 
+from station_agent.descriptor import TOKEN_RE
 from station_agent.slot_discovery import (
     _MAX_RESPONSE_BYTES,
     _MODULE_ID_RE,
@@ -25,11 +25,6 @@ from station_agent.slot_discovery import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Conservative token charset: covers bool, int, float, enum, and string values
-# produced by format_value().  Whitespace/control chars are forbidden to prevent
-# command injection at the FW line boundary.
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+/-]+$")
 
 _RESULT_PREFIX = "MODULE-RESULT "
 _TIMEOUT_RESULT = {"ok": False, "error": "timeout"}
@@ -50,7 +45,7 @@ class SlotControl:
         # whatever the broker above happens to send.
         if op not in ("set", "get", "do"):
             return {"ok": False, "error": "bad_value"}
-        if token is not None and not _TOKEN_RE.match(token):
+        if token is not None and not TOKEN_RE.match(token):
             return {"ok": False, "error": "bad_value"}
         parts = ["module", module_id, op, cap]
         if token is not None:

@@ -68,8 +68,19 @@ class ControlClient:
         return f"{ws_base}{path}?{urlencode(query)}"
 
     async def _ws_send(self, msg: dict) -> None:
-        if self._ws is not None:
+        if self._ws is None:
+            return
+        try:
             await self._ws.send(json.dumps(msg))
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Control: _ws_send: connection already closed, dropping message")
+            self._ws = None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Control: _ws_send: send failed (%s: %s), dropping message",
+                type(exc).__name__,
+                exc,
+            )
 
     async def _connect_and_serve(self) -> None:
         url = self._build_ws_url()

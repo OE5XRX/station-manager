@@ -116,3 +116,25 @@ def test_control_client_connects_sends_inventory_and_handles_command(tmp_path):
     assert received["result"]["ok"] is True and received["result"]["request_id"] == "c1"
     assert "frequency" in received["state"]["values"]
     assert fw.state["fm"]["frequency"] == "145.5"
+
+
+def test_ws_send_on_closed_connection_does_not_raise(tmp_path):
+    """_ws_send must swallow ConnectionClosed and not propagate to the caller."""
+    key_path = _gen_key(tmp_path)
+    cfg = _FakeConfig("http://127.0.0.1:9", 1, key_path, str(tmp_path))
+    client = ControlClient(cfg)
+
+    async def scenario():
+        # Stub _ws with an object whose send() raises ConnectionClosed.
+        class _ClosedWS:
+            async def send(self, _data):
+                raise websockets.exceptions.ConnectionClosed(
+                    websockets.frames.Close(1001, "going away"), None
+                )
+
+        client._ws = _ClosedWS()
+        # Must not raise; must clear _ws.
+        await client._ws_send({"type": "test"})
+        assert client._ws is None
+
+    asyncio.run(scenario())

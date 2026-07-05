@@ -135,10 +135,10 @@ def test_format_value_float_no_exponent():
     assert float(result) == 1e-06
 
 
-def test_string_value_whitespace_and_empty_rejected():
-    """String values that are empty or contain whitespace must raise BAD_VALUE."""
+def test_string_value_token_charset_enforced():
+    """String values must match the canonical FW token charset (TOKEN_RE)."""
     cap = {"name": "label", "kind": "setting", "type": "string"}
-    # Valid non-empty whitespace-free string must pass.
+    # Valid token must pass.
     d.validate_command(cap, "set", "ok")
     # String with a space must be rejected.
     with pytest.raises(p.ProtocolError) as exc:
@@ -147,6 +147,10 @@ def test_string_value_whitespace_and_empty_rejected():
     # Empty string must be rejected.
     with pytest.raises(p.ProtocolError) as exc:
         d.validate_command(cap, "set", "")
+    assert exc.value.code == p.BAD_VALUE
+    # String with '@' (outside charset) must also be rejected.
+    with pytest.raises(p.ProtocolError) as exc:
+        d.validate_command(cap, "set", "a@b")
     assert exc.value.code == p.BAD_VALUE
 
 

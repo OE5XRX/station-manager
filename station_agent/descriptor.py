@@ -9,6 +9,7 @@ NO change here — it is all read from the descriptor.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from station_agent.protocol import (
@@ -19,6 +20,9 @@ from station_agent.protocol import (
     WRONG_OP,
     ProtocolError,
 )
+
+# Canonical FW single-token charset; shared with SlotControl.
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+/-]+$")
 
 # kind -> the set of ops that kind accepts (mirrors FW iface.h mixins).
 _OPS_FOR_KIND = {
@@ -77,8 +81,8 @@ def _check_value(cap: dict, value) -> None:
     if vtype == "string":
         if not isinstance(value, str):
             raise ProtocolError(BAD_VALUE, "expected string")
-        if not value or any(c.isspace() for c in value):
-            raise ProtocolError(BAD_VALUE, "string value must be non-empty and whitespace-free")
+        if not TOKEN_RE.match(value):
+            raise ProtocolError(BAD_VALUE, "string value is not a valid FW token")
         return
     if vtype == "int":
         if not isinstance(value, int) or isinstance(value, bool):
