@@ -113,7 +113,7 @@ Der Broker (D3) muss beide Klassen tragen (Discovery: Firmware-`describe` vs. Ag
 ## 8. Datenfluss (Camp-Slice)
 
 1. VM bootet; Harness startet `native_sim` (FM), legt `/dev/oe5xrx/slot1/control` (Symlink → pty) an.
-2. Agent scannt `/dev/oe5xrx/slot*/`, findet slot1, sendet `describe` → erhält Identity (`fm_transceiver`/`SA818-V`/`2m`) + Capabilities.
+2. Agent scannt `/dev/oe5xrx/slot*/`, findet slot1, sendet `module list` → erhält die Modul-IDs (`{"modules":["fm", …]}`), dann pro ID `module <id> describe` → Identity (`fm_transceiver`/`SA818-V`/`2m`) + Capabilities. Keine hartkodierte Modul-ID — die Firmware ist self-describing.
 3. Agent meldet das Inventar an den station-manager (Muster wie bestehende Outbound-WS).
 4. Später: Control-Kommandos (D3+) fließen `slot1/control` → `native_sim` → SA818-Treiber.
 
