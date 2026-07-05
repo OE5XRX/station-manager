@@ -45,6 +45,11 @@ class SlotControl:
         # Defense-in-depth: never echo an unsafe token into the shell line.
         if not _MODULE_ID_RE.match(module_id) or not _MODULE_ID_RE.match(cap):
             return {"ok": False, "error": "bad_value"}
+        # This transport is the device trust boundary: reject any op outside the
+        # generic FW verb set before it reaches the command line, independent of
+        # whatever the broker above happens to send.
+        if op not in ("set", "get", "do"):
+            return {"ok": False, "error": "bad_value"}
         if token is not None and not _TOKEN_RE.match(token):
             return {"ok": False, "error": "bad_value"}
         parts = ["module", module_id, op, cap]

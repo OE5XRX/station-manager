@@ -66,3 +66,15 @@ def test_execute_rejects_unsafe_token_and_does_not_mutate_fw():
         assert "frequency" not in fw.state["fm"]
     finally:
         fw.stop()
+
+
+def test_execute_rejects_unknown_op():
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        sc = SlotControl(fw.control_path, timeout=2.0)
+        r = sc.execute("fm", "delete", "frequency", "145.5")
+        assert r["ok"] is False and r["error"] == "bad_value"
+        assert "frequency" not in fw.state["fm"]  # never reached the firmware
+    finally:
+        fw.stop()

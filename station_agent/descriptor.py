@@ -9,6 +9,8 @@ NO change here — it is all read from the descriptor.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from station_agent.protocol import (
     BAD_VALUE,
     OUT_OF_RANGE,
@@ -111,9 +113,10 @@ def format_value(cap_type: str, value) -> str:
         # those without exponent so the FW token parser always sees a plain decimal.
         text = repr(float(value))
         if "e" in text or "E" in text:
-            text = f"{float(value):.10f}".rstrip("0")
-            if text.endswith("."):
-                text += "0"
+            # repr() used scientific notation; expand to a lossless fixed-point
+            # string via Decimal. A rounding format like ".10f" would flush tiny
+            # magnitudes (e.g. 1e-12 -> 0.0) and send the wrong token to the FW.
+            text = format(Decimal(text), "f")
         return text
     # enum / string are passed through verbatim.
     return str(value)

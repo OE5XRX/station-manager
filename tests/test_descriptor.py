@@ -133,3 +133,11 @@ def test_format_value_float_no_exponent():
     result = d.format_value("float", 1e-06)
     assert "e" not in result and "E" not in result
     assert float(result) == 1e-06
+
+
+def test_format_value_float_tiny_no_precision_loss():
+    # A magnitude that repr() renders in scientific notation must become a
+    # lossless fixed-point token — not rounded to 0.0 by a ".10f" format.
+    out = d.format_value("float", 1e-12)
+    assert "e" not in out and "E" not in out
+    assert float(out) == 1e-12
