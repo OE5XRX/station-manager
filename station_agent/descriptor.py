@@ -22,7 +22,7 @@ from station_agent.protocol import (
 )
 
 # Canonical FW single-token charset; shared with SlotControl.
-TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+/-]+$")
+TOKEN_RE = re.compile(r"^[-A-Za-z0-9_.:+/]+$")
 
 # kind -> the set of ops that kind accepts (mirrors FW iface.h mixins).
 _OPS_FOR_KIND = {

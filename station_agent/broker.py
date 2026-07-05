@@ -21,6 +21,11 @@ from station_agent.slot_control import SlotControl
 logger = logging.getLogger(__name__)
 
 
+def _valid_addr(slot, module) -> bool:
+    # slot is an int (not bool), module is a str — hashable and type-correct for keying.
+    return isinstance(slot, int) and not isinstance(slot, bool) and isinstance(module, str)
+
+
 def _as_str_list(value) -> list[str]:
     """Return a list of strings from *value*, silently dropping non-string items.
 
@@ -101,6 +106,18 @@ class Broker:
         capability = msg.get("capability")
         op = msg.get("op")
         value = msg.get("value")
+
+        if (
+            not _valid_addr(slot, module)
+            or not isinstance(capability, str)
+            or not isinstance(op, str)
+        ):
+            await self._send(
+                proto.build_result(
+                    request_id, False, error=(proto.VALIDATION_FAILED, "malformed command frame")
+                )
+            )
+            return
 
         descriptor = self._descriptor(slot, module)
         if descriptor is None:
@@ -197,6 +214,11 @@ class Broker:
 
     async def handle_subscribe(self, msg: dict) -> None:
         slot, module = msg.get("slot"), msg.get("module")
+        if not _valid_addr(slot, module):
+            logger.debug(
+                "broker: ignoring subscribe with malformed addr slot=%r module=%r", slot, module
+            )
+            return
         requested = _as_str_list(msg.get("capabilities"))
         raw_interval = msg.get("interval_ms")
         if (
@@ -230,6 +252,11 @@ class Broker:
 
     async def handle_unsubscribe(self, msg: dict) -> None:
         slot, module = msg.get("slot"), msg.get("module")
+        if not _valid_addr(slot, module):
+            logger.debug(
+                "broker: ignoring unsubscribe with malformed addr slot=%r module=%r", slot, module
+            )
+            return
         key = (slot, module)
         sub = self._subscriptions.get(key)
         if not sub:
@@ -302,6 +329,11 @@ class Broker:
 
     async def handle_keepalive(self, msg: dict) -> None:
         slot, module = msg.get("slot"), msg.get("module")
+        if not _valid_addr(slot, module):
+            logger.debug(
+                "broker: ignoring keepalive with malformed addr slot=%r module=%r", slot, module
+            )
+            return
         entry = self._ptt.get((slot, module))
         if not entry:
             return  # nothing keyed — keepalive is a no-op

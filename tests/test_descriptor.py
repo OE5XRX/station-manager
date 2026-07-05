@@ -3,6 +3,7 @@ import pytest
 
 from station_agent import descriptor as d
 from station_agent import protocol as p
+from station_agent.descriptor import TOKEN_RE
 
 FM = {
     "schema": 1,
@@ -160,3 +161,13 @@ def test_format_value_float_tiny_no_precision_loss():
     out = d.format_value("float", 1e-12)
     assert "e" not in out and "E" not in out
     assert float(out) == 1e-12
+
+
+# Fix 1 (Copilot round-6): TOKEN_RE — hyphen moved to front; matched set unchanged.
+def test_token_re_charset():
+    valid = ["67.0", "023", "none", "145.5", "a-b", "a/b", "a+b", "a:b", "a_b", "a.b"]
+    for x in valid:
+        assert TOKEN_RE.match(x), f"TOKEN_RE should accept {x!r}"
+    invalid = [",", "@", "a,b", " ", "", "a b"]
+    for x in invalid:
+        assert not TOKEN_RE.match(x), f"TOKEN_RE should reject {x!r}"

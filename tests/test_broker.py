@@ -831,6 +831,81 @@ def test_stop_with_armed_ptt_completes_without_pending_task_warnings():
         fw.stop()
 
 
+# --- Fix 2-5 (Copilot round-6): malformed addr type-guards -------------------
+
+
+def test_command_malformed_slot_type_returns_validation_failed():
+    """handle_command with slot=[] must not raise; emits ok=False validation_failed."""
+    col = Collector()
+    b = Broker(col, now=lambda: 1.0)
+    b.set_inventory([])
+
+    async def scenario():
+        await b.handle(
+            {
+                "v": 1,
+                "type": "command",
+                "request_id": "bad1",
+                "slot": [],  # unhashable / wrong type
+                "module": "fm",
+                "capability": "frequency",
+                "op": "set",
+                "value": 145.5,
+            }
+        )
+        await b.stop()
+
+    _run(scenario())
+    results = [m for m in col.sent if m["type"] == "result"]
+    assert results, "a result message must be emitted"
+    assert results[0]["ok"] is False
+    assert results[0]["error"]["code"] == "validation_failed"
+
+
+def test_subscribe_malformed_slot_type_is_noop():
+    """handle_subscribe with slot=[] must not raise and must not create a subscription."""
+    col = Collector()
+    b = Broker(col, now=lambda: 1.0)
+    b.set_inventory([])
+
+    async def scenario():
+        await b.handle_subscribe(
+            {"slot": [], "module": "fm", "capabilities": ["rssi"], "interval_ms": 100}
+        )
+        assert b._subscriptions == {}, "no subscription must be created"
+        await b.stop()
+
+    _run(scenario())
+
+
+def test_unsubscribe_malformed_slot_type_is_noop():
+    """handle_unsubscribe with slot=[] must not raise and must not alter subscription state."""
+    col = Collector()
+    b = Broker(col, now=lambda: 1.0)
+    b.set_inventory([])
+
+    async def scenario():
+        await b.handle_unsubscribe({"slot": [], "module": "fm", "capabilities": ["rssi"]})
+        assert b._subscriptions == {}, "subscription state must remain empty"
+        await b.stop()
+
+    _run(scenario())
+
+
+def test_keepalive_malformed_module_type_is_noop():
+    """handle_keepalive with module={} must not raise and must not alter PTT state."""
+    col = Collector()
+    b = Broker(col, now=lambda: 1.0)
+    b.set_inventory([])
+
+    async def scenario():
+        await b.handle_keepalive({"slot": 1, "module": {}})
+        assert b._ptt == {}, "PTT state must remain empty"
+        await b.stop()
+
+    _run(scenario())
+
+
 def test_subscribe_streams_state_then_unsubscribe_stops():
     fw = FakeFirmware({"fm": FM})
     fw.start()
