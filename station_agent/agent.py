@@ -451,11 +451,13 @@ class StationAgent:
             logger.info("Remote terminal disabled")
 
         # Start control client in a background thread if enabled
-        from .control_client import ControlClient  # local import: keeps agent import light
-
         control_client = None
         control_thread = None
         if config.control_enabled:
+            # Local import inside the enabled branch: stations with the control
+            # channel off never import ControlClient (and its websockets dep).
+            from .control_client import ControlClient
+
             logger.info("Control channel enabled")
             control_client = ControlClient(config)
             control_thread = threading.Thread(
