@@ -61,6 +61,12 @@ class Broker:
         self._subscriptions: dict[tuple[int, str], dict] = {}
         # (slot, module) -> {"cap": capability_name, "task": asyncio.Task}
         self._ptt: dict[tuple[int, str], dict] = {}
+        # slot -> asyncio.Lock serializing device access. A slot's control device
+        # is a single serial/pty line: concurrent execute() calls (e.g. a telemetry
+        # poll tick and a command) would interleave their write/read framing on the
+        # wire and corrupt each other's MODULE-RESULT. One lock per slot makes every
+        # command+telemetry access to a given slot mutually exclusive.
+        self._slot_locks: dict[int, asyncio.Lock] = {}
 
     # --- inventory cache ---------------------------------------------------
     def set_inventory(self, discovered: list) -> None:
@@ -201,7 +207,16 @@ class Broker:
     async def _execute(self, slot, module, op, capability, token) -> dict:
         transport = self._transport_factory(self._control_path(slot))
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, transport.execute, module, op, capability, token)
+        lock = self._slot_locks.get(slot)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._slot_locks[slot] = lock
+        # Serialize per-slot device I/O so a telemetry poll and a command never
+        # interleave their framing on the same serial/pty line.
+        async with lock:
+            return await loop.run_in_executor(
+                None, transport.execute, module, op, capability, token
+            )
 
     # --- telemetry subscription --------------------------------------------
     def _poll_interval_s(self, slot, module) -> float | None:

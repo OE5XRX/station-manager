@@ -1129,3 +1129,59 @@ def test_emit_inventory_skips_non_dict_cap_entries():
         assert "frequency" in state, "valid setting must appear in state snapshot"
     finally:
         fw.stop()
+
+
+def test_concurrent_commands_on_same_slot_are_serialized():
+    """Concurrent execute() on one slot must not interleave pty framing (per-slot lock)."""
+    import asyncio as _asyncio
+
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    try:
+        col = Collector()
+        b = Broker(
+            col,
+            transport_factory=lambda p: SlotControl(p, timeout=2.0),
+            now=lambda: 1.0,
+        )
+        b.set_inventory(
+            [
+                {
+                    "slot": 1,
+                    "control": fw.control_path,
+                    "modules": [
+                        {
+                            "id": "fm",
+                            "identity": FM["identity"],
+                            "capabilities": FM["capabilities"],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        async def scenario():
+            # Fire many commands against the same slot at once. Without per-slot
+            # serialization these interleave on the pty and some return not-ok.
+            cmds = [
+                {
+                    "v": 1,
+                    "type": "command",
+                    "request_id": f"c{i}",
+                    "slot": 1,
+                    "module": "fm",
+                    "capability": "frequency",
+                    "op": "set",
+                    "value": 145.5,
+                }
+                for i in range(8)
+            ]
+            await _asyncio.gather(*(b.handle(c) for c in cmds))
+            await b.stop()
+
+        _run(scenario())
+        results = [m for m in col.sent if m["type"] == "result"]
+        assert len(results) == 8
+        assert all(r["ok"] for r in results), "every serialized command must succeed"
+    finally:
+        fw.stop()
