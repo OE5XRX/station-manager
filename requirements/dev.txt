@@ -2,7 +2,7 @@
 pytest>=8.0,<10.0
 pytest-django>=4.9,<5.0
 ruff>=0.8,<1.0
-django-debug-toolbar>=5.0,<7.0
+django-debug-toolbar>=7.0.0,<8.0
 # PyYAML is a transitive dep of station_agent.config; pulling it in here
 # lets the terminal-agent tests actually run under `.venv/bin/pytest`
 # instead of being skipped via pytest.importorskip.
@@ -12,4 +12,4 @@ websockets>=14.0,<17.0
 # pulling it into dev so the OTA install tests actually run in CI
 # instead of being skipped via pytest.importorskip.
 requests>=2.32,<3.0
-django-test-migrations>=1.4,<2.0
+django-test-migrations>=1.5.0,<2.0
