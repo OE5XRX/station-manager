@@ -28,6 +28,10 @@ class AgentConfig:
     bootloader: str = "auto"
     slot_discovery_enabled: bool = True
     slot_dev_base: str = "/dev/oe5xrx"
+    control_enabled: bool = False
+    control_dead_man_timeout: float = 1.5
+    telemetry_default_interval_ms: int = 1000
+    telemetry_min_floor_ms: int = 200
 
     def validate(self):
         """Validate that required fields are present."""
@@ -77,6 +81,10 @@ def load_config() -> AgentConfig:
         bootloader=str(data.get("bootloader", "auto")),
         slot_discovery_enabled=bool(data.get("slot_discovery_enabled", True)),
         slot_dev_base=str(data.get("slot_dev_base", "/dev/oe5xrx")),
+        control_enabled=bool(data.get("control_enabled", False)),
+        control_dead_man_timeout=float(data.get("control_dead_man_timeout", 1.5)),
+        telemetry_default_interval_ms=int(data.get("telemetry_default_interval_ms", 1000)),
+        telemetry_min_floor_ms=int(data.get("telemetry_min_floor_ms", 200)),
     )
     config.validate()
     return config
