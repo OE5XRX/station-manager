@@ -1,0 +1,22 @@
+Django>=6.0,<6.1
+djangorestframework>=3.17,<3.18
+django-htmx>=1.21,<2.0
+django-axes>=7.0,<9.0
+channels[daphne]>=4.2,<5.0
+channels-redis>=4.2,<5.0
+# redis-py 8.0 defaults to RESP3 on the wire, which breaks channels_redis's
+# blocking-pop channel layer (BZPOPMIN -> "Timeout reading from redis") and
+# takes down ALL WebSockets (terminal, live status). channels-redis only
+# declares `redis>=4.6` with no upper bound, so an unpinned build floats to
+# the newest major -- this regressed prod on 2026-06-13. Cap below 8.0 until
+# channels_redis supports RESP3. See https://github.com/redis/redis-py/issues/4091
+redis>=5.0,<8.0
+django-storages[s3]>=1.14,<2.0
+Pillow>=11.0,<13.0
+psycopg[binary]>=3.2,<4.0
+gunicorn>=23.0,<26.0
+whitenoise>=6.8,<7.0
+cryptography>=46.0,<47.0
+python-telegram-bot>=21.0,<23.0
+django-oauth-toolkit>=3.2,<4.0
+geoip2>=4.8,<6.0

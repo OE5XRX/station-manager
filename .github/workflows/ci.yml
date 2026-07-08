@@ -34,6 +34,31 @@ jobs:
         # in prod (PR #61, PR #65). Stdlib-only script, no deps.
         run: python scripts/check_template_comments.py
 
+  deps:
+    name: Deps lock in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Recompile lockfiles from *.in
+        # uv prefers the versions already pinned in the -o target, so this
+        # only re-resolves when a requirements/*.in changed. It does NOT
+        # chase new upstream releases (that is a deliberate --upgrade / a
+        # Renovate PR), so the drift check below is stable.
+        run: |
+          uv pip compile requirements/base.in -o requirements/base.txt --python-version 3.14 --no-strip-extras
+          uv pip compile requirements/prod.in -c requirements/base.txt -o requirements/prod.txt --python-version 3.14 --no-strip-extras
+          uv pip compile requirements/dev.in -c requirements/base.txt -o requirements/dev.txt --python-version 3.14 --no-strip-extras
+
+      - name: Fail if lockfiles are out of sync with *.in
+        run: |
+          if ! git diff --exit-code requirements/*.txt; then
+            echo "::error::requirements/*.txt are out of sync with requirements/*.in — run the three 'uv pip compile' commands above and commit the result."
+            exit 1
+          fi
+
   test:
     name: Test
     runs-on: ubuntu-latest
