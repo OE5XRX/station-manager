@@ -11,6 +11,7 @@ import asyncio
 from datetime import timedelta
 
 import pytest
+from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 from django.utils import timezone
 
@@ -83,3 +84,63 @@ def test_stale_sessions_do_not_block():
 
     reaped = TerminalSession.objects.filter(station=station, status="closed").count()
     assert reaped >= 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_disconnect_does_not_close_shell():
+    """A transient browser disconnect must NOT tell the agent to close the shell."""
+    station = Station.objects.create(name="s-noclose", status="online")
+    user = User.objects.create(
+        username="u_admin_noclose", membership_level=User.MembershipLevel.ADMIN
+    )
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "agent-spy-noclose"
+        await layer.group_add(f"terminal_{station.id}_agent", spy)
+
+        comm = _communicator(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+
+        # Drain the terminal_ensure sent to the agent group on connect.
+        ensure = await layer.receive(spy)
+        assert ensure["type"] == "terminal_ensure"
+
+        await comm.disconnect()
+
+        # No further message (i.e. no terminal_close) must reach the agent.
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(layer.receive(spy), timeout=0.3)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_browser_restart_forwards_terminal_restart():
+    """A browser {type:"restart"} is forwarded as terminal_restart to the agent."""
+    station = Station.objects.create(name="s-restart", status="online")
+    user = User.objects.create(
+        username="u_admin_restart", membership_level=User.MembershipLevel.ADMIN
+    )
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "agent-spy-restart"
+        await layer.group_add(f"terminal_{station.id}_agent", spy)
+
+        comm = _communicator(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+
+        # Drain the terminal_ensure sent on connect.
+        await layer.receive(spy)
+
+        await comm.send_json_to({"type": "restart"})
+
+        msg = await layer.receive(spy)
+        assert msg["type"] == "terminal_restart"
+
+        await comm.disconnect()
+
+    asyncio.run(scenario())

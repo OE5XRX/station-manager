@@ -86,6 +86,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=code)
 
     async def disconnect(self, close_code):
+        if getattr(self, "keepalive_task", None):
+            self.keepalive_task.cancel()
+            try:
+                await self.keepalive_task
+            except asyncio.CancelledError:
+                pass
+            self.keepalive_task = None
+
         if self.session:
             await self._close_session(close_reason=f"disconnect (code={close_code})")
 
@@ -100,11 +108,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     user if user and not user.is_anonymous else None,
                 )
 
-            await self.channel_layer.group_send(
-                f"{self.group_name}_agent",
-                {"type": "terminal_close", "data": "browser disconnected"},
-            )
-
+        # NOTE: intentionally NO terminal_close to the agent — a transient
+        # browser disconnect (tab switch, iOS backgrounding, flaky network)
+        # must not kill the shell. The shell persists for reattach; explicit
+        # user close (receive type=close) is the only path that tears it down.
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -125,6 +132,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     "cols": payload.get("cols", 80),
                     "rows": payload.get("rows", 24),
                 },
+            )
+        elif msg_type == "restart":
+            await self.channel_layer.group_send(
+                f"{self.group_name}_agent",
+                {"type": "terminal_restart"},
             )
         elif msg_type == "close":
             await self.channel_layer.group_send(
@@ -317,6 +329,14 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
     async def terminal_close(self, event):
         """Browser requests close -> forward to agent."""
         await self.send(text_data=json.dumps({"type": "close", "reason": event.get("data", "")}))
+
+    async def terminal_ensure(self, event):
+        """Browser (re)connected -> tell the agent to guarantee a live shell."""
+        await self.send(text_data=json.dumps({"type": "ensure"}))
+
+    async def terminal_restart(self, event):
+        """Browser requested a shell restart -> forward to the agent."""
+        await self.send(text_data=json.dumps({"type": "restart"}))
 
     async def terminal_output(self, event):
         """Ignore own output messages relayed back through the group."""
