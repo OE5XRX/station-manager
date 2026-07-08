@@ -158,13 +158,21 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({"type": "output", "data": event["data"]}))
 
     async def terminal_closed(self, event):
-        """Agent closed terminal -> notify browser and close."""
+        """Agent disconnected entirely -> notify browser and close."""
         await self.send(
             text_data=json.dumps(
                 {"type": "closed", "reason": event.get("reason", "agent disconnected")}
             )
         )
         await self.close()
+
+    async def terminal_shell_closed(self, event):
+        """The agent's shell exited but the agent is still connected -> tell
+        the browser (so it shows a reason) but keep the WS open for restart /
+        reattach under the persist model."""
+        await self.send(
+            text_data=json.dumps({"type": "closed", "reason": event.get("reason", "shell exited")})
+        )
 
     # -- Database helpers ------------------------------------------------------
 
@@ -317,12 +325,26 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
-        """Agent sends shell output -> broadcast to browser group."""
+        """Agent sends shell output / lifecycle frames -> forward to browser."""
         if text_data is None:
             return
         try:
             payload = json.loads(text_data)
         except json.JSONDecodeError:
+            return
+
+        if payload.get("type") == "closed":
+            # The shell exited on its own (EOF / `exit` / crash). Tell the
+            # browser so it can show a reason — but do NOT close the browser
+            # WS: under the persist/reattach model the session stays open so
+            # the operator can hit Restart (or a reconnect auto-respawns).
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "terminal_shell_closed",
+                    "reason": payload.get("reason", "shell exited"),
+                },
+            )
             return
 
         await self.channel_layer.group_send(

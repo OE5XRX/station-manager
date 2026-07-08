@@ -322,21 +322,21 @@
           var payload = JSON.parse(ev.data);
           if (payload.type === "output") term.write(payload.data);
           else if (payload.type === "closed")
-            term.write("\r\n" + color("[ closed: " + (payload.reason || "") + " ]", "31"));
+            term.write("\r\n" + color("[ closed: " + (payload.reason || "") + " ]", "31") + "\r\n");
           else if (payload.type === "error") {
             userClosed = true;  // an operational reject is not worth retrying
-            term.write("\r\n" + color("[ " + (payload.reason || "rejected") + " ]", "31"));
+            term.write("\r\n" + color("[ " + (payload.reason || "rejected") + " ]", "31") + "\r\n");
           }
         } catch (_) {}
       });
       ws.addEventListener("close", function (ev) {
         if (userClosed) {
-          term.write("\r\n" + color("[ disconnected: " + ev.code + " ]", "33"));
+          term.write("\r\n" + color("[ disconnected: " + ev.code + " ]", "33") + "\r\n");
           return;
         }
         if (attempts >= MAX_ATTEMPTS) {
           term.write("\r\n" + color("[ disconnected — giving up after " + MAX_ATTEMPTS +
-            " attempts; refresh to retry ]", "31"));
+            " attempts; refresh to retry ]", "31") + "\r\n");
           return;
         }
         attempts += 1;

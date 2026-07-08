@@ -164,3 +164,38 @@ def test_anonymous_gets_error_message_then_close():
         await comm.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_shell_closed_notifies_browser_without_closing():
+    """An agent 'closed' frame (shell exited) reaches the browser as
+    {type:"closed"} but must NOT close the browser WS (persist model)."""
+    station = Station.objects.create(name="s-shellclosed", status="online")
+    user = User.objects.create(username="u_admin_sc", membership_level=User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "agent-spy-sc"
+        await layer.group_add(f"terminal_{station.id}_agent", spy)
+
+        comm = _communicator(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+        # Draining the connect-time ensure guarantees connect() ran past
+        # group_add (which precedes the ensure group_send), so the browser is
+        # in the group before we inject the shell-closed frame below.
+        assert (await layer.receive(spy))["type"] == "terminal_ensure"
+
+        # Simulate the server relaying an agent shell-exit to the browser group.
+        await layer.group_send(
+            f"terminal_{station.id}",
+            {"type": "terminal_shell_closed", "reason": "shell exited with code 0"},
+        )
+        msg = await comm.receive_json_from()
+        assert msg["type"] == "closed"
+        assert "shell exited" in msg["reason"]
+        # WS must stay open: no further frame (esp. no close) should arrive.
+        assert await comm.receive_nothing(timeout=0.2) is True
+        await comm.disconnect()
+
+    asyncio.run(scenario())
