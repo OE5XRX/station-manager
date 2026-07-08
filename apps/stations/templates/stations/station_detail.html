@@ -91,7 +91,7 @@
       <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
       <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
-      {% if user.is_internal %}
+      {% if user.is_admin %}
       <button type="button" class="tab" data-tab="terminal" aria-selected="false">{% trans "Terminal" %}</button>
       {% endif %}
     </div>
@@ -374,7 +374,7 @@
     </section>
   </div>
 
-  {% if user.is_internal %}
+  {% if user.is_admin %}
   <div data-tab-panel="terminal" hidden>
     <section class="panel">
       <div class="panel-head">
