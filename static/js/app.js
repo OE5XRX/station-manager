@@ -294,36 +294,74 @@
       cursorBlink: true,
       fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 13,
-      theme: {
-        background: "#000000",
-        foreground: "#F5F7FA",
-        cursor: "#FF8A3D",
-        selection: "rgba(255, 138, 61, 0.3)",
-      },
+      theme: { background: "#000000", foreground: "#F5F7FA", cursor: "#FF8A3D",
+               selection: "rgba(255, 138, 61, 0.3)" },
     });
     term.open(host);
-    term.write("\x1b[90mConnecting to station #" + stationId + "...\x1b[0m\r\n");
 
-    var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    var ws = new WebSocket(proto + "//" + location.host + "/ws/terminal/" + stationId + "/");
+    var ws = null;
+    var userClosed = false;
+    var backoff = 1000;
+    var BACKOFF_MAX = 15000;
+    var MAX_ATTEMPTS = 8;
+    var attempts = 0;
 
-    ws.addEventListener("open", function () {
-      term.write("\x1b[32m[ connected ]\x1b[0m\r\n");
-    });
-    ws.addEventListener("message", function (ev) {
-      try {
-        var payload = JSON.parse(ev.data);
-        if (payload.type === "output") term.write(payload.data);
-        else if (payload.type === "closed") term.write("\r\n\x1b[31m[ closed: " + (payload.reason || "") + " ]\x1b[0m");
-      } catch (_) {}
-    });
-    ws.addEventListener("close", function (ev) {
-      term.write("\r\n\x1b[33m[ disconnected: " + ev.code + " ]\x1b[0m");
-    });
+    function color(s, c) { return "\x1b[" + c + "m" + s + "\x1b[0m"; }
+
+    function connect() {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      term.write(color("Connecting to station #" + stationId + "...", "90") + "\r\n");
+      ws = new WebSocket(proto + "//" + location.host + "/ws/terminal/" + stationId + "/");
+
+      ws.addEventListener("open", function () {
+        attempts = 0; backoff = 1000;
+        term.write(color("[ connected ]", "32") + "\r\n");
+      });
+      ws.addEventListener("message", function (ev) {
+        try {
+          var payload = JSON.parse(ev.data);
+          if (payload.type === "output") term.write(payload.data);
+          else if (payload.type === "closed")
+            term.write("\r\n" + color("[ closed: " + (payload.reason || "") + " ]", "31"));
+          else if (payload.type === "error") {
+            userClosed = true;  // an operational reject is not worth retrying
+            term.write("\r\n" + color("[ " + (payload.reason || "rejected") + " ]", "31"));
+          }
+        } catch (_) {}
+      });
+      ws.addEventListener("close", function (ev) {
+        if (userClosed) {
+          term.write("\r\n" + color("[ disconnected: " + ev.code + " ]", "33"));
+          return;
+        }
+        attempts += 1;
+        if (attempts > MAX_ATTEMPTS) {
+          term.write("\r\n" + color("[ disconnected — giving up after " + MAX_ATTEMPTS +
+            " attempts; refresh to retry ]", "31"));
+          return;
+        }
+        term.write("\r\n" + color("[ reconnecting… (" + attempts + ") ]", "33") + "\r\n");
+        setTimeout(connect, backoff);
+        backoff = Math.min(backoff * 2, BACKOFF_MAX);
+      });
+    }
+
     term.onData(function (data) {
-      if (ws.readyState === WebSocket.OPEN)
+      if (ws && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({ type: "input", data: data }));
     });
+
+    var restartBtn = document.getElementById("xterm-restart");
+    if (restartBtn) {
+      restartBtn.addEventListener("click", function () {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          term.write("\r\n" + color("[ restarting shell… ]", "33") + "\r\n");
+          ws.send(JSON.stringify({ type: "restart" }));
+        }
+      });
+    }
+
+    connect();
   }
 
   // ---------------------------------------------------------------------------

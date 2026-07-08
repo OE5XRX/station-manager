@@ -380,6 +380,7 @@
       <div class="panel-head">
         <div class="panel-title"><span class="dot" style="background:var(--signal)"></span>{% trans "Remote terminal" %}</div>
         <span class="t-label">wss://{{ request.get_host }}/ws/terminal/{{ station.id }}/</span>
+        <button type="button" id="xterm-restart" class="btn btn-sm btn-outline-warning" title="{% translate 'Restart shell' %}">{% translate 'Restart shell' %}</button>
       </div>
       <div class="panel-body">
         <div class="t-muted mb-14" style="font-size:12.5px;">
