@@ -16,6 +16,8 @@
 - A transient browser disconnect must NOT send `terminal_close` to the agent.
 - Session staleness uses a **periodic keepalive while the WS is open** (NOT user I/O) so an idle-but-open terminal is never reaped. TTL must be greater than the keepalive interval.
 - Django template comments: only `{% comment %}`, never multi-line `{# … #}`.
+- **Tests live FLAT in `tests/` (e.g. `tests/test_terminal_lifecycle.py`) — NOT in `tests/tunnel/` or `tests/agent/`.**
+- **This repo has NO `pytest-asyncio`.** Async code is tested with plain sync test functions that call `asyncio.run(coro())` — follow the established pattern in `tests/test_terminal_agent.py` and `tests/test_control_client.py`. Do NOT use `@pytest.mark.asyncio` or a module-level `pytestmark = pytest.mark.asyncio`. For Channels consumer tests, create the DB objects with normal ORM in the sync test body (under `@pytest.mark.django_db(transaction=True)`), then drive the `WebsocketCommunicator` inside a nested `async def scenario(): ...` executed via `asyncio.run(scenario())`. The test-code blocks below that use `@pytest.mark.asyncio` are ILLUSTRATIVE of intent only — port them to the `asyncio.run` pattern.
 - DE-locale number inputs are irrelevant here; no numeric form fields added.
 - Agent (`station_agent/terminal.py`) ships to stations via `linux-image` SRCREV bump + OTA — it is NOT deployed by the station-manager image. Server + frontend deploy via the station-manager image.
 
@@ -24,11 +26,11 @@
 ## File Structure
 
 - `station_agent/terminal.py` — **modify**: decouple shell lifecycle; add `_ensure_shell`, `_restart_shell`; handle `ensure`/`restart` messages.
-- `tests/agent/test_terminal_lifecycle.py` — **create**: agent shell-lifecycle unit tests.
+- `tests/test_terminal_lifecycle.py` — **create**: agent shell-lifecycle unit tests.
 - `apps/tunnel/models.py` — **modify**: add `last_seen` to `TerminalSession`.
 - `apps/tunnel/migrations/000X_terminalsession_last_seen.py` — **create**: migration.
 - `apps/tunnel/consumers.py` — **modify**: `TerminalConsumer.connect/disconnect/receive` + keepalive + staleness helpers; `AgentTerminalConsumer` new handlers.
-- `tests/tunnel/test_terminal_consumer.py` — **create/extend**: Channels tests.
+- `tests/test_terminal_consumer.py` — **create/extend**: Channels tests.
 - `static/js/app.js` — **modify**: restart button wiring, reject-reason rendering, auto-reconnect.
 - `apps/stations/templates/stations/station_detail.html` — **modify**: add Restart button to the terminal panel.
 
@@ -45,7 +47,7 @@ TERMINAL_SESSION_STALE_TTL_SECONDS = 180   # must be > keepalive
 
 **Files:**
 - Modify: `station_agent/terminal.py`
-- Test: `tests/agent/test_terminal_lifecycle.py` (create)
+- Test: `tests/test_terminal_lifecycle.py` (create)
 
 **Interfaces:**
 - Produces (agent-internal): `async _ensure_shell()` (spawn only if no live shell), `async _restart_shell()` (stop + fresh spawn), `_shell_alive() -> bool`. Reader-task ownership held on `self._reader_task`.
@@ -54,7 +56,7 @@ TERMINAL_SESSION_STALE_TTL_SECONDS = 180   # must be > keepalive
 
 - [ ] **Step 1: Write failing tests for shell-alive detection and ensure/restart**
 
-Create `tests/agent/test_terminal_lifecycle.py`:
+Create `tests/test_terminal_lifecycle.py`:
 ```python
 import asyncio
 import pytest
@@ -138,7 +140,7 @@ async def test_restart_shell_stops_then_starts():
 
 - [ ] **Step 2: Run tests, verify they fail**
 
-Run: `pytest tests/agent/test_terminal_lifecycle.py -v`
+Run: `pytest tests/test_terminal_lifecycle.py -v`
 Expected: FAIL — `_shell_alive` / `_ensure_shell` / `_restart_shell` do not exist.
 
 - [ ] **Step 3: Add lifecycle helpers and `_reader_task` bookkeeping**
@@ -184,7 +186,7 @@ In `station_agent/terminal.py`, add `self._reader_task = None` in `__init__` (af
 
 - [ ] **Step 4: Run tests, verify they pass**
 
-Run: `pytest tests/agent/test_terminal_lifecycle.py -v`
+Run: `pytest tests/test_terminal_lifecycle.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Wire `ensure`/`restart` into `_handle_message` and use `_ensure_shell` in `_connect_and_serve`**
@@ -223,7 +225,7 @@ And update the `finally` block of `_connect_and_serve` (current lines ~311-318):
 
 - [ ] **Step 6: Add a message-dispatch test for ensure/restart/input**
 
-Append to `tests/agent/test_terminal_lifecycle.py`:
+Append to `tests/test_terminal_lifecycle.py`:
 ```python
 @pytest.mark.asyncio
 async def test_handle_message_dispatches_ensure_and_restart():
@@ -245,13 +247,13 @@ async def test_handle_message_dispatches_ensure_and_restart():
 
 - [ ] **Step 7: Run full agent terminal test module**
 
-Run: `pytest tests/agent/test_terminal_lifecycle.py -v`
+Run: `pytest tests/test_terminal_lifecycle.py -v`
 Expected: PASS (all).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add station_agent/terminal.py tests/agent/test_terminal_lifecycle.py
+git add station_agent/terminal.py tests/test_terminal_lifecycle.py
 git commit -m "feat(agent): decouple terminal shell lifecycle (ensure/restart)"
 ```
 
@@ -296,7 +298,7 @@ git commit -m "feat(tunnel): add TerminalSession.last_seen for staleness reaping
 
 **Files:**
 - Modify: `apps/tunnel/consumers.py` (`TerminalConsumer.connect`, `_count_active_sessions`, add helpers, constants)
-- Test: `tests/tunnel/test_terminal_consumer.py` (create/extend)
+- Test: `tests/test_terminal_consumer.py` (create/extend)
 
 **Interfaces:**
 - Consumes: `TerminalSession.last_seen` (Task 2); agent handler `terminal_ensure` (Task 4) — the connect sends `{"type":"terminal_ensure"}` to `f"{group}_agent"`.
@@ -304,7 +306,7 @@ git commit -m "feat(tunnel): add TerminalSession.last_seen for staleness reaping
 
 - [ ] **Step 1: Write failing Channels tests**
 
-Create/extend `tests/tunnel/test_terminal_consumer.py`:
+Create/extend `tests/test_terminal_consumer.py`:
 ```python
 import pytest
 from channels.testing import WebsocketCommunicator
@@ -378,7 +380,7 @@ async def test_stale_sessions_do_not_block(settings):
 
 - [ ] **Step 2: Run tests, verify they fail**
 
-Run: `pytest tests/tunnel/test_terminal_consumer.py -v`
+Run: `pytest tests/test_terminal_consumer.py -v`
 Expected: FAIL — current code rejects pre-accept (no `error` message), uses `is_internal`, counts stale rows.
 
 - [ ] **Step 3: Add constants + staleness helpers**
@@ -504,13 +506,13 @@ Replace `_count_active_sessions` body:
 
 - [ ] **Step 6: Run tests, verify they pass**
 
-Run: `pytest tests/tunnel/test_terminal_consumer.py -v`
+Run: `pytest tests/test_terminal_consumer.py -v`
 Expected: PASS (non-admin error, offline error, stale-do-not-block).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/tunnel/consumers.py tests/tunnel/test_terminal_consumer.py
+git add apps/tunnel/consumers.py tests/test_terminal_consumer.py
 git commit -m "feat(tunnel): admin-gated terminal, accept-then-error rejects, stale-session reaping"
 ```
 
@@ -520,7 +522,7 @@ git commit -m "feat(tunnel): admin-gated terminal, accept-then-error rejects, st
 
 **Files:**
 - Modify: `apps/tunnel/consumers.py`
-- Test: `tests/tunnel/test_terminal_consumer.py` (extend)
+- Test: `tests/test_terminal_consumer.py` (extend)
 
 **Interfaces:**
 - Consumes: keepalive task `self.keepalive_task` (Task 3).
@@ -528,7 +530,7 @@ git commit -m "feat(tunnel): admin-gated terminal, accept-then-error rejects, st
 
 - [ ] **Step 1: Write failing tests**
 
-Append to `tests/tunnel/test_terminal_consumer.py`:
+Append to `tests/test_terminal_consumer.py`:
 ```python
 async def test_disconnect_does_not_close_shell(settings):
     """Browser disconnect must NOT tell the agent to close the shell."""
@@ -566,7 +568,7 @@ async def test_browser_restart_forwards_terminal_restart(settings):
 
 - [ ] **Step 2: Run tests, verify they fail**
 
-Run: `pytest tests/tunnel/test_terminal_consumer.py -k "restart or does_not_close" -v`
+Run: `pytest tests/test_terminal_consumer.py -k "restart or does_not_close" -v`
 Expected: FAIL — disconnect still sends `terminal_close`; no `restart` handling.
 
 - [ ] **Step 3: Rewrite `disconnect()` (no shell kill; cancel keepalive)**
@@ -625,13 +627,13 @@ Add to `AgentTerminalConsumer` (next to `terminal_input`/`terminal_resize`/`term
 
 - [ ] **Step 6: Run tests, verify they pass**
 
-Run: `pytest tests/tunnel/test_terminal_consumer.py -v`
+Run: `pytest tests/test_terminal_consumer.py -v`
 Expected: PASS (all, including Task 3 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/tunnel/consumers.py tests/tunnel/test_terminal_consumer.py
+git add apps/tunnel/consumers.py tests/test_terminal_consumer.py
 git commit -m "feat(tunnel): persist shell on transient disconnect; forward restart/ensure"
 ```
 
@@ -769,7 +771,7 @@ git commit -m "feat(frontend): terminal restart button, reject reasons, auto-rec
 
 - [ ] **Step 1: Run the full server test suite**
 
-Run: `pytest tests/tunnel/ tests/agent/ -v`
+Run: `pytest tests/test_terminal_consumer.py tests/test_terminal_lifecycle.py -v`
 Expected: PASS.
 
 - [ ] **Step 2: Full-suite regression**
