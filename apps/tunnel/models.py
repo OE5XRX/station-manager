@@ -32,6 +32,7 @@ class TerminalSession(models.Model):
         default=Status.CONNECTING,
     )
     started_at = models.DateTimeField(_("started at"), auto_now_add=True)
+    last_seen = models.DateTimeField(_("last seen"), null=True, blank=True, db_index=True)
     ended_at = models.DateTimeField(_("ended at"), null=True, blank=True)
     close_reason = models.CharField(_("close reason"), max_length=200, blank=True)
 

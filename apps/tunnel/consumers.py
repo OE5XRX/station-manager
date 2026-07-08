@@ -1,13 +1,18 @@
+import asyncio
 import json
 import logging
+from datetime import timedelta
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.db import models
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 MAX_SESSIONS_PER_STATION = 2
+TERMINAL_SESSION_KEEPALIVE_SECONDS = 60
+TERMINAL_SESSION_STALE_TTL_SECONDS = 180  # must exceed the keepalive interval
 
 
 class TerminalConsumer(AsyncWebsocketConsumer):
@@ -21,40 +26,49 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
         self.group_name = f"terminal_{self.station_id}"
         self.session = None
+        self.keepalive_task = None
 
         user = self.scope.get("user")
+        # Accept first so EVERY reject can send a human-readable reason. A
+        # pre-accept close reaches the browser only as an opaque 1006 — and
+        # for an auth failure that also makes the client reconnect-loop, since
+        # it never sees a {type:"error"} telling it to stop.
+        await self.accept()
+
         if not user or user.is_anonymous:
-            await self.close(code=4401)
+            await self._reject(4401, "Not signed in — please sign in again")
             return
 
-        # ``user.is_internal`` is a pure in-memory check: a
-        # @cached_property that reads the ``membership_level`` field
-        # already loaded on the User instance by AuthMiddleware. No
-        # ORM access, so no database_sync_to_async hop needed.
-        if not user.is_internal:
-            await self.close(code=4403)
+        # Root shell -> admin only.
+        if not user.is_admin:
+            await self._reject(4403, "Terminal access is restricted to admins")
             return
 
         station = await self._get_station()
         if station is None:
-            await self.close(code=4404)
+            await self._reject(4404, "Station not found")
             return
-
         if station.status != "online":
-            await self.close(code=4409)
+            await self._reject(4409, "Station is offline")
             return
 
-        active_count = await self._count_active_sessions()
-        if active_count >= MAX_SESSIONS_PER_STATION:
-            await self.close(code=4429)
+        await self._reap_stale_sessions()
+        if await self._count_active_sessions() >= MAX_SESSIONS_PER_STATION:
+            await self._reject(4429, "Too many active terminal sessions for this station")
             return
 
+        # Only now create the tracking row — a failed/rejected handshake
+        # never leaves a zombie "connecting" session behind.
         self.session = await self._create_session(user)
-
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
-
         await self._update_session_status("active")
+        await self._touch_session()
+        self.keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+        # Ask the agent to guarantee a live shell (spawns if dead, reattach otherwise).
+        await self.channel_layer.group_send(
+            f"{self.group_name}_agent", {"type": "terminal_ensure"}
+        )
 
         await self._audit_log(
             station,
@@ -63,7 +77,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             user,
         )
 
+    async def _reject(self, code, reason):
+        """Accept-then-error reject so the browser shows a real reason."""
+        try:
+            await self.send(
+                text_data=json.dumps({"type": "error", "reason": reason, "code": code})
+            )
+        finally:
+            await self.close(code=code)
+
     async def disconnect(self, close_code):
+        if getattr(self, "keepalive_task", None):
+            self.keepalive_task.cancel()
+            try:
+                await self.keepalive_task
+            except asyncio.CancelledError:
+                pass
+            self.keepalive_task = None
+
         if self.session:
             await self._close_session(close_reason=f"disconnect (code={close_code})")
 
@@ -78,11 +109,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     user if user and not user.is_anonymous else None,
                 )
 
-            await self.channel_layer.group_send(
-                f"{self.group_name}_agent",
-                {"type": "terminal_close", "data": "browser disconnected"},
-            )
-
+        # NOTE: intentionally NO terminal_close to the agent — a transient
+        # browser disconnect (tab switch, iOS backgrounding, flaky network)
+        # must not kill the shell. The shell persists for reattach; explicit
+        # user close (receive type=close) is the only path that tears it down.
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -104,6 +134,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     "rows": payload.get("rows", 24),
                 },
             )
+        elif msg_type == "restart":
+            await self.channel_layer.group_send(
+                f"{self.group_name}_agent",
+                {"type": "terminal_restart"},
+            )
         elif msg_type == "close":
             await self.channel_layer.group_send(
                 f"{self.group_name}_agent",
@@ -123,13 +158,21 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({"type": "output", "data": event["data"]}))
 
     async def terminal_closed(self, event):
-        """Agent closed terminal -> notify browser and close."""
+        """Agent disconnected entirely -> notify browser and close."""
         await self.send(
             text_data=json.dumps(
                 {"type": "closed", "reason": event.get("reason", "agent disconnected")}
             )
         )
         await self.close()
+
+    async def terminal_shell_closed(self, event):
+        """The agent's shell exited but the agent is still connected -> tell
+        the browser (so it shows a reason) but keep the WS open for restart /
+        reattach under the persist model."""
+        await self.send(
+            text_data=json.dumps({"type": "closed", "reason": event.get("reason", "shell exited")})
+        )
 
     # -- Database helpers ------------------------------------------------------
 
@@ -146,10 +189,56 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _count_active_sessions(self):
         from apps.tunnel.models import TerminalSession
 
-        return TerminalSession.objects.filter(
+        # A brand-new row has last_seen=NULL until its first keepalive touch;
+        # count NULL-but-recently-started as fresh so a concurrent connect does
+        # not undercount it and let both slip past MAX_SESSIONS_PER_STATION.
+        cutoff = timezone.now() - timedelta(seconds=TERMINAL_SESSION_STALE_TTL_SECONDS)
+        return (
+            TerminalSession.objects.filter(
+                station_id=self.station_id,
+                status__in=("connecting", "active"),
+            )
+            .filter(
+                models.Q(last_seen__gte=cutoff)
+                | models.Q(last_seen__isnull=True, started_at__gte=cutoff)
+            )
+            .count()
+        )
+
+    @database_sync_to_async
+    def _reap_stale_sessions(self):
+        """Close sessions whose keepalive has lapsed (dead WS never cleaned up)."""
+        from apps.tunnel.models import TerminalSession
+
+        cutoff = timezone.now() - timedelta(seconds=TERMINAL_SESSION_STALE_TTL_SECONDS)
+        TerminalSession.objects.filter(
             station_id=self.station_id,
             status__in=("connecting", "active"),
-        ).count()
+        ).filter(
+            models.Q(last_seen__lt=cutoff)
+            # Only reap a NULL-last_seen row if it is ALSO old — otherwise a
+            # concurrent connect's freshly created (not-yet-touched) session
+            # would be closed mid-handshake.
+            | models.Q(last_seen__isnull=True, started_at__lt=cutoff)
+        ).update(
+            status="closed",
+            ended_at=timezone.now(),
+            close_reason="stale (keepalive lapsed)",
+        )
+
+    @database_sync_to_async
+    def _touch_session(self):
+        if self.session:
+            self.session.last_seen = timezone.now()
+            self.session.save(update_fields=["last_seen"])
+
+    async def _keepalive_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+                await self._touch_session()
+        except asyncio.CancelledError:
+            raise
 
     @database_sync_to_async
     def _create_session(self, user):
@@ -236,12 +325,26 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
-        """Agent sends shell output -> broadcast to browser group."""
+        """Agent sends shell output / lifecycle frames -> forward to browser."""
         if text_data is None:
             return
         try:
             payload = json.loads(text_data)
         except json.JSONDecodeError:
+            return
+
+        if payload.get("type") == "closed":
+            # The shell exited on its own (EOF / `exit` / crash). Tell the
+            # browser so it can show a reason — but do NOT close the browser
+            # WS: under the persist/reattach model the session stays open so
+            # the operator can hit Restart (or a reconnect auto-respawns).
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "terminal_shell_closed",
+                    "reason": payload.get("reason", "shell exited"),
+                },
+            )
             return
 
         await self.channel_layer.group_send(
@@ -264,6 +367,14 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
     async def terminal_close(self, event):
         """Browser requests close -> forward to agent."""
         await self.send(text_data=json.dumps({"type": "close", "reason": event.get("data", "")}))
+
+    async def terminal_ensure(self, event):
+        """Browser (re)connected -> tell the agent to guarantee a live shell."""
+        await self.send(text_data=json.dumps({"type": "ensure"}))
+
+    async def terminal_restart(self, event):
+        """Browser requested a shell restart -> forward to the agent."""
+        await self.send(text_data=json.dumps({"type": "restart"}))
 
     async def terminal_output(self, event):
         """Ignore own output messages relayed back through the group."""

@@ -91,7 +91,7 @@
       <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
       <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
-      {% if user.is_internal %}
+      {% if user.is_admin %}
       <button type="button" class="tab" data-tab="terminal" aria-selected="false">{% trans "Terminal" %}</button>
       {% endif %}
     </div>
@@ -374,12 +374,13 @@
     </section>
   </div>
 
-  {% if user.is_internal %}
+  {% if user.is_admin %}
   <div data-tab-panel="terminal" hidden>
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title"><span class="dot" style="background:var(--signal)"></span>{% trans "Remote terminal" %}</div>
         <span class="t-label">wss://{{ request.get_host }}/ws/terminal/{{ station.id }}/</span>
+        <button type="button" id="xterm-restart" class="btn btn-sm btn-outline-warning" title="{% translate 'Restart shell' %}">{% translate 'Restart shell' %}</button>
       </div>
       <div class="panel-body">
         <div class="t-muted mb-14" style="font-size:12.5px;">

@@ -49,6 +49,7 @@ class TerminalClient:
         self._config = config
         self._process: subprocess.Popen | None = None
         self._master_fd: int | None = None
+        self._reader_task: asyncio.Task | None = None
         self._ws = None
         self._shutdown = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -123,6 +124,7 @@ class TerminalClient:
         """
         loop = asyncio.get_running_loop()
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        cancelled = False
         try:
             while not self._shutdown.is_set():
                 try:
@@ -158,10 +160,13 @@ class TerminalClient:
                     break
 
         except asyncio.CancelledError:
-            # Normal shutdown — the caller cancelled us via reader_task.
-            # Re-raise explicitly so the task's cancellation semantics
-            # stay clear instead of getting entangled with the broad
-            # Exception catch below.
+            # Intentional cancellation — the caller cancelled this reader
+            # (shutdown, or _restart_shell/_ensure_shell reaping the old
+            # shell). Mark it so the finally block does NOT emit a
+            # misleading "shell exited" / {"type":"closed"} for a shell we
+            # deliberately tore down. Re-raise so cancellation semantics
+            # stay clear instead of being swallowed by the broad except.
+            cancelled = True
             raise
         except Exception as exc:
             logger.error("Terminal: output reader error: %s", exc)
@@ -182,25 +187,31 @@ class TerminalClient:
                 except Exception:
                     pass
 
-            reason = "shell exited"
-            if self._process is not None:
-                retcode = self._process.poll()
-                if retcode is not None:
-                    reason = f"shell exited with code {retcode}"
-            logger.info("Terminal: %s", reason)
+            # Only announce "closed" for a shell that ended on its own
+            # (EOF / exit / error). A deliberately cancelled reader (restart
+            # or ensure reaping a dead shell) must stay silent so the browser
+            # doesn't flash "[ closed: shell exited ]" right before the fresh
+            # shell's prompt.
+            if not cancelled:
+                reason = "shell exited"
+                if self._process is not None:
+                    retcode = self._process.poll()
+                    if retcode is not None:
+                        reason = f"shell exited with code {retcode}"
+                logger.info("Terminal: %s", reason)
 
-            try:
-                if self._ws is not None:
-                    await self._ws.send(
-                        json.dumps(
-                            {
-                                "type": "closed",
-                                "reason": reason,
-                            }
+                try:
+                    if self._ws is not None:
+                        await self._ws.send(
+                            json.dumps(
+                                {
+                                    "type": "closed",
+                                    "reason": reason,
+                                }
+                            )
                         )
-                    )
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     def _resize_pty(self, master_fd: int, cols: int, rows: int):
         """Resize the pseudo-terminal to the given dimensions."""
@@ -254,8 +265,56 @@ class TerminalClient:
             logger.info("Terminal: server requested close")
             await self._stop_shell()
 
+        elif msg_type == "ensure":
+            await self._ensure_shell()
+
+        elif msg_type == "restart":
+            logger.info("Terminal: restart requested")
+            await self._restart_shell()
+
         else:
             logger.debug("Terminal: unknown message type: %s", msg_type)
+
+    def _shell_alive(self) -> bool:
+        """True iff a shell process exists and has not exited."""
+        return self._process is not None and self._process.poll() is None
+
+    async def _ensure_shell(self):
+        """Start a shell + reader task only if none is currently alive.
+
+        Idempotent: a no-op when a shell is already running, so a browser
+        reattach (server sends ``ensure`` on every connect) does not spawn
+        duplicates.
+        """
+        if self._shell_alive():
+            return
+        # A previous shell may have just exited with its reader still finishing
+        # (flushing / emitting {"type":"closed"}). Cancel it BEFORE respawning so
+        # the dead shell's reader can't post a late "closed" over the new shell,
+        # and two readers never run at once.
+        await self._cancel_reader()
+        # Clean up a dead-but-not-reaped process/fd before respawning.
+        if self._process is not None or self._master_fd is not None:
+            await self._stop_shell()
+        self._master_fd, self._process = self._start_shell()
+        self._reader_task = asyncio.create_task(self._read_shell_output(self._master_fd))
+
+    async def _restart_shell(self):
+        """Kill the current shell (if any) and start a fresh one."""
+        await self._cancel_reader()
+        await self._stop_shell()
+        self._master_fd, self._process = self._start_shell()
+        self._reader_task = asyncio.create_task(self._read_shell_output(self._master_fd))
+
+    async def _cancel_reader(self):
+        """Cancel and await the current reader task, if any."""
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+            self._reader_task = None
 
     async def _stop_shell(self):
         """Stop the running shell process and clean up."""
@@ -295,11 +354,9 @@ class TerminalClient:
             self._ws = ws
             logger.info("Terminal: connected, waiting for commands")
 
-            # Start the shell
-            self._master_fd, self._process = self._start_shell()
-
-            # Start the output reader as a background task
-            reader_task = asyncio.create_task(self._read_shell_output(self._master_fd))
+            # Ensure a shell is running (idempotent). The reader task is
+            # owned by _ensure_shell via self._reader_task.
+            await self._ensure_shell()
 
             try:
                 async for message in ws:
@@ -309,11 +366,7 @@ class TerminalClient:
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.info("Terminal: WebSocket closed (code=%s)", exc.code)
             finally:
-                reader_task.cancel()
-                try:
-                    await reader_task
-                except asyncio.CancelledError:
-                    pass
+                await self._cancel_reader()
                 await self._stop_shell()
                 self._ws = None
 
