@@ -12,7 +12,7 @@
 
 - Terminal access is **admin-only** (`user.is_admin`), replacing the previous `user.is_internal` gate. (Topology-based access is a documented future step, NOT this plan.)
 - Control transport is **in-band on the terminal WS** — do NOT use the D3 `/ws/agent/control/` channel.
-- Operational rejects (offline / session-limit / not-admin) must `accept()` then send `{type:"error", reason, code}` then `close(code)`; only unauthenticated/anonymous stays a pre-accept close.
+- ALL rejects (including anonymous/unauthenticated `4401`, plus offline / session-limit / not-admin) must `accept()` then send `{type:"error", reason, code}` then `close(code)` — so no reject reaches the browser as an opaque `1006` and the client stops reconnecting.
 - A transient browser disconnect must NOT send `terminal_close` to the agent.
 - Session staleness uses a **periodic keepalive while the WS is open** (NOT user I/O) so an idle-but-open terminal is never reaped. TTL must be greater than the keepalive interval.
 - Django template comments: only `{% comment %}`, never multi-line `{# … #}`.

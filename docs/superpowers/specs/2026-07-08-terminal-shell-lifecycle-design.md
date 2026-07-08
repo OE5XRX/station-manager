@@ -67,13 +67,12 @@ Decouple shell lifecycle from the WS connection:
 - `_restart_shell()` — `_stop_shell()` (if alive) then start fresh + new reader task.
 - `_connect_and_serve()` — calls `_ensure_shell()` on connect (instead of unconditionally spawning once). The `async for message` loop dispatches the new message types.
 - `_handle_message()` — add `"ensure"` → `_ensure_shell()`, `"restart"` → `_restart_shell()`. Keep `"close"` → `_stop_shell()`.
-- Reader-task ownership moves to the ensure/restart helpers so each shell instance has exactly one reader; on shell EOF the reader clears `_process` so the next `ensure` respawns.
+- Reader-task ownership moves to the ensure/restart helpers so each shell instance has exactly one reader. A shell that exits on its own is **not** reaped by the reader; `_ensure_shell()` detects the dead process via `poll()` and runs `_stop_shell()` to clean up before respawning. A reader cancelled intentionally (restart / ensure reaping a dead shell) stays silent — it emits no `{type:"closed"}` frame.
 
 ### Server — `apps/tunnel/consumers.py`
 
 `TerminalConsumer.connect()`:
-- **Authenticate first** (anonymous → pre-accept `close(4401)`, acceptable — unauthenticated users get no friendly message).
-- **`accept()` early**, then run operational checks (**admin** gate, station found, station online, session limit). On failure: `send({type:"error", reason, code})` then `close(code)`. This is fix #3-visibility — the browser shows the reason.
+- **`accept()` first**, then run ALL checks (auth + operational). Every reject uses accept-then-error `send({type:"error", reason, code})` then `close(code)` so the browser shows the reason — including the anonymous/unauthenticated case (`4401`), so no reject is an opaque `1006` and the client stops reconnecting. Checks: authenticated (else 4401), **admin** gate (else 4403), station found (4404), station online (4409), session limit (4429).
 - **Admin gate:** replace `user.is_internal` with `user.is_admin` (see Access Control). Non-admin authenticated user → `{type:"error", reason:"Terminal access is restricted to admins"}` + close.
 - **Create the `TerminalSession` only after `accept()` and after checks pass** — a pre-accept/auth failure leaves no zombie row.
 - After success: `group_add`, then `group_send(terminal_<id>_agent, {type:"terminal_ensure"})` so the agent guarantees a live shell.
@@ -111,7 +110,7 @@ Frontend work follows the `frontend-design` skill.
 ## Error Handling
 
 - Agent: `_ensure_shell`/`_restart_shell` guard against double-spawn and against races between reader-task cancellation and respawn. A shell that fails to spawn sends `{type:"closed", reason:"shell failed to start"}` to the browser.
-- Server: operational rejects always `accept()`-then-`error`-then-`close` so the browser gets the reason; truly unauthenticated stays pre-accept.
+- Server: ALL rejects (including anonymous/unauthenticated, 4401) `accept()`-then-`error`-then-`close` so the browser gets a reason and never an opaque 1006.
 - Frontend: bounded reconnect attempts; explicit terminal states (connecting / connected / reconnecting / closed / error).
 
 ## Deployment & OTA Sequencing
@@ -126,7 +125,7 @@ The implementation plan sequences these so item 1 ships first for quick relief.
 ## Testing
 
 - **Server (Django Channels, in-memory layer):** connect creates no zombie on pre-accept/auth failure; disconnect does **not** send `terminal_close`; `restart`/`ensure` group-sends fire; operational rejects send `{type:"error"}` then close; admin gate; `_count_active_sessions` ignores stale rows + reconciliation closes them.
-- **Agent (pytest):** `_ensure_shell` spawns only when dead; `_restart_shell` kills + respawns; shell persists across `input`/`resize`; reader task is singular per shell; EOF clears `_process`.
+- **Agent (pytest):** `_ensure_shell` spawns only when dead; `_restart_shell` kills + respawns; shell persists across `input`/`resize`; reader task is singular per shell; a cancelled reader emits no `closed` frame.
 - **Integration (`probe`, full E2E):** browser input → server → agent → PTY → output; restart flow; transient-disconnect → reattach; dead-shell → auto-respawn on connect.
 - **Frontend:** restart button, reconnect backoff, reject-reason rendering.
 
