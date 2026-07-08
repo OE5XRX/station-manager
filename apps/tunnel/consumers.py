@@ -180,12 +180,21 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _count_active_sessions(self):
         from apps.tunnel.models import TerminalSession
 
+        # A brand-new row has last_seen=NULL until its first keepalive touch;
+        # count NULL-but-recently-started as fresh so a concurrent connect does
+        # not undercount it and let both slip past MAX_SESSIONS_PER_STATION.
         cutoff = timezone.now() - timedelta(seconds=TERMINAL_SESSION_STALE_TTL_SECONDS)
-        return TerminalSession.objects.filter(
-            station_id=self.station_id,
-            status__in=("connecting", "active"),
-            last_seen__gte=cutoff,
-        ).count()
+        return (
+            TerminalSession.objects.filter(
+                station_id=self.station_id,
+                status__in=("connecting", "active"),
+            )
+            .filter(
+                models.Q(last_seen__gte=cutoff)
+                | models.Q(last_seen__isnull=True, started_at__gte=cutoff)
+            )
+            .count()
+        )
 
     @database_sync_to_async
     def _reap_stale_sessions(self):
@@ -196,7 +205,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         TerminalSession.objects.filter(
             station_id=self.station_id,
             status__in=("connecting", "active"),
-        ).filter(models.Q(last_seen__lt=cutoff) | models.Q(last_seen__isnull=True)).update(
+        ).filter(
+            models.Q(last_seen__lt=cutoff)
+            # Only reap a NULL-last_seen row if it is ALSO old — otherwise a
+            # concurrent connect's freshly created (not-yet-touched) session
+            # would be closed mid-handshake.
+            | models.Q(last_seen__isnull=True, started_at__lt=cutoff)
+        ).update(
             status="closed",
             ended_at=timezone.now(),
             close_reason="stale (keepalive lapsed)",

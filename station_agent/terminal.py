@@ -278,6 +278,11 @@ class TerminalClient:
         """
         if self._shell_alive():
             return
+        # A previous shell may have just exited with its reader still finishing
+        # (flushing / emitting {"type":"closed"}). Cancel it BEFORE respawning so
+        # the dead shell's reader can't post a late "closed" over the new shell,
+        # and two readers never run at once.
+        await self._cancel_reader()
         # Clean up a dead-but-not-reaped process/fd before respawning.
         if self._process is not None or self._master_fd is not None:
             await self._stop_shell()

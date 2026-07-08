@@ -334,13 +334,13 @@
           term.write("\r\n" + color("[ disconnected: " + ev.code + " ]", "33"));
           return;
         }
-        attempts += 1;
-        if (attempts > MAX_ATTEMPTS) {
+        if (attempts >= MAX_ATTEMPTS) {
           term.write("\r\n" + color("[ disconnected — giving up after " + MAX_ATTEMPTS +
             " attempts; refresh to retry ]", "31"));
           return;
         }
-        term.write("\r\n" + color("[ reconnecting… (" + attempts + ") ]", "33") + "\r\n");
+        attempts += 1;
+        term.write("\r\n" + color("[ reconnecting… (" + attempts + "/" + MAX_ATTEMPTS + ") ]", "33") + "\r\n");
         setTimeout(connect, backoff);
         backoff = Math.min(backoff * 2, BACKOFF_MAX);
       });
