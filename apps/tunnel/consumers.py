@@ -29,14 +29,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.keepalive_task = None
 
         user = self.scope.get("user")
-        # Unauthenticated: reject pre-accept (no friendly message needed).
-        if not user or user.is_anonymous:
-            await self.close(code=4401)
-            return
-
-        # Accept first so operational rejects can send a readable reason
-        # (a pre-accept close reaches the browser only as an opaque 1006).
+        # Accept first so EVERY reject can send a human-readable reason. A
+        # pre-accept close reaches the browser only as an opaque 1006 — and
+        # for an auth failure that also makes the client reconnect-loop, since
+        # it never sees a {type:"error"} telling it to stop.
         await self.accept()
+
+        if not user or user.is_anonymous:
+            await self._reject(4401, "Not signed in — please sign in again")
+            return
 
         # Root shell -> admin only.
         if not user.is_admin:

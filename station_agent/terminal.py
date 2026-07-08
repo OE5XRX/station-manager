@@ -124,6 +124,7 @@ class TerminalClient:
         """
         loop = asyncio.get_running_loop()
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        cancelled = False
         try:
             while not self._shutdown.is_set():
                 try:
@@ -159,10 +160,13 @@ class TerminalClient:
                     break
 
         except asyncio.CancelledError:
-            # Normal shutdown — the caller cancelled us via reader_task.
-            # Re-raise explicitly so the task's cancellation semantics
-            # stay clear instead of getting entangled with the broad
-            # Exception catch below.
+            # Intentional cancellation — the caller cancelled this reader
+            # (shutdown, or _restart_shell/_ensure_shell reaping the old
+            # shell). Mark it so the finally block does NOT emit a
+            # misleading "shell exited" / {"type":"closed"} for a shell we
+            # deliberately tore down. Re-raise so cancellation semantics
+            # stay clear instead of being swallowed by the broad except.
+            cancelled = True
             raise
         except Exception as exc:
             logger.error("Terminal: output reader error: %s", exc)
@@ -183,25 +187,31 @@ class TerminalClient:
                 except Exception:
                     pass
 
-            reason = "shell exited"
-            if self._process is not None:
-                retcode = self._process.poll()
-                if retcode is not None:
-                    reason = f"shell exited with code {retcode}"
-            logger.info("Terminal: %s", reason)
+            # Only announce "closed" for a shell that ended on its own
+            # (EOF / exit / error). A deliberately cancelled reader (restart
+            # or ensure reaping a dead shell) must stay silent so the browser
+            # doesn't flash "[ closed: shell exited ]" right before the fresh
+            # shell's prompt.
+            if not cancelled:
+                reason = "shell exited"
+                if self._process is not None:
+                    retcode = self._process.poll()
+                    if retcode is not None:
+                        reason = f"shell exited with code {retcode}"
+                logger.info("Terminal: %s", reason)
 
-            try:
-                if self._ws is not None:
-                    await self._ws.send(
-                        json.dumps(
-                            {
-                                "type": "closed",
-                                "reason": reason,
-                            }
+                try:
+                    if self._ws is not None:
+                        await self._ws.send(
+                            json.dumps(
+                                {
+                                    "type": "closed",
+                                    "reason": reason,
+                                }
+                            )
                         )
-                    )
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     def _resize_pty(self, master_fd: int, cols: int, rows: int):
         """Resize the pseudo-terminal to the given dimensions."""

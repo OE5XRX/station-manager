@@ -142,3 +142,36 @@ def test_handle_message_dispatches_ensure_and_restart():
 
     asyncio.run(scenario())
     assert counters["ensure"] == 1 and counters["restart"] == 1
+
+
+def test_reader_cancel_does_not_emit_closed():
+    """A deliberately cancelled reader (restart/ensure reap) must NOT send a
+    {"type":"closed"} for the shell it tore down."""
+    import os
+
+    c = _client()
+    sent = []
+    ws = MagicMock()
+
+    async def fake_send(m):
+        sent.append(m)
+
+    ws.send = fake_send
+    c._ws = ws
+
+    async def scenario():
+        r, w = os.pipe()  # read end blocks (no data written) -> reader parks on os.read
+        try:
+            task = asyncio.create_task(c._read_shell_output(r))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        finally:
+            os.close(r)
+            os.close(w)
+
+    asyncio.run(scenario())
+    assert not any('"closed"' in s for s in sent), f"unexpected closed frame: {sent}"

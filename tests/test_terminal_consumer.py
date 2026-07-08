@@ -144,3 +144,23 @@ def test_browser_restart_forwards_terminal_restart():
         await comm.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_anonymous_gets_error_message_then_close():
+    """An unauthenticated connect is accepted then errored 4401, so the browser
+    shows a reason instead of an opaque 1006 and does not reconnect-loop."""
+    from django.contrib.auth.models import AnonymousUser
+
+    station = Station.objects.create(name="s-anon", status="online")
+
+    async def scenario():
+        comm = _communicator(AnonymousUser(), station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+        msg = await comm.receive_json_from()
+        assert msg["type"] == "error"
+        assert msg["code"] == 4401
+        await comm.disconnect()
+
+    asyncio.run(scenario())
