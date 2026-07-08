@@ -24,7 +24,11 @@ terminal_mod = pytest.importorskip(
 )
 TerminalClient = terminal_mod.TerminalClient
 
-from station_agent.config import AgentConfig  # noqa: E402
+config_mod = pytest.importorskip(
+    "station_agent.config",
+    reason="station_agent deps (PyYAML) not installed in this environment",
+)
+AgentConfig = config_mod.AgentConfig
 
 
 def _client():
