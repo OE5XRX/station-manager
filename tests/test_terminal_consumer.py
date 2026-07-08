@@ -1,0 +1,85 @@
+"""Channels tests for TerminalConsumer.connect() lifecycle.
+
+This repo has NO pytest-asyncio. Async Channels scenarios are driven with
+plain sync test functions marked ``@pytest.mark.django_db(transaction=True)``:
+DB objects are created with normal ORM in the sync body, then the
+``WebsocketCommunicator`` scenario runs inside a nested ``async def scenario()``
+executed via ``asyncio.run(scenario())``. Do NOT use ``@pytest.mark.asyncio``.
+"""
+
+import asyncio
+from datetime import timedelta
+
+import pytest
+from channels.testing import WebsocketCommunicator
+from django.utils import timezone
+
+from apps.accounts.models import User
+from apps.stations.models import Station
+from apps.tunnel.models import TerminalSession
+from config.asgi import application
+
+
+def _communicator(user, station_id):
+    comm = WebsocketCommunicator(application, f"/ws/terminal/{station_id}/")
+    comm.scope["user"] = user
+    return comm
+
+
+@pytest.mark.django_db(transaction=True)
+def test_non_admin_gets_error_message_then_close():
+    """A staff (internal but not admin) user is accepted then errored 4403."""
+    station = Station.objects.create(name="s-nonadmin", status="online")
+    user = User.objects.create(username="u_staff", membership_level=User.MembershipLevel.STAFF)
+
+    async def scenario():
+        comm = _communicator(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True  # accept happened before the reject
+        msg = await comm.receive_json_from()
+        assert msg["type"] == "error"
+        assert msg["code"] == 4403
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_offline_station_gets_error():
+    """An admin connecting to an offline station is accepted then errored 4409."""
+    station = Station.objects.create(name="s-offline", status="offline")
+    user = User.objects.create(username="u_admin_off", membership_level=User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        comm = _communicator(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+        msg = await comm.receive_json_from()
+        assert msg["type"] == "error"
+        assert msg["code"] == 4409
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_stale_sessions_do_not_block():
+    """Ancient 'active' rows with old last_seen are reaped, not counted."""
+    station = Station.objects.create(name="s-stale", status="online")
+    user = User.objects.create(
+        username="u_admin_stale", membership_level=User.MembershipLevel.ADMIN
+    )
+    old = timezone.now() - timedelta(hours=5)
+    TerminalSession.objects.create(station=station, user=user, status="active", last_seen=old)
+    TerminalSession.objects.create(station=station, user=user, status="active", last_seen=old)
+
+    async def scenario():
+        comm = _communicator(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True  # not rejected with 4429
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+
+    reaped = TerminalSession.objects.filter(station=station, status="closed").count()
+    assert reaped >= 2

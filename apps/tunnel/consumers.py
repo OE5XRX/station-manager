@@ -1,13 +1,18 @@
+import asyncio
 import json
 import logging
+from datetime import timedelta
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.db import models
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 MAX_SESSIONS_PER_STATION = 2
+TERMINAL_SESSION_KEEPALIVE_SECONDS = 60
+TERMINAL_SESSION_STALE_TTL_SECONDS = 180  # must exceed the keepalive interval
 
 
 class TerminalConsumer(AsyncWebsocketConsumer):
@@ -21,40 +26,48 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
         self.group_name = f"terminal_{self.station_id}"
         self.session = None
+        self.keepalive_task = None
 
         user = self.scope.get("user")
+        # Unauthenticated: reject pre-accept (no friendly message needed).
         if not user or user.is_anonymous:
             await self.close(code=4401)
             return
 
-        # ``user.is_internal`` is a pure in-memory check: a
-        # @cached_property that reads the ``membership_level`` field
-        # already loaded on the User instance by AuthMiddleware. No
-        # ORM access, so no database_sync_to_async hop needed.
-        if not user.is_internal:
-            await self.close(code=4403)
+        # Accept first so operational rejects can send a readable reason
+        # (a pre-accept close reaches the browser only as an opaque 1006).
+        await self.accept()
+
+        # Root shell -> admin only.
+        if not user.is_admin:
+            await self._reject(4403, "Terminal access is restricted to admins")
             return
 
         station = await self._get_station()
         if station is None:
-            await self.close(code=4404)
+            await self._reject(4404, "Station not found")
             return
-
         if station.status != "online":
-            await self.close(code=4409)
+            await self._reject(4409, "Station is offline")
             return
 
-        active_count = await self._count_active_sessions()
-        if active_count >= MAX_SESSIONS_PER_STATION:
-            await self.close(code=4429)
+        await self._reap_stale_sessions()
+        if await self._count_active_sessions() >= MAX_SESSIONS_PER_STATION:
+            await self._reject(4429, "Too many active terminal sessions for this station")
             return
 
+        # Only now create the tracking row — a failed/rejected handshake
+        # never leaves a zombie "connecting" session behind.
         self.session = await self._create_session(user)
-
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
-
         await self._update_session_status("active")
+        await self._touch_session()
+        self.keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+        # Ask the agent to guarantee a live shell (spawns if dead, reattach otherwise).
+        await self.channel_layer.group_send(
+            f"{self.group_name}_agent", {"type": "terminal_ensure"}
+        )
 
         await self._audit_log(
             station,
@@ -62,6 +75,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             f"Terminal session opened by {user.username}",
             user,
         )
+
+    async def _reject(self, code, reason):
+        """Accept-then-error reject so the browser shows a real reason."""
+        try:
+            await self.send(
+                text_data=json.dumps({"type": "error", "reason": reason, "code": code})
+            )
+        finally:
+            await self.close(code=code)
 
     async def disconnect(self, close_code):
         if self.session:
@@ -146,10 +168,41 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _count_active_sessions(self):
         from apps.tunnel.models import TerminalSession
 
+        cutoff = timezone.now() - timedelta(seconds=TERMINAL_SESSION_STALE_TTL_SECONDS)
         return TerminalSession.objects.filter(
             station_id=self.station_id,
             status__in=("connecting", "active"),
+            last_seen__gte=cutoff,
         ).count()
+
+    @database_sync_to_async
+    def _reap_stale_sessions(self):
+        """Close sessions whose keepalive has lapsed (dead WS never cleaned up)."""
+        from apps.tunnel.models import TerminalSession
+
+        cutoff = timezone.now() - timedelta(seconds=TERMINAL_SESSION_STALE_TTL_SECONDS)
+        TerminalSession.objects.filter(
+            station_id=self.station_id,
+            status__in=("connecting", "active"),
+        ).filter(models.Q(last_seen__lt=cutoff) | models.Q(last_seen__isnull=True)).update(
+            status="closed",
+            ended_at=timezone.now(),
+            close_reason="stale (keepalive lapsed)",
+        )
+
+    @database_sync_to_async
+    def _touch_session(self):
+        if self.session:
+            self.session.last_seen = timezone.now()
+            self.session.save(update_fields=["last_seen"])
+
+    async def _keepalive_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+                await self._touch_session()
+        except asyncio.CancelledError:
+            raise
 
     @database_sync_to_async
     def _create_session(self, user):
