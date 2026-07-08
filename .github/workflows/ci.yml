@@ -41,6 +41,12 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: astral-sh/setup-uv@v6
+        with:
+          # Pin uv so the drift check is reproducible: a uv upgrade can change
+          # resolver/formatting output and make this job fail even when no
+          # requirements/*.in changed. Bump in lockstep with the version used
+          # to (re)generate requirements/*.txt.
+          version: "0.10.10"
 
       - name: Recompile lockfiles from *.in
         # uv prefers the versions already pinned in the -o target, so this
