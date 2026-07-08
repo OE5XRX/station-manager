@@ -49,6 +49,7 @@ class TerminalClient:
         self._config = config
         self._process: subprocess.Popen | None = None
         self._master_fd: int | None = None
+        self._reader_task: asyncio.Task | None = None
         self._ws = None
         self._shutdown = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -254,8 +255,51 @@ class TerminalClient:
             logger.info("Terminal: server requested close")
             await self._stop_shell()
 
+        elif msg_type == "ensure":
+            await self._ensure_shell()
+
+        elif msg_type == "restart":
+            logger.info("Terminal: restart requested")
+            await self._restart_shell()
+
         else:
             logger.debug("Terminal: unknown message type: %s", msg_type)
+
+    def _shell_alive(self) -> bool:
+        """True iff a shell process exists and has not exited."""
+        return self._process is not None and self._process.poll() is None
+
+    async def _ensure_shell(self):
+        """Start a shell + reader task only if none is currently alive.
+
+        Idempotent: a no-op when a shell is already running, so a browser
+        reattach (server sends ``ensure`` on every connect) does not spawn
+        duplicates.
+        """
+        if self._shell_alive():
+            return
+        # Clean up a dead-but-not-reaped process/fd before respawning.
+        if self._process is not None or self._master_fd is not None:
+            await self._stop_shell()
+        self._master_fd, self._process = self._start_shell()
+        self._reader_task = asyncio.create_task(self._read_shell_output(self._master_fd))
+
+    async def _restart_shell(self):
+        """Kill the current shell (if any) and start a fresh one."""
+        await self._cancel_reader()
+        await self._stop_shell()
+        self._master_fd, self._process = self._start_shell()
+        self._reader_task = asyncio.create_task(self._read_shell_output(self._master_fd))
+
+    async def _cancel_reader(self):
+        """Cancel and await the current reader task, if any."""
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+            self._reader_task = None
 
     async def _stop_shell(self):
         """Stop the running shell process and clean up."""
@@ -295,11 +339,9 @@ class TerminalClient:
             self._ws = ws
             logger.info("Terminal: connected, waiting for commands")
 
-            # Start the shell
-            self._master_fd, self._process = self._start_shell()
-
-            # Start the output reader as a background task
-            reader_task = asyncio.create_task(self._read_shell_output(self._master_fd))
+            # Ensure a shell is running (idempotent). The reader task is
+            # owned by _ensure_shell via self._reader_task.
+            await self._ensure_shell()
 
             try:
                 async for message in ws:
@@ -309,11 +351,7 @@ class TerminalClient:
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.info("Terminal: WebSocket closed (code=%s)", exc.code)
             finally:
-                reader_task.cancel()
-                try:
-                    await reader_task
-                except asyncio.CancelledError:
-                    pass
+                await self._cancel_reader()
                 await self._stop_shell()
                 self._ws = None
 
