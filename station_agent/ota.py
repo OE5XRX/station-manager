@@ -446,13 +446,28 @@ def apply_update(config, firmware_path: str) -> bool:
     # carries the *source* partition's label (root_a). Writing it to slot B
     # therefore leaves B's filesystem labelled root_a — and x86 GRUB locates
     # the slot with `search --label root_b`, so it can no longer find B and
-    # the trial boot fails -> rollback. Fix it before arming the trial so a
-    # relabel failure surfaces as a clean FAILED instead of a mystery
-    # rollback. (RPi u-boot finds the slot by GPT PARTLABEL and is
-    # unaffected; the relabel is a harmless no-op there.)
+    # the trial boot fails -> rollback. Fix it before arming the trial.
+    #
+    # This is mandatory only under GRUB (which searches by fs-label): a bad or
+    # failed label makes the trial unbootable, so abort with a clean FAILED
+    # rather than a later mystery rollback. u-boot locates the slot by GPT
+    # PARTLABEL (untouched by the raw write) and ignores the fs-label, so a
+    # relabel failure there must NOT fail an otherwise-good OTA — warn and
+    # continue.
     if not set_slot_fs_label(target_dev, target_slot):
-        logger.error("Failed to label slot %s filesystem as root_%s", target_slot, target_slot)
-        return False
+        if bl == "grub":
+            logger.error(
+                "Failed to label slot %s filesystem as root_%s — GRUB needs it to boot the slot",
+                target_slot,
+                target_slot,
+            )
+            return False
+        logger.warning(
+            "Could not set fs label root_%s on slot %s; continuing (%s boots by PARTLABEL)",
+            target_slot,
+            target_slot,
+            bl,
+        )
 
     if not set_upgrade_pending(bl, target_slot):
         logger.error("Failed to set bootloader to trial-boot slot %s", target_slot)
@@ -467,8 +482,9 @@ def set_slot_fs_label(device: str, slot: str) -> bool:
 
     Required because the OTA writes a raw rootfs image (labelled root_a) onto
     the target slot, clobbering its own label; x86 GRUB's ``search --label
-    root_<slot>`` then fails to find the slot. Returns False (so the caller
-    aborts the trial) on any failure, including tune2fs being absent.
+    root_<slot>`` then fails to find the slot. Returns False on any failure
+    (including tune2fs being absent); the caller decides whether that is fatal
+    (GRUB) or ignorable (u-boot boots by PARTLABEL).
     """
     label = f"root_{slot}"
     try:
@@ -476,6 +492,7 @@ def set_slot_fs_label(device: str, slot: str) -> bool:
             ["tune2fs", "-L", label, device],
             check=True,
             capture_output=True,
+            text=True,
             timeout=30,
         )
     except FileNotFoundError:
