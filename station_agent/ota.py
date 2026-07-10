@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import subprocess
 
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
 from .http_client import HttpClient
@@ -440,11 +441,59 @@ def apply_update(config, firmware_path: str) -> bool:
         logger.error("install_to_slot failed: %s", exc)
         return False
 
+    # Re-stamp the slot's filesystem label. install_to_slot streams the
+    # served rootfs image straight onto the block device, and that image
+    # carries the *source* partition's label (root_a). Writing it to slot B
+    # therefore leaves B's filesystem labelled root_a — and x86 GRUB locates
+    # the slot with `search --label root_b`, so it can no longer find B and
+    # the trial boot fails -> rollback. Fix it before arming the trial so a
+    # relabel failure surfaces as a clean FAILED instead of a mystery
+    # rollback. (RPi u-boot finds the slot by GPT PARTLABEL and is
+    # unaffected; the relabel is a harmless no-op there.)
+    if not set_slot_fs_label(target_dev, target_slot):
+        logger.error("Failed to label slot %s filesystem as root_%s", target_slot, target_slot)
+        return False
+
     if not set_upgrade_pending(bl, target_slot):
         logger.error("Failed to set bootloader to trial-boot slot %s", target_slot)
         return False
 
     logger.info("Update applied to slot %s — reboot to activate", target_slot)
+    return True
+
+
+def set_slot_fs_label(device: str, slot: str) -> bool:
+    """Stamp the ext4 filesystem label of a freshly-written slot as root_<slot>.
+
+    Required because the OTA writes a raw rootfs image (labelled root_a) onto
+    the target slot, clobbering its own label; x86 GRUB's ``search --label
+    root_<slot>`` then fails to find the slot. Returns False (so the caller
+    aborts the trial) on any failure, including tune2fs being absent.
+    """
+    label = f"root_{slot}"
+    try:
+        subprocess.run(
+            ["tune2fs", "-L", label, device],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except FileNotFoundError:
+        logger.error("tune2fs not found — cannot set filesystem label %s on %s", label, device)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("tune2fs -L %s %s timed out", label, device)
+        return False
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "tune2fs -L %s %s failed (rc=%s): %s", label, device, exc.returncode, exc.stderr
+        )
+        return False
+    except OSError as exc:
+        logger.error("tune2fs -L %s %s errored: %s", label, device, exc)
+        return False
+
+    logger.info("Set filesystem label %s on %s", label, device)
     return True
 
 

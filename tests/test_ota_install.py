@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import bz2
 import os
+import subprocess
 
 import pytest
 
@@ -380,3 +381,83 @@ def test_inventory_reports_current_version(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(inv, "_OS_RELEASE_PATH", str(os_release))
     assert inv.get_current_version() == "v1-beta"
+
+
+def test_apply_update_relabels_slot_fs_then_arms_trial(monkeypatch, tmp_path):
+    """apply_update must tune2fs -L root_<slot> the freshly written slot
+    (before arming the trial) so GRUB's `search --label` can find it."""
+    from station_agent import ota
+
+    monkeypatch.setattr(ota, "get_bootloader", lambda cfg: "grub")
+    monkeypatch.setattr(ota, "get_inactive_slot", lambda bl: "b")
+    monkeypatch.setattr(ota.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(ota, "install_to_slot", lambda src, dev: None)
+
+    order = []
+    monkeypatch.setattr(
+        ota, "set_upgrade_pending", lambda bl, slot: order.append(("pending", slot)) or True
+    )
+
+    run_cmd = {}
+
+    def fake_run(cmd, **kw):
+        run_cmd["cmd"] = cmd
+        order.append(("relabel", cmd))
+
+        class _R:
+            returncode = 0
+
+        return _R()
+
+    monkeypatch.setattr(ota.subprocess, "run", fake_run)
+
+    ok = ota.apply_update(config=object(), firmware_path=str(tmp_path / "fw.rootfs.bz2"))
+
+    assert ok is True
+    assert run_cmd["cmd"] == ["tune2fs", "-L", "root_b", "/dev/disk/by-partlabel/root_b"]
+    # relabel happens BEFORE the trial is armed
+    assert [k for k, _ in order] == ["relabel", "pending"]
+
+
+def test_apply_update_aborts_when_relabel_fails(monkeypatch, tmp_path):
+    """If tune2fs fails, apply_update returns False and does NOT arm the
+    trial — a clean FAILED instead of a mystery rollback later."""
+    from station_agent import ota
+
+    monkeypatch.setattr(ota, "get_bootloader", lambda cfg: "grub")
+    monkeypatch.setattr(ota, "get_inactive_slot", lambda bl: "b")
+    monkeypatch.setattr(ota.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(ota, "install_to_slot", lambda src, dev: None)
+
+    armed = {"called": False}
+    monkeypatch.setattr(
+        ota, "set_upgrade_pending", lambda bl, slot: armed.__setitem__("called", True) or True
+    )
+
+    def boom(cmd, **kw):
+        raise subprocess.CalledProcessError(1, cmd, stderr=b"bad magic")
+
+    monkeypatch.setattr(ota.subprocess, "run", boom)
+
+    ok = ota.apply_update(config=object(), firmware_path=str(tmp_path / "fw.rootfs.bz2"))
+
+    assert ok is False
+    assert armed["called"] is False
+
+
+def test_apply_update_aborts_when_tune2fs_missing(monkeypatch, tmp_path):
+    """A missing tune2fs binary is a clean abort, not a crash."""
+    from station_agent import ota
+
+    monkeypatch.setattr(ota, "get_bootloader", lambda cfg: "grub")
+    monkeypatch.setattr(ota, "get_inactive_slot", lambda bl: "a")
+    monkeypatch.setattr(ota.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(ota, "install_to_slot", lambda src, dev: None)
+    monkeypatch.setattr(ota, "set_upgrade_pending", lambda bl, slot: True)
+
+    def missing(cmd, **kw):
+        raise FileNotFoundError("tune2fs")
+
+    monkeypatch.setattr(ota.subprocess, "run", missing)
+
+    assert ota.apply_update(config=object(), firmware_path=str(tmp_path / "fw")) is False
