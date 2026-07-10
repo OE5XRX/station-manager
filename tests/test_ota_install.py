@@ -435,7 +435,8 @@ def test_apply_update_aborts_when_relabel_fails(monkeypatch, tmp_path):
     )
 
     def boom(cmd, **kw):
-        raise subprocess.CalledProcessError(1, cmd, stderr=b"bad magic")
+        # subprocess.run(..., text=True) => stderr is a str in the real path.
+        raise subprocess.CalledProcessError(1, cmd, stderr="bad magic")
 
     monkeypatch.setattr(ota.subprocess, "run", boom)
 

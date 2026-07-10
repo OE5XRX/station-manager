@@ -462,10 +462,11 @@ def apply_update(config, firmware_path: str) -> bool:
                 target_slot,
             )
             return False
-        logger.warning(
-            "Could not set fs label root_%s on slot %s; continuing "
+        # set_slot_fs_label already logged the failure detail at WARNING; this
+        # is just the (expected, non-problematic) decision to proceed, so INFO.
+        logger.info(
+            "Continuing OTA despite fs-label not set on slot %s "
             "(bootloader %s does not use the fs-label to locate the slot)",
-            target_slot,
             target_slot,
             bl,
         )
