@@ -463,7 +463,8 @@ def apply_update(config, firmware_path: str) -> bool:
             )
             return False
         logger.warning(
-            "Could not set fs label root_%s on slot %s; continuing (%s boots by PARTLABEL)",
+            "Could not set fs label root_%s on slot %s; continuing "
+            "(bootloader %s does not use the fs-label to locate the slot)",
             target_slot,
             target_slot,
             bl,
@@ -483,8 +484,9 @@ def set_slot_fs_label(device: str, slot: str) -> bool:
     Required because the OTA writes a raw rootfs image (labelled root_a) onto
     the target slot, clobbering its own label; x86 GRUB's ``search --label
     root_<slot>`` then fails to find the slot. Returns False on any failure
-    (including tune2fs being absent); the caller decides whether that is fatal
-    (GRUB) or ignorable (u-boot boots by PARTLABEL).
+    (including tune2fs being absent). Logs at WARNING only — the caller decides
+    the severity (fatal under GRUB, ignorable under u-boot which boots by
+    PARTLABEL).
     """
     label = f"root_{slot}"
     try:
@@ -496,18 +498,18 @@ def set_slot_fs_label(device: str, slot: str) -> bool:
             timeout=30,
         )
     except FileNotFoundError:
-        logger.error("tune2fs not found — cannot set filesystem label %s on %s", label, device)
+        logger.warning("tune2fs not found — cannot set filesystem label %s on %s", label, device)
         return False
     except subprocess.TimeoutExpired:
-        logger.error("tune2fs -L %s %s timed out", label, device)
+        logger.warning("tune2fs -L %s %s timed out", label, device)
         return False
     except subprocess.CalledProcessError as exc:
-        logger.error(
+        logger.warning(
             "tune2fs -L %s %s failed (rc=%s): %s", label, device, exc.returncode, exc.stderr
         )
         return False
     except OSError as exc:
-        logger.error("tune2fs -L %s %s errored: %s", label, device, exc)
+        logger.warning("tune2fs -L %s %s errored: %s", label, device, exc)
         return False
 
     logger.info("Set filesystem label %s on %s", label, device)
