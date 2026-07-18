@@ -77,7 +77,10 @@ def apply_state(station, slot, module_id, values):
             module.last_state[cap_name] = value
             changed = True
     if changed:
-        module.save(update_fields=["last_state"])
+        # updated_at is auto_now, but Django does NOT auto-add auto_now fields
+        # to an explicit update_fields — list it so the settings-change
+        # timestamp actually advances on the incremental state path.
+        module.save(update_fields=["last_state", "updated_at"])
 
 
 def mark_station_offline(station):

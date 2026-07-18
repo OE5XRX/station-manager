@@ -108,3 +108,27 @@ def test_mark_station_offline():
     StationModule.objects.create(station=station, slot="slot0", module_id="fm0", online=True)
     registry.mark_station_offline(station)
     assert StationModule.objects.filter(station=station, online=True).count() == 0
+
+
+@pytest.mark.django_db
+def test_apply_state_bumps_updated_at():
+    """The incremental state path must advance updated_at (auto_now is NOT
+    auto-added to an explicit update_fields)."""
+    import time
+
+    from apps.control import registry
+    from apps.control.models import StationModule
+
+    station = Station.objects.create(name="st-updated")
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm0",
+        capability_descriptor=_fm_descriptor(),
+        last_state={"frequency": 145.5},
+    )
+    before = StationModule.objects.get(station=station, slot="slot0", module_id="fm0").updated_at
+    time.sleep(0.01)
+    registry.apply_state(station, "slot0", "fm0", {"frequency": 146.0})
+    after = StationModule.objects.get(station=station, slot="slot0", module_id="fm0").updated_at
+    assert after > before

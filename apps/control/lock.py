@@ -93,6 +93,14 @@ def touch(station, user, scope="station"):
 
 @transaction.atomic
 def holder_disconnected(station, user, grace_seconds, scope="station"):
+    # KNOWN LIMITATION (D4): the lock is USER-owned and meant to be shared
+    # across a user's tabs, but this arms the reconnect-grace on ANY holder
+    # tab closing — even if another tab of the same user is still connected.
+    # If that co-tab stays idle (no command/ptt/acquire) through the grace
+    # window, the sweep will auto-free the lock. A correct fix needs per-tab
+    # presence tracking (a ControlSession-style count), deferred to the same
+    # follow-up as the viewer-cap infrastructure. For the single-operator D4
+    # MVP this edge case is acceptable; documented in PR #90.
     lock = _locked(station, scope)
     if lock.holder_id == user.id:
         lock.pending_release_at = timezone.now() + timedelta(seconds=grace_seconds)
