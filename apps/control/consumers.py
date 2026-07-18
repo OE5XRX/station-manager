@@ -435,10 +435,6 @@ class ControlConsumer(AsyncWebsocketConsumer):
             self.group_name, {"type": "control.lock", "lock": status}
         )
 
-    async def _send_lock_status(self, station):
-        status = await self._lock_status(station)
-        await self._push_lock(status)
-
     async def _push_lock(self, status):
         payload = dict(status)
         payload["type"] = "lock"
