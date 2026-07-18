@@ -207,3 +207,41 @@ def test_ptt_command_audited_as_control_ptt():
     assert (
         StationAuditLog.objects.filter(station=station, event_type="control_command").count() == 1
     )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_connect_inventory_snapshot_uses_slots_shape():
+    """The connect-time inventory snapshot must use the same {v, type, slots}
+    shape as the agent's live inventory frame (D5 wires one handler)."""
+    from apps.control.models import StationModule
+
+    station = Station.objects.create(name="cc-snap", status="offline")
+    user = User.objects.create(username="usnap", membership_level=User.MembershipLevel.MEMBER)
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm0",
+        type="fm",
+        capability_descriptor=[{"name": "frequency", "kind": "setting", "type": "float"}],
+        last_state={"frequency": 145.5},
+        online=False,
+    )
+
+    async def scenario():
+        comm = _browser_comm(user, station.id)
+        assert (await comm.connect())[0] is True
+        inv = await _drain_until(comm, "inventory")
+        await comm.disconnect()
+        return inv
+
+    inv = asyncio.run(scenario())
+    assert inv["v"] == 1
+    assert "modules" not in inv  # old flat shape is gone
+    assert isinstance(inv["slots"], list)
+    slot0 = inv["slots"][0]
+    assert slot0["slot"] == "slot0"
+    mod = slot0["modules"][0]
+    assert mod["module"] == "fm0"
+    assert mod["identity"]["type"] == "fm"
+    assert mod["state"] == {"frequency": 145.5}
+    assert mod["online"] is False  # offline module still renders from last_state

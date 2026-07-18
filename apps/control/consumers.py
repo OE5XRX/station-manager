@@ -270,7 +270,13 @@ class ControlConsumer(AsyncWebsocketConsumer):
         # later lock mutation, so D5 (the UI) wires a single lock handler and
         # renders the lock panel from the very first frame on load.
         await self.send(
-            text_data=json.dumps({"type": "inventory", "modules": await self._snapshot(station)})
+            text_data=json.dumps(
+                {
+                    "v": constants.PROTOCOL_VERSION,
+                    "type": "inventory",
+                    "slots": await self._snapshot(station),
+                }
+            )
         )
         await self._send_lock_status(station)
 
@@ -515,13 +521,21 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _snapshot(self, station):
+        """Build the connect-time inventory in the SAME slots-grouped shape as
+        the agent's live ``inventory`` frame, so D5 wires one handler for
+        ``type:"inventory"``. Adds a per-module ``online`` flag (additive) so
+        offline modules can still render from persisted descriptors/last_state.
+        """
         from .models import StationModule
 
-        out = []
+        slots = {}
+        order = []
         for m in StationModule.objects.filter(station=station):
-            out.append(
+            if m.slot not in slots:
+                slots[m.slot] = []
+                order.append(m.slot)
+            slots[m.slot].append(
                 {
-                    "slot": m.slot,
                     "module": m.module_id,
                     "identity": {"type": m.type, "model": m.model, "version": m.version},
                     "capabilities": m.capability_descriptor,
@@ -529,7 +543,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
                     "online": m.online,
                 }
             )
-        return out
+        return [{"slot": s, "modules": slots[s]} for s in order]
 
     @database_sync_to_async
     def _acquire(self, station):
