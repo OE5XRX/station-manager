@@ -29,6 +29,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self.group_name = f"control_{self.station_id}"
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.sweep_task = None
+        self.station = None  # cached after connect to avoid a DB fetch per frame
 
         from urllib.parse import parse_qs
 
@@ -39,6 +40,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         if station is None:
             await self.close(code=4404)
             return
+        self.station = station
         if not await self._verify_agent(station, params):
             await self.close(code=4401)
             return
@@ -58,7 +60,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             self.sweep_task = None
 
         try:
-            station = await self._get_station()
+            station = await self._cached_station()
             if station is not None:
                 await self._mark_offline(station)
                 freed = await self._force_free(station)
@@ -81,12 +83,12 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             return
         mtype = msg.get("type")
         if mtype == "inventory":
-            station = await self._get_station()
+            station = await self._cached_station()
             if station is not None:
                 await self._apply_inventory(station, msg.get("slots", []))
             await self._broadcast("control.inventory", {"msg": msg})
         elif mtype == "state":
-            station = await self._get_station()
+            station = await self._cached_station()
             if station is not None:
                 await self._apply_state(
                     station, msg.get("slot"), msg.get("module"), msg.get("values", {})
@@ -134,7 +136,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             while True:
                 await asyncio.sleep(constants.LOCK_SWEEP_INTERVAL_SECONDS)
                 try:
-                    station = await self._get_station()
+                    station = await self._cached_station()
                     if station is None:
                         continue
                     freed = await self._sweep(station)
@@ -152,6 +154,17 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_send(self.group_name, {"type": msg_type, **payload})
 
     # -- DB helpers -----------------------------------------------------------
+
+    async def _cached_station(self):
+        """Return the Station, fetching once and caching on the instance.
+
+        The station is fixed for the life of the connection, so re-querying it
+        on every (potentially high-frequency) inventory/state frame is wasted
+        work. Falls back to a DB fetch if the cache is somehow unset.
+        """
+        if self.station is None:
+            self.station = await self._get_station()
+        return self.station
 
     @database_sync_to_async
     def _get_station(self):
@@ -248,6 +261,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.pending = {}  # request_id -> asyncio.Task (command timeout)
         self.user = self.scope.get("user")
+        self.station = None  # cached after connect to avoid a DB fetch per frame
 
         await self.accept()
 
@@ -258,6 +272,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if station is None:
             await self._reject(4404, "Station not found")
             return
+        self.station = station
         if not await self._can_use(station):
             await self._reject(4403, "You are not permitted to control this station")
             return
@@ -299,7 +314,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         # it is pending" on shutdown/reload and cleanup may be left unfinished.
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        station = await self._get_station()
+        station = await self._cached_station()
         if station is not None and self.user and not self.user.is_anonymous:
             await self._holder_disconnected(station)
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
@@ -312,7 +327,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         except json.JSONDecodeError:
             return
         mtype = msg.get("type")
-        station = await self._get_station()
+        station = await self._cached_station()
         if station is None:
             return
 
@@ -501,6 +516,17 @@ class ControlConsumer(AsyncWebsocketConsumer):
         pass  # not for browsers
 
     # -- DB helpers -----------------------------------------------------------
+
+    async def _cached_station(self):
+        """Return the Station, fetching once and caching on the instance.
+
+        The station is fixed for the connection's life, so re-querying it on
+        every incoming browser frame (incl. high-frequency ptt_keepalive) is
+        wasted work. Falls back to a DB fetch if the cache is somehow unset.
+        """
+        if self.station is None:
+            self.station = await self._get_station()
+        return self.station
 
     @database_sync_to_async
     def _get_station(self):
