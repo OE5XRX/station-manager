@@ -48,3 +48,41 @@ class StationModule(models.Model):
 
     def __str__(self):
         return f"{self.station_id}/{self.slot}/{self.module_id}"
+
+
+class ControlLock(models.Model):
+    """Per-(station, scope) TX-lock. USER-owned (shared across the user's tabs).
+
+    ``scope`` is ``"station"`` today; the unique key leaves room to extend to
+    per-module or role scopes later without a schema change to the holder logic.
+    """
+
+    station = models.ForeignKey(
+        "stations.Station",
+        verbose_name=_("station"),
+        on_delete=models.CASCADE,
+        related_name="control_locks",
+    )
+    scope = models.CharField(_("scope"), max_length=64, default="station")
+    holder = models.ForeignKey(
+        "accounts.User",
+        verbose_name=_("holder"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="held_control_locks",
+    )
+    acquired_at = models.DateTimeField(_("acquired at"), null=True, blank=True)
+    last_activity = models.DateTimeField(_("last activity"), null=True, blank=True)
+    pending_release_at = models.DateTimeField(_("pending release at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("control lock")
+        verbose_name_plural = _("control locks")
+        constraints = [
+            models.UniqueConstraint(fields=["station", "scope"], name="uniq_station_scope_lock"),
+        ]
+
+    def __str__(self):
+        who = self.holder_id or "FREE"
+        return f"lock({self.station_id}/{self.scope})={who}"
