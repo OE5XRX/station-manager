@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "apps.stations",
     "apps.deployments",
     "apps.tunnel",
+    "apps.control",
     "apps.audit",
     "apps.monitoring",
     "apps.images",
