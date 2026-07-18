@@ -51,17 +51,20 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 pass
             self.sweep_task = None
 
-        station = await self._get_station()
-        if station is not None:
-            await self._mark_offline(station)
-            freed = await self._force_free(station)
-            await self._broadcast("control.agent_offline", {})
-            if freed:
-                status = await self._lock_status(station)
-                await self._broadcast("control.lock", {"lock": status})
-
-        await self.channel_layer.group_discard(self.agent_group_name, self.channel_name)
-        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        try:
+            station = await self._get_station()
+            if station is not None:
+                await self._mark_offline(station)
+                freed = await self._force_free(station)
+                await self._broadcast("control.agent_offline", {})
+                if freed:
+                    status = await self._lock_status(station)
+                    await self._broadcast("control.lock", {"lock": status})
+        finally:
+            # Always release group membership for this dead channel, even if
+            # the offline/free/broadcast steps above raise (e.g. channel layer down).
+            await self.channel_layer.group_discard(self.agent_group_name, self.channel_name)
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
         if text_data is None:
@@ -124,13 +127,18 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         try:
             while True:
                 await asyncio.sleep(constants.LOCK_SWEEP_INTERVAL_SECONDS)
-                station = await self._get_station()
-                if station is None:
-                    continue
-                freed = await self._sweep(station)
-                if freed:
-                    status = await self._lock_status(station)
-                    await self._broadcast("control.lock", {"lock": status})
+                try:
+                    station = await self._get_station()
+                    if station is None:
+                        continue
+                    freed = await self._sweep(station)
+                    if freed:
+                        status = await self._lock_status(station)
+                        await self._broadcast("control.lock", {"lock": status})
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("control: lock sweep iteration failed; continuing")
         except asyncio.CancelledError:
             raise
 
