@@ -279,9 +279,15 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self.close(code=code)
 
     async def disconnect(self, close_code):
-        for task in list(self.pending.values()):
-            task.cancel()
+        pending = list(self.pending.values())
         self.pending.clear()
+        for task in pending:
+            task.cancel()
+        # Await the cancelled tasks so they finish tearing down before the
+        # consumer goes away — otherwise asyncio logs "Task was destroyed but
+        # it is pending" on shutdown/reload and cleanup may be left unfinished.
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         station = await self._get_station()
         if station is not None and self.user and not self.user.is_anonymous:
             await self._holder_disconnected(station)
@@ -331,12 +337,15 @@ class ControlConsumer(AsyncWebsocketConsumer):
         request_id = msg.get("request_id")
         if request_id is not None:
             self.pending[request_id] = asyncio.create_task(self._command_timeout(request_id))
-        # Audit command frames; also logs PTT-on (capability=="ptt") here —
-        # ptt_keepalive frames are intentionally not audited (log-spam).
+        # Audit command frames. A PTT key (capability=="ptt") is logged under
+        # the dedicated CONTROL_PTT event so audit trails can tell PTT apart
+        # from other commands; ptt_keepalive frames stay unaudited (log-spam).
+        capability = msg.get("capability")
+        event_type = "control_ptt" if capability == "ptt" else "control_command"
         await self._audit(
             station,
-            "control_command",
-            f"{self.user.username} {msg.get('op')} {msg.get('capability')}",
+            event_type,
+            f"{self.user.username} {msg.get('op')} {capability}",
         )
 
     async def _command_timeout(self, request_id):

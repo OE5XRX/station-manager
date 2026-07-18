@@ -157,3 +157,53 @@ def test_admin_preempt_takes_lock():
         await ac.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ptt_command_audited_as_control_ptt():
+    """A holder command with capability=='ptt' is audited under CONTROL_PTT,
+    other commands under CONTROL_COMMAND — so audit trails distinguish PTT."""
+    from apps.stations.models import StationAuditLog
+
+    station = Station.objects.create(name="cc-ptt", status="online")
+    holder = User.objects.create(username="hptt", membership_level=User.MembershipLevel.MEMBER)
+
+    async def scenario():
+        hc = _browser_comm(holder, station.id)
+        assert (await hc.connect())[0] is True
+        await _drain_until(hc, "lock")  # initial free-state
+        await hc.send_json_to({"type": "lock_acquire"})
+        await _drain_until(hc, "lock")  # held-state
+
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "request_id": "p1",
+                "slot": "slot0",
+                "module": "fm0",
+                "capability": "ptt",
+                "op": "set",
+                "value": True,
+            }
+        )
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "request_id": "f1",
+                "slot": "slot0",
+                "module": "fm0",
+                "capability": "frequency",
+                "op": "set",
+                "value": 145.5,
+            }
+        )
+        # Give the audit writes a moment to land.
+        await asyncio.sleep(0.1)
+        await hc.disconnect()
+
+    asyncio.run(scenario())
+
+    assert StationAuditLog.objects.filter(station=station, event_type="control_ptt").count() == 1
+    assert (
+        StationAuditLog.objects.filter(station=station, event_type="control_command").count() == 1
+    )
