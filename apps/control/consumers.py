@@ -347,6 +347,12 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self._relay(msg)
         request_id = msg.get("request_id")
         if request_id is not None:
+            # A reused request_id must not orphan the previous timeout task —
+            # cancel it first, else two timers fire for the same id and the
+            # overwritten task can GC while pending ("Task was destroyed").
+            existing = self.pending.pop(request_id, None)
+            if existing is not None:
+                existing.cancel()
             self.pending[request_id] = asyncio.create_task(self._command_timeout(request_id))
         # Audit command frames. A PTT key (capability=="ptt") is logged under
         # the dedicated CONTROL_PTT event so audit trails can tell PTT apart
