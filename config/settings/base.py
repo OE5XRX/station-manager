@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "apps.stations",
     "apps.deployments",
     "apps.tunnel",
+    "apps.control",
     "apps.audit",
     "apps.monitoring",
     "apps.images",
@@ -202,6 +203,12 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer",
     },
 }
+
+# Control-plane (D4) tunables.
+CONTROL_T_IDLE_SECONDS = 300  # idle lock auto-free (5 min)
+CONTROL_RECONNECT_GRACE_SECONDS = 12  # hold survives a short WS blip
+CONTROL_COMMAND_TIMEOUT_SECONDS = 10  # no result -> timeout error to browser
+CONTROL_LOCK_SWEEP_INTERVAL_SECONDS = 5
 
 # Django Tasks Framework
 TASKS = {

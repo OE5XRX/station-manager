@@ -291,6 +291,12 @@ class StationAuditLog(models.Model):
         STATION_ASSIGNMENT_CREATED = "station_assignment_created", _("Station Assignment Created")
         STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked", _("Station Assignment Revoked")
         STATION_REGION_CHANGED = "station_region_changed", _("Station Region Changed")
+        CONTROL_LOCK_ACQUIRED = "control_lock_acquired", _("Control Lock Acquired")
+        CONTROL_LOCK_RELEASED = "control_lock_released", _("Control Lock Released")
+        CONTROL_LOCK_TRANSFERRED = "control_lock_transferred", _("Control Lock Transferred")
+        CONTROL_LOCK_PREEMPTED = "control_lock_preempted", _("Control Lock Preempted")
+        CONTROL_COMMAND = "control_command", _("Control Command")
+        CONTROL_PTT = "control_ptt", _("Control PTT")
 
     station = models.ForeignKey(
         Station,

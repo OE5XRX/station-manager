@@ -268,3 +268,14 @@ def alert(station, offline_alert_rule):
         title=f"Station offline: {station.name}",
         message="Test alert message",
     )
+
+
+@pytest.fixture
+def control_agent_auth(monkeypatch):
+    """Bypass Ed25519 verification for AgentControlConsumer in tests."""
+    from apps.control import consumers
+
+    async def _ok(self, station, params):
+        return True
+
+    monkeypatch.setattr(consumers.AgentControlConsumer, "_verify_agent", _ok)

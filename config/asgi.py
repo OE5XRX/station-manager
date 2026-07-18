@@ -10,6 +10,7 @@ from django.core.asgi import get_asgi_application
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.prod")
 django_asgi_app = get_asgi_application()
 
+from apps.control import routing as control_routing  # noqa: E402
 from apps.deployments import routing as deployments_routing  # noqa: E402
 from apps.stations import routing as stations_routing  # noqa: E402
 from apps.tunnel import routing as tunnel_routing  # noqa: E402
@@ -18,12 +19,15 @@ browser_ws_routes = (
     stations_routing.websocket_urlpatterns
     + deployments_routing.websocket_urlpatterns
     + tunnel_routing.websocket_urlpatterns
+    + control_routing.websocket_urlpatterns
 )
 
 # Agent routes authenticate themselves via Ed25519 signature in query
 # params — they skip AllowedHostsOriginValidator because the station agent
 # is a CLI client that doesn't send an Origin header.
-agent_ws_routes = tunnel_routing.agent_websocket_urlpatterns
+agent_ws_routes = (
+    tunnel_routing.agent_websocket_urlpatterns + control_routing.agent_websocket_urlpatterns
+)
 
 
 async def websocket_app(scope, receive, send):
