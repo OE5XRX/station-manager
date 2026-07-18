@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 
+import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
@@ -227,10 +228,341 @@ def _lock_with_holder(station, scope="station"):
 class ControlConsumer(AsyncWebsocketConsumer):
     """Browser-facing control WebSocket. Path: ws/control/<station_id>/.
 
-    # NOTE: full implementation in Task 6
-    This is a minimal placeholder to allow routing.py and config.asgi to import
-    cleanly. Task 6 replaces this stub with the real viewer/controller logic.
+    Access-controlled (can_use_station). Relays holder commands/PTT and lock
+    actions to the agent; pushes state/inventory/result/event + lock status to
+    all viewers.
+
+    Audit note: CONTROL_PTT keepalives arrive ~1/sec — auditing every one would
+    spam the log. Instead we audit command frames whose capability == "ptt" (i.e.
+    the PTT-on command itself). ptt_keepalive frames are NOT audited.
     """
 
     async def connect(self):
-        await self.close()
+        self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
+        self.group_name = f"control_{self.station_id}"
+        self.agent_group_name = f"control_{self.station_id}_agent"
+        self.pending = {}  # request_id -> asyncio.Task (command timeout)
+        self.user = self.scope.get("user")
+
+        await self.accept()
+
+        if not self.user or self.user.is_anonymous:
+            await self._reject(4401, "Not signed in — please sign in again")
+            return
+        station = await self._get_station()
+        if station is None:
+            await self._reject(4404, "Station not found")
+            return
+        if not await self._can_use(station):
+            await self._reject(4403, "You are not permitted to control this station")
+            return
+
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        # Reconnect within grace keeps a held lock.
+        await self._holder_reconnected(station)
+        # Initial snapshot with embedded lock status — one frame, not two.
+        # Using a single combined frame means the broadcast "lock" type is
+        # unambiguously from a lock-state mutation (acquire/release/preempt),
+        # which lets clients and tests distinguish initial state from changes.
+        status = await self._lock_status(station)
+        lock_payload = dict(status)
+        lock_payload["you_hold"] = bool(self.user and status.get("holder_id") == self.user.id)
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "inventory",
+                    "modules": await self._snapshot(station),
+                    "lock": lock_payload,
+                }
+            )
+        )
+
+    async def _reject(self, code, reason):
+        """Accept-then-error reject so the browser sees a real reason."""
+        try:
+            await self.send(
+                text_data=json.dumps({"type": "error", "reason": reason, "code": code})
+            )
+        finally:
+            await self.close(code=code)
+
+    async def disconnect(self, close_code):
+        for task in list(self.pending.values()):
+            task.cancel()
+        self.pending.clear()
+        station = await self._get_station()
+        if station is not None and self.user and not self.user.is_anonymous:
+            await self._holder_disconnected(station)
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if text_data is None:
+            return
+        try:
+            msg = json.loads(text_data)
+        except json.JSONDecodeError:
+            return
+        mtype = msg.get("type")
+        station = await self._get_station()
+        if station is None:
+            return
+
+        if mtype == "command":
+            await self._handle_command(station, msg)
+        elif mtype == "ptt_keepalive":
+            if await self._touch_if_holder(station):
+                await self._relay(msg)
+            else:
+                await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
+        elif mtype in ("subscribe", "unsubscribe"):
+            # Any viewer may subscribe/unsubscribe — access already checked at connect.
+            await self._relay(msg)
+        elif mtype == "lock_acquire":
+            await self._lock_acquire(station)
+        elif mtype == "lock_release":
+            await self._lock_release(station)
+        elif mtype == "lock_request":
+            await self._lock_request(station)
+        elif mtype == "lock_transfer":
+            await self._lock_transfer(station, msg.get("to_user_id"))
+        elif mtype == "lock_preempt":
+            await self._lock_preempt(station)
+        # Unknown types are ignored (forward-compat).
+
+    # -- command + timeout ----------------------------------------------------
+
+    async def _handle_command(self, station, msg):
+        if not await self._touch_if_holder(station):
+            await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
+            return
+        await self._relay(msg)
+        request_id = msg.get("request_id")
+        if request_id is not None:
+            self.pending[request_id] = asyncio.create_task(
+                self._command_timeout(request_id)
+            )
+        # Audit command frames; also logs PTT-on (capability=="ptt") here —
+        # ptt_keepalive frames are intentionally not audited (log-spam).
+        await self._audit(
+            station,
+            "control_command",
+            f"{self.user.username} {msg.get('op')} {msg.get('capability')}",
+        )
+
+    async def _command_timeout(self, request_id):
+        """Fire a timeout error to the browser if no result arrives in time.
+
+        Reads the timeout from settings at call-time (not the module-level
+        constant) so the Task 7 settings fixture can override it without
+        an importlib reload.
+        """
+        try:
+            timeout = getattr(
+                django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10
+            )
+            await asyncio.sleep(timeout)
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "error",
+                        "request_id": request_id,
+                        "error": {"code": "timeout", "msg": "No result from agent"},
+                    }
+                )
+            )
+            self.pending.pop(request_id, None)
+        except asyncio.CancelledError:
+            raise
+
+    async def _relay(self, frame):
+        await self.channel_layer.group_send(
+            self.agent_group_name, {"type": "control.to_agent", "frame": frame}
+        )
+
+    async def _error(self, request_id, code, msg):
+        await self.send(
+            text_data=json.dumps(
+                {"type": "error", "request_id": request_id, "error": {"code": code, "msg": msg}}
+            )
+        )
+
+    # -- lock actions ---------------------------------------------------------
+
+    async def _lock_acquire(self, station):
+        if await self._acquire(station):
+            await self._audit(station, "control_lock_acquired", f"{self.user.username} acquired control")
+        await self._broadcast_lock(station)
+
+    async def _lock_release(self, station):
+        if await self._release(station):
+            await self._audit(station, "control_lock_released", f"{self.user.username} released control")
+        await self._broadcast_lock(station)
+
+    async def _lock_request(self, station):
+        holder = await self._request(station)
+        if holder is not None:
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "control.control_requested",
+                    "holder_id": holder.holder_id,
+                    "requester": {"id": self.user.id, "username": self.user.username},
+                },
+            )
+
+    async def _lock_transfer(self, station, to_user_id):
+        if to_user_id is not None and await self._transfer(station, to_user_id):
+            await self._audit(
+                station,
+                "control_lock_transferred",
+                f"{self.user.username} -> user {to_user_id}",
+            )
+        await self._broadcast_lock(station)
+
+    async def _lock_preempt(self, station):
+        if not await self._can_administer(station):
+            await self._error(None, "forbidden", "Admin rights required to preempt")
+            return
+        await self._preempt(station)
+        await self._audit(
+            station, "control_lock_preempted", f"{self.user.username} preempted control"
+        )
+        await self._broadcast_lock(station)
+
+    async def _broadcast_lock(self, station):
+        status = await self._lock_status(station)
+        await self.channel_layer.group_send(
+            self.group_name, {"type": "control.lock", "lock": status}
+        )
+
+    async def _send_lock_status(self, station):
+        status = await self._lock_status(station)
+        await self._push_lock(status)
+
+    async def _push_lock(self, status):
+        payload = dict(status)
+        payload["type"] = "lock"
+        payload["you_hold"] = bool(self.user and status.get("holder_id") == self.user.id)
+        await self.send(text_data=json.dumps(payload))
+
+    # -- channel handlers (broadcast -> this browser) -------------------------
+
+    async def control_state(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_inventory(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_result(self, event):
+        msg = event["msg"]
+        rid = msg.get("request_id")
+        task = self.pending.pop(rid, None)
+        if task is not None:
+            task.cancel()
+        await self.send(text_data=json.dumps(msg))
+
+    async def control_event(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_lock(self, event):
+        await self._push_lock(event["lock"])
+
+    async def control_agent_offline(self, event):
+        await self.send(text_data=json.dumps({"type": "agent_offline"}))
+
+    async def control_control_requested(self, event):
+        # Only the current holder should be prompted.
+        if self.user and event.get("holder_id") == self.user.id:
+            await self.send(
+                text_data=json.dumps(
+                    {"type": "control_requested", "requester": event["requester"]}
+                )
+            )
+
+    async def control_to_agent(self, event):
+        pass  # not for browsers
+
+    # -- DB helpers -----------------------------------------------------------
+
+    @database_sync_to_async
+    def _get_station(self):
+        from apps.stations.models import Station
+
+        try:
+            return Station.objects.get(pk=self.station_id)
+        except Station.DoesNotExist:
+            return None
+
+    @database_sync_to_async
+    def _can_use(self, station):
+        return bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
+
+    @database_sync_to_async
+    def _can_administer(self, station):
+        return (
+            self.user.is_admin
+            or self.user.is_station_admin(station)
+            or self.user.can_administer_station(station)
+        )
+
+    @database_sync_to_async
+    def _snapshot(self, station):
+        from .models import StationModule
+
+        out = []
+        for m in StationModule.objects.filter(station=station):
+            out.append(
+                {
+                    "slot": m.slot,
+                    "module": m.module_id,
+                    "identity": {"type": m.type, "model": m.model, "version": m.version},
+                    "capabilities": m.capability_descriptor,
+                    "state": m.last_state,
+                    "online": m.online,
+                }
+            )
+        return out
+
+    @database_sync_to_async
+    def _acquire(self, station):
+        return lock.acquire(station, self.user)
+
+    @database_sync_to_async
+    def _release(self, station):
+        return lock.release(station, self.user)
+
+    @database_sync_to_async
+    def _request(self, station):
+        return lock.request_control(station, self.user)
+
+    @database_sync_to_async
+    def _transfer(self, station, to_user_id):
+        return lock.transfer(station, self.user, to_user_id)
+
+    @database_sync_to_async
+    def _preempt(self, station):
+        return lock.preempt(station, self.user)
+
+    @database_sync_to_async
+    def _touch_if_holder(self, station):
+        return lock.touch(station, self.user)
+
+    @database_sync_to_async
+    def _holder_disconnected(self, station):
+        lock.holder_disconnected(station, self.user, constants.RECONNECT_GRACE_SECONDS)
+
+    @database_sync_to_async
+    def _holder_reconnected(self, station):
+        lock.holder_reconnected(station, self.user)
+
+    @database_sync_to_async
+    def _lock_status(self, station):
+        return lock.lock_status(_lock_with_holder(station))
+
+    @database_sync_to_async
+    def _audit(self, station, event_type, message):
+        from apps.stations.models import StationAuditLog
+
+        StationAuditLog.log(
+            station=station, event_type=event_type, message=message, user=self.user
+        )
