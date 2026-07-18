@@ -28,12 +28,14 @@
 1. **New app `apps.control`.** Files that change together live together: registry model, lock, both consumers, routing, config. FK to `stations.Station`. Registered in `INSTALLED_APPS` after `apps.tunnel`.
 2. **Two channel groups per station** (mirrors tunnel): `control_<id>` (viewers + broadcasts) and `control_<id>_agent` (server→agent frames). The `AgentControlConsumer` joins both; `ControlConsumer` joins only `control_<id>`.
 3. **`ControlLock` is a DB model** keyed unique `(station, scope)` with `scope="station"` today (erweiterbar). Lock ops are `@transaction.atomic` + `select_for_update`. Timers are timestamp fields (`last_activity`, `pending_release_at`) swept by a pure function.
-4. **Gating split** (documented decision; the ticket text bundles `subscribe` under "gated durch den Lock", but the whole D5 multi-viewer design needs read-only viewers to see telemetry):
+4. **Gating split** (CONFIRMED by project owner 2026-07-18; the ticket text bundles `subscribe` under "gated durch den Lock", but the whole D5 multi-viewer design needs read-only viewers to see telemetry):
    - `command` and `ptt_keepalive` → **lock-holder only** (+ `can_use_station`).
    - `subscribe`/`unsubscribe` → **`can_use_station` only** (any viewer may watch telemetry; a subscription is a server↔agent stream request, not radio control).
-   This is called out explicitly in the PR description for reviewer sign-off.
-5. **Command timeout** is tracked per originating `ControlConsumer` instance (the browser that sent it): schedule an `asyncio` timer keyed by `request_id`; the broadcast `result` (which reaches the originator too) cancels it; otherwise a structured `{type:"error", request_id, error:{code:"timeout"}}` is pushed to that browser.
-6. **Lock sweep** (T_idle + reconnect-grace) runs as a periodic loop on the **single** `AgentControlConsumer` per station (there is exactly one agent WS), plus the same pure `sweep_lock()` function is called opportunistically and directly in tests. When the agent disconnects, the lock is freed anyway, so having the agent own the timer is correct.
+   This is called out explicitly in the PR description.
+
+5. **NO viewer cap** (CONFIRMED by project owner 2026-07-18, conscious deviation from spec §10 "Max-Viewer analog MAX_SESSIONS_PER_STATION"). Rationale: unlike a terminal session (which spawns a real shell = resource cost), a control *viewer* is just a WebSocket receiving broadcasts — cheap. The real safety concern (multiple people keying the radio) is already prevented by the TX-lock + PTT dead-man. Per YAGNI we ship **no** `CONTROL_MAX_VIEWERS_PER_STATION` config, **no** `ControlSession` table, and **no** 4429 rejection. If load ever demands it, it's a ~30-min follow-up. The PR notes this deviation.
+6. **Command timeout** is tracked per originating `ControlConsumer` instance (the browser that sent it): schedule an `asyncio` timer keyed by `request_id`; the broadcast `result` (which reaches the originator too) cancels it; otherwise a structured `{type:"error", request_id, error:{code:"timeout"}}` is pushed to that browser.
+7. **Lock sweep** (T_idle + reconnect-grace) runs as a periodic loop on the **single** `AgentControlConsumer` per station (there is exactly one agent WS), plus the same pure `sweep_lock()` function is called opportunistically and directly in tests. When the agent disconnects, the lock is freed anyway, so having the agent own the timer is correct.
 
 ## File structure
 
@@ -597,9 +599,11 @@ from django.conf import settings
 
 T_IDLE_SECONDS = getattr(settings, "CONTROL_T_IDLE_SECONDS", 300)
 RECONNECT_GRACE_SECONDS = getattr(settings, "CONTROL_RECONNECT_GRACE_SECONDS", 12)
-MAX_VIEWERS_PER_STATION = getattr(settings, "CONTROL_MAX_VIEWERS_PER_STATION", 8)
 COMMAND_TIMEOUT_SECONDS = getattr(settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10)
 LOCK_SWEEP_INTERVAL_SECONDS = getattr(settings, "CONTROL_LOCK_SWEEP_INTERVAL_SECONDS", 5)
+
+# NOTE: no CONTROL_MAX_VIEWERS_PER_STATION — viewers are cheap (WS + broadcasts);
+# the TX-lock + PTT dead-man are the real safeguards. Conscious §10 deviation.
 ```
 
 Add to `config/settings/base.py` (near the Channels block):
@@ -608,7 +612,6 @@ Add to `config/settings/base.py` (near the Channels block):
 # Control-plane (D4) tunables.
 CONTROL_T_IDLE_SECONDS = 300           # idle lock auto-free (5 min)
 CONTROL_RECONNECT_GRACE_SECONDS = 12   # hold survives a short WS blip
-CONTROL_MAX_VIEWERS_PER_STATION = 8    # analog MAX_SESSIONS_PER_STATION
 CONTROL_COMMAND_TIMEOUT_SECONDS = 10   # no result -> timeout error to browser
 CONTROL_LOCK_SWEEP_INTERVAL_SECONDS = 5
 ```
@@ -1252,7 +1255,7 @@ git commit -m "feat(control): AgentControlConsumer (relay + registry + lock swee
 **Interfaces:**
 - Consumes: `lock`, `registry`, `constants`, `StationModule`, `User.can_use_station` / `is_station_admin` / `can_administer_station` / `is_admin`, `StationAuditLog.log`.
 - Produces `ControlConsumer` at `ws/control/<station_id>/`:
-  - **connect:** `accept()`; reject-with-reason if anonymous (`4401`), not `can_use_station` (`4403`), station missing (`4404`), or viewers ≥ `MAX_VIEWERS_PER_STATION` (`4429`). On success: join `control_<id>`; send initial `inventory` snapshot (from registry) + current `lock` status; if this user is the lock holder reconnecting, `lock.holder_reconnected`.
+  - **connect:** `accept()`; reject-with-reason if anonymous (`4401`), not `can_use_station` (`4403`), or station missing (`4404`). (No viewer cap — see decision 7.) On success: join `control_<id>`; send initial `inventory` snapshot (from registry) + current `lock` status; if this user is the lock holder reconnecting, `lock.holder_reconnected`.
   - **receive** (browser→server), dispatched by `type`:
     - `command` → require `can_use_station` **and** lock-holder (`lock.touch` returns holder-ness) → relay verbatim frame to `control_<id>_agent` via `control.to_agent`; start command-timeout timer keyed by `request_id`; audit `CONTROL_COMMAND`. Non-holder → `{type:"error", error:{code:"not_locked"}}`.
     - `ptt_keepalive` → require holder → `lock.touch` + relay verbatim; audit `CONTROL_PTT` (throttled/first only — see note).
@@ -1458,9 +1461,6 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if not await self._can_use(station):
             await self._reject(4403, "You are not permitted to control this station")
             return
-        if await self._viewer_count() >= constants.MAX_VIEWERS_PER_STATION:
-            await self._reject(4429, "Too many active viewers for this station")
-            return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         # Reconnect within grace keeps a held lock.
@@ -1650,16 +1650,6 @@ class ControlConsumer(AsyncWebsocketConsumer):
         return self.user.is_admin or self.user.is_station_admin(station) or self.user.can_administer_station(station)
 
     @database_sync_to_async
-    def _viewer_count(self):
-        # Channel-group membership isn't directly countable; approximate with a
-        # cheap upper bound of 0 here and rely on group size being small. For a
-        # hard cap, track ControlSession rows (future). For D4 we enforce via a
-        # per-connection in-memory set is impossible cross-process, so return 0
-        # (cap effectively disabled unless CONTROL_MAX_VIEWERS_PER_STATION logic
-        # is backed by a session table). See Task 6 note.
-        return 0
-
-    @database_sync_to_async
     def _snapshot(self, station):
         from .models import StationModule
 
@@ -1715,8 +1705,6 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
         StationAuditLog.log(station=station, event_type=event_type, message=message, user=self.user)
 ```
-
-**Viewer-cap note:** the cross-process viewer cap needs a `ControlSession` table to count reliably (like `TerminalSession`). For D4 the cap is defined in config but enforcement returns 0 (effectively off) to avoid an unreliable per-process count. If a hard cap is required, add a `ControlSession` model in a follow-up task mirroring `TerminalSession` reap/count. This is documented as a known limitation in the PR. **Decision point:** if the reviewer wants the cap enforced now, implement `ControlSession` (see Task 6b optional).
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1926,12 +1914,6 @@ Per CLAUDE.md, station-manager PRs need several review rounds. Use `~/.claude/sk
 
 ---
 
-## Optional Task 6b: `ControlSession` for a hard viewer cap (only if reviewer requires)
-
-Mirror `apps/tunnel/models.TerminalSession`: `ControlSession(station, user, channel_name, status, started_at, last_seen, close_reason)`. In `ControlConsumer.connect`, reap stale + count active < `MAX_VIEWERS_PER_STATION` (reject 4429 otherwise), create a row, keepalive-touch loop, close on disconnect. Add a Channels test `test_control_viewer_cap`. Only build this if the PR review asks for enforced caps — otherwise YAGNI.
-
----
-
 ## Self-Review (completed against the spec)
 
 - **§3 two consumers + channel-group relay** → Tasks 4/5/6. `control_<id>` + `control_<id>_agent`. ✔
@@ -1940,8 +1922,8 @@ Mirror `apps/tunnel/models.TerminalSession`: `ControlSession(station, user, chan
 - **§6 access mapping (can_use_station to see+control; admin to preempt)** → Task 6. ✔
 - **§7 edge cases (agent-disconnect→lock free+offline; command timeout→error; audit)** → Tasks 5/6/7. ✔
 - **§8 data flow** → Task 7 E2E. ✔
-- **§10 config (T_idle, grace, max-viewer, command timeout)** → Task 3 constants + settings; viewer-cap enforcement flagged as deferred. ✔
+- **§10 config (T_idle, grace, command timeout)** → Task 3 constants + settings. **Max-viewer: consciously dropped** (decision 7) — viewers are cheap; lock is the safeguard. ✔
 - **§11 testing (relay/registry/lock/access/edge)** → Tasks 2/3/5/6/7. ✔
 - **Verbatim relay** (no §7 transformation) → command/subscribe/unsubscribe/ptt/state/result/event forwarded as whole frames. ✔
 
-**Known deferred (documented in PR):** hard viewer-cap enforcement (needs `ControlSession`); per-module lock / teacher-student / license bit (explicitly out of scope, model left extensible via `scope`).
+**Conscious deviation (documented in PR):** no viewer cap (§10) — YAGNI, confirmed by project owner. **Out of scope (model left extensible via `scope`):** per-module lock / teacher-student / license bit.
