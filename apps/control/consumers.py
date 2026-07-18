@@ -260,22 +260,16 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         # Reconnect within grace keeps a held lock.
         await self._holder_reconnected(station)
-        # Initial snapshot with embedded lock status — one frame, not two.
-        # Using a single combined frame means the broadcast "lock" type is
-        # unambiguously from a lock-state mutation (acquire/release/preempt),
-        # which lets clients and tests distinguish initial state from changes.
-        status = await self._lock_status(station)
-        lock_payload = dict(status)
-        lock_payload["you_hold"] = bool(self.user and status.get("holder_id") == self.user.id)
+        # Initial snapshot + lock status to just this browser, as TWO frames.
+        # The initial lock uses the IDENTICAL {type:"lock",...} shape as every
+        # later lock mutation, so D5 (the UI) wires a single lock handler and
+        # renders the lock panel from the very first frame on load.
         await self.send(
             text_data=json.dumps(
-                {
-                    "type": "inventory",
-                    "modules": await self._snapshot(station),
-                    "lock": lock_payload,
-                }
+                {"type": "inventory", "modules": await self._snapshot(station)}
             )
         )
+        await self._send_lock_status(station)
 
     async def _reject(self, code, reason):
         """Accept-then-error reject so the browser sees a real reason."""
@@ -434,6 +428,10 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_send(
             self.group_name, {"type": "control.lock", "lock": status}
         )
+
+    async def _send_lock_status(self, station):
+        status = await self._lock_status(station)
+        await self._push_lock(status)
 
     async def _push_lock(self, status):
         payload = dict(status)

@@ -60,6 +60,12 @@ def test_acquire_broadcasts_lock_and_non_holder_command_rejected():
         assert (await hc.connect())[0] is True
         assert (await oc.connect())[0] is True
 
+        # Consume the initial free-state lock frame so the next drain gets the
+        # post-acquire held-state (initial + updates share {type:"lock"}).
+        init_lock = await _drain_until(hc, "lock")
+        assert init_lock["state"] == "free"
+        assert init_lock["you_hold"] is False
+
         await hc.send_json_to({"type": "lock_acquire"})
         lock_evt = await _drain_until(hc, "lock")
         assert lock_evt["state"] == "held"
@@ -93,6 +99,9 @@ def test_holder_command_relayed_to_agent():
 
         hc = _browser_comm(holder, station.id)
         assert (await hc.connect())[0] is True
+        # Drain the initial free-state lock frame, then acquire and drain again.
+        init_lock = await _drain_until(hc, "lock")
+        assert init_lock["state"] == "free"
         await hc.send_json_to({"type": "lock_acquire"})
         await _drain_until(hc, "lock")
 
@@ -122,6 +131,12 @@ def test_admin_preempt_takes_lock():
     async def scenario():
         ac = _browser_comm(admin, station.id)
         assert (await ac.connect())[0] is True
+        # Initial lock is already held by `holder`; drain it before preempt so
+        # the next drain gets the post-preempt held-state (holder == admin).
+        init_lock = await _drain_until(ac, "lock")
+        assert init_lock["state"] == "held"
+        assert init_lock["holder_id"] == holder.id
+        assert init_lock["you_hold"] is False
         await ac.send_json_to({"type": "lock_preempt"})
         evt = await _drain_until(ac, "lock")
         assert evt["state"] == "held"
