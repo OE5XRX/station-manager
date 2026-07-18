@@ -34,6 +34,11 @@ def apply_inventory(station, slots):
             if slot is None or module_id is None:
                 continue
             identity = mod.get("identity") or {}
+            cap_descriptor = mod.get("capabilities", []) or []
+            raw_state = mod.get("state", {}) or {}
+            filtered_state = {
+                k: v for k, v in raw_state.items() if is_setting_cap(cap_descriptor, k)
+            }
             StationModule.objects.update_or_create(
                 station=station,
                 slot=slot,
@@ -42,8 +47,8 @@ def apply_inventory(station, slots):
                     "type": identity.get("type", ""),
                     "model": identity.get("model", ""),
                     "version": identity.get("version", ""),
-                    "capability_descriptor": mod.get("capabilities", []) or [],
-                    "last_state": mod.get("state", {}) or {},
+                    "capability_descriptor": cap_descriptor,
+                    "last_state": filtered_state,
                     "online": True,
                     "last_seen": now,
                 },
@@ -72,7 +77,7 @@ def apply_state(station, slot, module_id, values):
             module.last_state[cap_name] = value
             changed = True
     if changed:
-        module.save(update_fields=["last_state", "updated_at"])
+        module.save(update_fields=["last_state"])
 
 
 def mark_station_offline(station):

@@ -53,7 +53,9 @@ def test_apply_inventory_upserts_and_marks_offline():
                     "module": "fm0",
                     "identity": {"type": "fm", "model": "SA818", "version": "1.2"},
                     "capabilities": _fm_descriptor(),
-                    "state": {"frequency": 145.5},
+                    # Include a telemetry cap (rssi) in the snapshot: it must be
+                    # filtered out of last_state on persist.
+                    "state": {"frequency": 145.5, "rssi": -70},
                 }
             ],
         }
@@ -64,7 +66,7 @@ def test_apply_inventory_upserts_and_marks_offline():
     assert m.online is True
     assert m.type == "fm" and m.model == "SA818" and m.version == "1.2"
     assert m.capability_descriptor == _fm_descriptor()
-    assert m.last_state == {"frequency": 145.5}
+    assert m.last_state == {"frequency": 145.5}  # rssi (telemetry) NOT persisted
     assert m.last_seen is not None
 
     stale.refresh_from_db()
