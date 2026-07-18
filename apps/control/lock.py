@@ -123,6 +123,21 @@ def sweep_lock(station, now, idle_seconds, scope="station"):
     return False
 
 
+@transaction.atomic
+def force_free(station, scope="station"):
+    """Atomically clear the lock regardless of who holds it.
+
+    Returns True iff the lock was held (i.e. a holder was cleared).
+    Used by AgentControlConsumer on agent disconnect so a ghost lock
+    never outlives the agent connection.
+    """
+    lk = _locked(station, scope)
+    if lk.holder_id is None:
+        return False
+    _clear(lk)
+    return True
+
+
 def _clear(lock):
     lock.holder = None
     lock.acquired_at = None

@@ -103,3 +103,23 @@ def test_sweep_reconnect_grace():
     lock.holder_disconnected(station, a, grace_seconds=12)
     past_grace = timezone.now() + timedelta(seconds=30)
     assert lock.sweep_lock(station, now=past_grace, idle_seconds=999999) is True
+
+
+@pytest.mark.django_db
+def test_force_free_returns_true_when_held():
+    from apps.control import lock
+
+    station = Station.objects.create(name="l8")
+    a = _user("a8")
+    lock.acquire(station, a)
+    assert lock.force_free(station) is True
+    lk = lock.get_or_create_lock(station)
+    assert lk.holder_id is None
+
+
+@pytest.mark.django_db
+def test_force_free_returns_false_when_already_free():
+    from apps.control import lock
+
+    station = Station.objects.create(name="l9")
+    assert lock.force_free(station) is False
