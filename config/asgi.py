@@ -26,8 +26,7 @@ browser_ws_routes = (
 # params — they skip AllowedHostsOriginValidator because the station agent
 # is a CLI client that doesn't send an Origin header.
 agent_ws_routes = (
-    tunnel_routing.agent_websocket_urlpatterns
-    + control_routing.agent_websocket_urlpatterns
+    tunnel_routing.agent_websocket_urlpatterns + control_routing.agent_websocket_urlpatterns
 )
 
 
