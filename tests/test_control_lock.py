@@ -123,3 +123,24 @@ def test_force_free_returns_false_when_already_free():
 
     station = Station.objects.create(name="l9")
     assert lock.force_free(station) is False
+
+
+@pytest.mark.django_db
+def test_transfer_rejects_unknown_and_non_usable_target():
+    """transfer() must reject untrusted target ids: unknown pk, non-int pk,
+    and a target who cannot use the station (would become a ghost holder)."""
+    from apps.control import lock
+
+    station = Station.objects.create(name="l-xfer-guard")
+    a = _user("axf")
+    applicant = User.objects.create(
+        username="appxf", membership_level=User.MembershipLevel.APPLICANT
+    )
+    lock.acquire(station, a)
+
+    assert lock.transfer(station, a, 999999) is False  # unknown pk
+    assert lock.transfer(station, a, "not-an-int") is False  # non-int pk
+    assert lock.transfer(station, a, applicant.id) is False  # can't use station
+
+    # Lock is untouched: still held by a.
+    assert lock.get_or_create_lock(station).holder_id == a.id

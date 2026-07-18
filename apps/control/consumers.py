@@ -15,8 +15,13 @@ logger = logging.getLogger(__name__)
 class AgentControlConsumer(AsyncWebsocketConsumer):
     """Agent-facing control WebSocket. Path: ws/agent/control/<station_id>/.
 
-    Exactly one per station (one persistent agent Control-WS). Relays §7
-    frames verbatim, updates the registry, and owns the lock sweep timer.
+    Relays §7 frames verbatim, updates the registry, and owns the lock sweep
+    timer. A station runs a single agent process holding one persistent
+    Control-WS, so in practice there is one connection per station — but that
+    is a deployment invariant, not enforced here (matching the tunnel
+    AgentTerminalConsumer). A brief overlap during an agent reconnect is
+    tolerated: both connections share the agent group and the registry/lock
+    state is authoritative in the DB.
     """
 
     async def connect(self):

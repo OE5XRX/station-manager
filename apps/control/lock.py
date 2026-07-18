@@ -60,8 +60,20 @@ def transfer(station, from_user, to_user_id, scope="station"):
     lock = _locked(station, scope)
     if lock.holder_id != from_user.id:
         return False
+    # to_user_id is untrusted browser input: a bad/unknown id would raise an
+    # IntegrityError on save, and a target who can't use the station would
+    # become a "ghost holder" blocking everyone until T_idle/grace clears it.
+    # Resolve + authorize the target before mutating; reject otherwise.
+    from apps.accounts.models import User
+
+    try:
+        to_user = User.objects.get(pk=to_user_id)
+    except (User.DoesNotExist, ValueError, TypeError):
+        return False
+    if not to_user.can_use_station(station):
+        return False
     now = timezone.now()
-    lock.holder_id = to_user_id
+    lock.holder = to_user
     lock.acquired_at = now
     lock.last_activity = now
     lock.pending_release_at = None
