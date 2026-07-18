@@ -44,7 +44,6 @@ def test_applicant_rejected():
 
 @pytest.mark.django_db(transaction=True)
 def test_acquire_broadcasts_lock_and_non_holder_command_rejected():
-    from apps.control import lock as lockmod
 
     station = Station.objects.create(name="cc2", status="online")
     holder = User.objects.create(username="h", membership_level=User.MembershipLevel.MEMBER)
@@ -73,8 +72,15 @@ def test_acquire_broadcasts_lock_and_non_holder_command_rejected():
 
         # Non-holder command is rejected, never reaches the agent group.
         await oc.send_json_to(
-            {"type": "command", "request_id": "r1", "slot": "slot0",
-             "module": "fm0", "capability": "frequency", "op": "set", "value": 145.5}
+            {
+                "type": "command",
+                "request_id": "r1",
+                "slot": "slot0",
+                "module": "fm0",
+                "capability": "frequency",
+                "op": "set",
+                "value": 145.5,
+            }
         )
         err = await _drain_until(oc, "error")
         assert err["error"]["code"] == "not_locked"
@@ -105,8 +111,15 @@ def test_holder_command_relayed_to_agent():
         await hc.send_json_to({"type": "lock_acquire"})
         await _drain_until(hc, "lock")
 
-        frame = {"type": "command", "request_id": "r9", "slot": "slot0",
-                 "module": "fm0", "capability": "frequency", "op": "set", "value": 145.5}
+        frame = {
+            "type": "command",
+            "request_id": "r9",
+            "slot": "slot0",
+            "module": "fm0",
+            "capability": "frequency",
+            "op": "set",
+            "value": 145.5,
+        }
         await hc.send_json_to(frame)
 
         relayed = await layer.receive(agent_spy)

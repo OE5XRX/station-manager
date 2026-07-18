@@ -265,9 +265,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         # later lock mutation, so D5 (the UI) wires a single lock handler and
         # renders the lock panel from the very first frame on load.
         await self.send(
-            text_data=json.dumps(
-                {"type": "inventory", "modules": await self._snapshot(station)}
-            )
+            text_data=json.dumps({"type": "inventory", "modules": await self._snapshot(station)})
         )
         await self._send_lock_status(station)
 
@@ -332,9 +330,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self._relay(msg)
         request_id = msg.get("request_id")
         if request_id is not None:
-            self.pending[request_id] = asyncio.create_task(
-                self._command_timeout(request_id)
-            )
+            self.pending[request_id] = asyncio.create_task(self._command_timeout(request_id))
         # Audit command frames; also logs PTT-on (capability=="ptt") here —
         # ptt_keepalive frames are intentionally not audited (log-spam).
         await self._audit(
@@ -351,9 +347,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         an importlib reload.
         """
         try:
-            timeout = getattr(
-                django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10
-            )
+            timeout = getattr(django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10)
             await asyncio.sleep(timeout)
             await self.send(
                 text_data=json.dumps(
@@ -384,12 +378,16 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
     async def _lock_acquire(self, station):
         if await self._acquire(station):
-            await self._audit(station, "control_lock_acquired", f"{self.user.username} acquired control")
+            await self._audit(
+                station, "control_lock_acquired", f"{self.user.username} acquired control"
+            )
         await self._broadcast_lock(station)
 
     async def _lock_release(self, station):
         if await self._release(station):
-            await self._audit(station, "control_lock_released", f"{self.user.username} released control")
+            await self._audit(
+                station, "control_lock_released", f"{self.user.username} released control"
+            )
         await self._broadcast_lock(station)
 
     async def _lock_request(self, station):
@@ -489,7 +487,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _can_use(self, station):
-        return bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
+        return (
+            bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
+        )
 
     @database_sync_to_async
     def _can_administer(self, station):

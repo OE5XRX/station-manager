@@ -17,7 +17,9 @@ V = 1
 def _agent_comm(station_id):
     # Ed25519 verification is bypassed in tests by monkeypatching _verify_agent
     # (see conftest fixture control_agent_auth). Path still must match routing.
-    return WebsocketCommunicator(application, f"/ws/agent/control/{station_id}/?signature=x&timestamp=0")
+    return WebsocketCommunicator(
+        application, f"/ws/agent/control/{station_id}/?signature=x&timestamp=0"
+    )
 
 
 def _browser(user, station_id):
@@ -143,14 +145,27 @@ def test_full_relay_command_result_state_to_all_viewers(control_agent_auth):
         # Connect mock agent and seed registry with an fm0 module.
         agent = _agent_comm(station.id)
         assert (await agent.connect())[0] is True
-        await agent.send_json_to({
-            "v": V, "type": "inventory",
-            "slots": [{"slot": "slot0", "modules": [{
-                "module": "fm0", "identity": {"type": "fm"},
-                "capabilities": [{"name": "frequency", "kind": "setting", "type": "float"}],
-                "state": {"frequency": 145.0},
-            }]}],
-        })
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "inventory",
+                "slots": [
+                    {
+                        "slot": "slot0",
+                        "modules": [
+                            {
+                                "module": "fm0",
+                                "identity": {"type": "fm"},
+                                "capabilities": [
+                                    {"name": "frequency", "kind": "setting", "type": "float"}
+                                ],
+                                "state": {"frequency": 145.0},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
 
         # Connect holder and viewer browsers.
         hc = _browser(holder, station.id)
@@ -168,11 +183,17 @@ def test_full_relay_command_result_state_to_all_viewers(control_agent_auth):
         assert lock_evt["you_hold"] is True
 
         # Holder sends a command to set frequency.
-        await hc.send_json_to({
-            "type": "command", "request_id": "rq1",
-            "slot": "slot0", "module": "fm0",
-            "capability": "frequency", "op": "set", "value": 146.5,
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "request_id": "rq1",
+                "slot": "slot0",
+                "module": "fm0",
+                "capability": "frequency",
+                "op": "set",
+                "value": 146.5,
+            }
+        )
 
         # The MOCK AGENT receives the relayed command frame verbatim.
         got = await agent.receive_json_from()
@@ -181,15 +202,25 @@ def test_full_relay_command_result_state_to_all_viewers(control_agent_auth):
         assert got["value"] == 146.5
 
         # Agent replies with result (cancels the timeout timer) then state.
-        await agent.send_json_to({
-            "v": V, "type": "result",
-            "request_id": "rq1", "ok": True, "value": 146.5,
-        })
-        await agent.send_json_to({
-            "v": V, "type": "state",
-            "slot": "slot0", "module": "fm0",
-            "values": {"frequency": 146.5}, "ts": 1.0,
-        })
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "result",
+                "request_id": "rq1",
+                "ok": True,
+                "value": 146.5,
+            }
+        )
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "state",
+                "slot": "slot0",
+                "module": "fm0",
+                "values": {"frequency": 146.5},
+                "ts": 1.0,
+            }
+        )
 
         # Both holder and viewer see the state broadcast.
         hstate = await _until(hc, "state")
@@ -230,11 +261,17 @@ def test_command_timeout_pushes_error(control_agent_auth, settings):
         await _until_lock_held(hc)
 
         # Send a command — no agent connected so no result will ever arrive.
-        await hc.send_json_to({
-            "type": "command", "request_id": "to1",
-            "slot": "slot0", "module": "fm0",
-            "capability": "frequency", "op": "set", "value": 1.0,
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "request_id": "to1",
+                "slot": "slot0",
+                "module": "fm0",
+                "capability": "frequency",
+                "op": "set",
+                "value": 1.0,
+            }
+        )
 
         # The timeout fires (sleep(0) yields to the event loop once) and the
         # holder receives a timeout error for exactly that request_id.

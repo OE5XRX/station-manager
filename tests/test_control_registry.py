@@ -1,6 +1,5 @@
 import pytest
 from django.db import IntegrityError
-from django.utils import timezone
 
 from apps.stations.models import Station
 
