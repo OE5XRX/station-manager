@@ -1,0 +1,6 @@
+{# Module card placeholder — expanded in Task 3 #}
+<div class="cp-module-card" data-slot="{{ m.slot }}" data-module="{{ m.module_id }}">
+  {% for cap in m.capability_descriptor %}
+    <div data-cap="{{ cap.name }}"></div>
+  {% endfor %}
+</div>

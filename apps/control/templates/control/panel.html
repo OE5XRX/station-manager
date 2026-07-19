@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% load i18n static %}
+{% block title %}{% trans "Control" %} · {{ station.name }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/control-panel.css' %}" nonce="{{ csp_nonce }}">{% endblock %}
+{% block content %}
+  {{ initial_inventory|json_script:"control-initial" }}
+  <div id="control-panel"
+       x-data="controlPanel()"
+       data-station-id="{{ station.id }}"
+       data-user-id="{{ request.user.id }}"
+       data-can-admin="{{ can_admin|yesno:'1,0' }}"
+       data-ptt-default-key="{{ ptt_default_key }}">
+    {% include "control/_lock_banner.html" %}
+    <div class="cp-modules">
+      {% for m in modules %}{% include "control/_module_card.html" %}{% empty %}
+        <p class="cp-empty">{% trans "No modules discovered on this station yet." %}</p>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock %}
+{% block extra_scripts %}<script src="{% static 'js/control-panel.js' %}" nonce="{{ csp_nonce }}"></script>{% endblock %}

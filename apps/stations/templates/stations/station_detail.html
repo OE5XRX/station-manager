@@ -39,6 +39,9 @@
       </div>
     </div>
     <div class="page-head-actions">
+      {% if station.modules.exists %}
+      <a class="btn btn-sm btn-primary" href="{% url 'control:station_control' station.id %}">{% trans "Control panel" %}</a>
+      {% endif %}
       {% if user.is_internal %}
       <a href="{% url 'stations:station_edit' station.pk %}" class="btn btn-ghost">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4v16h16v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
