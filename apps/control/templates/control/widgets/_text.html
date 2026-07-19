@@ -1,0 +1,33 @@
+{% load i18n %}
+<div class="cp-widget cp-text"
+     data-widget
+     data-slot="{{ m.slot }}"
+     data-module="{{ m.module_id }}"
+     data-cap="{{ cap.name }}"
+     data-kind="{{ cap.kind }}"
+     data-type="{{ cap.type }}">
+  <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+  </label>
+  {% if cap.readonly %}
+  <span id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+        class="cp-readout cp-readout--display"
+        x-text="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')">
+    &#8212;
+  </span>
+  {% else %}
+  <input id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+         class="cp-readout cp-readout--text"
+         type="text"
+         :value="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
+         :disabled="!canControl"
+         :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"
+         @change="setValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}', $event.target.value)"
+         aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+  <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+        class="cp-widget-error"
+        role="alert"
+        x-show="errorOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
+        x-text="errorOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"></span>
+  {% endif %}
+</div>

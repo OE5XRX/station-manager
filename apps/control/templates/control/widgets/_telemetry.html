@@ -1,0 +1,35 @@
+{% load i18n %}
+<div class="cp-widget cp-telemetry"
+     data-widget
+     data-slot="{{ m.slot }}"
+     data-module="{{ m.module_id }}"
+     data-cap="{{ cap.name }}"
+     data-kind="telemetry"
+     data-type="{{ cap.type }}"
+     {% for r in cap.ranges %}{% if forloop.first %}data-min="{{ r.min }}"{% endif %}{% endfor %}
+     {% for r in cap.ranges %}{% if forloop.last %}data-max="{{ r.max }}"{% endif %}{% endfor %}>
+  <div class="cp-telemetry-header">
+    <span class="cp-widget-label">{{ cap.name }}</span>
+    {% if cap.unit %}<span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+  </div>
+  <div class="cp-telemetry-readout">
+    <output class="cp-readout cp-readout--telemetry"
+            for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+            x-text="telemetryText('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')">
+      &#8212;
+    </output>
+  </div>
+  {% if cap.ranges %}
+  <div class="cp-meter" role="meter"
+       :aria-valuenow="telemetryText('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
+       {% for r in cap.ranges %}{% if forloop.first %}aria-valuemin="{{ r.min }}"{% endif %}{% endfor %}
+       {% for r in cap.ranges %}{% if forloop.last %}aria-valuemax="{{ r.max }}"{% endif %}{% endfor %}
+       aria-label="{{ cap.name }}">
+    <div class="cp-meter-track">
+      <div class="cp-meter-fill"
+           :style="'width:' + telemetryPct('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') + '%'">
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>

@@ -1,0 +1,40 @@
+{% load i18n %}
+{% comment %}
+PTT widget — spans full card width (cp-ptt--full).
+Detected by cap.kind=="action" AND cap.name=="ptt" (platform capability, not module-specific).
+Mouse: @mousedown/@mouseup. Touch: @touchstart.prevent/@touchend.prevent. Keyboard: handled by JS.
+{% endcomment %}
+<div class="cp-widget cp-ptt cp-ptt--full"
+     data-widget
+     data-slot="{{ m.slot }}"
+     data-module="{{ m.module_id }}"
+     data-cap="ptt"
+     data-kind="action"
+     data-type="{{ cap.type }}">
+  <button type="button"
+          class="cp-ptt-button"
+          :disabled="!canControl"
+          :class="{
+            'cp-ptt-button--active': pttState('{{ m.slot }}','{{ m.module_id }}'),
+            'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','ptt')
+          }"
+          :aria-pressed="String(pttState('{{ m.slot }}','{{ m.module_id }}'))"
+          @mousedown="pttDown('{{ m.slot }}','{{ m.module_id }}')"
+          @mouseup="pttUp('{{ m.slot }}','{{ m.module_id }}')"
+          @mouseleave="pttUp('{{ m.slot }}','{{ m.module_id }}')"
+          @touchstart.prevent="pttDown('{{ m.slot }}','{{ m.module_id }}')"
+          @touchend.prevent="pttUp('{{ m.slot }}','{{ m.module_id }}')"
+          aria-label="{% trans 'Push to transmit' %}"
+          aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-ptt">
+    <span class="cp-ptt-icon" aria-hidden="true"></span>
+    <span class="cp-ptt-label"
+          x-text="pttState('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "TX" %}' : '{% trans "PTT" %}'">
+      {% trans "PTT" %}
+    </span>
+  </button>
+  <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-ptt"
+        class="cp-widget-error"
+        role="alert"
+        x-show="errorOf('{{ m.slot }}','{{ m.module_id }}','ptt')"
+        x-text="errorOf('{{ m.slot }}','{{ m.module_id }}','ptt')"></span>
+</div>

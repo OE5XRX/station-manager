@@ -1,6 +1,46 @@
-{# Module card placeholder — expanded in Task 3 #}
-<div class="cp-module-card" data-slot="{{ m.slot }}" data-module="{{ m.module_id }}">
-  {% for cap in m.capability_descriptor %}
-    <div data-cap="{{ cap.name }}"></div>
-  {% endfor %}
-</div>
+{% load i18n %}
+{% comment %}
+Module card — one card per StationModule.
+Header: slot + type + online indicator.
+Body: all capabilities rendered via the dispatch widget partial.
+PTT is rendered last within the card so it can span full width.
+{% endcomment %}
+<article class="cp-module cp-module-card"
+         data-slot="{{ m.slot }}"
+         data-module="{{ m.module_id }}">
+  <header class="cp-module-header">
+    <div class="cp-module-identity">
+      <span class="cp-module-slot">{{ m.slot }}</span>
+      <span class="cp-module-sep" aria-hidden="true">&#8202;&#8226;&#8202;</span>
+      <span class="cp-module-type">{{ m.type }}</span>
+      {% if m.model %}<span class="cp-module-model t-muted">{{ m.model }}</span>{% endif %}
+    </div>
+    <div class="cp-module-status">
+      <span class="cp-online-dot"
+            :class="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? 'cp-online-dot--on' : 'cp-online-dot--off'"
+            :aria-label="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %'"
+            aria-hidden="false">
+      </span>
+      <span class="cp-online-label t-muted"
+            x-text="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %'">
+        {{ m.online|yesno:"online,offline" }}
+      </span>
+    </div>
+  </header>
+
+  <div class="cp-module-widgets">
+    {% comment %}Pass 1: all caps except PTT{% endcomment %}
+    {% for cap in m.capability_descriptor %}
+      {% if not cap.name == "ptt" %}
+        {% include "control/widgets/_widget.html" %}
+      {% endif %}
+    {% endfor %}
+
+    {% comment %}Pass 2: PTT last (spans full width){% endcomment %}
+    {% for cap in m.capability_descriptor %}
+      {% if cap.name == "ptt" %}
+        {% include "control/widgets/_widget.html" %}
+      {% endif %}
+    {% endfor %}
+  </div>
+</article>

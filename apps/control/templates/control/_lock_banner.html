@@ -1,1 +1,18 @@
-{# Lock banner placeholder — implemented in Task 2 #}
+{% load i18n %}
+{% comment %}
+Lock banner — shown when the control lock is held by another user or when the
+current user's lock is about to expire. Bound to the Alpine controlPanel component.
+{% endcomment %}
+<div class="cp-lock-banner"
+     x-show="$data.lockState && $data.lockState !== 'free' && $data.lockState !== 'held'"
+     x-transition:enter="cp-fade-enter"
+     x-transition:enter-start="cp-fade-start"
+     x-transition:enter-end="cp-fade-end"
+     role="status"
+     aria-live="polite">
+  <span class="cp-lock-icon" aria-hidden="true">&#128274;</span>
+  <span class="cp-lock-message"
+        x-text="$data.lockHolder ? '{% trans "Controlled by" %} ' + $data.lockHolder : '{% trans "Station locked" %}'">
+    {% trans "Station locked" %}
+  </span>
+</div>
