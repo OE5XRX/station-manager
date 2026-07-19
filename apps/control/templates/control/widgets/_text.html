@@ -6,16 +6,20 @@
      data-cap="{{ cap.name }}"
      data-kind="{{ cap.kind }}"
      data-type="{{ cap.type }}">
-  <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
-    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
-  </label>
   {% if cap.readonly %}
+  {% comment %}Readonly value is a <span> (not labelable) — plain label, no for={% endcomment %}
+  <span class="cp-widget-label">
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+  </span>
   <span id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
         class="cp-readout cp-readout--display"
         x-text="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')">
     &#8212;
   </span>
   {% else %}
+  <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+  </label>
   <input id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
          class="cp-readout cp-readout--text"
          type="text"

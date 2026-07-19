@@ -1,4 +1,9 @@
 {% load i18n %}
+{% comment %}
+Bounds: MVP reads data-min/data-max (first/last range band) in JS. Multi-band
+ranges (cap.ranges with >1 entry) are a future enhancement — not serialized on a
+data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.parse.
+{% endcomment %}
 <div class="cp-widget cp-number"
      data-widget
      data-slot="{{ m.slot }}"
@@ -8,8 +13,7 @@
      data-type="{{ cap.type }}"
      {% for r in cap.ranges %}{% if forloop.first %}data-min="{{ r.min }}"{% endif %}{% endfor %}
      {% for r in cap.ranges %}{% if forloop.last %}data-max="{{ r.max }}"{% endif %}{% endfor %}
-     {% if cap.step %}data-step="{{ cap.step }}"{% endif %}
-     data-ranges="{{ cap.ranges|default:'[]' }}">
+     {% if cap.step %}data-step="{{ cap.step }}"{% endif %}>
   <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
   </label>
@@ -23,6 +27,7 @@
            type="number"
            lang="en"
            inputmode="decimal"
+           step="{{ cap.step|default:'any' }}"
            {% for r in cap.ranges %}{% if forloop.first %}min="{{ r.min }}"{% endif %}{% endfor %}
            {% for r in cap.ranges %}{% if forloop.last %}max="{{ r.max }}"{% endif %}{% endfor %}
            :value="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"

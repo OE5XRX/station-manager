@@ -18,11 +18,11 @@ PTT is rendered last within the card so it can span full width.
     <div class="cp-module-status">
       <span class="cp-online-dot"
             :class="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? 'cp-online-dot--on' : 'cp-online-dot--off'"
-            :aria-label="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %'"
+            :aria-label="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %}'"
             aria-hidden="false">
       </span>
       <span class="cp-online-label t-muted"
-            x-text="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %'">
+            x-text="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %}'">
         {{ m.online|yesno:"online,offline" }}
       </span>
     </div>

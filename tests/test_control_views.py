@@ -132,8 +132,8 @@ def test_offline_module_renders_from_last_state(client, station, operator):
     client.force_login(operator)
     html = _render(client, station).decode()
     assert "145.5" in html  # value present in json_script/SSR
-    # offline indicator present
-    assert "cp-module" in html
+    # a real per-card marker rendered (not the always-present cp-modules wrapper)
+    assert "cp-module-card" in html
 
 
 def test_number_input_is_dot_decimal_locale_safe(client, station, operator):
