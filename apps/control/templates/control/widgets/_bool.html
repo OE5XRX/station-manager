@@ -1,0 +1,37 @@
+{% load i18n %}
+{% trans "ON" as on_label %}{% trans "OFF" as off_label %}
+<div class="cp-widget cp-bool"
+     data-widget
+     data-slot="{{ m.slot }}"
+     data-module="{{ m.module_id }}"
+     data-cap="{{ cap.name }}"
+     data-kind="setting"
+     data-type="bool">
+  <label class="cp-widget-label cp-bool-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+    {{ cap.name }}
+  </label>
+  <button type="button"
+          id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+          class="cp-toggle"
+          role="switch"
+          :aria-checked="String(!!valueOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}'))"
+          :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          :class="{
+            'cp-toggle--on': valueOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}'),
+            'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')
+          }"
+          @click="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', !valueOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}'))"
+          aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+    <span class="cp-toggle-track">
+      <span class="cp-toggle-thumb"></span>
+    </span>
+    <span class="cp-toggle-label"
+          x-text="valueOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') ? '{{ on_label|escapejs }}' : '{{ off_label|escapejs }}'">
+    </span>
+  </button>
+  <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+        class="cp-widget-error"
+        role="alert"
+        x-show="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+        x-text="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"></span>
+</div>

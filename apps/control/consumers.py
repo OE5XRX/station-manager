@@ -558,24 +558,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
         ``type:"inventory"``. Adds a per-module ``online`` flag (additive) so
         offline modules can still render from persisted descriptors/last_state.
         """
-        from .models import StationModule
+        from . import serializers
 
-        slots = {}
-        order = []
-        for m in StationModule.objects.filter(station=station):
-            if m.slot not in slots:
-                slots[m.slot] = []
-                order.append(m.slot)
-            slots[m.slot].append(
-                {
-                    "module": m.module_id,
-                    "identity": {"type": m.type, "model": m.model, "version": m.version},
-                    "capabilities": m.capability_descriptor,
-                    "state": m.last_state,
-                    "online": m.online,
-                }
-            )
-        return [{"slot": s, "modules": slots[s]} for s in order]
+        return serializers.snapshot(station)
 
     @database_sync_to_async
     def _acquire(self, station):

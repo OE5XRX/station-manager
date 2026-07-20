@@ -1,0 +1,30 @@
+{% load i18n %}
+<div class="cp-widget cp-enum"
+     data-widget
+     data-slot="{{ m.slot }}"
+     data-module="{{ m.module_id }}"
+     data-cap="{{ cap.name }}"
+     data-kind="setting"
+     data-type="enum">
+  <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+  </label>
+  <select id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+          class="cp-readout cp-readout--select"
+          :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          :class="{ 'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') }"
+          @change="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', $event.target.value)"
+          aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
+    {% for v in cap.values %}
+    <option value="{{ v }}"
+            :selected="valueOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') === '{{ v|escapejs }}'">
+      {{ v }}
+    </option>
+    {% endfor %}
+  </select>
+  <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+        class="cp-widget-error"
+        role="alert"
+        x-show="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+        x-text="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"></span>
+</div>

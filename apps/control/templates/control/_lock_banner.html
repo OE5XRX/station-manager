@@ -1,0 +1,120 @@
+{% load i18n %}
+{% comment %}
+Translated labels embedded inside Alpine/JS string literals must go through
+|escapejs — a translation may legally contain an ASCII apostrophe, which would
+otherwise break the single-quoted JS expression at runtime.
+{% endcomment %}
+{% trans "Another operator" as another_operator_label %}
+{% trans "has control" as has_control_label %}
+{% trans "Live" as live_label %}
+{% trans "Error" as error_label %}
+{% trans "Reconnecting" as reconnecting_label %}
+{% trans "is requesting control" as requesting_label %}
+{% comment %}
+Lock banner — the station's single control affordance. Always visible; its state
+class (is-free / is-you / is-other) and message are driven by the Alpine
+controlPanel component. Reuses the app pill/dot vocabulary for the connection
+indicator (LIVE / RECONNECTING). Buttons are real <button>s, disabled while the
+socket is not open.
+{% endcomment %}
+<div class="cp-lock-banner"
+     :class="{
+       'is-free': lockState === 'free',
+       'is-you': lockState === 'held',
+       'is-other': lockState === 'other'
+     }"
+     role="status"
+     aria-live="polite">
+  <span class="cp-lock-icon" aria-hidden="true"
+        x-text="lockState === 'other' ? '🔒' : (lockState === 'held' ? '🎙' : '○')"></span>
+
+  <span class="cp-lock-message">
+    <template x-if="lockState === 'free'">
+      <span>{% trans "Control is free" %}</span>
+    </template>
+    <template x-if="lockState === 'held'">
+      <span>{% trans "You have control" %}</span>
+    </template>
+    <template x-if="lockState === 'other'">
+      <span x-text="(lockHolder || '{{ another_operator_label|escapejs }}') + ' {{ has_control_label|escapejs }}'"></span>
+    </template>
+  </span>
+
+  <div class="cp-lock-actions">
+    <button type="button" class="cp-btn cp-btn--action cp-lock-btn"
+            x-show="lockState === 'free'"
+            :disabled="conn !== 'open'"
+            @click="acquire()">{% trans "Take control" %}</button>
+
+    <button type="button" class="cp-btn cp-lock-btn"
+            x-show="lockState === 'held'"
+            :disabled="conn !== 'open'"
+            @click="release()">{% trans "Release control" %}</button>
+
+    <button type="button" class="cp-btn cp-lock-btn"
+            x-show="lockState === 'other'"
+            :disabled="conn !== 'open'"
+            @click="request()">{% trans "Request control" %}</button>
+
+    <button type="button" class="cp-btn cp-lock-btn cp-lock-btn--override"
+            x-show="lockState === 'other' && canAdmin"
+            :disabled="conn !== 'open'"
+            @click="preempt()">{% trans "Override" %}</button>
+  </div>
+
+  {% comment %}Connection indicator — reuses the shared pill/dot chrome.{% endcomment %}
+  <span class="pill"
+        :class="conn === 'open' ? 'pill-online' : (connError ? 'pill-error' : 'pill-warn')"
+        aria-live="polite">
+    <span class="dot" aria-hidden="true"></span>
+    <span x-text="conn === 'open' ? '{{ live_label|escapejs }}' : (connError ? '{{ error_label|escapejs }}' : '{{ reconnecting_label|escapejs }}')"></span>
+  </span>
+</div>
+
+{% comment %}
+Incoming control request — shown to the holder only. Non-blocking: grant hands
+the lock over, dismiss ignores it.
+{% endcomment %}
+<div class="cp-lock-prompt"
+     x-show="pendingRequest"
+     x-transition:enter="cp-fade-enter"
+     x-transition:enter-start="cp-fade-start"
+     x-transition:enter-end="cp-fade-end"
+     role="status"
+     aria-live="polite">
+  <span class="cp-lock-prompt-msg"
+        x-text="(pendingRequest ? pendingRequest.username : '') + ' {{ requesting_label|escapejs }}'"></span>
+  <div class="cp-lock-actions">
+    <button type="button" class="cp-btn cp-btn--action cp-lock-btn"
+            :disabled="conn !== 'open'"
+            @click="grant(pendingRequest.id)">{% trans "Grant" %}</button>
+    <button type="button" class="cp-btn cp-lock-btn"
+            @click="dismissRequest()">{% trans "Dismiss" %}</button>
+  </div>
+</div>
+
+{% comment %}Transient loss notice — auto-dismisses after ~4s (JS timer).{% endcomment %}
+<div class="cp-lock-notice"
+     x-show="lossNotice"
+     x-transition:enter="cp-fade-enter"
+     x-transition:enter-start="cp-fade-start"
+     x-transition:enter-end="cp-fade-end"
+     role="status"
+     aria-live="polite">
+  {% trans "You no longer have control" %}
+</div>
+
+{% comment %}Agent-offline notice — cleared automatically when the agent reconnects (C1).{% endcomment %}
+<div class="cp-agent-offline-notice"
+     x-show="agentOffline"
+     role="status"
+     aria-live="polite">
+  {% trans "Station agent offline — showing last known state" %}
+</div>
+
+{% comment %}Terminal connection-error notice — shown on permanent deny (4401/4403/4404).{% endcomment %}
+<div class="cp-lock-notice cp-conn-error-notice"
+     x-show="connError"
+     role="alert">
+  <span x-text="connError"></span>
+</div>

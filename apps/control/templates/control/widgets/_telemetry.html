@@ -1,0 +1,41 @@
+{% load i18n %}
+<div class="cp-widget cp-telemetry"
+     data-widget
+     data-slot="{{ m.slot }}"
+     data-module="{{ m.module_id }}"
+     data-cap="{{ cap.name }}"
+     data-kind="telemetry"
+     data-type="{{ cap.type }}"
+     {% for r in cap.ranges %}{% if forloop.first %}data-min="{{ r.min }}"{% endif %}{% endfor %}
+     {% for r in cap.ranges %}{% if forloop.last %}data-max="{{ r.max }}"{% endif %}{% endfor %}>
+  <div class="cp-telemetry-header">
+    <span class="cp-widget-label">{{ cap.name }}</span>
+    {% if cap.unit %}<span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+  </div>
+  <div class="cp-telemetry-readout">
+    <output class="cp-readout cp-readout--telemetry"
+            for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
+            x-text="telemetryText('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')">
+      &#8212;
+    </output>
+  </div>
+  {% if cap.ranges %}
+  {% comment %}
+  role="meter" needs a NUMERIC aria-valuenow. telemetryText can be "—" or
+  formatted text, so drive the meter as a 0–100% scale (telemetryPct, matching
+  the fill width) and expose the human-readable value (+unit) via aria-valuetext.
+  {% endcomment %}
+  <div class="cp-meter" role="meter"
+       :aria-valuenow="telemetryPct('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+       :aria-valuetext="telemetryText('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}'){% if cap.unit %} + ' {{ cap.unit|escapejs }}'{% endif %}"
+       aria-valuemin="0"
+       aria-valuemax="100"
+       aria-label="{{ cap.name }}">
+    <div class="cp-meter-track">
+      <div class="cp-meter-fill"
+           :style="'width:' + telemetryPct('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') + '%'">
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>

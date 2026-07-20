@@ -1,0 +1,1180 @@
+/* =============================================================================
+   OE5XRX Control Panel — Rack-Console Styling
+   Extends app.css token system. Do not redefine tokens here.
+   ============================================================================= */
+
+/* ---------- Alpine transition helpers ---------------------------------------- */
+.cp-fade-enter { transition: opacity 0.2s var(--ease), transform 0.2s var(--ease-out); }
+.cp-fade-start { opacity: 0; transform: translateY(-6px); }
+.cp-fade-end   { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the opacity fade, drop the slide */
+  .cp-fade-enter { transition: opacity 0.2s var(--ease); }
+  .cp-fade-start { transform: none; }
+}
+
+/* ---------- Lock banner ------------------------------------------------------- */
+.cp-lock-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-bright);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--ink-1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* State: locked by you */
+.cp-lock-banner.is-you {
+  border-color: rgba(62, 213, 152, 0.4);
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+/* State: locked by another operator */
+.cp-lock-banner.is-other {
+  border-color: rgba(247, 185, 85, 0.4);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+/* State: unlocked / free */
+.cp-lock-banner.is-free {
+  color: var(--ink-2);
+  background: transparent;
+  border-color: var(--line);
+}
+
+/* Light-theme border hues (dark rgba hardcodes above are wrong hue in light) */
+:root[data-theme="light"] .cp-lock-banner.is-you {
+  border-color: rgba(18, 154, 106, 0.4);   /* light --signal #129A6A */
+}
+:root[data-theme="light"] .cp-lock-banner.is-other {
+  border-color: rgba(199, 138, 30, 0.45);  /* light --warn #C78A1E */
+}
+
+.cp-lock-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.cp-lock-message {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+/* Connection sub-indicator reuses pill/dot vocabulary */
+.cp-lock-banner .pill {
+  flex-shrink: 0;
+}
+
+/* Lock action buttons sit between the message and the connection pill. The
+   message keeps flex:1, so actions + pill are pushed to the trailing edge. */
+.cp-lock-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cp-lock-btn {
+  font-size: 11px;
+  padding: 5px 12px;
+}
+
+/* Override is the destructive admin path — tint it with the danger channel so
+   it never reads like the everyday "Request control". */
+.cp-lock-btn--override {
+  color: var(--danger);
+  border-color: rgba(255, 93, 115, 0.4);
+}
+.cp-lock-btn--override:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+/* Incoming request prompt — a quiet card under the banner, holder-only. */
+.cp-lock-prompt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(78, 225, 242, 0.35);
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.cp-lock-prompt-msg {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+/* Transient lock-loss notice — warns the operator control was taken. */
+.cp-lock-notice {
+  padding: 8px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(247, 185, 85, 0.4);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+/* Agent-offline banner — shown when agentOffline is true; cleared on inventory
+   (C1). Desaturated/ink-3 treatment consistent with the is-offline card overlay.
+   Quiet: one line, no icon, no animation. */
+.cp-agent-offline-notice {
+  padding: 8px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-bright);
+  background: var(--bg-2);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  filter: saturate(0.4);
+}
+
+/* Terminal connection-error notice — permanent deny (4401/4403/4404). Uses the
+   same visual chrome as .cp-lock-notice but with a danger tint to signal it
+   is not a transient state. */
+.cp-conn-error-notice {
+  border-color: rgba(255, 93, 115, 0.4);
+  background: var(--danger-soft);
+  color: var(--danger);
+  filter: none;
+}
+
+@media (max-width: 560px) {
+  .cp-lock-banner {
+    flex-wrap: wrap;
+  }
+  .cp-lock-message {
+    flex-basis: 100%;
+  }
+}
+
+/* ---------- Module grid ------------------------------------------------------- */
+.cp-modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Empty state */
+.cp-empty {
+  grid-column: 1 / -1;
+  padding: 48px 24px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border: 1px dashed var(--line-bright);
+  border-radius: var(--radius-lg);
+}
+
+/* ---------- Module card ------------------------------------------------------- */
+.cp-module-card {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+  position: relative;
+}
+
+/* Subtle rack-face scanline texture */
+.cp-module-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 3px,
+    rgba(255, 255, 255, 0.008) 3px,
+    rgba(255, 255, 255, 0.008) 4px
+  );
+  opacity: 0.6;
+  z-index: 0;
+}
+
+:root[data-theme="light"] .cp-module-card::before {
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 3px,
+    rgba(0, 0, 0, 0.018) 3px,
+    rgba(0, 0, 0, 0.018) 4px
+  );
+}
+
+/* Card header — top label strip */
+.cp-module-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+
+/* Left: identity */
+.cp-module-identity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cp-module-slot {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.cp-module-sep {
+  color: var(--line-hot);
+  flex-shrink: 0;
+}
+
+.cp-module-type {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-module-model {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Right: status */
+.cp-module-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Online indicator dot */
+.cp-online-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-bright);
+  flex-shrink: 0;
+}
+
+.cp-online-dot--on {
+  background: var(--signal);
+  box-shadow: 0 0 0 0 rgba(62, 213, 152, 0.55);
+  animation: cp-dot-pulse 2s ease-in-out infinite;
+}
+
+.cp-online-dot--off {
+  background: var(--danger);
+  box-shadow: none;
+}
+
+@keyframes cp-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(62, 213, 152, 0.55); }
+  50%       { box-shadow: 0 0 0 5px rgba(62, 213, 152, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-online-dot--on { animation: none; }
+}
+
+.cp-online-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Widgets container */
+.cp-module-widgets {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+  flex: 1;
+}
+
+/* ---------- Offline / disconnected overlay ------------------------------------ */
+.cp-module-card.is-offline,
+.cp-module-card.cp-disconnected {
+  filter: saturate(0.25) brightness(0.85);
+}
+
+/* Etched OFFLINE label via pseudo-element */
+.cp-module-card.is-offline::after,
+.cp-module-card.cp-disconnected::after {
+  content: "OFFLINE";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-15deg);
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--ink-3);
+  opacity: 0.18;
+  pointer-events: none;
+  z-index: 2;
+  user-select: none;
+}
+
+/* Controls inside an offline card are visually inert */
+.cp-module-card.is-offline .cp-ptt-button,
+.cp-module-card.cp-disconnected .cp-ptt-button,
+.cp-module-card.is-offline .cp-step,
+.cp-module-card.cp-disconnected .cp-step,
+.cp-module-card.is-offline .cp-toggle,
+.cp-module-card.cp-disconnected .cp-toggle,
+.cp-module-card.is-offline .cp-btn--action,
+.cp-module-card.cp-disconnected .cp-btn--action {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---------- Widget base ------------------------------------------------------- */
+.cp-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-widget-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cp-unit {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+.cp-widget-error {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--danger);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--danger-soft);
+  border: 1px solid rgba(255, 93, 115, 0.25);
+  display: block;
+}
+
+/* ---------- Readout — shared by number, text, enum, telemetry ---------------- */
+.cp-readout {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: var(--bg-0);
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  width: 100%;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  /* Backlit-dial inner shadow */
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 138, 61, 0.06);
+}
+
+:root[data-theme="light"] .cp-readout {
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.cp-readout:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint), inset 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.cp-readout:disabled,
+.cp-readout[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--ink-2);
+}
+
+.cp-readout.is-pending {
+  animation: cp-readout-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes cp-readout-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-readout.is-pending { animation: none; opacity: 0.7; }
+}
+
+/* Number input — hide browser spin arrows */
+.cp-readout--number {
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  min-width: 0;
+  flex: 1;
+  font-size: 24px;
+}
+
+.cp-readout--number::-webkit-outer-spin-button,
+.cp-readout--number::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* Telemetry output — display only (no interaction) */
+.cp-readout--telemetry {
+  display: block;
+  font-size: 28px;
+  cursor: default;
+  border-color: var(--line);
+  letter-spacing: 0.04em;
+}
+
+/* Select readout — enum widget */
+.cp-readout--select {
+  font-size: 15px;
+  cursor: pointer;
+  /* Override app.css custom arrow for rack aesthetic */
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-3) 50%),
+                    linear-gradient(-45deg, transparent 50%, var(--ink-3) 50%);
+  background-position: calc(100% - 14px) 18px, calc(100% - 9px) 18px;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  background-color: var(--bg-0);
+  appearance: none;
+  padding-right: 32px;
+}
+
+.cp-readout--select:focus-visible {
+  background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+                    linear-gradient(-45deg, transparent 50%, var(--accent) 50%);
+}
+
+/* Text display (readonly) */
+.cp-readout--display {
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  cursor: default;
+  color: var(--ink-1);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+/* Editable text input */
+.cp-readout--text {
+  font-size: 15px;
+}
+
+/* ---------- Number widget — step buttons + row ------------------------------ */
+.cp-number-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+/* Reset readout border when it sits inside the row compound */
+.cp-number-row .cp-readout {
+  border: none;
+  border-left: 1px solid var(--line-bright);
+  border-right: 1px solid var(--line-bright);
+  border-radius: 0;
+  box-shadow: none;
+  flex: 1;
+}
+
+.cp-number-row .cp-readout:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.cp-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  padding: 0 12px;
+  background: var(--bg-2);
+  border: none;
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+  /* Tactile key feel */
+  position: relative;
+}
+
+.cp-step:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+
+.cp-step:active:not(:disabled) {
+  background: var(--bg-0);
+  transform: scale(0.96);
+}
+
+.cp-step:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.cp-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-step:active:not(:disabled) { transform: none; }
+}
+
+/* ---------- PTT — signature transmit bar ------------------------------------- */
+/*
+ * Three states driven by JS class toggles on .cp-ptt-button:
+ *   .is-armed   — ready, accent outline
+ *   .is-keying  — key pressed, awaiting agent confirm, warn + pulse
+ *   .is-tx      — agent confirmed TX, danger fill + carrier-glow bloom
+ * .cp-ptt-button--active mirrors the Alpine boolean state (same as .is-tx base).
+ */
+
+.cp-ptt {
+  /* PTT widget wraps full-width at bottom of card */
+  margin-top: auto;
+}
+
+.cp-ptt--full {
+  width: 100%;
+}
+
+.cp-ptt-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 14px 20px;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--line-bright);
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  transition:
+    background 0.12s var(--ease),
+    border-color 0.12s var(--ease),
+    color 0.12s var(--ease),
+    box-shadow 0.12s var(--ease);
+  position: relative;
+  overflow: hidden;
+}
+
+.cp-ptt-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.cp-ptt-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* --- State: armed (resting, operator ready) --- */
+.cp-ptt-button.is-armed {
+  border-color: var(--accent);
+  background: var(--bg-2);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-tint);
+}
+
+/* --- State: keying (button held, awaiting agent echo) --- */
+.cp-ptt-button.is-keying {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+  animation: cp-ptt-key-pulse 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes cp-ptt-key-pulse {
+  from { box-shadow: 0 0 8px 0 rgba(247, 185, 85, 0.25); }
+  to   { box-shadow: 0 0 24px 4px rgba(247, 185, 85, 0.45); }
+}
+
+/* --- State: TX confirmed (carrier on air) --- */
+.cp-ptt-button.is-tx,
+.cp-ptt-button.cp-ptt-button--active {
+  border-color: var(--danger);
+  /* Darker fill than raw --danger so white bold text clears WCAG AA:
+     #fff on #D2273F = 5.12:1 (>= 4.5). The vivid --danger hue survives in
+     the border + glow bloom, keeping the "ON AIR" signal drama. */
+  background: #D2273F;
+  color: #fff;
+  font-weight: 700;
+  /* Carrier glow bloom */
+  box-shadow:
+    0 0 0 2px rgba(255, 93, 115, 0.25),
+    0 0 28px 6px rgba(255, 93, 115, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+/* Light theme PTT adjustments */
+:root[data-theme="light"] .cp-ptt-button {
+  background: var(--bg-3);
+  border-color: var(--line-bright);
+}
+
+:root[data-theme="light"] .cp-ptt-button.is-tx,
+:root[data-theme="light"] .cp-ptt-button.cp-ptt-button--active {
+  /* Light --danger #D23250 on #fff = 4.87:1 (>= 4.5). */
+  background: var(--danger);
+  box-shadow:
+    0 0 0 2px rgba(210, 50, 80, 0.2),
+    0 0 20px 4px rgba(210, 50, 80, 0.25),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Reduced motion: replace pulse with static color, kill bloom animation */
+@media (prefers-reduced-motion: reduce) {
+  .cp-ptt-button.is-keying {
+    animation: none;
+    box-shadow: 0 0 0 2px rgba(247, 185, 85, 0.4);
+  }
+  .cp-ptt-button.is-tx,
+  .cp-ptt-button.cp-ptt-button--active {
+    box-shadow: 0 0 0 2px rgba(255, 93, 115, 0.4);
+  }
+}
+
+/* Pending (sent to agent, no echo yet) */
+.cp-ptt-button.is-pending {
+  opacity: 0.75;
+  cursor: wait;
+}
+
+/* Icon glyph inside PTT button (microphone dot) */
+.cp-ptt-icon {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  flex-shrink: 0;
+  transition: background 0.12s var(--ease);
+}
+
+.cp-ptt-button.is-tx .cp-ptt-icon,
+.cp-ptt-button.cp-ptt-button--active .cp-ptt-icon {
+  background: currentColor;
+}
+
+.cp-ptt-label {
+  letter-spacing: 0.22em;
+}
+
+/* ---------- Telemetry meter -------------------------------------------------- */
+.cp-telemetry {
+  gap: 8px;
+}
+
+.cp-telemetry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Numeric readout in telemetry */
+.cp-telemetry-readout {
+  margin: 2px 0;
+}
+
+.cp-meter {
+  /* role=meter element */
+  display: block;
+}
+
+.cp-meter-track {
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 100px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--line);
+}
+
+.cp-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--signal) 0%, #5AEDAB 100%);
+  border-radius: 100px;
+  transition: width 0.35s var(--ease);
+  position: relative;
+}
+
+/* Amber peak flash at high values — JS can add .is-peak via JS later */
+.cp-meter-fill.is-peak {
+  background: linear-gradient(90deg, var(--warn) 0%, var(--accent) 100%);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-meter-fill { transition: none; }
+}
+
+/* ---------- Bool toggle ------------------------------------------------------ */
+.cp-bool {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cp-bool-label {
+  /* Inherits cp-widget-label styles already set above */
+  margin-bottom: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.cp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--ink-2);
+}
+
+.cp-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-xs);
+}
+
+.cp-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.cp-toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 100px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-bright);
+  position: relative;
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease);
+  flex-shrink: 0;
+}
+
+.cp-toggle--on .cp-toggle-track {
+  background: var(--signal);
+  border-color: var(--signal);
+}
+
+.cp-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: left 0.18s var(--ease-out), background 0.18s var(--ease);
+}
+
+.cp-toggle--on .cp-toggle-thumb {
+  left: calc(36px - 14px - 4px); /* 36 - thumb - padding */
+  background: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-toggle-track,
+  .cp-toggle-thumb { transition: none; }
+}
+
+.cp-toggle-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  min-width: 22px;
+}
+
+.cp-toggle--on .cp-toggle-label {
+  color: var(--signal);
+}
+
+/* Pending toggle */
+.cp-toggle.is-pending .cp-toggle-track {
+  opacity: 0.6;
+}
+
+/* ---------- Action button ---------------------------------------------------- */
+.cp-action {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.cp-action .cp-widget-label {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.cp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-bright);
+  background: var(--bg-2);
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease), color 0.12s var(--ease);
+  min-height: 36px;
+  white-space: nowrap;
+}
+
+.cp-btn:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: var(--line-hot);
+  color: var(--ink-0);
+}
+
+.cp-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-btn:active:not(:disabled) { transform: none; }
+}
+
+.cp-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.cp-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cp-btn--action {
+  /* Action buttons default to accent-ghost style */
+  border-color: rgba(255, 138, 61, 0.35);
+  color: var(--accent);
+}
+
+.cp-btn--action:hover:not(:disabled) {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cp-btn--action.is-pending {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.cp-btn-label {
+  letter-spacing: inherit;
+}
+
+/* Inline spinner for action buttons */
+.cp-btn-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  /* Token-based track so the hue follows --accent in both themes */
+  border: 2px solid var(--accent-tint);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cp-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes cp-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-btn-spinner {
+    animation: none;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    opacity: 0.6;
+  }
+}
+
+/* ---------- Text widget ------------------------------------------------------ */
+.cp-text {}
+
+/* ---------- Enum widget ------------------------------------------------------ */
+.cp-enum {}
+
+/* ---------- Number widget outer (inherits widget base) ----------------------- */
+.cp-number {}
+
+/* ---------- Module alias (cp-module co-exists with cp-module-card) ----------- */
+/* Layout anchor only — all visual chrome is on cp-module-card */
+.cp-module {}
+
+/* ---------- Responsive ------------------------------------------------------- */
+
+/* Tablet: tighter grid */
+@media (max-width: 1024px) {
+  .cp-modules {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+}
+
+/* Phone: single column, PTT reachable with thumb */
+@media (max-width: 640px) {
+  .cp-modules {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .cp-module-card {
+    border-radius: var(--radius-md);
+  }
+
+  /* PTT: tall enough for a thumb press, fixed at bottom */
+  .cp-ptt-button {
+    min-height: 64px;
+    font-size: 15px;
+  }
+
+  /* Step buttons wider tap target */
+  .cp-step {
+    min-width: 48px;
+    padding: 0 14px;
+  }
+
+  /* Number readout slightly larger */
+  .cp-readout--number {
+    font-size: 20px;
+  }
+
+  /* Telemetry readout */
+  .cp-readout--telemetry {
+    font-size: 24px;
+  }
+
+  /* Lock banner stacks on narrow phones */
+  .cp-lock-banner {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .cp-lock-banner .pill {
+    margin-left: 0;
+  }
+}
+
+/* Small phone */
+@media (max-width: 380px) {
+  .cp-ptt-button {
+    min-height: 70px;
+    gap: 8px;
+  }
+
+  .cp-readout {
+    font-size: 18px;
+  }
+}
+
+/* Touch: make sure PTT responds correctly to touch without hover ghosts */
+@media (hover: none) and (pointer: coarse) {
+  .cp-ptt-button:hover {
+    /* Reset hover state on touch devices — state driven purely by JS classes */
+    background: var(--bg-2);
+    border-color: var(--line-bright);
+    color: var(--ink-2);
+    box-shadow: none;
+  }
+
+  .cp-ptt-button.is-armed:hover {
+    border-color: var(--accent);
+    background: var(--bg-2);
+    color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-tint);
+  }
+
+  .cp-ptt-button.is-keying:hover {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+
+  .cp-ptt-button.is-tx:hover,
+  .cp-ptt-button.cp-ptt-button--active:hover {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+  }
+
+  .cp-step:hover {
+    background: var(--bg-2);
+    color: var(--ink-1);
+  }
+}
+
+/* ---------- Light theme overrides -------------------------------------------- */
+
+:root[data-theme="light"] .cp-module-card {
+  /* Light rack face: subtle warm tint at top */
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+}
+
+:root[data-theme="light"] .cp-module-header {
+  background: var(--bg-3);
+}
+
+:root[data-theme="light"] .cp-step {
+  background: var(--bg-3);
+}
+
+:root[data-theme="light"] .cp-step:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+:root[data-theme="light"] .cp-ptt-button.is-keying {
+  animation: cp-ptt-key-pulse-light 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes cp-ptt-key-pulse-light {
+  from { box-shadow: 0 0 6px 0 rgba(199, 138, 30, 0.25); }
+  to   { box-shadow: 0 0 18px 3px rgba(199, 138, 30, 0.4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="light"] .cp-ptt-button.is-keying {
+    animation: none;
+    box-shadow: 0 0 0 2px rgba(199, 138, 30, 0.4);
+  }
+}
+
+:root[data-theme="light"] .cp-meter-fill {
+  background: linear-gradient(90deg, var(--signal) 0%, #00A875 100%);
+}
+
+:root[data-theme="light"] .cp-readout {
+  background: var(--bg-0);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="light"] .cp-module-card.is-offline::after,
+:root[data-theme="light"] .cp-module-card.cp-disconnected::after {
+  color: var(--ink-2);
+  opacity: 0.12;
+}
