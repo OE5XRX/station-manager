@@ -180,4 +180,30 @@ ok("widgetKey / moduleKey composite", () => {
   assert.equal(L.moduleKey("slot0", "fm0"), "slot0 fm0");
 });
 
+// --- §7 envelope ------------------------------------------------------------
+// Regression: the agent's parse_message drops any frame whose "v" != 1, so
+// every browser->server frame MUST be stamped. Missing this = every command /
+// subscribe / ptt is silently rejected and the browser only sees "No response".
+ok("PROTOCOL_VERSION is 1", () => {
+  assert.equal(L.PROTOCOL_VERSION, 1);
+});
+ok("envelope stamps v:1 on a command frame", () => {
+  const f = L.envelope({ type: "command", capability: "frequency", op: "set", value: 145.5 });
+  assert.equal(f.v, 1);
+  assert.equal(f.type, "command");
+  assert.equal(f.capability, "frequency");
+  assert.equal(f.value, 145.5);
+});
+ok("envelope stamps every frame type the agent parses", () => {
+  for (const t of ["command", "subscribe", "unsubscribe", "ptt_keepalive"]) {
+    assert.equal(L.envelope({ type: t }).v, 1, t + " must carry v:1");
+  }
+});
+ok("envelope returns a copy and does not mutate the input", () => {
+  const src = { type: "command" };
+  const f = L.envelope(src);
+  assert.equal(src.v, undefined); // input untouched
+  assert.notEqual(f, src);
+});
+
 console.log("\n" + passed + " assertions passed");

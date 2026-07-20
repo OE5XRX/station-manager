@@ -15,6 +15,7 @@ it is reported (D4 consumers are NOT modified from this task).
 """
 
 import asyncio
+import json
 
 import pytest
 from channels.layers import get_channel_layer
@@ -122,8 +123,12 @@ def test_command_relayed_and_result_state_confirm(control_agent_auth):
         assert held["you_hold"] is True
 
         # JS setValue for a float setting sends op:set with a JSON number.
+        # Every browser->server frame carries the §7 envelope version (v); the
+        # agent's parse_message DROPS any frame whose v != 1 (see the dedicated
+        # test_agent_parse_message_requires_envelope_version below).
         await hc.send_json_to(
             {
+                "v": V,
                 "type": "command",
                 "request_id": "js-rq1",
                 "slot": "slot0",
@@ -136,6 +141,7 @@ def test_command_relayed_and_result_state_confirm(control_agent_auth):
 
         got = await agent.receive_json_from()
         assert got["type"] == "command"
+        assert got["v"] == V  # envelope version relayed through to the agent
         assert got["slot"] == "slot0"
         assert got["module"] == "fm0"
         assert got["capability"] == "frequency"
@@ -188,6 +194,7 @@ def test_subscribe_carries_capabilities_and_interval(control_agent_auth):
         # subscribe is access-gated, not lock-gated: no lock acquired here.
         await vc.send_json_to(
             {
+                "v": V,
                 "type": "subscribe",
                 "slot": "slot0",
                 "module": "fm0",
@@ -358,3 +365,49 @@ def test_agent_reconnect_delivers_fresh_inventory(control_agent_auth):
         await agent2.disconnect()
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Regression: the §7 envelope version is mandatory on browser->server frames.
+#
+# The real station-agent parser (station_agent.protocol.parse_message) DROPS
+# any frame whose "v" != PROTOCOL_VERSION. D5 shipped commands/subscribe/ptt
+# WITHOUT the "v" field, so every relayed frame was silently rejected and the
+# operator only ever saw a command timeout ("No response"). The Channels relay
+# tests above missed it because the simulated agent receives raw JSON and never
+# runs parse_message. This test pins the contract against the REAL parser.
+# ---------------------------------------------------------------------------
+def test_agent_parse_message_requires_envelope_version():
+    from station_agent import protocol as proto
+
+    # A command exactly as D5 builds it, WITH the envelope version -> accepted.
+    good = json.dumps(
+        {
+            "v": proto.PROTOCOL_VERSION,
+            "type": "command",
+            "request_id": "b1-123",
+            "slot": "slot0",
+            "module": "fm0",
+            "capability": "frequency",
+            "op": "set",
+            "value": 145.5,
+        }
+    )
+    parsed = proto.parse_message(good)
+    assert parsed["type"] == "command"
+
+    # The SAME frame without "v" -> rejected (this was the production bug).
+    bad = json.dumps(
+        {
+            "type": "command",
+            "request_id": "b1-123",
+            "slot": "slot0",
+            "module": "fm0",
+            "capability": "frequency",
+            "op": "set",
+            "value": 145.5,
+        }
+    )
+    with pytest.raises(proto.ProtocolError) as exc:
+        proto.parse_message(bad)
+    assert exc.value.code == proto.VALIDATION_FAILED
