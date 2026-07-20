@@ -1,6 +1,6 @@
 Django>=6.0,<6.1
 djangorestframework>=3.17,<3.18
-django-htmx>=1.21,<2.0
+django-htmx>=1.28.0,<2.0
 django-axes>=7.0,<9.0
 channels[daphne]>=4.2,<5.0
 channels-redis>=4.2,<5.0
