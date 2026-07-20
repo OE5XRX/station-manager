@@ -149,3 +149,31 @@ def test_number_input_is_dot_decimal_locale_safe(client, station, operator):
     client.force_login(operator)
     html = _render(client, station).decode()
     assert 'lang="en"' in html and 'inputmode="decimal"' in html
+
+
+def test_number_input_min_max_dot_decimal_under_de_locale(client, station, operator):
+    """I2: min/max/step HTML attributes must always use a dot as decimal separator
+    regardless of the active locale, so native HTML5 number validation is not lost
+    under a de/de_AT deployment that would otherwise localize floats to commas."""
+    from django.utils import translation
+
+    # FM descriptor has float ranges: min=134.0, max=174.0 (from the FM list above)
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm",
+        type="fm",
+        capability_descriptor=FM,
+        last_state={"frequency": 145.5},
+        online=True,
+    )
+    client.force_login(operator)
+    with translation.override("de"):
+        html = _render(client, station).decode()
+
+    # The min/max on <input type="number"> and data-min/data-max on the div
+    # must be dot-decimal regardless of locale.
+    assert 'min="134' in html, "min attribute missing"
+    assert 'min="134,' not in html, "min attribute used comma decimal under de locale"
+    assert 'max="174' in html, "max attribute missing"
+    assert 'max="174,' not in html, "max attribute used comma decimal under de locale"

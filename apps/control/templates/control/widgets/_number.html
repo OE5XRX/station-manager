@@ -1,4 +1,4 @@
-{% load i18n %}
+{% load i18n l10n %}
 {% comment %}
 Bounds: MVP reads data-min/data-max (first/last range band) in JS. Multi-band
 ranges (cap.ranges with >1 entry) are a future enhancement — not serialized on a
@@ -11,9 +11,9 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
      data-cap="{{ cap.name }}"
      data-kind="setting"
      data-type="{{ cap.type }}"
-     {% for r in cap.ranges %}{% if forloop.first %}data-min="{{ r.min }}"{% endif %}{% endfor %}
+     {% localize off %}{% for r in cap.ranges %}{% if forloop.first %}data-min="{{ r.min }}"{% endif %}{% endfor %}
      {% for r in cap.ranges %}{% if forloop.last %}data-max="{{ r.max }}"{% endif %}{% endfor %}
-     {% if cap.step %}data-step="{{ cap.step }}"{% endif %}>
+     {% if cap.step %}data-step="{{ cap.step }}"{% endif %}{% endlocalize %}>
   <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
   </label>
@@ -27,9 +27,9 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
            type="number"
            lang="en"
            inputmode="decimal"
-           step="{{ cap.step|default:'any' }}"
+           {% localize off %}step="{{ cap.step|default:'any' }}"
            {% for r in cap.ranges %}{% if forloop.first %}min="{{ r.min }}"{% endif %}{% endfor %}
-           {% for r in cap.ranges %}{% if forloop.last %}max="{{ r.max }}"{% endif %}{% endfor %}
+           {% for r in cap.ranges %}{% if forloop.last %}max="{{ r.max }}"{% endif %}{% endfor %}{% endlocalize %}
            :value="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
            :disabled="!canControl"
            :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"

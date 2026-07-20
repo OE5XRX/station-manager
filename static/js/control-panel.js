@@ -25,6 +25,7 @@
       // -- reactive state ----------------------------------------------------
       conn: "connecting", // 'connecting' | 'open' | 'closed'
       agentOffline: false,
+      connError: null, // terminal connection-error reason (4401/4403/4404 deny)
       values: {}, // "slot module cap" -> setting value
       telemetry: {}, // "slot module cap" -> telemetry value
       online: {}, // "slot module" -> bool
@@ -46,6 +47,7 @@
       // -- non-reactive internals (underscore-prefixed) ----------------------
       _ws: null,
       _retry: 0,
+      _closeCode: null, // last WS close code; inspected in _onDisconnect
       _caps: {}, // "slot module cap" -> descriptor
       _capNames: {}, // "slot module" -> {settings:[], telemetry:[]}
       _reqWidget: {}, // request_id -> "slot module cap"
@@ -105,6 +107,11 @@
 
       _ingestInventory: function (slots) {
         if (!Array.isArray(slots)) return;
+        // C1: A live inventory frame is proof the agent is (re)connected.
+        // Clear the agentOffline latch so canControl/moduleOnline unfreeze
+        // when the agent reconnects while the browser socket stays open (no
+        // browser "open" fires in that case, so this is the only reliable path).
+        this.agentOffline = false;
         for (var i = 0; i < slots.length; i++) {
           var slot = slots[i].slot;
           var mods = slots[i].modules || [];
@@ -175,7 +182,8 @@
           }
           self._route(msg);
         });
-        ws.addEventListener("close", function () {
+        ws.addEventListener("close", function (ev) {
+          self._closeCode = ev.code || null;
           self._onDisconnect();
           self._scheduleReconnect();
         });
@@ -194,6 +202,12 @@
 
       _scheduleReconnect: function () {
         if (this._closed) return;
+        // Permanent-deny codes: do not retry — set terminal state instead.
+        var code = this._closeCode;
+        if (code === 4401 || code === 4403 || code === 4404) {
+          this.conn = "closed";
+          return;
+        }
         this._retry += 1;
         var wait = Math.min(30000, 1000 * Math.pow(1.6, this._retry));
         var self = this;
@@ -302,7 +316,15 @@
         if (rid !== undefined) delete this._reqWidget[rid];
         if (wkey && this.pending[wkey]) delete this.pending[wkey];
         var code = msg.error && msg.error.code ? msg.error.code : msg.code;
-        if (wkey) this.errors[wkey] = L.errorMessage(code);
+        if (wkey) {
+          this.errors[wkey] = L.errorMessage(code);
+        } else if (msg.reason) {
+          // Connect-time rejection frame (4401/4403/4404): no request_id, but
+          // msg.reason contains a human-readable explanation. Surface it as a
+          // terminal connection error in the banner area so the user knows why
+          // they are not able to connect (not just an endless Reconnecting pill).
+          this.connError = msg.reason;
+        }
       },
 
       _onEvent: function (msg) {

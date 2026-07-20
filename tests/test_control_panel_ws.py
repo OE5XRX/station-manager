@@ -312,3 +312,49 @@ def test_agent_offline_and_lock_free_on_agent_disconnect(control_agent_auth):
         await hc.disconnect()
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# 7. C1 — agent reconnect while browser socket stays open delivers a fresh
+#    inventory frame.  Contract-level proof that the agentOffline latch is
+#    clearable: the browser receives agent_offline on disconnect and then an
+#    inventory on reconnect (the inventory ingestion clears agentOffline in
+#    the JS component).
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db(transaction=True)
+def test_agent_reconnect_delivers_fresh_inventory(control_agent_auth):
+    station = Station.objects.create(name="jsws6", status="online")
+    viewer = User.objects.create(username="jv6", membership_level=User.MembershipLevel.MEMBER)
+
+    async def scenario():
+        # First agent connects and the browser observes it.
+        agent1 = _agent_comm(station.id)
+        assert (await agent1.connect())[0] is True
+        await agent1.send_json_to(_inventory_frame())
+
+        hc = _browser(viewer, station.id)
+        assert (await hc.connect())[0] is True
+        # Drain the connect-time inventory + lock frames so the queue is clean.
+        await _until(hc, "inventory")
+        await _until(hc, "lock")
+
+        # Agent drops — browser gets agent_offline.
+        await agent1.disconnect()
+        offline = await _until(hc, "agent_offline")
+        assert offline["type"] == "agent_offline"
+
+        # A NEW agent connects and sends a fresh inventory.
+        agent2 = _agent_comm(station.id)
+        assert (await agent2.connect())[0] is True
+        await agent2.send_json_to(_inventory_frame())
+
+        # The browser MUST receive that fresh inventory frame.  This is the
+        # event that the JS _ingestInventory handler uses to clear agentOffline.
+        fresh = await _until(hc, "inventory")
+        assert fresh["type"] == "inventory"
+        assert fresh["slots"][0]["slot"] == "slot0"
+
+        await hc.disconnect()
+        await agent2.disconnect()
+
+    asyncio.run(scenario())

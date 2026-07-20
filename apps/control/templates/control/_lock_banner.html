@@ -92,3 +92,18 @@ the lock over, dismiss ignores it.
      aria-live="polite">
   {% trans "You no longer have control" %}
 </div>
+
+{% comment %}Agent-offline notice — cleared automatically when the agent reconnects (C1).{% endcomment %}
+<div class="cp-agent-offline-notice"
+     x-show="agentOffline"
+     role="status"
+     aria-live="polite">
+  {% trans "Station agent offline — showing last known state" %}
+</div>
+
+{% comment %}Terminal connection-error notice — shown on permanent deny (4401/4403/4404).{% endcomment %}
+<div class="cp-lock-notice cp-conn-error-notice"
+     x-show="connError"
+     role="alert">
+  <span x-text="connError"></span>
+</div>

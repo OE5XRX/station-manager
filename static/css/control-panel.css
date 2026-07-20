@@ -134,6 +134,33 @@
   text-align: center;
 }
 
+/* Agent-offline banner — shown when agentOffline is true; cleared on inventory
+   (C1). Desaturated/ink-3 treatment consistent with the is-offline card overlay.
+   Quiet: one line, no icon, no animation. */
+.cp-agent-offline-notice {
+  padding: 8px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-bright);
+  background: var(--bg-2);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  filter: saturate(0.4);
+}
+
+/* Terminal connection-error notice — permanent deny (4401/4403/4404). Uses the
+   same visual chrome as .cp-lock-notice but with a danger tint to signal it
+   is not a transient state. */
+.cp-conn-error-notice {
+  border-color: rgba(255, 93, 115, 0.4);
+  background: var(--danger-soft);
+  color: var(--danger);
+  filter: none;
+}
+
 @media (max-width: 560px) {
   .cp-lock-banner {
     flex-wrap: wrap;
