@@ -112,8 +112,12 @@ def test_second_fictitious_module_renders_without_ui_code(client, station, opera
 def test_renderer_has_no_fm_or_frequency_hardcode():
     import pathlib
 
-    root = pathlib.Path("apps/control/templates/control")
-    for p in root.rglob("*.html"):
+    # Anchor to the repo root relative to this test file — a CWD-relative path
+    # would make rglob() yield nothing and pass vacuously from another dir.
+    root = pathlib.Path(__file__).resolve().parent.parent / "apps/control/templates/control"
+    templates = list(root.rglob("*.html"))
+    assert templates, f"no control templates found under {root}"
+    for p in templates:
         txt = p.read_text().lower()
         assert "frequency" not in txt, f"{p} hardcodes 'frequency'"
         assert '"fm"' not in txt and ">fm<" not in txt, f"{p} hardcodes fm"

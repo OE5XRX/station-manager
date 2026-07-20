@@ -53,10 +53,10 @@ socket is not open.
 
   {% comment %}Connection indicator — reuses the shared pill/dot chrome.{% endcomment %}
   <span class="pill"
-        :class="conn === 'open' ? 'pill-online' : 'pill-warn'"
+        :class="conn === 'open' ? 'pill-online' : (connError ? 'pill-error' : 'pill-warn')"
         aria-live="polite">
     <span class="dot" aria-hidden="true"></span>
-    <span x-text="conn === 'open' ? '{% trans "Live" %}' : '{% trans "Reconnecting" %}'"></span>
+    <span x-text="conn === 'open' ? '{% trans "Live" %}' : (connError ? '{% trans "Error" %}' : '{% trans "Reconnecting" %}')"></span>
   </span>
 </div>
 

@@ -20,10 +20,16 @@
     </output>
   </div>
   {% if cap.ranges %}
+  {% comment %}
+  role="meter" needs a NUMERIC aria-valuenow. telemetryText can be "—" or
+  formatted text, so drive the meter as a 0–100% scale (telemetryPct, matching
+  the fill width) and expose the human-readable value (+unit) via aria-valuetext.
+  {% endcomment %}
   <div class="cp-meter" role="meter"
-       :aria-valuenow="telemetryText('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-       {% for r in cap.ranges %}{% if forloop.first %}aria-valuemin="{{ r.min }}"{% endif %}{% endfor %}
-       {% for r in cap.ranges %}{% if forloop.last %}aria-valuemax="{{ r.max }}"{% endif %}{% endfor %}
+       :aria-valuenow="telemetryPct('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
+       :aria-valuetext="telemetryText('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}'){% if cap.unit %} + ' {{ cap.unit }}'{% endif %}"
+       aria-valuemin="0"
+       aria-valuemax="100"
        aria-label="{{ cap.name }}">
     <div class="cp-meter-track">
       <div class="cp-meter-fill"
