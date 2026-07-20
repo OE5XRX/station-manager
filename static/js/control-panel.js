@@ -48,7 +48,6 @@
       _retry: 0,
       _caps: {}, // "slot module cap" -> descriptor
       _capNames: {}, // "slot module" -> {settings:[], telemetry:[]}
-      _keepalive: null,
       _reqWidget: {}, // request_id -> "slot module cap"
       _reqSeq: 0,
       _listeners: [],
@@ -151,7 +150,7 @@
 
       _connect: function () {
         if (this._closed) return;
-        this.conn = this._retry === 0 ? "connecting" : "connecting";
+        this.conn = "connecting";
         var self = this;
         var ws;
         try {
@@ -312,7 +311,10 @@
         var mkey = L.moduleKey(slot, module);
         switch (msg.event) {
           case "ptt_auto_unkey":
-            this._unkeyModule(mkey, false);
+            // Belt-and-suspenders: the agent already unkeyed (dead-man), but we
+            // still send ptt=false when the socket is open so browser and agent
+            // never disagree about carrier state (spec §5 fail-safe list).
+            this._unkeyModule(mkey, true);
             break;
           case "module_added":
             this.online[mkey] = true;
