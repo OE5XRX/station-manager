@@ -1,18 +1,94 @@
 {% load i18n %}
 {% comment %}
-Lock banner — shown when the control lock is held by another user or when the
-current user's lock is about to expire. Bound to the Alpine controlPanel component.
+Lock banner — the station's single control affordance. Always visible; its state
+class (is-free / is-you / is-other) and message are driven by the Alpine
+controlPanel component. Reuses the app pill/dot vocabulary for the connection
+indicator (LIVE / RECONNECTING). Buttons are real <button>s, disabled while the
+socket is not open.
 {% endcomment %}
 <div class="cp-lock-banner"
-     x-show="$data.lockState && $data.lockState !== 'free' && $data.lockState !== 'held'"
+     :class="{
+       'is-free': lockState === 'free',
+       'is-you': lockState === 'held',
+       'is-other': lockState === 'other'
+     }"
+     role="status"
+     aria-live="polite">
+  <span class="cp-lock-icon" aria-hidden="true"
+        x-text="lockState === 'other' ? '🔒' : (lockState === 'held' ? '🎙' : '○')"></span>
+
+  <span class="cp-lock-message">
+    <template x-if="lockState === 'free'">
+      <span>{% trans "Control is free" %}</span>
+    </template>
+    <template x-if="lockState === 'held'">
+      <span>{% trans "You have control" %}</span>
+    </template>
+    <template x-if="lockState === 'other'">
+      <span x-text="(lockHolder || '{% trans "Another operator" %}') + ' {% trans "has control" %}'"></span>
+    </template>
+  </span>
+
+  <div class="cp-lock-actions">
+    <button type="button" class="cp-btn cp-btn--action cp-lock-btn"
+            x-show="lockState === 'free'"
+            :disabled="conn !== 'open'"
+            @click="acquire()">{% trans "Take control" %}</button>
+
+    <button type="button" class="cp-btn cp-lock-btn"
+            x-show="lockState === 'held'"
+            :disabled="conn !== 'open'"
+            @click="release()">{% trans "Release control" %}</button>
+
+    <button type="button" class="cp-btn cp-lock-btn"
+            x-show="lockState === 'other'"
+            :disabled="conn !== 'open'"
+            @click="request()">{% trans "Request control" %}</button>
+
+    <button type="button" class="cp-btn cp-lock-btn cp-lock-btn--override"
+            x-show="lockState === 'other' && canAdmin"
+            :disabled="conn !== 'open'"
+            @click="preempt()">{% trans "Override" %}</button>
+  </div>
+
+  {% comment %}Connection indicator — reuses the shared pill/dot chrome.{% endcomment %}
+  <span class="pill"
+        :class="conn === 'open' ? 'pill-online' : 'pill-warn'"
+        aria-live="polite">
+    <span class="dot" aria-hidden="true"></span>
+    <span x-text="conn === 'open' ? '{% trans "Live" %}' : '{% trans "Reconnecting" %}'"></span>
+  </span>
+</div>
+
+{% comment %}
+Incoming control request — shown to the holder only. Non-blocking: grant hands
+the lock over, dismiss ignores it.
+{% endcomment %}
+<div class="cp-lock-prompt"
+     x-show="pendingRequest"
      x-transition:enter="cp-fade-enter"
      x-transition:enter-start="cp-fade-start"
      x-transition:enter-end="cp-fade-end"
      role="status"
      aria-live="polite">
-  <span class="cp-lock-icon" aria-hidden="true">&#128274;</span>
-  <span class="cp-lock-message"
-        x-text="$data.lockHolder ? '{% trans "Controlled by" %} ' + $data.lockHolder : '{% trans "Station locked" %}'">
-    {% trans "Station locked" %}
-  </span>
+  <span class="cp-lock-prompt-msg"
+        x-text="(pendingRequest ? pendingRequest.username : '') + ' {% trans "is requesting control" %}'"></span>
+  <div class="cp-lock-actions">
+    <button type="button" class="cp-btn cp-btn--action cp-lock-btn"
+            :disabled="conn !== 'open'"
+            @click="grant(pendingRequest.id)">{% trans "Grant" %}</button>
+    <button type="button" class="cp-btn cp-lock-btn"
+            @click="dismissRequest()">{% trans "Dismiss" %}</button>
+  </div>
+</div>
+
+{% comment %}Transient loss notice — auto-dismisses after ~4s (JS timer).{% endcomment %}
+<div class="cp-lock-notice"
+     x-show="lossNotice"
+     x-transition:enter="cp-fade-enter"
+     x-transition:enter-start="cp-fade-start"
+     x-transition:enter-end="cp-fade-end"
+     role="status"
+     aria-live="polite">
+  {% trans "You no longer have control" %}
 </div>

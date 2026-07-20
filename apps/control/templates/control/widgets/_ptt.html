@@ -11,10 +11,21 @@ Mouse: @mousedown/@mouseup. Touch: @touchstart.prevent/@touchend.prevent. Keyboa
      data-cap="ptt"
      data-kind="action"
      data-type="{{ cap.type }}">
+  {% comment %}
+  Labels assigned to template vars so the 3-state x-text below stays readable.
+  Phase → label: tx = confirmed on air, keying = key sent awaiting confirm,
+  armed = ready.
+  {% endcomment %}
+  {% trans "ON AIR" as ptt_tx_label %}
+  {% trans "KEYING…" as ptt_keying_label %}
+  {% trans "PTT" as ptt_armed_label %}
   <button type="button"
           class="cp-ptt-button"
           :disabled="!canControl"
           :class="{
+            'is-armed': pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'armed',
+            'is-keying': pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'keying',
+            'is-tx': pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'tx',
             'cp-ptt-button--active': pttState('{{ m.slot }}','{{ m.module_id }}'),
             'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','ptt')
           }"
@@ -28,7 +39,7 @@ Mouse: @mousedown/@mouseup. Touch: @touchstart.prevent/@touchend.prevent. Keyboa
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-ptt">
     <span class="cp-ptt-icon" aria-hidden="true"></span>
     <span class="cp-ptt-label"
-          x-text="pttState('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "TX" %}' : '{% trans "PTT" %}'">
+          x-text="pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'tx' ? '{{ ptt_tx_label }}' : (pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'keying' ? '{{ ptt_keying_label }}' : '{{ ptt_armed_label }}')">
       {% trans "PTT" %}
     </span>
   </button>

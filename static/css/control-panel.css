@@ -73,8 +73,74 @@
 
 /* Connection sub-indicator reuses pill/dot vocabulary */
 .cp-lock-banner .pill {
-  margin-left: auto;
   flex-shrink: 0;
+}
+
+/* Lock action buttons sit between the message and the connection pill. The
+   message keeps flex:1, so actions + pill are pushed to the trailing edge. */
+.cp-lock-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cp-lock-btn {
+  font-size: 11px;
+  padding: 5px 12px;
+}
+
+/* Override is the destructive admin path — tint it with the danger channel so
+   it never reads like the everyday "Request control". */
+.cp-lock-btn--override {
+  color: var(--danger);
+  border-color: rgba(255, 93, 115, 0.4);
+}
+.cp-lock-btn--override:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+/* Incoming request prompt — a quiet card under the banner, holder-only. */
+.cp-lock-prompt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(78, 225, 242, 0.35);
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.cp-lock-prompt-msg {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+/* Transient lock-loss notice — warns the operator control was taken. */
+.cp-lock-notice {
+  padding: 8px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(247, 185, 85, 0.4);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .cp-lock-banner {
+    flex-wrap: wrap;
+  }
+  .cp-lock-message {
+    flex-basis: 100%;
+  }
 }
 
 /* ---------- Module grid ------------------------------------------------------- */
