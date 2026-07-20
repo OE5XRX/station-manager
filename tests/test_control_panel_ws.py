@@ -207,6 +207,7 @@ def test_subscribe_carries_capabilities_and_interval(control_agent_auth):
         assert relayed["type"] == "control.to_agent"
         frame = relayed["frame"]
         assert frame["type"] == "subscribe"
+        assert frame["v"] == V  # envelope version survives the relay to the agent
         assert frame["capabilities"] == ["rssi"]
         assert frame["interval_ms"] == 500
 
