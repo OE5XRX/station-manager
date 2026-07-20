@@ -10,7 +10,9 @@ PTT is detected by cap.kind=="action" AND cap.name=="ptt" (platform-level capabi
   {% include "control/widgets/_action.html" %}
 {% elif cap.kind == "setting" and cap.readonly %}
   {% include "control/widgets/_text.html" %}
-{% elif cap.kind == "setting" and cap.type == "float" or cap.kind == "setting" and cap.type == "int" %}
+{% elif cap.kind == "setting" and cap.type == "float" %}
+  {% include "control/widgets/_number.html" %}
+{% elif cap.kind == "setting" and cap.type == "int" %}
   {% include "control/widgets/_number.html" %}
 {% elif cap.kind == "setting" and cap.type == "enum" %}
   {% include "control/widgets/_enum.html" %}

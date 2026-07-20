@@ -20,7 +20,7 @@ from django.urls import reverse
 
 from apps.accounts.models import User
 from apps.control.models import StationModule
-from apps.stations.models import Station, StationAssignment
+from apps.stations.models import Station
 
 FM = [
     {
@@ -53,13 +53,13 @@ def station(db):
 
 
 @pytest.fixture
-def operator(db, station):
+def operator(db):
+    # can_use_station() (the control view's gate) only requires a non-applicant
+    # membership level today — no per-station assignment. Keep the fixture
+    # minimal so it mirrors the real permission contract.
     u = User.objects.create_user(username="op-int", password="x")
     u.membership_level = User.MembershipLevel.MEMBER
     u.save(update_fields=["membership_level"])
-    StationAssignment.objects.create(
-        user=u, station=station, role=StationAssignment.Role.MAINTAINER
-    )
     return u
 
 

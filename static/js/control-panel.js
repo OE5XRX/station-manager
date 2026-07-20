@@ -201,6 +201,19 @@
         var code = this._closeCode;
         if (code === 4401 || code === 4403 || code === 4404) {
           this.conn = "closed";
+          // The server normally sends a {type:"error", reason:...} frame first,
+          // which sets connError. If that frame was missed (network drop / parse
+          // failure) connError stays null and the pill would wrongly read
+          // "Reconnecting" even though we've stopped retrying — derive a fallback
+          // from the close code so the banner stays accurate.
+          if (!this.connError) {
+            this.connError =
+              code === 4401
+                ? "You are not signed in."
+                : code === 4403
+                  ? "You are not permitted to control this station."
+                  : "Station not found.";
+          }
           return;
         }
         this._retry += 1;
