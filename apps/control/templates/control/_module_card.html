@@ -10,6 +10,10 @@ Body: all capabilities rendered via the dispatch widget partial.
 PTT is rendered last within the card so it can span full width.
 {% endcomment %}
 <article class="cp-module cp-module-card"
+         :class="{
+           'is-offline': !moduleOnline('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}'),
+           'cp-disconnected': conn !== 'open'
+         }"
          data-slot="{{ m.slot }}"
          data-module="{{ m.module_id }}">
   <header class="cp-module-header">

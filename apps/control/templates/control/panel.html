@@ -7,7 +7,6 @@
   <div id="control-panel"
        x-data="controlPanel()"
        data-station-id="{{ station.id }}"
-       data-user-id="{{ request.user.id }}"
        data-can-admin="{{ can_admin|yesno:'1,0' }}"
        data-ptt-default-key="{{ ptt_default_key }}">
     {% include "control/_lock_banner.html" %}

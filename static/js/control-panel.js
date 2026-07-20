@@ -40,7 +40,6 @@
       lossNotice: false,
       // config (from data-* on root)
       stationId: null,
-      userId: null,
       canAdmin: false,
       pttKey: " ",
 
@@ -62,7 +61,6 @@
       init: function () {
         var root = this.$el;
         this.stationId = root.getAttribute("data-station-id");
-        this.userId = parseInt(root.getAttribute("data-user-id"), 10);
         this.canAdmin = root.getAttribute("data-can-admin") === "1";
         var defaultKey = root.getAttribute("data-ptt-default-key");
         if (defaultKey === null || defaultKey === "") defaultKey = " ";
