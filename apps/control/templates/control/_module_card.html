@@ -35,7 +35,7 @@ PTT is rendered last within the card so it can span full width.
   <div class="cp-module-widgets">
     {% comment %}Pass 1: all caps except PTT{% endcomment %}
     {% for cap in m.capability_descriptor %}
-      {% if not cap.name == "ptt" %}
+      {% if cap.name != "ptt" %}
         {% include "control/widgets/_widget.html" %}
       {% endif %}
     {% endfor %}
