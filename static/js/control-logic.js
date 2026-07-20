@@ -18,6 +18,29 @@
   "use strict";
 
   // ---------------------------------------------------------------------------
+  // §7 envelope
+  // ---------------------------------------------------------------------------
+
+  // Protocol version carried on EVERY browser->server frame (design spec §7).
+  // The agent's parse_message drops any frame whose "v" != PROTOCOL_VERSION,
+  // so an unstamped command/subscribe/ptt_keepalive is silently rejected and
+  // the browser only ever sees a command timeout ("No response").
+  var PROTOCOL_VERSION = 1;
+
+  /* Return a shallow copy of `obj` with the §7 envelope version FORCED to
+     PROTOCOL_VERSION. A caller-supplied `v` is always overridden — there is
+     exactly one valid version, and a wrong `v` would be silently dropped by
+     the agent, so we never trust the caller here. */
+  function envelope(obj) {
+    var out = {};
+    for (var k in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
+    }
+    out.v = PROTOCOL_VERSION;
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // DE-locale number parsing / serialization
   // ---------------------------------------------------------------------------
 
@@ -223,6 +246,8 @@
   }
 
   return {
+    PROTOCOL_VERSION: PROTOCOL_VERSION,
+    envelope: envelope,
     parseNumber: parseNumber,
     formatNumber: formatNumber,
     shouldIgnoreKey: shouldIgnoreKey,
