@@ -107,6 +107,17 @@
         // when the agent reconnects while the browser socket stays open (no
         // browser "open" fires in that case, so this is the only reliable path).
         this.agentOffline = false;
+        // Rebuild the descriptor/topology maps from scratch: a refreshed
+        // inventory that REMOVES a module/capability (topology change or a
+        // reconnect with different modules) must not leave stale entries, which
+        // would otherwise mislead keyboard PTT, _subscribeAll, and cached bounds.
+        // Live value/telemetry/ptt state is keyed and preserved for surviving
+        // modules; entries for removed modules go inert once they drop out of
+        // _capNames.
+        this._caps = {};
+        this._capNames = {};
+        this.online = {};
+        this._boundsCache = {};
         for (var i = 0; i < slots.length; i++) {
           var slot = slots[i].slot;
           var mods = slots[i].modules || [];
