@@ -77,11 +77,6 @@
         this._seedFromInitial();
         this._installListeners();
         this._connect();
-
-        var self = this;
-        this._onDestroy = function () {
-          self._teardown();
-        };
       },
 
       destroy: function () {
@@ -492,6 +487,13 @@
       },
 
       _bounds: function (slot, module, cap) {
+        // Bounds are static per widget (data-* attrs are rendered from the
+        // descriptor and never change), but telemetryPct() is called twice per
+        // meter on every telemetry tick — cache the result so the DOM query
+        // happens at most once per widget key, not on every frame.
+        var key = L.widgetKey(slot, module, cap);
+        var cache = this._boundsCache || (this._boundsCache = {});
+        if (cache[key]) return cache[key];
         // Prefer the live DOM data-min/data-max (authoritative for the widget),
         // fall back to the cap descriptor's ranges.
         var el = this._widgetEl(slot, module, cap);
@@ -504,14 +506,15 @@
           if (el.hasAttribute("data-step")) step = el.getAttribute("data-step");
         }
         if (min === null || max === null) {
-          var descr = this._caps[L.widgetKey(slot, module, cap)];
+          var descr = this._caps[key];
           if (descr && descr.ranges && descr.ranges.length) {
             if (min === null) min = descr.ranges[0].min;
             if (max === null) max = descr.ranges[descr.ranges.length - 1].max;
           }
           if (step === null && descr && descr.step != null) step = descr.step;
         }
-        return { min: min, max: max, step: step };
+        cache[key] = { min: min, max: max, step: step };
+        return cache[key];
       },
 
       _widgetEl: function (slot, module, cap) {
