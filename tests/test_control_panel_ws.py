@@ -123,9 +123,10 @@ def test_command_relayed_and_result_state_confirm(control_agent_auth):
         assert held["you_hold"] is True
 
         # JS setValue for a float setting sends op:set with a JSON number.
-        # Every browser->server frame carries the §7 envelope version (v); the
-        # agent's parse_message DROPS any frame whose v != 1 (see the dedicated
-        # test_agent_parse_message_requires_envelope_version below).
+        # Frames relayed to the agent (command/subscribe/unsubscribe/ptt_keepalive)
+        # carry the §7 envelope version (v); the agent's parse_message DROPS any
+        # such frame whose v != 1 (see test_agent_parse_message_requires_envelope_version).
+        # The lock_* frames above are handled by the server, not relayed to the agent.
         await hc.send_json_to(
             {
                 "v": V,

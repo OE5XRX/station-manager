@@ -27,13 +27,16 @@
   // the browser only ever sees a command timeout ("No response").
   var PROTOCOL_VERSION = 1;
 
-  /* Return a shallow copy of `obj` with the §7 envelope version stamped.
-     Never clobbers an explicit `v` a caller already set. */
+  /* Return a shallow copy of `obj` with the §7 envelope version FORCED to
+     PROTOCOL_VERSION. A caller-supplied `v` is always overridden — there is
+     exactly one valid version, and a wrong `v` would be silently dropped by
+     the agent, so we never trust the caller here. */
   function envelope(obj) {
-    var out = { v: PROTOCOL_VERSION };
+    var out = {};
     for (var k in obj) {
       if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
     }
+    out.v = PROTOCOL_VERSION;
     return out;
   }
 

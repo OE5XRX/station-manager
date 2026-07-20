@@ -236,8 +236,9 @@
       _send: function (obj) {
         if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false;
         try {
-          // Stamp the §7 envelope version — the agent's parse_message drops any
-          // frame whose "v" != 1, so command/subscribe/ptt_keepalive MUST carry it.
+          // Stamp the §7 envelope version (L.PROTOCOL_VERSION) — the agent's
+          // parse_message drops any frame whose "v" mismatches, so command/
+          // subscribe/ptt_keepalive MUST carry it.
           this._ws.send(JSON.stringify(L.envelope(obj)));
           return true;
         } catch (_) {

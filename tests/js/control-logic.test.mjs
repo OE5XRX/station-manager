@@ -199,6 +199,13 @@ ok("envelope stamps every frame type the agent parses", () => {
     assert.equal(L.envelope({ type: t }).v, 1, t + " must carry v:1");
   }
 });
+ok("envelope FORCES v to PROTOCOL_VERSION even if the caller supplies one", () => {
+  // A wrong caller-supplied v (or undefined) must never leak through — the
+  // agent would silently drop it. envelope() always overrides.
+  assert.equal(L.envelope({ type: "command", v: 2 }).v, 1);
+  assert.equal(L.envelope({ type: "command", v: undefined }).v, 1);
+  assert.equal(L.envelope({ type: "command", v: "1" }).v, 1);
+});
 ok("envelope returns a copy and does not mutate the input", () => {
   const src = { type: "command" };
   const f = L.envelope(src);
