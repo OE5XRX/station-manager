@@ -23,18 +23,15 @@ def station(db):
 
 
 @pytest.fixture
-def operator(db, station):
+def operator(db):
+    # The control view's gate is can_use_station(), which today only requires a
+    # non-applicant membership level — there is no per-station assignment check.
+    # Keep the fixture minimal so it mirrors the real permission contract; a
+    # StationAssignment here would be dead setup that misleads if the contract
+    # ever tightens.
     u = User.objects.create_user(username="op", password="x")
-    # Grant can_use_station via the project's assignment mechanism.
-    # can_use_station requires membership_level != APPLICANT; role is required
-    # for StationAssignment.
     u.membership_level = User.MembershipLevel.MEMBER
     u.save(update_fields=["membership_level"])
-    from apps.stations.models import StationAssignment
-
-    StationAssignment.objects.create(
-        user=u, station=station, role=StationAssignment.Role.MAINTAINER
-    )
     return u
 
 
