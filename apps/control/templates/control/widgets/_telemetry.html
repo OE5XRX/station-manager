@@ -15,7 +15,7 @@
   <div class="cp-telemetry-readout">
     <output class="cp-readout cp-readout--telemetry"
             for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
-            x-text="telemetryText('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')">
+            x-text="telemetryText('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')">
       &#8212;
     </output>
   </div>
@@ -26,14 +26,14 @@
   the fill width) and expose the human-readable value (+unit) via aria-valuetext.
   {% endcomment %}
   <div class="cp-meter" role="meter"
-       :aria-valuenow="telemetryPct('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-       :aria-valuetext="telemetryText('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}'){% if cap.unit %} + ' {{ cap.unit }}'{% endif %}"
+       :aria-valuenow="telemetryPct('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+       :aria-valuetext="telemetryText('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}'){% if cap.unit %} + ' {{ cap.unit|escapejs }}'{% endif %}"
        aria-valuemin="0"
        aria-valuemax="100"
        aria-label="{{ cap.name }}">
     <div class="cp-meter-track">
       <div class="cp-meter-fill"
-           :style="'width:' + telemetryPct('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') + '%'">
+           :style="'width:' + telemetryPct('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') + '%'">
       </div>
     </div>
   </div>

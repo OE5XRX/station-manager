@@ -9,17 +9,17 @@
   <label class="cp-widget-label">{{ cap.name }}</label>
   <button type="button"
           class="cp-btn cp-btn--action"
-          :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}') || isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-          :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"
-          @click="doAction('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
+          :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') || isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+          :class="{ 'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') }"
+          @click="doAction('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     <span class="cp-btn-label">{{ cap.name }}</span>
     <span class="cp-btn-spinner" aria-hidden="true"
-          x-show="isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"></span>
+          x-show="isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"></span>
   </button>
   <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
         class="cp-widget-error"
         role="alert"
-        x-show="errorOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-        x-text="errorOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"></span>
+        x-show="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+        x-text="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"></span>
 </div>

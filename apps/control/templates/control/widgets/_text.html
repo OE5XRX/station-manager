@@ -13,7 +13,7 @@
   </span>
   <span id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
         class="cp-readout cp-readout--display"
-        x-text="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')">
+        x-text="displayValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')">
     &#8212;
   </span>
   {% else %}
@@ -23,15 +23,15 @@
   <input id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
          class="cp-readout cp-readout--text"
          type="text"
-         :value="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-         :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
-         :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"
-         @change="setValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}', $event.target.value)"
+         :value="displayValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+         :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+         :class="{ 'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') }"
+         @change="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', $event.target.value)"
          aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
   <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
         class="cp-widget-error"
         role="alert"
-        x-show="errorOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-        x-text="errorOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"></span>
+        x-show="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+        x-text="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"></span>
   {% endif %}
 </div>

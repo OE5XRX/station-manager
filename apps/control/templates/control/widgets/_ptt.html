@@ -21,31 +21,31 @@ Mouse: @mousedown/@mouseup. Touch: @touchstart.prevent/@touchend.prevent. Keyboa
   {% trans "PTT" as ptt_armed_label %}
   <button type="button"
           class="cp-ptt-button"
-          :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
+          :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
           :class="{
-            'is-armed': pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'armed',
-            'is-keying': pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'keying',
-            'is-tx': pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'tx',
-            'cp-ptt-button--active': pttState('{{ m.slot }}','{{ m.module_id }}'),
-            'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','ptt')
+            'is-armed': pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'armed',
+            'is-keying': pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'keying',
+            'is-tx': pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'tx',
+            'cp-ptt-button--active': pttState('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}'),
+            'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','ptt')
           }"
-          :aria-pressed="String(pttState('{{ m.slot }}','{{ m.module_id }}'))"
-          @mousedown="pttDown('{{ m.slot }}','{{ m.module_id }}')"
-          @mouseup="pttUp('{{ m.slot }}','{{ m.module_id }}')"
-          @mouseleave="pttUp('{{ m.slot }}','{{ m.module_id }}')"
-          @touchstart.prevent="pttDown('{{ m.slot }}','{{ m.module_id }}')"
-          @touchend.prevent="pttUp('{{ m.slot }}','{{ m.module_id }}')"
+          :aria-pressed="String(pttState('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}'))"
+          @mousedown="pttDown('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          @mouseup="pttUp('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          @mouseleave="pttUp('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          @touchstart.prevent="pttDown('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          @touchend.prevent="pttUp('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
           aria-label="{% trans 'Push to transmit' %}"
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-ptt">
     <span class="cp-ptt-icon" aria-hidden="true"></span>
     <span class="cp-ptt-label"
-          x-text="pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'tx' ? '{{ ptt_tx_label }}' : (pttPhase('{{ m.slot }}','{{ m.module_id }}') === 'keying' ? '{{ ptt_keying_label }}' : '{{ ptt_armed_label }}')">
+          x-text="pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'tx' ? '{{ ptt_tx_label|escapejs }}' : (pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'keying' ? '{{ ptt_keying_label|escapejs }}' : '{{ ptt_armed_label|escapejs }}')">
       {% trans "PTT" %}
     </span>
   </button>
   <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-ptt"
         class="cp-widget-error"
         role="alert"
-        x-show="errorOf('{{ m.slot }}','{{ m.module_id }}','ptt')"
-        x-text="errorOf('{{ m.slot }}','{{ m.module_id }}','ptt')"></span>
+        x-show="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','ptt')"
+        x-text="errorOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','ptt')"></span>
 </div>

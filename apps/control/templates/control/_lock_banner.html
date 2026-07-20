@@ -1,5 +1,16 @@
 {% load i18n %}
 {% comment %}
+Translated labels embedded inside Alpine/JS string literals must go through
+|escapejs — a translation may legally contain an ASCII apostrophe, which would
+otherwise break the single-quoted JS expression at runtime.
+{% endcomment %}
+{% trans "Another operator" as another_operator_label %}
+{% trans "has control" as has_control_label %}
+{% trans "Live" as live_label %}
+{% trans "Error" as error_label %}
+{% trans "Reconnecting" as reconnecting_label %}
+{% trans "is requesting control" as requesting_label %}
+{% comment %}
 Lock banner — the station's single control affordance. Always visible; its state
 class (is-free / is-you / is-other) and message are driven by the Alpine
 controlPanel component. Reuses the app pill/dot vocabulary for the connection
@@ -25,7 +36,7 @@ socket is not open.
       <span>{% trans "You have control" %}</span>
     </template>
     <template x-if="lockState === 'other'">
-      <span x-text="(lockHolder || '{% trans "Another operator" %}') + ' {% trans "has control" %}'"></span>
+      <span x-text="(lockHolder || '{{ another_operator_label|escapejs }}') + ' {{ has_control_label|escapejs }}'"></span>
     </template>
   </span>
 
@@ -56,7 +67,7 @@ socket is not open.
         :class="conn === 'open' ? 'pill-online' : (connError ? 'pill-error' : 'pill-warn')"
         aria-live="polite">
     <span class="dot" aria-hidden="true"></span>
-    <span x-text="conn === 'open' ? '{% trans "Live" %}' : (connError ? '{% trans "Error" %}' : '{% trans "Reconnecting" %}')"></span>
+    <span x-text="conn === 'open' ? '{{ live_label|escapejs }}' : (connError ? '{{ error_label|escapejs }}' : '{{ reconnecting_label|escapejs }}')"></span>
   </span>
 </div>
 
@@ -72,7 +83,7 @@ the lock over, dismiss ignores it.
      role="status"
      aria-live="polite">
   <span class="cp-lock-prompt-msg"
-        x-text="(pendingRequest ? pendingRequest.username : '') + ' {% trans "is requesting control" %}'"></span>
+        x-text="(pendingRequest ? pendingRequest.username : '') + ' {{ requesting_label|escapejs }}'"></span>
   <div class="cp-lock-actions">
     <button type="button" class="cp-btn cp-btn--action cp-lock-btn"
             :disabled="conn !== 'open'"

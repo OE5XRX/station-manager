@@ -1,4 +1,8 @@
 {% load i18n %}
+{% comment %}online/offline labels are embedded in Alpine JS string literals —
+escapejs guards against an apostrophe in a translation breaking the expression.{% endcomment %}
+{% trans "online" as online_label %}
+{% trans "offline" as offline_label %}
 {% comment %}
 Module card — one card per StationModule.
 Header: slot + type + online indicator.
@@ -17,12 +21,12 @@ PTT is rendered last within the card so it can span full width.
     </div>
     <div class="cp-module-status">
       <span class="cp-online-dot"
-            :class="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? 'cp-online-dot--on' : 'cp-online-dot--off'"
-            :aria-label="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %}'"
+            :class="moduleOnline('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') ? 'cp-online-dot--on' : 'cp-online-dot--off'"
+            :aria-label="moduleOnline('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') ? '{{ online_label|escapejs }}' : '{{ offline_label|escapejs }}'"
             aria-hidden="false">
       </span>
       <span class="cp-online-label t-muted"
-            x-text="moduleOnline('{{ m.slot }}','{{ m.module_id }}') ? '{% trans "online" %}' : '{% trans "offline" %}'">
+            x-text="moduleOnline('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') ? '{{ online_label|escapejs }}' : '{{ offline_label|escapejs }}'">
         {{ m.online|yesno:"online,offline" }}
       </span>
     </div>
