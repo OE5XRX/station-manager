@@ -11,7 +11,7 @@
   </label>
   <select id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
           class="cp-readout cp-readout--select"
-          :disabled="!canControl"
+          :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
           :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"
           @change="setValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}', $event.target.value)"
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">

@@ -9,7 +9,7 @@
   <label class="cp-widget-label">{{ cap.name }}</label>
   <button type="button"
           class="cp-btn cp-btn--action"
-          :disabled="!canControl || isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
+          :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}') || isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
           :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"
           @click="doAction('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">

@@ -19,7 +19,7 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
   </label>
   <div class="cp-number-row">
     <button type="button" class="cp-step cp-step--dec"
-            :disabled="!canControl"
+            :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
             @click="stepValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}',-1)"
             aria-label="{% trans 'Decrease' %} {{ cap.name }}">&#8722;</button>
     <input id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
@@ -31,12 +31,12 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
            {% for r in cap.ranges %}{% if forloop.first %}min="{{ r.min }}"{% endif %}{% endfor %}
            {% for r in cap.ranges %}{% if forloop.last %}max="{{ r.max }}"{% endif %}{% endfor %}{% endlocalize %}
            :value="displayValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')"
-           :disabled="!canControl"
+           :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
            :class="{ 'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}') }"
            @change="setValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}', $event.target.value)"
            aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     <button type="button" class="cp-step cp-step--inc"
-            :disabled="!canControl"
+            :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
             @click="stepValue('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}',1)"
             aria-label="{% trans 'Increase' %} {{ cap.name }}">&#43;</button>
   </div>

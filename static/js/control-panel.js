@@ -237,6 +237,11 @@
         switch (msg.type) {
           case "inventory":
             this._ingestInventory(msg.slots || []);
+            // Re-subscribe telemetry: a fresh inventory frame means the agent
+            // (re)connected or the topology changed while our socket stayed
+            // open, and no "open" event fires in that case — without this,
+            // live telemetry would silently stop after an agent reconnect.
+            this._subscribeAll();
             break;
           case "state":
             this._onState(msg);
@@ -436,6 +441,13 @@
         return v !== false && v !== undefined;
       },
 
+      // A widget is operable only if the user controls AND the module is online
+      // — commands to an offline module would just time out. Templates gate
+      // per-module widgets on this (not bare canControl).
+      canOperate: function (slot, module) {
+        return this.canControl && this.moduleOnline(slot, module);
+      },
+
       valueOf: function (slot, module, cap) {
         return this.values[L.widgetKey(slot, module, cap)];
       },
@@ -599,7 +611,7 @@
       },
 
       pttDown: function (slot, module) {
-        if (!this.canControl) return;
+        if (!this.canOperate(slot, module)) return;
         var mkey = L.moduleKey(slot, module);
         if (L.isKeyed(this.ptt[mkey])) return; // already keying/tx this module
         // One active PTT (MVP): unkey any other keyed module first.
@@ -650,15 +662,10 @@
       },
 
       _sendPtt: function (slot, module, on) {
-        this._send({
-          type: "command",
-          request_id: this._nextReqId(),
-          slot: slot,
-          module: module,
-          capability: PTT_CAP,
-          op: "do",
-          value: !!on,
-        });
+        // Route through _sendCommand so the request_id -> widget mapping is
+        // recorded: result/error frames for the PTT command can then clear
+        // pending state and surface errors, and isPending(...,ptt) is accurate.
+        this._sendCommand(slot, module, PTT_CAP, "do", !!on, L.widgetKey(slot, module, PTT_CAP));
       },
 
       _startKeepalive: function (slot, module, mkey) {

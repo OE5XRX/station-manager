@@ -156,6 +156,7 @@ CONTRACT_METHODS = [
     "telemetryPct",
     "moduleOnline",
     "canControl",
+    "canOperate",
     "pttState",
     "pttPhase",
     "pttDown",

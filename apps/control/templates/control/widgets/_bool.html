@@ -14,7 +14,7 @@
           class="cp-toggle"
           role="switch"
           :aria-checked="String(!!valueOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}'))"
-          :disabled="!canControl"
+          :disabled="!canOperate('{{ m.slot }}','{{ m.module_id }}')"
           :class="{
             'cp-toggle--on': valueOf('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}'),
             'is-pending': isPending('{{ m.slot }}','{{ m.module_id }}','{{ cap.name }}')
