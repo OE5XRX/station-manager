@@ -42,14 +42,27 @@ class Broker:
         self,
         send,
         *,
-        transport_factory=SlotControl,
+        transport_factory=None,
+        slot_command_timeout: float = 5.0,
         dead_man_timeout: float = 1.5,
         telemetry_default_interval_ms: int = 1000,
         telemetry_min_floor_ms: int = 200,
         now=time.monotonic,
     ):
         self._send = send
-        self._transport_factory = transport_factory
+        # A command's whole slot round-trip must outlast the module's worst-case
+        # firmware timeout, or SlotControl gives up first and the real device
+        # error (e.g. driver_error from an unanswered SA818 AT command, ~2 s)
+        # surfaces as a generic "timeout" instead. Keep it comfortably above the
+        # firmware AT timeout and well below the server's command timeout (10 s):
+        #   firmware AT (~2 s)  <  slot_command_timeout (5 s)  <  server (10 s).
+        self._slot_command_timeout = slot_command_timeout
+        # Default transport bakes the configured timeout into SlotControl. An
+        # explicit transport_factory (tests) is a single-arg (path) callable and
+        # is used verbatim, so this never changes its arity.
+        self._transport_factory = transport_factory or (
+            lambda path: SlotControl(path, timeout=slot_command_timeout)
+        )
         self._dead_man_timeout = dead_man_timeout
         self._telemetry_default_interval_ms = telemetry_default_interval_ms
         self._telemetry_min_floor_ms = telemetry_min_floor_ms

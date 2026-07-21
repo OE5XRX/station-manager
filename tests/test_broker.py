@@ -6,6 +6,24 @@ from station_agent.slot_control import SlotControl
 from tests.fake_fw import FakeFirmware
 
 
+def test_default_transport_uses_configured_slot_command_timeout():
+    """The default transport must bake the configured slot_command_timeout into
+    SlotControl so a real device error (which the firmware can take ~2 s to
+    report) is read and surfaced, not pre-empted as a generic timeout."""
+    b = Broker(lambda *a: None, slot_command_timeout=7.5)
+    transport = b._transport_factory("/dev/null")
+    assert isinstance(transport, SlotControl)
+    assert transport._timeout == 7.5
+
+
+def test_explicit_transport_factory_is_used_verbatim():
+    """A caller-supplied (single-arg) transport_factory is respected as-is and
+    slot_command_timeout does not override it."""
+    sentinel = object()
+    b = Broker(lambda *a: None, transport_factory=lambda path: sentinel, slot_command_timeout=9.0)
+    assert b._transport_factory("/dev/null") is sentinel
+
+
 class CountingTransport:
     """Transport wrapper that counts execute() calls across the whole broker."""
 
