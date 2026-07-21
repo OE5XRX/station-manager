@@ -213,4 +213,22 @@ ok("envelope returns a copy and does not mutate the input", () => {
   assert.notEqual(f, src);
 });
 
+// --- slot address coercion --------------------------------------------------
+// The agent's broker requires an INTEGER slot; the value round-trips through a
+// Django CharField and the widget's string data-slot, so D5 must coerce an
+// all-digits slot back to a Number before sending or the agent rejects it
+// ("malformed addr" -> validation_failed).
+ok("slotAddr coerces an all-digits string slot to a Number", () => {
+  assert.strictEqual(L.slotAddr("1"), 1);
+  assert.strictEqual(L.slotAddr("12"), 12);
+  assert.strictEqual(L.slotAddr("0"), 0);
+});
+ok("slotAddr passes an already-numeric slot through", () => {
+  assert.strictEqual(L.slotAddr(3), 3);
+});
+ok("slotAddr leaves a genuinely non-numeric slot untouched", () => {
+  assert.strictEqual(L.slotAddr("slot1"), "slot1");
+  assert.strictEqual(L.slotAddr("1a"), "1a");
+});
+
 console.log("\n" + passed + " assertions passed");

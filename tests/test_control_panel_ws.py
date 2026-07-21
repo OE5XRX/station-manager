@@ -413,3 +413,22 @@ def test_agent_parse_message_requires_envelope_version():
     with pytest.raises(proto.ProtocolError) as exc:
         proto.parse_message(bad)
     assert exc.value.code == proto.VALIDATION_FAILED
+
+
+# ---------------------------------------------------------------------------
+# Regression: the agent broker addresses modules by an INTEGER slot.
+#
+# The slot round-trips through StationModule.slot (a Django CharField) and the
+# widget's string data-slot attribute, so D5 used to send slot="1" (a string).
+# The broker's _valid_addr requires isinstance(slot, int), so a string slot is
+# rejected as "malformed command frame" -> the browser shows validation_failed.
+# D5 now coerces an all-digits slot back to a Number (L.slotAddr); this pins the
+# agent-side contract that made the string form fail.
+# ---------------------------------------------------------------------------
+def test_agent_broker_requires_integer_slot():
+    from station_agent import broker
+
+    assert broker._valid_addr(1, "fm") is True  # int slot D5 now sends
+    assert broker._valid_addr("1", "fm") is False  # string slot D5 used to send (the bug)
+    assert broker._valid_addr(True, "fm") is False  # bool is not a valid int slot
+    assert broker._valid_addr(1, 2) is False  # module must be a str

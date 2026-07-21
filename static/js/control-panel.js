@@ -418,7 +418,7 @@
           }
           this._send({
             type: "subscribe",
-            slot: slot,
+            slot: L.slotAddr(slot),
             module: module,
             capabilities: names.telemetry.slice(),
             interval_ms: L.subscribeInterval(descrs),
@@ -431,7 +431,7 @@
           if (!names.telemetry.length) return;
           this._send({
             type: "unsubscribe",
-            slot: slot,
+            slot: L.slotAddr(slot),
             module: module,
             capabilities: names.telemetry.slice(),
           });
@@ -609,7 +609,7 @@
         var ok = this._send({
           type: "command",
           request_id: rid,
-          slot: slot,
+          slot: L.slotAddr(slot),
           module: module,
           capability: cap,
           op: op,
@@ -705,7 +705,7 @@
             self._stopKeepalive(mkey);
             return;
           }
-          self._send({ type: "ptt_keepalive", slot: slot, module: module });
+          self._send({ type: "ptt_keepalive", slot: L.slotAddr(slot), module: module });
         }, KEEPALIVE_MS);
       },
 

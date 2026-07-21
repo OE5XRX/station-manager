@@ -40,6 +40,18 @@
     return out;
   }
 
+  /* Coerce a slot address to the wire type the agent expects. The slot contract
+     (/dev/oe5xrx/slotN/control) makes slots integers, and the agent's broker
+     rejects a non-int slot ("malformed addr"). But the slot round-trips through
+     StationModule.slot (a Django CharField) and the widget's data-slot HTML
+     attribute, both of which stringify it — so D5 would otherwise send "1" and
+     be rejected. Return a Number for an all-digits slot; leave anything else
+     untouched (the agent would reject a genuinely non-numeric slot anyway). */
+  function slotAddr(slot) {
+    var s = String(slot);
+    return /^\d+$/.test(s) ? Number(s) : slot;
+  }
+
   // ---------------------------------------------------------------------------
   // DE-locale number parsing / serialization
   // ---------------------------------------------------------------------------
@@ -248,6 +260,7 @@
   return {
     PROTOCOL_VERSION: PROTOCOL_VERSION,
     envelope: envelope,
+    slotAddr: slotAddr,
     parseNumber: parseNumber,
     formatNumber: formatNumber,
     shouldIgnoreKey: shouldIgnoreKey,
