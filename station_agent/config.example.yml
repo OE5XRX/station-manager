@@ -27,6 +27,10 @@ slot_dev_base: /dev/oe5xrx
 control_enabled: false
 # PTT dead-man: auto-unkey if no keepalive within this many seconds.
 control_dead_man_timeout: 1.5
+# Whole-command slot round-trip budget (s). Must exceed the module's worst-case
+# firmware timeout (SA818 AT ~2 s) so a real device error surfaces as itself,
+# not a generic timeout; keep below the server command timeout (10 s).
+slot_command_timeout: 5.0
 # Telemetry subscription: default poll interval and the hard floor (ms).
 telemetry_default_interval_ms: 1000
 telemetry_min_floor_ms: 200

@@ -26,7 +26,6 @@ from .broker import Broker
 from .config import AgentConfig
 from .protocol import ProtocolError, parse_message
 from .signing import load_private_key
-from .slot_control import SlotControl
 from .slot_discovery import discover_slots
 
 logger = logging.getLogger(__name__)
@@ -91,7 +90,7 @@ class ControlClient:
             self._ws = ws
             broker = Broker(
                 self._ws_send,
-                transport_factory=SlotControl,
+                slot_command_timeout=getattr(self._config, "slot_command_timeout", 5.0),
                 dead_man_timeout=getattr(self._config, "control_dead_man_timeout", 1.5),
                 telemetry_default_interval_ms=getattr(
                     self._config, "telemetry_default_interval_ms", 1000

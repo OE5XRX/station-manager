@@ -31,7 +31,11 @@ _TIMEOUT_RESULT = {"ok": False, "error": "timeout"}
 
 
 class SlotControl:
-    def __init__(self, control_path: str, timeout: float = 3.0):
+    # Default read budget for one command's MODULE-RESULT. Must exceed the
+    # module's worst-case firmware timeout (SA818 AT ~2 s) so a real device
+    # error is read and surfaced, not pre-empted as a generic timeout. The
+    # broker injects the configured value; this is the standalone fallback.
+    def __init__(self, control_path: str, timeout: float = 5.0):
         self._path = control_path
         self._timeout = timeout
 
