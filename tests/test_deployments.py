@@ -499,8 +499,8 @@ class TestDeploymentWebViews:
         # pk-based DB ordering does not match the expected -created_at order.
         base = timezone.now()
         stamps = {
-            deps[0].pk: base - timezone.timedelta(minutes=5),   # middle
-            deps[1].pk: base,                                    # newest
+            deps[0].pk: base - timezone.timedelta(minutes=5),  # middle
+            deps[1].pk: base,  # newest
             deps[2].pk: base - timezone.timedelta(minutes=10),  # oldest
         }
         for pk, ts in stamps.items():
