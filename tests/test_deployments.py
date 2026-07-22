@@ -476,6 +476,42 @@ class TestDeploymentWebViews:
         response = client.get(reverse("deployments:deployment_list"))
         assert response.status_code == 403
 
+    def test_deployment_list_ordered_by_created_at_desc(
+        self, client, operator_user, image_release, station
+    ):
+        """Regression: the aggregate annotation on DeploymentListView used to
+        drop Meta.ordering (Django omits the default ordering once a GROUP BY
+        is forced by Count()), so the list came out in arbitrary DB order.
+        Newest deployment must always be first, regardless of pk order."""
+        from django.utils import timezone
+
+        deps = [
+            Deployment.objects.create(
+                image_release=image_release,
+                target_type=Deployment.TargetType.STATION,
+                target_station=station,
+                status=Deployment.Status.IN_PROGRESS,
+                created_by=operator_user,
+            )
+            for _ in range(3)
+        ]
+        # created_at deliberately NOT monotonic with pk so that any accidental
+        # pk-based DB ordering does not match the expected -created_at order.
+        base = timezone.now()
+        stamps = {
+            deps[0].pk: base - timezone.timedelta(minutes=5),   # middle
+            deps[1].pk: base,                                    # newest
+            deps[2].pk: base - timezone.timedelta(minutes=10),  # oldest
+        }
+        for pk, ts in stamps.items():
+            Deployment.objects.filter(pk=pk).update(created_at=ts)
+
+        client.force_login(operator_user)
+        response = client.get(reverse("deployments:deployment_list"))
+        assert response.status_code == 200
+        returned = [d.pk for d in response.context["deployments"]]
+        assert returned == [deps[1].pk, deps[0].pk, deps[2].pk]
+
     def test_deployment_detail_shows_progress(
         self, client, operator_user, deployment, deployment_result
     ):
