@@ -261,7 +261,6 @@ def _run_provisioning_job(job: ProvisioningJob) -> None:
 
             guestfish.inject_provisioning_files(
                 wic_path=decompressed,
-                partition_device=guestfish.data_partition_for(job.image_release.machine),
                 config_yaml=render_config(
                     server_url=server_url,
                     station_id=job.station_id,

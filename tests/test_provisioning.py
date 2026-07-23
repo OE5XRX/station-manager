@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import uuid
 
 import pytest
@@ -58,45 +60,102 @@ class TestConfigRender:
         assert "terminal_shell: /bin/sh" in yaml_text
 
 
+@pytest.mark.skipif(
+    shutil.which("guestfish") is None, reason="guestfish not installed"
+)
 class TestGuestfishInject:
-    def test_inject_files_into_data_partition(self, tmp_path):
-        import bz2
-        import subprocess
-        from pathlib import Path
+    """The data partition is mounted by filesystem label, so provisioning is
+    correct regardless of the partition's index in the GPT table. These tests
+    build synthetic GPT images matching the two real wks layouts and prove the
+    bundle lands on the `data` partition wherever it sits:
+      - x86-64 wks: 4 partitions, data is #4
+      - RPi wks:    6 partitions, data is #6   (regression: code used to point
+                    at a non-existent /dev/sda8 here)
+    """
 
+    @staticmethod
+    def _build_labeled_wic(path, part_labels):
+        """Create a GPT image via guestfish (no root needed). `part_labels` is
+        the ordered list of ext4 filesystem labels, one per 10 MB partition."""
+        sectors = 20480  # 10 MB per partition
+        start = 2048
+        script = ["run", "part-init /dev/sda gpt"]
+        for _ in part_labels:
+            end = start + sectors - 1
+            script.append(f"part-add /dev/sda p {start} {end}")
+            start = end + 1
+        for i, label in enumerate(part_labels, start=1):
+            script.append(f"mkfs ext4 /dev/sda{i}")
+            script.append(f"set-label /dev/sda{i} {label}")
+
+        with open(path, "wb") as fh:
+            fh.truncate(120 * 1024 * 1024)
+        subprocess.run(
+            ["guestfish", "-a", str(path)],
+            input="\n".join(script).encode(),
+            capture_output=True,
+            check=True,
+        )
+
+    @pytest.mark.parametrize(
+        "part_labels,expected_device",
+        [
+            (["efi", "root_a", "root_b", "data"], "/dev/sda4"),
+            (
+                ["firmware", "uboot_env", "uboot_envr", "root_a", "root_b", "data"],
+                "/dev/sda6",
+            ),
+        ],
+        ids=["x86-64-layout", "rpi-layout"],
+    )
+    def test_inject_targets_data_partition_by_label(
+        self, tmp_path, part_labels, expected_device
+    ):
         from apps.provisioning.guestfish import inject_provisioning_files
 
-        src = Path(__file__).parent / "fixtures" / "tiny.wic.bz2"
-        wic_path = tmp_path / "tiny.wic"
-        wic_path.write_bytes(bz2.decompress(src.read_bytes()))
+        wic_path = tmp_path / "layout.wic"
+        self._build_labeled_wic(wic_path, part_labels)
+
+        # Sanity: the `data` label resolves to the expected partition index.
+        resolved = subprocess.run(
+            ["guestfish", "--ro", "-a", str(wic_path), "run", ":", "findfs-label", "data"],
+            capture_output=True,
+            check=True,
+        )
+        assert resolved.stdout.decode().strip() == expected_device
 
         inject_provisioning_files(
             wic_path=wic_path,
-            partition_device="/dev/sda1",
             config_yaml="server_url: https://x\n",
             private_key_pem=b"-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\n",
         )
 
-        # Read back via guestfish to verify
+        # Read back from the exact partition the label pointed at.
         result = subprocess.run(
             [
-                "guestfish",
-                "--ro",
-                "-a",
-                str(wic_path),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda1",
-                "/",
-                ":",
-                "cat",
-                "/etc-overlay/stationagent/config.yml",
+                "guestfish", "--ro", "-a", str(wic_path),
+                "run", ":",
+                "mount", expected_device, "/", ":",
+                "cat", "/etc-overlay/stationagent/config.yml",
             ],
             capture_output=True,
             check=True,
         )
         assert b"server_url: https://x" in result.stdout
+
+    def test_inject_fails_loudly_when_no_data_label(self, tmp_path):
+        """An image without a `data` label must raise, not silently no-op."""
+        from apps.provisioning.guestfish import GuestfishError, inject_provisioning_files
+
+        wic_path = tmp_path / "nolabel.wic"
+        self._build_labeled_wic(wic_path, ["efi", "root_a", "root_b", "other"])
+
+        with pytest.raises(GuestfishError):
+            inject_provisioning_files(
+                wic_path=wic_path,
+                config_yaml="server_url: https://x\n",
+                private_key_pem=b"key\n",
+            )
 
 
 @pytest.mark.django_db

@@ -4,14 +4,17 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# Partition index where `data` lives per the wks layouts in
-# meta-oe5xrx-remotestation/wic/:
-#   x86-64: 4 partitions (EFI, rootfs-A, rootfs-B, data) -> /dev/sda4
-#   RPi:    8 partitions, data is last                   -> /dev/sda8
-DATA_PARTITION = {
-    "qemux86-64": "/dev/sda4",
-    "raspberrypi4-64": "/dev/sda8",
-}
+# The persistent partition carries the ext4 filesystem label "data" in every
+# wks layout (linux-image/meta-oe5xrx-remotestation/wic/*.wks.in), independent
+# of its position in the GPT table:
+#   x86-64: 4 partitions, data is #4
+#   RPi:    6 partitions, data is #6
+# We mount it by label via /dev/disk/by-label/ instead of a hardcoded
+# /dev/sdaN index. A hardcoded index silently rots when a layout adds or
+# removes partitions — that is exactly how RPi ended up pointing at a
+# non-existent /dev/sda8 after the boot_a/boot_b partitions were dropped.
+DATA_LABEL = "data"
+DATA_LABEL_DEVICE = f"/dev/disk/by-label/{DATA_LABEL}"
 
 
 class GuestfishError(RuntimeError):
@@ -21,11 +24,11 @@ class GuestfishError(RuntimeError):
 def inject_provisioning_files(
     *,
     wic_path: Path,
-    partition_device: str,
     config_yaml: str,
     private_key_pem: bytes,
 ) -> None:
-    """Mount the data partition of `wic_path` and write the provisioning bundle."""
+    """Mount the data partition of `wic_path` (by filesystem label) and write
+    the provisioning bundle. Layout-agnostic across all supported machines."""
     with tempfile.TemporaryDirectory() as tmp:
         config_path = Path(tmp) / "config.yml"
         key_path = Path(tmp) / "device_key.pem"
@@ -35,7 +38,7 @@ def inject_provisioning_files(
         script = "\n".join(
             [
                 "run",
-                f"mount {partition_device} /",
+                f"mount {DATA_LABEL_DEVICE} /",
                 "mkdir-p /etc-overlay/stationagent",
                 f"upload {config_path} /etc-overlay/stationagent/config.yml",
                 f"upload {key_path} /etc-overlay/stationagent/device_key.pem",
@@ -53,10 +56,3 @@ def inject_provisioning_files(
                 f"guestfish failed ({result.returncode}): "
                 f"{result.stderr.decode('utf-8', 'replace')}"
             )
-
-
-def data_partition_for(machine: str) -> str:
-    try:
-        return DATA_PARTITION[machine]
-    except KeyError:
-        raise ValueError(f"unsupported machine: {machine}") from None
