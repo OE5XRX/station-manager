@@ -161,6 +161,21 @@ class TestGuestfishInject:
                 private_key_pem=b"key\n",
             )
 
+    def test_inject_fails_loudly_when_data_label_duplicated(self, tmp_path):
+        """Two partitions labeled `data` (layout drift) must raise rather than
+        silently mount whichever one udev resolves first."""
+        from apps.provisioning.guestfish import GuestfishError, inject_provisioning_files
+
+        wic_path = tmp_path / "duplabel.wic"
+        self._build_labeled_wic(wic_path, ["data", "root_a", "root_b", "data"])
+
+        with pytest.raises(GuestfishError, match="exactly one partition"):
+            inject_provisioning_files(
+                wic_path=wic_path,
+                config_yaml="server_url: https://x\n",
+                private_key_pem=b"key\n",
+            )
+
 
 @pytest.mark.django_db
 class TestProvisioningWorker:
