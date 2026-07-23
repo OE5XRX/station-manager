@@ -60,9 +60,7 @@ class TestConfigRender:
         assert "terminal_shell: /bin/sh" in yaml_text
 
 
-@pytest.mark.skipif(
-    shutil.which("guestfish") is None, reason="guestfish not installed"
-)
+@pytest.mark.skipif(shutil.which("guestfish") is None, reason="guestfish not installed")
 class TestGuestfishInject:
     """The data partition is mounted by filesystem label, so provisioning is
     correct regardless of the partition's index in the GPT table. These tests
@@ -108,9 +106,7 @@ class TestGuestfishInject:
         ],
         ids=["x86-64-layout", "rpi-layout"],
     )
-    def test_inject_targets_data_partition_by_label(
-        self, tmp_path, part_labels, expected_device
-    ):
+    def test_inject_targets_data_partition_by_label(self, tmp_path, part_labels, expected_device):
         from apps.provisioning.guestfish import inject_provisioning_files
 
         wic_path = tmp_path / "layout.wic"
@@ -133,10 +129,18 @@ class TestGuestfishInject:
         # Read back from the exact partition the label pointed at.
         result = subprocess.run(
             [
-                "guestfish", "--ro", "-a", str(wic_path),
-                "run", ":",
-                "mount", expected_device, "/", ":",
-                "cat", "/etc-overlay/stationagent/config.yml",
+                "guestfish",
+                "--ro",
+                "-a",
+                str(wic_path),
+                "run",
+                ":",
+                "mount",
+                expected_device,
+                "/",
+                ":",
+                "cat",
+                "/etc-overlay/stationagent/config.yml",
             ],
             capture_output=True,
             check=True,
