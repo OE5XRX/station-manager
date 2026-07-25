@@ -1,6 +1,6 @@
 Django>=6.0,<6.1
 djangorestframework>=3.17,<3.18
-django-htmx>=1.21,<2.0
+django-htmx>=1.28.0,<2.0
 django-axes>=7.0,<9.0
 channels[daphne]>=4.2,<5.0
 channels-redis>=4.2,<5.0
@@ -18,5 +18,5 @@ gunicorn>=23.0,<26.0
 whitenoise>=6.8,<7.0
 cryptography>=46.0,<47.0
 python-telegram-bot>=21.0,<23.0
-django-oauth-toolkit>=3.2,<4.0
+django-oauth-toolkit>=3.4.0,<4.0
 geoip2>=4.8,<6.0
