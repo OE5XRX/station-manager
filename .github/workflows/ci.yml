@@ -20,7 +20,15 @@ jobs:
           python-version: "3.14"
 
       - name: Install ruff
-        run: pip install ruff
+        # Pin to the version locked in requirements/dev.txt instead of floating to
+        # the newest release. ruff's formatter changes output between minor versions
+        # (0.16 reformatted 33 unrelated files vs the 0.15.x the repo is formatted
+        # with), so an unpinned `pip install ruff` turns every new ruff release into
+        # a spurious repo-wide `format --check` failure. We grep the exact pin out of
+        # the lock (a `-c` constraint file can't be used here: dev.txt carries extras
+        # like psycopg[binary], which pip rejects in constraints). Keeps CI in sync
+        # with local dev; bump ruff in dev.in (+ reformat) to move deliberately.
+        run: pip install "ruff==$(grep -m1 -E '^ruff==' requirements/dev.txt | cut -d= -f3)"
 
       - name: Check formatting
         run: ruff format --check .
