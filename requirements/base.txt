@@ -44,17 +44,17 @@ cffi==2.1.0
     #   cryptography
 channels[daphne]==4.3.2
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   channels-redis
 channels-redis==4.3.0
-    # via -r requirements/base.in
+    # via -r base.in
 charset-normalizer==3.4.9
     # via requests
 constantly==23.10.4
     # via twisted
 cryptography==46.0.7
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   autobahn
     #   jwcrypto
     #   pyopenssl
@@ -63,7 +63,7 @@ daphne==4.2.2
     # via channels
 django==6.0.7
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   channels
     #   django-axes
     #   django-htmx
@@ -71,23 +71,23 @@ django==6.0.7
     #   django-storages
     #   djangorestframework
 django-axes==8.3.1
-    # via -r requirements/base.in
-django-htmx==1.27.0
-    # via -r requirements/base.in
-django-oauth-toolkit==3.3.0
-    # via -r requirements/base.in
+    # via -r base.in
+django-htmx==1.28.0
+    # via -r base.in
+django-oauth-toolkit==3.4.0
+    # via -r base.in
 django-storages[s3]==1.14.6
-    # via -r requirements/base.in
+    # via -r base.in
 djangorestframework==3.17.1
-    # via -r requirements/base.in
+    # via -r base.in
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
 geoip2==5.2.0
-    # via -r requirements/base.in
+    # via -r base.in
 gunicorn==25.3.0
-    # via -r requirements/base.in
+    # via -r base.in
 h11==0.16.0
     # via httpcore
 httpcore==1.0.9
@@ -133,13 +133,13 @@ packaging==26.2
     #   gunicorn
     #   incremental
 pillow==12.3.0
-    # via -r requirements/base.in
+    # via -r base.in
 propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
 psycopg[binary]==3.3.4
-    # via -r requirements/base.in
+    # via -r base.in
 psycopg-binary==3.3.4
     # via psycopg
 pyasn1==0.6.3
@@ -155,10 +155,10 @@ pyopenssl==26.2.0
 python-dateutil==2.9.0.post0
     # via botocore
 python-telegram-bot==22.8
-    # via -r requirements/base.in
+    # via -r base.in
 redis==7.4.1
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   channels-redis
 requests==2.34.2
     # via
@@ -185,9 +185,10 @@ ujson==5.13.0
 urllib3==2.7.0
     # via
     #   botocore
+    #   django-oauth-toolkit
     #   requests
 whitenoise==6.12.0
-    # via -r requirements/base.in
+    # via -r base.in
 yarl==1.24.2
     # via aiohttp
 zope-interface==8.5
