@@ -244,6 +244,8 @@ pyopenssl==26.2.0
     # via
     #   -c requirements/base.txt
     #   twisted
+pyserial==3.5
+    # via -r requirements/dev.in
 pytest==9.1.1
     # via
     #   -r requirements/dev.in

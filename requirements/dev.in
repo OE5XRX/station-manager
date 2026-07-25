@@ -12,4 +12,8 @@ websockets>=14.0,<17.0
 # pulling it into dev so the OTA install tests actually run in CI
 # instead of being skipped via pytest.importorskip.
 requests>=2.32,<3.0
+# station_agent.slot_discovery imports pyserial at import time; pulling it into
+# dev so the slot-discovery / inventory tests actually run in CI instead of
+# failing collection. Agent-only runtime dep (not used by the Django server).
+pyserial>=3.5,<4.0
 django-test-migrations>=1.4,<2.0

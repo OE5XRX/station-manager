@@ -9,6 +9,20 @@ Per slot, the firmware is self-describing over its control serial:
   1. ``module list``            -> ``MODULE-LIST {"modules":["fm", ...]}``  (module ids)
   2. ``module <id> describe``   -> ``MODULE-DESCRIBE {schema, module, identity, capabilities}``
 Module ids are NOT hardcoded — we enumerate whatever the firmware reports and describe each.
+
+The control endpoint is a USB-CDC ACM serial line. We drive it with pyserial (concrete line
+settings + read/write timeouts) rather than raw ``os.open`` + ``termios``. Right after opening
+the device may still be emitting bytes — a boot/status banner on a fresh connect, or a leftover
+shell prompt/echo — so we drain the link until it goes quiet before sending, then read framed
+replies. This is I/O hygiene: it keeps our command and its ``MODULE-*`` reply from interleaving
+with that unsolicited output, so the line parser never trips over stale bytes.
+
+To be clear about what this is NOT: draining is not a workaround for a device hang. A firmware
+bug used to make ``module list``/``describe`` hard-fault the module (a command-buffer stack
+overflow), wedging its USB until a physical power cycle — that was fixed in the firmware
+(FW-RemoteStation), not here, and is unrelated to how fast the agent sends. Opening the port
+does not reset this module either (toggling DTR/RTS has no observable effect on it); the drain
+simply absorbs whatever the firmware happens to have already queued.
 """
 
 from __future__ import annotations
@@ -18,10 +32,9 @@ import json
 import logging
 import os
 import re
-import select
-import termios
 import time
-import tty
+
+import serial
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +51,19 @@ _MODULE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 # before the timeout fires. Well above any real reply; exceeding it fails closed.
 _MAX_RESPONSE_BYTES = 65536
 
+_SERIAL_BAUD = 115200
+# CDC-ACM ignores the actual bit rate, but pyserial still needs concrete line settings;
+# these also make the intent explicit and let a real UART peer match.
+_READ_TIMEOUT = 0.2  # seconds per blocking read in the drain / reply loops
+_WRITE_TIMEOUT = 2.0
+# Consider whatever the device is emitting on open (boot banner / stale prompt) finished once
+# the link has been silent for _BOOT_QUIET seconds — but never wait longer than _BOOT_MAX.
+_BOOT_QUIET = 0.3
+_BOOT_MAX = 2.5
+
 
 def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
-    """Enumerate + describe every module reachable on a slot's control pty.
+    """Enumerate + describe every module reachable on a slot's control serial.
 
     Sends ``module list`` then ``module <id> describe`` for each reported id, over a
     single connection. Returns a list of ``{"id", "identity", "capabilities"}`` (possibly
@@ -48,21 +71,27 @@ def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
     does not answer ``module list``. Never raises — discovery must not disrupt the heartbeat.
     """
     try:
-        fd = os.open(control_path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-    except OSError as exc:
+        ser = serial.Serial(
+            port=control_path,
+            baudrate=_SERIAL_BAUD,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=_READ_TIMEOUT,
+            write_timeout=_WRITE_TIMEOUT,
+        )
+    except (serial.SerialException, ValueError, OSError) as exc:
         logger.debug("slot probe: cannot open %s: %s", control_path, exc)
         return None
-    saved_attrs = None
+
     try:
-        try:
-            saved_attrs = termios.tcgetattr(fd)
-            tty.setraw(fd)
-        except termios.error:
-            pass  # not a tty (e.g. plain file in a test) — proceed anyway
+        # Drain any unsolicited output already on the link (boot banner / stale prompt) until
+        # it goes quiet, so it can't interleave with our command's reply (see module docstring).
+        _drain_until_quiet(ser, _BOOT_QUIET, _BOOT_MAX)
 
         deadline = time.monotonic() + timeout
 
-        listing = _command(fd, _LIST_CMD, _LIST_PREFIX, deadline, control_path)
+        listing = _command(ser, _LIST_CMD, _LIST_PREFIX, deadline, control_path)
         if listing is None:
             logger.debug("slot probe: no MODULE-LIST from %s", control_path)
             return None
@@ -78,7 +107,7 @@ def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
                 logger.debug("slot probe: skipping invalid module id %r on %s", mid, control_path)
                 continue
             cmd = f"module {mid} describe\r\n".encode()
-            described = _command(fd, cmd, _DESCRIBE_PREFIX, deadline, control_path)
+            described = _command(ser, cmd, _DESCRIBE_PREFIX, deadline, control_path)
             if described is None:
                 logger.debug("slot probe: no describe for module %s on %s", mid, control_path)
                 continue
@@ -91,50 +120,50 @@ def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
             )
         return modules
     finally:
-        # Restore the original line discipline so we don't leave the slot control
-        # device in raw mode for a subsequent reader (guarded — must never raise).
-        if saved_attrs is not None:
-            try:
-                termios.tcsetattr(fd, termios.TCSANOW, saved_attrs)
-            except (termios.error, OSError):
-                pass
         try:
-            os.close(fd)
-        except OSError:
-            pass  # close() can raise (e.g. EINTR) — must never raise into the heartbeat
+            ser.close()
+        except (serial.SerialException, OSError):
+            pass  # close() must never raise into the heartbeat
 
 
-def _command(fd: int, cmd: bytes, prefix: str, deadline: float, control_path: str) -> dict | None:
+def _drain_until_quiet(ser: serial.Serial, quiet: float, max_wait: float) -> None:
+    """Read and discard whatever the device is already emitting (boot banner / stale prompt)
+    until the link has been silent for `quiet` seconds, or `max_wait` elapses. Never raises."""
+    end = time.monotonic() + max_wait
+    last_data = time.monotonic()
+    while time.monotonic() < end:
+        try:
+            chunk = ser.read(4096)  # blocks up to ser.timeout, then returns what it has
+        except (serial.SerialException, OSError):
+            return
+        now = time.monotonic()
+        if chunk:
+            last_data = now
+        elif now - last_data >= quiet:
+            return
+
+
+def _command(
+    ser: serial.Serial, cmd: bytes, prefix: str, deadline: float, control_path: str
+) -> dict | None:
     """Write a shell command and read until a line carrying `prefix` parses as a JSON dict.
 
-    Returns the parsed dict, or None on write error / timeout / EOF / read error / oversize.
+    Returns the parsed dict, or None on write error / timeout / read error / oversize.
     """
     try:
-        os.write(fd, cmd)
-    except OSError:
+        ser.reset_input_buffer()  # drop any stale bytes (prompt/echo) before this command
+        ser.write(cmd)
+    except (serial.SerialException, OSError):
         logger.debug("slot probe: write failed on %s", control_path)
         return None
     buf = b""
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
+    while time.monotonic() < deadline:
         try:
-            readable, _, _ = select.select([fd], [], [], remaining)
-        except InterruptedError:
-            continue
-        except OSError:
-            return None  # fail closed on any select error
-        if not readable:
-            continue
-        try:
-            chunk = os.read(fd, 4096)
-        except (BlockingIOError, InterruptedError):
-            continue
-        except OSError:
+            chunk = ser.read(4096)
+        except (serial.SerialException, OSError):
             return None
         if not chunk:
-            return None
+            continue  # read timed out with nothing; loop re-checks the deadline
         buf += chunk
         if len(buf) > _MAX_RESPONSE_BYTES:
             logger.debug(
@@ -144,6 +173,7 @@ def _command(fd: int, cmd: bytes, prefix: str, deadline: float, control_path: st
         parsed = _extract_json(buf, prefix)
         if parsed is not None:
             return parsed
+    return None
 
 
 def _extract_json(buf: bytes, prefix: str) -> dict | None:
