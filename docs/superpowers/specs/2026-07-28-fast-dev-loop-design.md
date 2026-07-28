@@ -29,7 +29,7 @@ Diese Spec adressiert Tier 0 (Agent) und Tier 1 (Server). Tier 2 bleibt bewusst 
 Neues CLI-Frontend in `station_agent/__main__.py` (argparse; Default ohne Subcommand = `agent.run()`, rückwärtskompatibel):
 
 - `python -m station_agent selftest serial [--slot N] [--json]`
-- Öffnet das Slot-Control-Device **exakt wie der Broker im Betrieb** — gleiche pyserial-Konfiguration (Baudrate, Raw-/termios-Mode, VMIN/VTIME, drain-before-send). Keine Zweit-Implementierung: die Öffnungslogik wird aus `broker.py`/`slot_discovery.py` extrahiert in eine gemeinsame Funktion (z.B. `serial_io.open_slot_control()`), die Broker *und* Selftest nutzen. So kann der Test niemals grün sein, während der Betriebspfad rot ist.
+- Öffnet das Slot-Control-Device **exakt wie der Betrieb**, indem es die echten Produktionspfade aufruft — keine Zweit-Implementierung: `slot_discovery.probe_slot()` (pyserial-Discovery = „Modul nicht gefunden"-Pfad) und optional `slot_control.execute()` (raw-termios Command = „Control-Knopf"-Pfad). Da `selftest` dieselben Funktionen nutzt wie Heartbeat/Broker, kann der Test niemals grün sein, während der Betriebspfad rot ist. (Ursprünglich war ein Extrahieren einer gemeinsamen `open_slot_control()` geplant; unnötig — die beiden Funktionen *sind* bereits die geteilten Betriebspfade.)
 - Führt einen `describe`-Round-Trip aus und **hexdumpt TX und RX** byteweise.
 - Exit-Code spiegelt Erfolg (0 = Round-Trip ok, ≠0 = Timeout/Mismatch).
 - Läuft identisch gegen echten CM4-UART und gegen das Sim-PTY → Byte-Level-Diff Sim-vs-HW bei Divergenz.
