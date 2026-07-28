@@ -1,5 +1,6 @@
 from station_agent import selftest
-from tests.fake_fw import FakeFirmware, make_slot_tree
+from station_agent.__main__ import main
+from tests.fake_fw import FakeFirmware
 
 
 def test_run_serial_returns_zero_when_module_describes(tmp_path):
@@ -15,9 +16,6 @@ def test_run_serial_returns_zero_when_module_describes(tmp_path):
 def test_run_serial_returns_one_on_dead_path(tmp_path):
     dead = str(tmp_path / "nonexistent")
     assert selftest.run_serial(dead, timeout=0.5) == 1
-
-
-from station_agent.__main__ import main
 
 
 def test_cli_selftest_serial_dead_path_returns_one(tmp_path):
