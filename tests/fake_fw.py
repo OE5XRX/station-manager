@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import termios
 import threading
 import time
+import tty
 
 _LIST_RE = re.compile(rb"module\s+list\s*$")
 _DESCRIBE_RE = re.compile(rb"module\s+(\S+)\s+describe\s*$")
@@ -24,6 +26,14 @@ class FakeFirmware:
         self._modules = modules
         self.state: dict = {mid: {} for mid in modules}
         self._master_fd, self._slave_fd = os.openpty()
+        # Real UARTs deliver raw bytes: no line discipline, no echo, no CR/LF
+        # mapping. A bare openpty() slave is canonical+echoing, which hides
+        # file-open bugs that a real UART would expose. Force raw on both ends.
+        for fd in (self._master_fd, self._slave_fd):
+            try:
+                tty.setraw(fd)
+            except termios.error:
+                pass
         self.control_path = os.ttyname(self._slave_fd)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
