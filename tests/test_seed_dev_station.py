@@ -1,4 +1,5 @@
 import io
+import os
 
 import pytest
 from django.core.management import call_command
@@ -21,6 +22,8 @@ def test_seed_dev_station_is_idempotent(tmp_path):
     assert DeviceKey.objects.filter(station__name="Dev Station").count() == 1
     assert "server_url:" in out2.getvalue()
     assert "station_id:" in out2.getvalue()
+    assert "ed25519_key_path:" in out2.getvalue()
+    assert (os.stat(key_out).st_mode & 0o777) == 0o600
 
 
 @pytest.mark.django_db

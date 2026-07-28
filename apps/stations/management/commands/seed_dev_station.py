@@ -1,6 +1,6 @@
 """Legt eine Dev-Station + statischen Device-Key an und druckt die Agent-Config.
 NUR unter DEBUG/Dev-Settings — statische Keys dürfen nie in Prod (Spec §4)."""
-from pathlib import Path
+import os
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -29,7 +29,13 @@ class Command(BaseCommand):
         if key is None:
             private_pem, public_b64 = DeviceKey.generate_keypair()
             key = DeviceKey.objects.create(station=station, current_public_key=public_b64)
-            Path(key_out).write_bytes(private_pem)
+            # Create with 0600 perms atomically — a private key must never be
+            # world-readable, not even for a moment (no write-then-chmod window).
+            fd = os.open(key_out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, private_pem)
+            finally:
+                os.close(fd)
             self.stderr.write(f"Wrote private key to {key_out}")
         else:
             self.stderr.write("DeviceKey already exists; reusing (private key not re-shown).")
