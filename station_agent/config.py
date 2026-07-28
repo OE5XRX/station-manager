@@ -28,6 +28,7 @@ class AgentConfig:
     bootloader: str = "auto"
     slot_discovery_enabled: bool = True
     slot_dev_base: str = "/dev/oe5xrx"
+    trace_serial: bool = False
     control_enabled: bool = False
     control_dead_man_timeout: float = 1.5
     # Whole-command slot round-trip budget. Must exceed the module's worst-case

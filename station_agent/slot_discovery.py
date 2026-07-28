@@ -62,7 +62,7 @@ _BOOT_QUIET = 0.3
 _BOOT_MAX = 2.5
 
 
-def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
+def probe_slot(control_path: str, timeout: float = 3.0, trace: bool = False) -> list[dict] | None:
     """Enumerate + describe every module reachable on a slot's control serial.
 
     Sends ``module list`` then ``module <id> describe`` for each reported id, over a
@@ -91,7 +91,7 @@ def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
 
         deadline = time.monotonic() + timeout
 
-        listing = _command(ser, _LIST_CMD, _LIST_PREFIX, deadline, control_path)
+        listing = _command(ser, _LIST_CMD, _LIST_PREFIX, deadline, control_path, trace=trace)
         if listing is None:
             logger.debug("slot probe: no MODULE-LIST from %s", control_path)
             return None
@@ -107,7 +107,7 @@ def probe_slot(control_path: str, timeout: float = 3.0) -> list[dict] | None:
                 logger.debug("slot probe: skipping invalid module id %r on %s", mid, control_path)
                 continue
             cmd = f"module {mid} describe\r\n".encode()
-            described = _command(ser, cmd, _DESCRIBE_PREFIX, deadline, control_path)
+            described = _command(ser, cmd, _DESCRIBE_PREFIX, deadline, control_path, trace=trace)
             if described is None:
                 logger.debug("slot probe: no describe for module %s on %s", mid, control_path)
                 continue
@@ -144,18 +144,26 @@ def _drain_until_quiet(ser: serial.Serial, quiet: float, max_wait: float) -> Non
 
 
 def _command(
-    ser: serial.Serial, cmd: bytes, prefix: str, deadline: float, control_path: str
+    ser: serial.Serial,
+    cmd: bytes,
+    prefix: str,
+    deadline: float,
+    control_path: str,
+    trace: bool = False,
 ) -> dict | None:
     """Write a shell command and read until a line carrying `prefix` parses as a JSON dict.
 
     Returns the parsed dict, or None on write error / timeout / read error / oversize.
     """
+    from station_agent import serial_trace
+
     try:
         ser.reset_input_buffer()  # drop any stale bytes (prompt/echo) before this command
         ser.write(cmd)
     except (serial.SerialException, OSError):
         logger.debug("slot probe: write failed on %s", control_path)
         return None
+    serial_trace.log_io(logger, "TX", cmd, trace)
     buf = b""
     while time.monotonic() < deadline:
         try:
@@ -164,6 +172,7 @@ def _command(
             return None
         if not chunk:
             continue  # read timed out with nothing; loop re-checks the deadline
+        serial_trace.log_io(logger, "RX", chunk, trace)
         buf += chunk
         if len(buf) > _MAX_RESPONSE_BYTES:
             logger.debug(

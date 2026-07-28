@@ -39,7 +39,9 @@ class SlotControl:
         self._path = control_path
         self._timeout = timeout
 
-    def execute(self, module_id: str, op: str, cap: str, token: str | None = None) -> dict:
+    def execute(
+        self, module_id: str, op: str, cap: str, token: str | None = None, trace: bool = False
+    ) -> dict:
         """Send one command, return the parsed MODULE-RESULT (or a timeout error)."""
         # Defense-in-depth: never echo an unsafe id into the shell line, and fail
         # closed on a non-str module_id/cap so .match() can't raise TypeError.
@@ -72,7 +74,7 @@ class SlotControl:
                 tty.setraw(fd)
             except termios.error:
                 pass
-            return self._converse(fd, cmd)
+            return self._converse(fd, cmd, trace=trace)
         finally:
             if saved is not None:
                 try:
@@ -84,11 +86,14 @@ class SlotControl:
             except OSError:
                 pass
 
-    def _converse(self, fd: int, cmd: bytes) -> dict:
+    def _converse(self, fd: int, cmd: bytes, trace: bool = False) -> dict:
+        from station_agent import serial_trace
+
         try:
             os.write(fd, cmd)
         except OSError:
             return dict(_TIMEOUT_RESULT)
+        serial_trace.log_io(logger, "TX", cmd, trace)
         deadline = time.monotonic() + self._timeout
         buf = b""
         while True:
@@ -111,6 +116,7 @@ class SlotControl:
                 return dict(_TIMEOUT_RESULT)
             if not chunk:
                 return dict(_TIMEOUT_RESULT)
+            serial_trace.log_io(logger, "RX", chunk, trace)
             buf += chunk
             if len(buf) > _MAX_RESPONSE_BYTES:
                 return dict(_TIMEOUT_RESULT)
