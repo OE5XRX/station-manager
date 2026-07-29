@@ -1,5 +1,7 @@
 import logging
+
 from station_agent import serial_trace
+from tests.fake_fw import FakeFirmware
 
 
 def test_hexdump_formats_direction_length_and_hex():
@@ -16,10 +18,6 @@ def test_log_io_emits_only_when_enabled(caplog):
         assert not caplog.records
         serial_trace.log_io(log, "RX", b"xy", enabled=True)
         assert any("7879" in r.getMessage() for r in caplog.records)
-
-
-import os
-from tests.fake_fw import FakeFirmware
 
 
 def test_probe_slot_trace_emits_tx_rx(caplog):
