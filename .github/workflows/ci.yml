@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           # Pin uv so the drift check is reproducible: a uv upgrade can change
           # resolver/formatting output and make this job fail even when no
