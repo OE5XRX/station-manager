@@ -273,6 +273,15 @@ ALERT_TELEGRAM_ENABLED = os.environ.get("ALERT_TELEGRAM_ENABLED", "false").lower
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Web-Push (PWA) notifications — third alert channel.
+# VAPID keys are generated via `manage.py generate_vapid_keys` and injected
+# via env/secrets, never committed. The channel stays silently disabled
+# until both keys are present (mirrors ALERT_EMAIL_ENABLED semantics).
+WEBPUSH_VAPID_PUBLIC_KEY = os.environ.get("WEBPUSH_VAPID_PUBLIC_KEY", "")
+WEBPUSH_VAPID_PRIVATE_KEY = os.environ.get("WEBPUSH_VAPID_PRIVATE_KEY", "")
+WEBPUSH_VAPID_ADMIN_EMAIL = os.environ.get("WEBPUSH_VAPID_ADMIN_EMAIL", "")
+ALERT_WEBPUSH_ENABLED = bool(WEBPUSH_VAPID_PUBLIC_KEY and WEBPUSH_VAPID_PRIVATE_KEY)
+
 # Django OAuth Toolkit — OIDC provider configuration.
 # Issuer must match the public URL prefix (see /sso/ in config/urls.py).
 # RSA private key path is resolved at runtime by the setup_oidc_keys
