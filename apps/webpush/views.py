@@ -5,11 +5,15 @@ static files because WhiteNoise's ManifestStaticFilesStorage hashes
 filenames — a service worker needs a stable URL and root scope.
 """
 
-from django.contrib.auth.decorators import login_not_required
+import json
+
+from django.contrib.auth.decorators import login_not_required, login_required
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.templatetags.static import static
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
+
+from .models import PushSubscription
 
 
 @login_not_required
@@ -48,3 +52,41 @@ def manifest(request):
         ],
     }
     return JsonResponse(data, content_type="application/manifest+json")
+
+
+@login_required
+@require_POST
+def subscribe(request):
+    try:
+        body = json.loads(request.body)
+        endpoint = body["endpoint"]
+        keys = body["keys"]
+        p256dh, auth = keys["p256dh"], keys["auth"]
+    except (ValueError, KeyError, TypeError):
+        return JsonResponse({"ok": False, "error": "invalid payload"}, status=400)
+
+    label = request.META.get("HTTP_USER_AGENT", "")[:120]
+    PushSubscription.objects.update_or_create(
+        endpoint=endpoint,
+        defaults={
+            "user": request.user,
+            "p256dh": p256dh,
+            "auth": auth,
+            "label": label,
+            "failure_count": 0,
+        },
+    )
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def unsubscribe(request):
+    try:
+        endpoint = json.loads(request.body)["endpoint"]
+    except (ValueError, KeyError, TypeError):
+        return JsonResponse({"ok": False, "error": "invalid payload"}, status=400)
+
+    # Scoped to the caller — a user can only remove their own subscription.
+    PushSubscription.objects.filter(user=request.user, endpoint=endpoint).delete()
+    return JsonResponse({"ok": True})
