@@ -1,10 +1,13 @@
-"""Notification dispatch for alerts (email and Telegram)."""
+"""Notification dispatch for alerts (email, Telegram, and Web-Push)."""
 
 import logging
 
 from django.conf import settings
 from django.core.mail import send_mail
+from django.urls import reverse
 from django.utils import timezone
+
+from apps.webpush.dispatch import send_web_push
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +18,8 @@ def send_alert_notifications(alert):
         _send_email_notification(alert)
     if getattr(settings, "ALERT_TELEGRAM_ENABLED", False):
         _send_telegram_notification(alert)
+    if getattr(settings, "ALERT_WEBPUSH_ENABLED", False):
+        _send_webpush_notification(alert)
 
 
 def _send_email_notification(alert, recipients_qs=None):
@@ -28,9 +33,9 @@ def _send_email_notification(alert, recipients_qs=None):
     list and calls send_mail directly.
     """
     if recipients_qs is None:
-        from apps.monitoring.recipients import recipients_for_station_alert
+        from apps.monitoring.recipients import email_recipients_for_station_alert
 
-        recipients_qs = recipients_for_station_alert(alert.station)
+        recipients_qs = email_recipients_for_station_alert(alert.station)
 
     recipient_list = list(recipients_qs.values_list("email", flat=True))
     if not recipient_list:
@@ -64,6 +69,29 @@ def _send_email_notification(alert, recipients_qs=None):
         logger.info("Alert email sent to %d recipient(s).", len(recipient_list))
     except Exception:
         logger.exception("Failed to send alert email.")
+
+
+def _send_webpush_notification(alert):
+    """Deliver the alert as Web-Push to PUSH/BOTH users with a device.
+
+    Each subscription is sent in isolation so one dead endpoint never
+    blocks the rest (send_web_push prunes 404/410 itself).
+    """
+    from apps.monitoring.recipients import push_recipients_for_station_alert
+
+    payload = {
+        "title": f"[OE5XRX] {alert.get_severity_display()}: {alert.title}",
+        "body": f"{alert.station.name}: {alert.message}",
+        "url": reverse("monitoring:alert_list"),
+        "severity": alert.severity,
+    }
+
+    count = 0
+    for user in push_recipients_for_station_alert(alert.station):
+        for subscription in user.push_subscriptions.all():
+            if send_web_push(subscription, payload):
+                count += 1
+    logger.info("Alert web-push delivered to %d subscription(s).", count)
 
 
 def _send_telegram_notification(alert):
