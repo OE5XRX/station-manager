@@ -17,6 +17,35 @@
     return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
   }
 
+  document.addEventListener('click', async function (e) {
+    const removeBtn = e.target.closest('.js-remove-device');
+    if (!removeBtn) return;
+    const row = removeBtn.closest('[data-endpoint]');
+    if (!row) return;
+    const endpoint = row.dataset.endpoint;
+    try {
+      const res = await fetch(section.dataset.unsubscribeUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        body: JSON.stringify({ endpoint }),
+      });
+      if (!res.ok) { status.textContent = 'Could not remove device.'; return; }
+      // Best-effort: unsubscribe browser-side if this endpoint matches current subscription.
+      if ('serviceWorker' in navigator) {
+        try {
+          const reg = await navigator.serviceWorker.ready;
+          const sub = await reg.pushManager.getSubscription();
+          if (sub && sub.endpoint === endpoint) await sub.unsubscribe();
+        } catch (_) { /* ignore */ }
+      }
+      row.remove();
+      status.textContent = 'Device removed.';
+      setTimeout(() => { if (status.textContent === 'Device removed.') status.textContent = ''; }, 3000);
+    } catch (e) {
+      status.textContent = 'Could not remove device: ' + e.message;
+    }
+  });
+
   btn.addEventListener('click', async function () {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       status.textContent = 'Push is not supported on this browser.';

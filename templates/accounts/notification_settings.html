@@ -18,7 +18,7 @@
   </div>
 </div>
 
-<form method="post" class="stack-gap-20" style="max-width:680px;">
+<form method="post" class="stack-gap-20">
   {% csrf_token %}
 
   <section class="panel">
@@ -45,8 +45,7 @@
 
 {% if webpush_enabled %}
 <section id="push-section"
-         class="panel"
-         style="max-width:680px;margin-top:24px;"
+         class="panel mt-24"
          data-vapid-key="{{ vapid_public_key }}"
          data-subscribe-url="{% url 'webpush:subscribe' %}"
          data-unsubscribe-url="{% url 'webpush:unsubscribe' %}">
@@ -78,11 +77,12 @@
       </div>
       <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;">
         {% for s in subscriptions %}
-        <li style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px;color:var(--ink-1);">
+        <li data-endpoint="{{ s.endpoint }}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px;color:var(--ink-1);">
           <span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-0);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             {{ s.label|default:s.endpoint|truncatechars:40 }}
           </span>
           <span class="t-mono-sm t-muted">{{ s.created_at|date }}</span>
+          <button type="button" class="btn btn-sm btn-ghost js-remove-device">{% trans "Remove" %}</button>
         </li>
         {% empty %}
         <li style="padding:12px 0;font-size:13px;color:var(--ink-3);">
