@@ -57,3 +57,16 @@ def test_transient_error_increments_failure(settings):
     assert ok is False
     s.refresh_from_db()
     assert s.failure_count == 1
+
+
+@pytest.mark.django_db
+def test_generic_error_increments_failure_and_keeps_subscription(settings):
+    settings.WEBPUSH_VAPID_PRIVATE_KEY = "priv"
+    settings.WEBPUSH_VAPID_ADMIN_EMAIL = "mailto:a@x"
+    s = _sub()
+    with mock.patch.object(dispatch, "webpush", side_effect=ConnectionError("boom")):
+        ok = dispatch.send_web_push(s, {"title": "t"})
+    assert ok is False
+    assert PushSubscription.objects.filter(pk=s.pk).exists()
+    s.refresh_from_db()
+    assert s.failure_count == 1

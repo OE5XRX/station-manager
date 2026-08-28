@@ -26,3 +26,21 @@ def test_endpoint_is_unique():
     _sub(u)
     with pytest.raises(IntegrityError):
         _sub(u)
+
+
+@pytest.mark.django_db
+def test_subscription_info_shape():
+    u = User.objects.create_user(username="c", password="x", email="c@x")
+    sub = PushSubscription.objects.create(
+        user=u,
+        endpoint="https://push.example/abc",
+        p256dh="dGVzdC1wMjU2ZGg=",
+        auth="dGVzdC1hdXRo",
+    )
+    assert sub.subscription_info == {
+        "endpoint": "https://push.example/abc",
+        "keys": {
+            "p256dh": "dGVzdC1wMjU2ZGg=",
+            "auth": "dGVzdC1hdXRo",
+        },
+    }

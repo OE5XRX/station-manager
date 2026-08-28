@@ -80,13 +80,9 @@ def email_recipients_for_station_alert(station):
 def push_recipients_for_station_alert(station):
     """Users who should receive the alert as Web-Push (PUSH/BOTH with a
     registered device)."""
-    return (
-        _base_topology_recipients(station)
-        .filter(
-            notify_channel__in=[User.NotifyChannel.PUSH, User.NotifyChannel.BOTH],
-            push_subscriptions__isnull=False,
-        )
-        .distinct()
+    return _base_topology_recipients(station).filter(
+        notify_channel__in=[User.NotifyChannel.PUSH, User.NotifyChannel.BOTH],
+        push_subscriptions__isnull=False,
     )
 
 

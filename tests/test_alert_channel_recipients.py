@@ -56,3 +56,11 @@ def test_both_user_with_device_in_both_sets():
     s = Station.objects.create(name="OE5A", callsign="OE5A")
     assert u in list(email_recipients_for_station_alert(s))
     assert u in list(push_recipients_for_station_alert(s))
+
+
+@pytest.mark.django_db
+def test_both_user_without_device_only_in_email_set():
+    u = _admin("e", User.NotifyChannel.BOTH)  # no push subscription
+    s = Station.objects.create(name="OE5A", callsign="OE5A")
+    assert u in list(email_recipients_for_station_alert(s))
+    assert u not in list(push_recipients_for_station_alert(s))
