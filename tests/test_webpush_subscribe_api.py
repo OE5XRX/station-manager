@@ -35,6 +35,23 @@ def test_subscribe_creates_then_upserts(client):
 
 
 @pytest.mark.django_db
+def test_subscribe_rejects_cross_user_endpoint(client):
+    owner = User.objects.create_user(username="o2", password="x", email="o2@x")
+    other = User.objects.create_user(username="p2", password="x", email="p2@x")
+    PushSubscription.objects.create(
+        user=owner, endpoint=SUB["endpoint"], p256dh="pp", auth="aa"
+    )
+    client.force_login(other)
+    r = client.post(
+        reverse("webpush:subscribe"), data=json.dumps(SUB), content_type="application/json"
+    )
+    assert r.status_code == 409
+    # ownership must NOT transfer to the caller
+    s = PushSubscription.objects.get(endpoint=SUB["endpoint"])
+    assert s.user_id == owner.id
+
+
+@pytest.mark.django_db
 def test_unsubscribe_only_removes_own(client):
     owner = User.objects.create_user(username="o", password="x", email="o@x")
     other = User.objects.create_user(username="p", password="x", email="p@x")

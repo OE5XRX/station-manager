@@ -66,6 +66,20 @@ def subscribe(request):
         return JsonResponse({"ok": False, "error": "invalid payload"}, status=400)
 
     label = request.META.get("HTTP_USER_AGENT", "")[:120]
+
+    # The endpoint is a secret, per-browser capability URL. Creating it, or the
+    # same user re-subscribing, is fine — but do NOT let one account silently
+    # take over an endpoint already registered to a different account. That
+    # would re-home another user's device (redirecting its pushes) on nothing
+    # more than knowledge of the endpoint. Reject it; the owner must remove the
+    # device first.
+    existing = PushSubscription.objects.filter(endpoint=endpoint).first()
+    if existing is not None and existing.user_id != request.user.id:
+        return JsonResponse(
+            {"ok": False, "error": "endpoint already registered to another account"},
+            status=409,
+        )
+
     PushSubscription.objects.update_or_create(
         endpoint=endpoint,
         defaults={
