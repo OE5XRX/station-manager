@@ -20,6 +20,7 @@
   document.addEventListener('click', async function (e) {
     const removeBtn = e.target.closest('.js-remove-device');
     if (!removeBtn) return;
+    if (!section) return;
     const row = removeBtn.closest('[data-endpoint]');
     if (!row) return;
     const endpoint = row.dataset.endpoint;
