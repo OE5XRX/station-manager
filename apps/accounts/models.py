@@ -103,6 +103,19 @@ class User(AbstractUser):
         default=Language.ENGLISH,
     )
 
+    class NotifyChannel(models.TextChoices):
+        EMAIL = "email", _("Nur E-Mail")
+        PUSH = "push", _("Nur Push")
+        BOTH = "both", _("E-Mail und Push")
+
+    notify_channel = models.CharField(
+        _("notification channel"),
+        max_length=8,
+        choices=NotifyChannel.choices,
+        default=NotifyChannel.EMAIL,
+        help_text=_("How station alerts reach you: e-mail, push, or both."),
+    )
+
     class MembershipLevel(models.TextChoices):
         APPLICANT = "applicant", _("Vereins-Bewerber")
         MEMBER = "member", _("Vereins-Mitglied")
