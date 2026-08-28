@@ -5,7 +5,7 @@ from apps.monitoring.recipients import (
     email_recipients_for_station_alert,
     push_recipients_for_station_alert,
 )
-from apps.stations.models import Station, StationAssignment
+from apps.stations.models import Station
 from apps.webpush.models import PushSubscription
 
 

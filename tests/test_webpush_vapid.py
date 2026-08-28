@@ -1,7 +1,7 @@
 import base64
+from io import StringIO
 
 from django.core.management import call_command
-from io import StringIO
 
 
 def _b64url_decode(s):

@@ -4,8 +4,8 @@ from unittest import mock
 import pytest
 
 from apps.accounts.models import User
-from apps.webpush.models import PushSubscription
 from apps.webpush import dispatch
+from apps.webpush.models import PushSubscription
 
 
 def _sub(endpoint="https://push.example/x"):

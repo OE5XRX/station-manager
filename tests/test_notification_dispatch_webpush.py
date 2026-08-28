@@ -6,7 +6,7 @@ from django.core import mail
 from apps.accounts.models import User
 from apps.monitoring.models import Alert, AlertRule
 from apps.monitoring.notifications import send_alert_notifications
-from apps.stations.models import Station, StationAssignment
+from apps.stations.models import Station
 from apps.webpush.models import PushSubscription
 
 
