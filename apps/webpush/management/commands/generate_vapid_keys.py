@@ -31,5 +31,6 @@ class Command(BaseCommand):
         self.stdout.write(f"WEBPUSH_VAPID_PUBLIC_KEY={_b64url(pub_point)}")
         self.stdout.write(f"WEBPUSH_VAPID_PRIVATE_KEY={_b64url(priv_raw)}")
         self.stdout.write(
-            "WEBPUSH_VAPID_ADMIN_EMAIL=mailto:admin@oe5xrx.org  # adjust"
+            "# Set WEBPUSH_VAPID_ADMIN_EMAIL to your admin address (mailto:you@example.com)"
         )
+        self.stdout.write("WEBPUSH_VAPID_ADMIN_EMAIL=mailto:admin@oe5xrx.org")

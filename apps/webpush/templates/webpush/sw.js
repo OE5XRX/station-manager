@@ -1,3 +1,4 @@
+{% load static %}
 // OE5XRX Station Manager — service worker (push only, no offline cache).
 self.addEventListener('push', function (event) {
   let data = {};
@@ -5,8 +6,8 @@ self.addEventListener('push', function (event) {
   const title = data.title || 'OE5XRX';
   const options = {
     body: data.body || '',
-    icon: '/static/webpush/icon-192.png',
-    badge: '/static/webpush/icon-192.png',
+    icon: '{% static "webpush/icon-192.png" %}',
+    badge: '{% static "webpush/icon-192.png" %}',
     data: { url: data.url || '/' },
   };
   event.waitUntil(self.registration.showNotification(title, options));
