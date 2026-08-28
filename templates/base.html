@@ -17,6 +17,20 @@
   <link rel="icon"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23FF8A3D'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='monospace' font-weight='700' font-size='14' fill='%23120A04'%3E5X%3C/text%3E%3C/svg%3E">
 
+  <link rel="manifest" href="{% url 'webpush:manifest' %}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OE5XRX">
+  <meta name="theme-color" content="#FF8A3D">
+  <link rel="apple-touch-icon" href="{% static 'webpush/icon-192.png' %}">
+  <script nonce="{{ csp_nonce }}">
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js').catch(function () {});
+      });
+    }
+  </script>
+
   {% block extra_head %}{% endblock %}
 </head>
 <body>
