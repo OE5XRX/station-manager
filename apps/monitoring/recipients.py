@@ -26,36 +26,66 @@ a topology assignment.
 """
 
 from django.contrib.auth import get_user_model
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 
 User = get_user_model()
 
 
-def recipients_for_station_alert(station):
+def _topology_q(station):
     q = Q(membership_level=User.MembershipLevel.ADMIN)
-
     if station.region_id is not None:
         q |= Q(
             region_assignments__region_id=station.region_id,
             region_assignments__role="manager",
         )
-
     q |= Q(
         station_assignments__station=station,
         station_assignments__role__in=["admin", "maintainer"],
     )
+    return q
 
-    # .active() excludes soft-deleted users (deleted_at IS NOT NULL).
-    # The subsequent .exclude(is_active=False) is a SEPARATE gate for
-    # deactivated-but-not-deleted users (admin disabled an account but
-    # didn't soft-delete it). Don't conflate the two — removing .active()
-    # would let soft-deleted rows leak into the recipient set whenever a
-    # future flow keeps is_active=True after soft-delete.
+
+def _base_topology_recipients(station):
+    """Topology-routed, active, non-applicant users — WITHOUT the email
+    exclusion (push recipients may legitimately have no email)."""
     return (
         User.objects.active()
-        .filter(q)
-        .exclude(email="")
+        .filter(_topology_q(station))
         .exclude(is_active=False)
         .exclude(membership_level=User.MembershipLevel.APPLICANT)
         .distinct()
     )
+
+
+def email_recipients_for_station_alert(station):
+    """Users who should receive the alert e-mail.
+
+    EMAIL/BOTH always; PUSH only as fallback when they have no working
+    push subscription. Empty e-mails are excluded (can't mail them).
+    """
+    from apps.webpush.models import PushSubscription
+
+    has_push = Exists(PushSubscription.objects.filter(user=OuterRef("pk")))
+    return (
+        _base_topology_recipients(station)
+        .annotate(_has_push=has_push)
+        .filter(
+            Q(notify_channel__in=[User.NotifyChannel.EMAIL, User.NotifyChannel.BOTH])
+            | Q(notify_channel=User.NotifyChannel.PUSH, _has_push=False)
+        )
+        .exclude(email="")
+    )
+
+
+def push_recipients_for_station_alert(station):
+    """Users who should receive the alert as Web-Push (PUSH/BOTH with a
+    registered device)."""
+    return _base_topology_recipients(station).filter(
+        notify_channel__in=[User.NotifyChannel.PUSH, User.NotifyChannel.BOTH],
+        push_subscriptions__isnull=False,
+    )
+
+
+def recipients_for_station_alert(station):
+    """Backward-compatible alias: the e-mail recipient set."""
+    return email_recipients_for_station_alert(station)
