@@ -6,6 +6,7 @@ from django.urls import include, path
 from apps.sso.views import AppGrantAuthorizationView
 
 urlpatterns = [
+    path("", include("apps.webpush.urls")),
     path("api/", include("apps.api.urls")),
     path("i18n/", include("django.conf.urls.i18n")),
     # Override DOT's authorize endpoint with our AppGrant-gated version
