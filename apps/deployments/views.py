@@ -47,6 +47,13 @@ class DeploymentListView(AdminOrOperatorRequiredMixin, ListView):
                     ),
                 ),
             )
+            # The Count() aggregations force a GROUP BY, and Django drops the
+            # model's Meta.ordering ("-created_at") once that happens — leaving
+            # the list in arbitrary DB order (and triggering
+            # UnorderedObjectListWarning under pagination). Re-assert the order
+            # explicitly. "-pk" is a tiebreaker so rows sharing a created_at
+            # second stay deterministic across paginated pages.
+            .order_by("-created_at", "-pk")
         )
 
         status_filter = self.request.GET.get("status")
