@@ -6,9 +6,7 @@ from apps.webpush.models import PushSubscription
 
 
 def _sub(user, endpoint="https://push.example/abc"):
-    return PushSubscription.objects.create(
-        user=user, endpoint=endpoint, p256dh="p", auth="a"
-    )
+    return PushSubscription.objects.create(user=user, endpoint=endpoint, p256dh="p", auth="a")
 
 
 @pytest.mark.django_db

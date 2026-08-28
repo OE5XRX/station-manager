@@ -10,9 +10,7 @@ from apps.webpush.models import PushSubscription
 
 def _sub(endpoint="https://push.example/x"):
     u = User.objects.create_user(username="a", password="x", email="a@x")
-    return PushSubscription.objects.create(
-        user=u, endpoint=endpoint, p256dh="p", auth="a"
-    )
+    return PushSubscription.objects.create(user=u, endpoint=endpoint, p256dh="p", auth="a")
 
 
 class _Resp:

@@ -38,9 +38,7 @@ def test_subscribe_creates_then_upserts(client):
 def test_subscribe_rejects_cross_user_endpoint(client):
     owner = User.objects.create_user(username="o2", password="x", email="o2@x")
     other = User.objects.create_user(username="p2", password="x", email="p2@x")
-    PushSubscription.objects.create(
-        user=owner, endpoint=SUB["endpoint"], p256dh="pp", auth="aa"
-    )
+    PushSubscription.objects.create(user=owner, endpoint=SUB["endpoint"], p256dh="pp", auth="aa")
     client.force_login(other)
     r = client.post(
         reverse("webpush:subscribe"), data=json.dumps(SUB), content_type="application/json"
@@ -55,9 +53,7 @@ def test_subscribe_rejects_cross_user_endpoint(client):
 def test_unsubscribe_only_removes_own(client):
     owner = User.objects.create_user(username="o", password="x", email="o@x")
     other = User.objects.create_user(username="p", password="x", email="p@x")
-    PushSubscription.objects.create(
-        user=owner, endpoint=SUB["endpoint"], p256dh="pp", auth="aa"
-    )
+    PushSubscription.objects.create(user=owner, endpoint=SUB["endpoint"], p256dh="pp", auth="aa")
     client.force_login(other)
     r = client.post(
         reverse("webpush:unsubscribe"),

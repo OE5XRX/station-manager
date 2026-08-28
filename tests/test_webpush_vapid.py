@@ -11,9 +11,7 @@ def _b64url_decode(s):
 def test_generate_vapid_keys_emits_valid_pair():
     out = StringIO()
     call_command("generate_vapid_keys", stdout=out)
-    lines = dict(
-        line.split("=", 1) for line in out.getvalue().splitlines() if "=" in line
-    )
+    lines = dict(line.split("=", 1) for line in out.getvalue().splitlines() if "=" in line)
     assert "WEBPUSH_VAPID_PUBLIC_KEY" in lines
     assert "WEBPUSH_VAPID_PRIVATE_KEY" in lines
     # raw scalar is 32 bytes; uncompressed point is 65 bytes (0x04 + X + Y)

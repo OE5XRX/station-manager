@@ -1,4 +1,5 @@
 """Pins the webpush feature-flag semantics: disabled unless VAPID keys set."""
+
 from django.conf import settings
 
 

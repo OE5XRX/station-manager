@@ -36,9 +36,7 @@ def test_both_channel_triggers_email_and_push(settings):
         user=u, endpoint="https://push.example/a", p256dh="p", auth="a"
     )
     s = Station.objects.create(name="OE5A", callsign="OE5A")
-    with mock.patch(
-        "apps.monitoring.notifications.send_web_push", return_value=True
-    ) as m:
+    with mock.patch("apps.monitoring.notifications.send_web_push", return_value=True) as m:
         send_alert_notifications(_alert(s))
     assert len(mail.outbox) == 1
     assert m.call_count == 1
@@ -52,9 +50,7 @@ def test_push_without_device_only_emails(settings):
     mail.outbox = []
     _admin("b", User.NotifyChannel.PUSH)  # no device → email fallback
     s = Station.objects.create(name="OE5A", callsign="OE5A")
-    with mock.patch(
-        "apps.monitoring.notifications.send_web_push", return_value=True
-    ) as m:
+    with mock.patch("apps.monitoring.notifications.send_web_push", return_value=True) as m:
         send_alert_notifications(_alert(s))
     assert len(mail.outbox) == 1
     assert m.call_count == 0
@@ -69,8 +65,6 @@ def test_webpush_disabled_skips_push(settings):
         user=u, endpoint="https://push.example/c", p256dh="p", auth="a"
     )
     s = Station.objects.create(name="OE5A", callsign="OE5A")
-    with mock.patch(
-        "apps.monitoring.notifications.send_web_push", return_value=True
-    ) as m:
+    with mock.patch("apps.monitoring.notifications.send_web_push", return_value=True) as m:
         send_alert_notifications(_alert(s))
     assert m.call_count == 0
