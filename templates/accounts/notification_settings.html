@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% load i18n static %}
+
+{% block title %}{% trans "Notification settings" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Notification settings" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Account" %} · {% trans "Preferences" %}</div>
+    <h1 class="page-title">{% trans "Notification settings" %}</h1>
+    <p class="page-sub">{% trans "Choose how you want to receive alerts from this station." %}</p>
+  </div>
+</div>
+
+<form method="post" class="stack-gap-20" style="max-width:680px;">
+  {% csrf_token %}
+
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Channel" %}</div></div>
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label">{% trans "Notification channel" %}</label>
+        {% for radio in form.notify_channel %}
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 0;cursor:pointer;font-family:var(--font-body);font-size:14px;color:var(--ink-0);text-transform:none;letter-spacing:0;font-weight:400;">
+          {{ radio.tag }}
+          <span>{{ radio.choice_label }}</span>
+        </label>
+        {% endfor %}
+        {{ form.notify_channel.errors }}
+      </div>
+    </div>
+  </section>
+
+  <div class="row-gap-8">
+    <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
+    <a href="{% url 'accounts:profile' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+
+{% if webpush_enabled %}
+<section id="push-section"
+         class="panel"
+         style="max-width:680px;margin-top:24px;"
+         data-vapid-key="{{ vapid_public_key }}"
+         data-subscribe-url="{% url 'webpush:subscribe' %}"
+         data-unsubscribe-url="{% url 'webpush:unsubscribe' %}">
+  <div class="panel-head"><div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Push on this device" %}</div></div>
+  <div class="panel-body stack-gap-20">
+
+    {% comment %}
+      iOS only allows Web-Push for an INSTALLED PWA (iOS 16.4+). The user
+      must Add-to-Home-Screen first, then open the app from the home screen.
+    {% endcomment %}
+    <p style="font-size:13.5px;color:var(--ink-2);margin:0;">
+      {% blocktrans %}On iPhone/iPad: first use Share → Add to Home Screen,
+      then open the app from the home screen and enable push here.{% endblocktrans %}
+    </p>
+
+    <div class="row-gap-8">
+      <button type="button" id="enable-push" class="btn btn-secondary">
+        {% trans "Enable push on this device" %}
+      </button>
+    </div>
+    <p id="push-status" role="status" style="font-size:13px;color:var(--ink-2);margin:0;min-height:1.4em;"></p>
+
+    <div>
+      <div class="panel-head" style="padding:0 0 10px;border-bottom:1px dashed var(--line);margin-bottom:12px;">
+        <div class="panel-title" style="font-size:12px;">
+          <span class="dot" style="background:var(--ink-3);width:6px;height:6px;"></span>
+          {% trans "Registered devices" %}
+        </div>
+      </div>
+      <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;">
+        {% for s in subscriptions %}
+        <li style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px;color:var(--ink-1);">
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-0);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {{ s.label|default:s.endpoint|truncatechars:40 }}
+          </span>
+          <span class="t-mono-sm t-muted">{{ s.created_at|date }}</span>
+        </li>
+        {% empty %}
+        <li style="padding:12px 0;font-size:13px;color:var(--ink-3);">
+          {% trans "No devices registered." %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+<script src="{% static 'webpush/push.js' %}" nonce="{{ csp_nonce }}" defer></script>
+{% endif %}
+{% endblock %}
