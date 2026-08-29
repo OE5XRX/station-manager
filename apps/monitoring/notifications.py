@@ -174,7 +174,9 @@ def _test_webpush(requesting_user=None):
     sent = sum(1 for sub in subscriptions if send_web_push(sub, payload))
     if sent == 0:
         return False, (
-            "All registered push devices failed (expired?). Re-enable push on this device."
+            "Push delivery failed for all your registered devices — a device "
+            "subscription may have expired (re-enable push here), or the push "
+            "service rejected the request (check the VAPID config and server logs)."
         )
     return True, ""
 
