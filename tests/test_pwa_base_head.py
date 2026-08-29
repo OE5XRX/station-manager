@@ -16,3 +16,7 @@ def test_base_head_has_manifest_and_sw_registration(client):
     assert "/manifest.webmanifest" in html
     assert "serviceWorker" in html
     assert 'name="apple-mobile-web-app-capable"' in html
+    # favicon is the official OE5XRX logo (favicon.ico), not the old inline
+    # data-URI placeholder
+    assert "favicon.ico" in html
+    assert "data:image/svg+xml" not in html
