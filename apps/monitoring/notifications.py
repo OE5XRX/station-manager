@@ -128,9 +128,10 @@ def send_test_notification(channel, requesting_user=None):
     """Send a test notification via the specified channel.
 
     Args:
-        channel: "email" or "telegram"
-        requesting_user: the admin who triggered the test (email path
-            scopes the mail to this user's address)
+        channel: "email", "telegram", or "webpush"
+        requesting_user: the admin who triggered the test (email and
+            web-push paths scope the notification to this user only —
+            their address / their own registered devices)
 
     Returns:
         Tuple of (success: bool, error_message: str)
@@ -139,7 +140,45 @@ def send_test_notification(channel, requesting_user=None):
         return _test_email(requesting_user=requesting_user)
     elif channel == "telegram":
         return _test_telegram()
+    elif channel == "webpush":
+        return _test_webpush(requesting_user=requesting_user)
     return False, f"Unknown channel: {channel}"
+
+
+def _test_webpush(requesting_user=None):
+    """Send a test Web-Push to the requesting user's own devices.
+
+    Scoped to the clicking user's registered subscriptions (like
+    ``_test_email`` scopes to their address) so testing never pushes to
+    other admins' phones. Returns a clear error when the channel is
+    unconfigured or the user has no working device.
+    """
+    if not getattr(settings, "ALERT_WEBPUSH_ENABLED", False):
+        return False, "Web-Push is not enabled (no VAPID keys configured)."
+
+    if requesting_user is None:
+        return False, "No requesting user to send the test push to."
+
+    subscriptions = list(requesting_user.push_subscriptions.all())
+    if not subscriptions:
+        return False, (
+            "No push device registered — open this app from the home screen "
+            "and enable push on this device first."
+        )
+
+    payload = {
+        "title": "[OE5XRX] Test notification",
+        "body": "Web-Push is working correctly.",
+        "url": reverse("monitoring:alert_list"),
+    }
+    sent = sum(1 for sub in subscriptions if send_web_push(sub, payload))
+    if sent == 0:
+        return False, (
+            "Push delivery failed for all your registered devices — a device "
+            "subscription may have expired (re-enable push here), or the push "
+            "service rejected the request (check the VAPID config and server logs)."
+        )
+    return True, ""
 
 
 def _test_email(requesting_user=None):

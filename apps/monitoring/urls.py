@@ -26,5 +26,11 @@ urlpatterns = [
         name="test_telegram",
         kwargs={"channel": "telegram"},
     ),
+    path(
+        "test/push/",
+        views.TestNotificationView.as_view(),
+        name="test_push",
+        kwargs={"channel": "webpush"},
+    ),
     path("count/", views.AlertCountView.as_view(), name="alert_count"),
 ]
