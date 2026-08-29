@@ -88,6 +88,7 @@
   <div class="panel-body row-gap-8">
     <button class="btn" hx-post="{% url 'monitoring:test_email' %}">{% trans "Send test email" %}</button>
     <button class="btn" hx-post="{% url 'monitoring:test_telegram' %}">{% trans "Send test telegram" %}</button>
+    <button class="btn" hx-post="{% url 'monitoring:test_push' %}">{% trans "Send test push" %}</button>
   </div>
 </section>
 {% endif %}
