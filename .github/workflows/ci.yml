@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true
 
       - uses: actions/setup-python@v6
         with:
@@ -41,6 +43,9 @@ jobs:
         # render as raw text on the page — bitten the project twice
         # in prod (PR #61, PR #65). Stdlib-only script, no deps.
         run: python scripts/check_template_comments.py
+
+      - name: Check color tokens
+        run: python scripts/check_color_tokens.py
 
   deps:
     name: Deps lock in sync

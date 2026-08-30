@@ -1,0 +1,3 @@
+[submodule "vendor/branding"]
+	path = vendor/branding
+	url = https://github.com/OE5XRX/branding.git

@@ -98,7 +98,7 @@
 </div>
 
 {% if request.user.is_admin and not object.has_usable_password and not object.deleted_at %}
-  <section class="panel mb-24" style="border-left:3px solid var(--warning);">
+  <section class="panel mb-24" style="border-left:3px solid var(--warn);">
     <div class="panel-head">
       <div class="panel-title"><span class="dot"></span>{% trans "Pending Welcome" %}</div>
     </div>
