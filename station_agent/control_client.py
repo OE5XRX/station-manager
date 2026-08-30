@@ -96,6 +96,7 @@ class ControlClient:
                     self._config, "telemetry_default_interval_ms", 1000
                 ),
                 telemetry_min_floor_ms=getattr(self._config, "telemetry_min_floor_ms", 200),
+                trace_serial=getattr(self._config, "trace_serial", False),
             )
             loop = asyncio.get_running_loop()
             if getattr(self._config, "slot_discovery_enabled", True):

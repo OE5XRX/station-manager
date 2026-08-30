@@ -12,4 +12,4 @@ if ! [[ "${slot}" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 
-exec ssh "root@${host}" "python -m station_agent selftest serial --slot ${slot}"
+exec ssh -- "root@${host}" "python -m station_agent selftest serial --slot ${slot}"

@@ -37,7 +37,11 @@ class Command(BaseCommand):
             # world-readable, not even for a moment (no write-then-chmod window).
             fd = os.open(key_out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
-                os.write(fd, private_pem)
+                # os.write may perform a short write; loop until the whole PEM is
+                # on disk so a truncated private key can never be produced.
+                view = memoryview(private_pem)
+                while view:
+                    view = view[os.write(fd, view) :]
             finally:
                 os.close(fd)
             self.stderr.write(f"Wrote private key to {key_out}")

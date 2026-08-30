@@ -47,9 +47,14 @@ class Broker:
         dead_man_timeout: float = 1.5,
         telemetry_default_interval_ms: int = 1000,
         telemetry_min_floor_ms: int = 200,
+        trace_serial: bool = False,
         now=time.monotonic,
     ):
         self._send = send
+        # Hex-dump every control-path TX/RX (SlotControl.execute) when tracing is
+        # on, so `trace_serial` covers BOTH serial paths (discovery + control),
+        # not just discovery.
+        self._trace = trace_serial
         # A command's whole slot round-trip must outlast the module's worst-case
         # firmware timeout, or SlotControl gives up first and the real device
         # error (e.g. driver_error from an unanswered SA818 AT command, ~2 s)
@@ -228,7 +233,7 @@ class Broker:
         # interleave their framing on the same serial/pty line.
         async with lock:
             return await loop.run_in_executor(
-                None, transport.execute, module, op, capability, token
+                None, transport.execute, module, op, capability, token, self._trace
             )
 
     # --- telemetry subscription --------------------------------------------
