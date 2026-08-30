@@ -1,5 +1,5 @@
 # tests/test_check_color_tokens.py
-import subprocess, sys, textwrap
+import subprocess, sys
 from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts/check_color_tokens.py"
 

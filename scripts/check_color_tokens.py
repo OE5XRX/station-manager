@@ -19,6 +19,13 @@ ANCHORS = {  # branding key -> (station token, )
     "success": "--signal", "warn": "--warn", "error": "--danger",
 }
 
+def rel(p):
+    """Path relative to ROOT for display; fall back to the raw path (e.g. --only tmp files outside ROOT)."""
+    try:
+        return p.relative_to(ROOT)
+    except ValueError:
+        return p
+
 def scan_raw_colors(only=None):
     findings = []
     files = [only] if only else [p for g in SCAN_GLOBS for p in ROOT.glob(g)]
@@ -31,7 +38,7 @@ def scan_raw_colors(only=None):
                 continue
             stripped = ENTITY.sub("", line)
             if HEX.search(stripped) or FUNC.search(stripped):
-                findings.append(f"{p.relative_to(ROOT)}:{i}: raw color literal — use var(--token)/color-mix")
+                findings.append(f"{rel(p)}:{i}: raw color literal — use var(--token)/color-mix")
     return findings
 
 def parse_block(text, selector):
@@ -78,7 +85,14 @@ def main():
             findings.append("static/css/tokens.css: missing (extract tokens here)")
         else:
             text = TOKENS.read_text()
-            findings += check_parity(text) + check_anchors(text)
+            findings += check_parity(text)
+            if not BRANDING.exists():
+                findings.append(
+                    "vendor/branding/color/tokens.json: missing — run "
+                    "`git submodule update --init` (branding submodule provides the anchor values)"
+                )
+            else:
+                findings += check_anchors(text)
     if findings:
         print("\n".join(findings)); print(f"\ncolor-tokens: {len(findings)} finding(s)"); sys.exit(1)
     print("color-tokens: OK"); sys.exit(0)
