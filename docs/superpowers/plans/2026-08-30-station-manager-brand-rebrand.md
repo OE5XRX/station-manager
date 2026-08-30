@@ -328,6 +328,8 @@ git commit -m "brand: swap favicon/PWA/apple-touch assets + theme-color #0A1219"
 - Modify: `apps/accounts/templates/accounts/login.html` — decorative SVG strokes/fills
 - Modify: `apps/sso/templates/sso/application_detail.html` — inline `<style>` box-shadow (line ~353)
 - Modify: `apps/sso/templates/sso/tag_detail.html` — inline `<style>` old-palette literal(s)
+- Modify: `apps/webpush/views.py` — PWA manifest `background_color: "#120A04"` → `"#0A1219"` (brand dark bg)
+- Also swap `.consent-avatar-self` "5X" badge → tower mark in `templates/oauth2_provider/authorize.html` (controller ruling; same retired-5X-badge concept). Reuse the exact tower SVG from Task 3; container keeps its size, `color: var(--accent)`.
 
 **Interfaces:**
 - Consumes: the Task 2 `:root` tokens (`--accent:#3AC6D6`, `--signal:#4DB870`, `--cyan:#5FBFE0`, `--warn:#FFB84D`, `--danger:#F06060`, `--violet:#9B6BFF`).
@@ -346,7 +348,7 @@ git commit -m "brand: swap favicon/PWA/apple-touch assets + theme-color #0A1219"
 | danger | `#FF5D73` | `255, 93, 115` | `#F06060` | `240, 96, 96` |
 | violet (deploy) | `#9B6BFF` | `155, 107, 255` | **unchanged** | **unchanged** |
 
-**Dark status-text shades** (darker on-color hexes used as text/foreground — `#1C8058` signal, `#A82538`/`#D23250` danger, `#B37A0E`/`#C78A1E` warn, `#6B46C1` violet, `#0C0D10`/`#120A04` near-black on-accent text): keep near-black text as-is; for the darker signal/danger/warn text shades, pick a darkened version of the matching NEW color so it stays legible and on-brand (e.g. signal text → `#1C8058` stays fine visually against green; if it reads off against the new green, nudge toward `#2E8A54`). Use `frontend-design` judgment per site; when in doubt, replace the hardcoded shade with the nearest `var(--token)`.
+**Dark status-text shades** (darker on-color hexes used as text/foreground — `#1C8058` signal, `#A82538`/`#D23250` danger, `#B37A0E`/`#C78A1E` warn, `#6B46C1` violet, near-black on-accent text): keep `#0C0D10` (already cool) as-is; map warm amber-tinted `#120A04` → `#08131A` (cool near-black — brand-consistent, legible on cyan/warn). For the darker signal/danger/warn text shades, pick a darkened version of the matching NEW color so it stays legible and on-brand (e.g. signal text → `#1C8058` stays fine visually against green; if it reads off against the new green, nudge toward `#2E8A54`). Use `frontend-design` judgment per site; when in doubt, replace the hardcoded shade with the nearest `var(--token)`.
 
 - [ ] **Step 1: Invoke `Skill("frontend-design")`** (this is UI color work across the app).
 
@@ -366,6 +368,9 @@ git commit -m "brand: swap favicon/PWA/apple-touch assets + theme-color #0A1219"
   - `templates/oauth2_provider/authorize.html`: replace every `#FF8A3D` (the `<stop stop-color>`, `<text fill>`, `<circle fill>`) and every `rgba(255,138,61,…)` stroke/fill with the accent-cyan equivalent (`#3AC6D6` / `rgba(58,198,214,…)` same alpha); the inline `<style>` box-shadow at ~line 403 too.
   - `apps/accounts/templates/accounts/login.html`: replace every `#FF8A3D` and `rgba(255,138,61,…)` in the decorative SVG (grid stroke, orbit circles, group fills) with the cyan equivalent, same alpha.
   - `apps/sso/templates/sso/application_detail.html` (~line 353) and `apps/sso/templates/sso/tag_detail.html`: replace old-palette literals in the inline `<style>` per the mapping.
+  - `templates/oauth2_provider/authorize.html`: also swap the `.consent-avatar-self` "5X" text badge (~line 123) for the tower SVG (exact SVG from Task 3), and map its inline-`<style>` warm-near-black text `#120A04` → `#08131A`.
+  - `apps/webpush/views.py`: PWA manifest `background_color: "#120A04"` → `"#0A1219"`.
+  - Any `#120A04` used as on-accent dark TEXT in `app.css` → `#08131A`.
 
 - [ ] **Step 6: Full old-palette scan → 0** (hex AND rgba, all semantic colors)
 
@@ -380,7 +385,7 @@ Expected: both greps print nothing (`exit=1`); check passes. (Violet `155,107,25
 - [ ] **Step 7: Commit**
 
 ```bash
-git add static/css/app.css static/css/control-panel.css static/js/app.js templates/oauth2_provider/authorize.html apps/accounts/templates/accounts/login.html apps/sso/templates/sso/application_detail.html apps/sso/templates/sso/tag_detail.html
+git add static/css/app.css static/css/control-panel.css static/js/app.js templates/oauth2_provider/authorize.html apps/accounts/templates/accounts/login.html apps/sso/templates/sso/application_detail.html apps/sso/templates/sso/tag_detail.html apps/webpush/views.py
 git commit -m "brand: sweep all old-palette color literals to marine/cyan brand"
 ```
 
