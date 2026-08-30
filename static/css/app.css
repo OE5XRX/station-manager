@@ -615,7 +615,8 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
   transition: box-shadow 0.2s var(--ease), background 0.15s var(--ease), transform 0.08s var(--ease);
 }
 .btn-primary:hover {
-  --btn-bg: var(--accent-soft);
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
   --btn-fg: var(--on-accent-ink);
   box-shadow: 0 0 28px -4px var(--accent-glow);
   color: var(--on-accent-ink);
