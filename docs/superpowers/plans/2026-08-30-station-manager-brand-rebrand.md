@@ -18,7 +18,7 @@
 - **Accent:** Cyan `#3AC6D6` (`--accent`). Amber survives only as `--warn: #FFB84D`.
 - **theme-color:** `#0A1219` (brand dark bg) everywhere it currently is `#FF8A3D`.
 - **Inline `<script>` comments:** only `/* */`, never `//` (brand convention — minified inline scripts collapse to one line; a `//` comments out the rest). (No new inline scripts are planned here, but honor it if one is added.)
-- **Rest-amber scan after all tasks:** `grep -riE 'FF8A3D|FF4E1F|D96418|Bricolage' static/ templates/ apps/` → 0 (or explicitly documented).
+- **Full old-palette scan after all tasks** (hex AND rgba, all semantic colors — the whole old palette is hardcoded outside `:root`, not just amber): old hexes `#FF8A3D|#FF4E1F|#D96418|#FFB584|#3ED598|#4EE1F2|#F7B955|#FF5D73|Bricolage` → 0, and old rgba triplets `255,138,61|255,78,31|217,100,24|62,213,152|78,225,242|247,185,85|255,93,115` → 0. Violet `155,107,255`/`#9B6BFF` is unchanged (not scanned). See Task 5 for the mapping.
 - **Process:** feature branch `feat/oe5xrx-brand-rebrand` (already created off `origin/main`); UI work MUST invoke `Skill("frontend-design")`; token-preview PNG render for user look-approval **before** merge; Copilot review loop; **one squash PR** at the end.
 - **Verification is grep + `python manage.py check` + visual**, not unit tests (CSS/template rebrand has no meaningful unit surface). Each task's "test" is a check command that fails before and passes after.
 
@@ -311,18 +311,44 @@ git commit -m "brand: swap favicon/PWA/apple-touch assets + theme-color #0A1219"
 
 ---
 
-### Task 5: Recolor remaining amber — terminal + decorative SVGs
+### Task 5: Full old-palette sweep — all hardcoded color literals → brand
 
-**Files:**
-- Modify: `static/js/app.js:297-298` (xterm.js theme `cursor`/`selection` amber → cyan)
-- Modify: `templates/oauth2_provider/authorize.html:22-46` (SVG `stop-color`/`fill` `#FF8A3D` → `#3AC6D6`)
-- Modify: `apps/accounts/templates/accounts/login.html:84-93` (SVG `stop-color`/`fill` `#FF8A3D` → `#3AC6D6`)
+> **Scope widened by controller ruling (see ledger).** The spec's premise "no
+> hard amber outside `:root`" was wrong: the ENTIRE old semantic palette is
+> hardcoded as hex/rgba literals OUTSIDE `:root` (per-component borders, glows,
+> pill borders, keyframe shadows, decorative SVGs, the terminal theme, and inline
+> template `<style>` blocks). A `:root` remap (Task 2) cannot reach them. This
+> task sweeps them ALL to the new brand palette so the dark UI is fully converted.
+
+**Files (all sites carrying an old-palette literal):**
+- Modify: `static/css/app.css` — every old-palette hex/rgba literal OUTSIDE the `:root` block (lines >58): `.pill-*` borders, glows, `--btn-*` locals, status text colors, etc.
+- Modify: `static/css/control-panel.css` — ~18 old-palette rgba literals (borders, keyframe box-shadows: lines 37, 43, 96, 110, 128, 158, 317, 327-328, 428, 448, 692-693, 708-709, 733, 737, 971 — verify by grep)
+- Modify: `static/js/app.js:297-298` — xterm.js theme `foreground`/`cursor`/`selection`
+- Modify: `templates/oauth2_provider/authorize.html` — decorative SVG strokes/fills + inline `<style>` box-shadow (line ~403)
+- Modify: `apps/accounts/templates/accounts/login.html` — decorative SVG strokes/fills
+- Modify: `apps/sso/templates/sso/application_detail.html` — inline `<style>` box-shadow (line ~353)
+- Modify: `apps/sso/templates/sso/tag_detail.html` — inline `<style>` old-palette literal(s)
 
 **Interfaces:**
-- Consumes: brand cyan `#3AC6D6` (matches `--accent`).
-- Produces: no amber left anywhere in JS or decorative SVGs.
+- Consumes: the Task 2 `:root` tokens (`--accent:#3AC6D6`, `--signal:#4DB870`, `--cyan:#5FBFE0`, `--warn:#FFB84D`, `--danger:#F06060`, `--violet:#9B6BFF`).
+- Produces: no old-palette literal (amber, old-green, old-teal, old-warn, old-danger) anywhere in the tree; violet unchanged.
 
-- [ ] **Step 1: Invoke `Skill("frontend-design")`** (decorative SVG recolor is UI work).
+**Old → new mapping (preserve the alpha of each rgba; prefer replacing with a `var(--token)` where an exact token match exists — e.g. a `rgba(...,0.14)` soft → the matching `--*-soft` token — otherwise use the new color's rgba with the SAME alpha):**
+
+| Old (role) | Old hex | Old rgb triplet | New hex | New rgb triplet |
+|---|---|---|---|---|
+| accent (amber) | `#FF8A3D` | `255, 138, 61` | `#3AC6D6` | `58, 198, 214` |
+| accent-soft | `#FFB584` | — | `#7FE0EB` | — |
+| accent-deep | `#D96418` / `#FF4E1F` | `217, 100, 24` / `255, 78, 31` | `#1E9EAD` | `30, 158, 173` |
+| signal (online green) | `#3ED598` | `62, 213, 152` | `#4DB870` | `77, 184, 112` |
+| cyan (info/tunnel) | `#4EE1F2` | `78, 225, 242` | `#5FBFE0` | `95, 191, 224` |
+| warn | `#F7B955` | `247, 185, 85` | `#FFB84D` | `255, 184, 77` |
+| danger | `#FF5D73` | `255, 93, 115` | `#F06060` | `240, 96, 96` |
+| violet (deploy) | `#9B6BFF` | `155, 107, 255` | **unchanged** | **unchanged** |
+
+**Dark status-text shades** (darker on-color hexes used as text/foreground — `#1C8058` signal, `#A82538`/`#D23250` danger, `#B37A0E`/`#C78A1E` warn, `#6B46C1` violet, `#0C0D10`/`#120A04` near-black on-accent text): keep near-black text as-is; for the darker signal/danger/warn text shades, pick a darkened version of the matching NEW color so it stays legible and on-brand (e.g. signal text → `#1C8058` stays fine visually against green; if it reads off against the new green, nudge toward `#2E8A54`). Use `frontend-design` judgment per site; when in doubt, replace the hardcoded shade with the nearest `var(--token)`.
+
+- [ ] **Step 1: Invoke `Skill("frontend-design")`** (this is UI color work across the app).
 
 - [ ] **Step 2: Recolor the xterm.js terminal theme** in `static/js/app.js` (lines ~297–298):
 
@@ -330,26 +356,32 @@ git commit -m "brand: swap favicon/PWA/apple-touch assets + theme-color #0A1219"
       theme: { background: "#000000", foreground: "#D8ECF5", cursor: "#3AC6D6",
                selection: "rgba(58, 198, 214, 0.3)" },
 ```
-(`foreground` moved to brand ink `--ink-0`; cursor/selection to cyan.)
+(`foreground` → brand ink `--ink-0`; cursor/selection → cyan.)
 
-- [ ] **Step 3: Recolor the authorize-page SVG** — in `templates/oauth2_provider/authorize.html`, replace every `#FF8A3D` (the two `<stop stop-color>`, the two `<text fill>`, and the `<circle fill>`) with `#3AC6D6`.
+- [ ] **Step 3: Sweep `static/css/app.css`** — for every old-palette literal on lines >58, apply the mapping table. Where the literal exactly equals an old soft-token value, prefer `var(--<name>-soft)`; otherwise substitute the new rgb triplet at the same alpha. Include `.pill-accent` border, `.brand-mark`-adjacent glows not already removed by Task 3, `--btn-*` locals, and any `rgba(62,213,152|78,225,242|255,93,115|247,185,85|255,138,61|255,78,31)` occurrence.
 
-- [ ] **Step 4: Recolor the login-page SVG** — in `apps/accounts/templates/accounts/login.html`, replace every `#FF8A3D` (the two `<stop stop-color>` and the `<g fill>`) with `#3AC6D6`.
+- [ ] **Step 4: Sweep `static/css/control-panel.css`** — replace each old-palette rgba (the ~18 sites listed under Files) with the mapped new triplet at the same alpha. `rgba(0,0,0,…)` / `rgba(255,255,255,…)` neutrals stay untouched.
 
-- [ ] **Step 5: Full rest-amber scan → 0**
+- [ ] **Step 5: Recolor the decorative SVGs + inline `<style>` blocks**
+  - `templates/oauth2_provider/authorize.html`: replace every `#FF8A3D` (the `<stop stop-color>`, `<text fill>`, `<circle fill>`) and every `rgba(255,138,61,…)` stroke/fill with the accent-cyan equivalent (`#3AC6D6` / `rgba(58,198,214,…)` same alpha); the inline `<style>` box-shadow at ~line 403 too.
+  - `apps/accounts/templates/accounts/login.html`: replace every `#FF8A3D` and `rgba(255,138,61,…)` in the decorative SVG (grid stroke, orbit circles, group fills) with the cyan equivalent, same alpha.
+  - `apps/sso/templates/sso/application_detail.html` (~line 353) and `apps/sso/templates/sso/tag_detail.html`: replace old-palette literals in the inline `<style>` per the mapping.
+
+- [ ] **Step 6: Full old-palette scan → 0** (hex AND rgba, all semantic colors)
 
 ```bash
 cd /home/pbuchegger/OE5XRX/station-manager
-grep -riE 'FF8A3D|FF4E1F|D96418|Bricolage' static/ templates/ apps/ ; echo "exit=$?"
+echo "== old hex =="; grep -riE '#FF8A3D|#FF4E1F|#D96418|#FFB584|#3ED598|#4EE1F2|#F7B955|#FF5D73|Bricolage' static/ templates/ apps/ ; echo "exit=$?"
+echo "== old rgba triplets =="; grep -rniE 'rgba\(\s*(255,\s*138,\s*61|255,\s*78,\s*31|217,\s*100,\s*24|62,\s*213,\s*152|78,\s*225,\s*242|247,\s*185,\s*85|255,\s*93,\s*115)' static/ templates/ apps/ ; echo "exit=$?"
 python manage.py check
 ```
-Expected: grep prints nothing (`exit=1`); check passes.
+Expected: both greps print nothing (`exit=1`); check passes. (Violet `155,107,255` is intentionally unchanged and NOT in the scan.)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add static/js/app.js templates/oauth2_provider/authorize.html apps/accounts/templates/accounts/login.html
-git commit -m "brand: recolor terminal + decorative SVGs to cyan"
+git add static/css/app.css static/css/control-panel.css static/js/app.js templates/oauth2_provider/authorize.html apps/accounts/templates/accounts/login.html apps/sso/templates/sso/application_detail.html apps/sso/templates/sso/tag_detail.html
+git commit -m "brand: sweep all old-palette color literals to marine/cyan brand"
 ```
 
 ---
@@ -371,13 +403,14 @@ git commit -m "brand: recolor terminal + decorative SVGs to cyan"
 
 ```bash
 cd /home/pbuchegger/OE5XRX/station-manager
-echo "== rest-amber/bricolage =="; grep -riE 'FF8A3D|FF4E1F|D96418|Bricolage' static/ templates/ apps/ ; echo "exit=$?"
+echo "== old-palette hex/bricolage =="; grep -riE '#FF8A3D|#FF4E1F|#D96418|#FFB584|#3ED598|#4EE1F2|#F7B955|#FF5D73|Bricolage' static/ templates/ apps/ ; echo "exit=$?"
+echo "== old-palette rgba triplets =="; grep -rniE 'rgba\(\s*(255,\s*138,\s*61|255,\s*78,\s*31|217,\s*100,\s*24|62,\s*213,\s*152|78,\s*225,\s*242|247,\s*185,\s*85|255,\s*93,\s*115)' static/ templates/ apps/ ; echo "exit=$?"
 echo "== weight 500 =="; grep -rn 'font-weight: *500' static/ templates/ apps/ ; echo "exit=$?"
 echo "== external fonts =="; grep -rniE 'fonts\.googleapis|fonts\.gstatic' static/ templates/ apps/ ; echo "exit=$?"
 echo "== django check =="; python manage.py check
 echo "== collectstatic =="; python manage.py collectstatic --dry-run --no-input | tail -3
 ```
-Expected: the three greps each print nothing (`exit=1`); check passes; collectstatic clean.
+Expected: the four greps each print nothing (`exit=1`); check passes; collectstatic clean. (Violet `155,107,255` / `#9B6BFF` is intentionally unchanged.)
 
 - [ ] **Step 4: Watcher pass (CLAUDE.md flow)** — dispatch `audit` on the changed files and `probe` for an E2E smoke (login page renders, sidebar renders, terminal page loads, manifest + sw served, PWA icons 200). Fix any findings.
 
