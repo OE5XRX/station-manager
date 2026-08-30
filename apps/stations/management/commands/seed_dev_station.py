@@ -1,5 +1,6 @@
 """Legt eine Dev-Station + statischen Device-Key an und druckt die Agent-Config.
 NUR unter DEBUG/Dev-Settings — statische Keys dürfen nie in Prod (Spec §4)."""
+
 import os
 
 from django.conf import settings

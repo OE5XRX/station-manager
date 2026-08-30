@@ -7,8 +7,8 @@ from tests.fake_fw import FakeFirmware
 def test_hexdump_formats_direction_length_and_hex():
     line = serial_trace.hexdump("TX", b"abc")
     assert "TX" in line
-    assert "3" in line          # length
-    assert "616263" in line     # hex of "abc"
+    assert "3" in line  # length
+    assert "616263" in line  # hex of "abc"
 
 
 def test_log_io_emits_only_when_enabled(caplog):
@@ -40,6 +40,7 @@ def test_discover_slots_forwards_trace_to_probe(tmp_path, monkeypatch):
 
 def test_probe_slot_trace_emits_tx_rx(caplog):
     from station_agent import slot_discovery
+
     fw = FakeFirmware({"fm1": {"identity": {}, "capabilities": []}})
     fw.start()
     try:

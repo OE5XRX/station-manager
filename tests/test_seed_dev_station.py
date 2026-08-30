@@ -54,5 +54,6 @@ def test_seed_dev_station_warns_when_key_file_missing(tmp_path):
 @override_settings(DEBUG=False)
 def test_seed_dev_station_refuses_in_prod(tmp_path):
     from django.core.management.base import CommandError
+
     with pytest.raises(CommandError):
         call_command("seed_dev_station", "--key-out", str(tmp_path / "k.pem"))

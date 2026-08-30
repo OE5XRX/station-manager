@@ -1,6 +1,7 @@
 """Serial-Contract-Selftest: öffnet das Slot-Control-Device über die echten
 Produktionspfade und hexdumpt den Verkehr. Grün nur wenn ein Modul antwortet.
 Ehrlichkeits-Regel: an dieser Grenze zählt nur ein grüner Lauf auf echtem CM4."""
+
 import logging
 import sys
 

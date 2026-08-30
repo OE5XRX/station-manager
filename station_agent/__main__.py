@@ -4,6 +4,7 @@ Usage:
   python -m station_agent                     run the agent (default)
   python -m station_agent selftest serial [--slot N] [--base PATH]
 """
+
 import argparse
 import sys
 
