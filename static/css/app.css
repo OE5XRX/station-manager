@@ -1,45 +1,31 @@
 /* =============================================================================
    OE5XRX Station Manager — Operator's Console
-   A radio-ops aesthetic: dark, technical, amber-accented, typography-led.
+   A radio-ops aesthetic: dark, marine, cyan-accented, typography-led.
    ============================================================================= */
 
 /* ---------- Tokens ------------------------------------------------------- */
 :root {
-  /* Surfaces */
-  --bg-0: #08090C;
-  --bg-1: #0E1116;
-  --bg-2: #141820;
-  --bg-3: #1C2230;
-  --bg-hover: #232B3C;
+  /* Surfaces — marine dark ramp (bg #0A1219 / surface #0F1C28) */
+  --bg-0:#070C11; --bg-1:#0A1219; --bg-2:#0F1C28; --bg-3:#16283A; --bg-hover:#1E3A50;
 
-  /* Lines */
-  --line: #1F2635;
-  --line-bright: #334160;
-  --line-hot: #4B5B7D;
+  /* Lines (border #1A2D3D) */
+  --line:#1A2D3D; --line-bright:#2C4A63; --line-hot:#3E6588;
 
-  /* Ink */
-  --ink-0: #F5F7FA;
-  --ink-1: #B4BDCC;
-  --ink-2: #7E8899;
-  --ink-3: #4E5668;
+  /* Ink (text #D8ECF5, muted #7AAFCA) */
+  --ink-0:#D8ECF5; --ink-1:#A9C4D6; --ink-2:#7AAFCA; --ink-3:#4E6B7E;
 
-  /* Signal palette */
-  --accent: #FF8A3D;              /* VU-meter amber */
-  --accent-soft: #FFB584;
-  --accent-deep: #D96418;
-  --accent-glow: rgba(255, 138, 61, 0.22);
-  --accent-tint: rgba(255, 138, 61, 0.08);
+  /* Accent = brand cyan */
+  --accent:#3AC6D6; --accent-soft:#7FE0EB; --accent-deep:#1E9EAD;
+  --accent-glow:rgba(58,198,214,.22); --accent-tint:rgba(58,198,214,.08);
 
-  --signal: #3ED598;              /* online green */
-  --signal-soft: rgba(62, 213, 152, 0.14);
-  --cyan: #4EE1F2;                /* info / tunnel cyan */
-  --cyan-soft: rgba(78, 225, 242, 0.12);
-  --warn: #F7B955;                /* warning amber */
-  --warn-soft: rgba(247, 185, 85, 0.14);
-  --danger: #FF5D73;              /* offline/error */
-  --danger-soft: rgba(255, 93, 115, 0.15);
-  --violet: #9B6BFF;              /* deployment */
-  --violet-soft: rgba(155, 107, 255, 0.14);
+  /* Semantic (brand dark) — amber survives as warn */
+  --signal:#4DB870; --signal-soft:rgba(77,184,112,.14);
+  --warn:#FFB84D;   --warn-soft:rgba(255,184,77,.14);
+  --danger:#F06060; --danger-soft:rgba(240,96,96,.15);
+
+  /* Status kept distinct from the cyan accent */
+  --cyan:#5FBFE0;   --cyan-soft:rgba(95,191,224,.12);
+  --violet:#9B6BFF; --violet-soft:rgba(155,107,255,.14);
 
   /* Shape */
   --radius-xs: 3px;
@@ -83,9 +69,9 @@
   --ink-1: #3A4252;
   --ink-2: #6C7487;
   --ink-3: #9AA1B0;
-  --accent: #D96418;
-  --accent-glow: rgba(217, 100, 24, 0.18);
-  --accent-tint: rgba(217, 100, 24, 0.06);
+  --accent: #1E9EAD;
+  --accent-glow: rgba(30,158,173,.18);
+  --accent-tint: rgba(30,158,173,.06);
   --signal: #129A6A;
   --cyan: #0891B2;
   --warn: #C78A1E;
