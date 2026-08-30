@@ -6,11 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <title>{% trans "Sign in" %} · OE5XRX Station Manager</title>
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
-        nonce="{{ csp_nonce }}">
+  <link rel="stylesheet" href="{% static 'css/fonts.css' %}" nonce="{{ csp_nonce }}">
   <link rel="stylesheet" href="{% static 'css/app.css' %}" nonce="{{ csp_nonce }}">
   <link rel="icon" href="{% static 'favicon.ico' %}" sizes="16x16 32x32 64x64" type="image/x-icon">
 </head>
@@ -19,7 +15,7 @@
 <div class="auth-shell">
   <section class="auth-panel">
     <div class="auth-brand">
-      <div class="brand-mark" aria-hidden="true">5X</div>
+      <div class="brand-mark" aria-hidden="true">{% include "includes/tower_mark.html" %}</div>
       <div class="brand-text">
         <div class="brand-callsign">OE5XRX</div>
         <div class="brand-sub">{% trans "Station Manager" %}</div>
@@ -78,19 +74,19 @@
     <svg class="auth-map" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
         <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,138,61,0.08)" stroke-width="1"/>
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(58,198,214,0.08)" stroke-width="1"/>
         </pattern>
         <radialGradient id="glow">
-          <stop offset="0%" stop-color="#FF8A3D" stop-opacity="0.25"/>
-          <stop offset="100%" stop-color="#FF8A3D" stop-opacity="0"/>
+          <stop offset="0%" stop-color="#3AC6D6" stop-opacity="0.25"/>
+          <stop offset="100%" stop-color="#3AC6D6" stop-opacity="0"/>
         </radialGradient>
       </defs>
       <rect width="600" height="600" fill="url(#grid)"/>
       <circle cx="300" cy="300" r="220" fill="url(#glow)"/>
-      <circle cx="300" cy="300" r="140" fill="none" stroke="rgba(255,138,61,0.2)" stroke-width="1" stroke-dasharray="4 6"/>
-      <circle cx="300" cy="300" r="210" fill="none" stroke="rgba(255,138,61,0.12)" stroke-width="1" stroke-dasharray="4 6"/>
-      <circle cx="300" cy="300" r="280" fill="none" stroke="rgba(255,138,61,0.08)" stroke-width="1" stroke-dasharray="4 6"/>
-      <g fill="#FF8A3D">
+      <circle cx="300" cy="300" r="140" fill="none" stroke="rgba(58,198,214,0.2)" stroke-width="1" stroke-dasharray="4 6"/>
+      <circle cx="300" cy="300" r="210" fill="none" stroke="rgba(58,198,214,0.12)" stroke-width="1" stroke-dasharray="4 6"/>
+      <circle cx="300" cy="300" r="280" fill="none" stroke="rgba(58,198,214,0.08)" stroke-width="1" stroke-dasharray="4 6"/>
+      <g fill="#3AC6D6">
         <circle cx="300" cy="300" r="5"/>
         <circle cx="280" cy="180" r="3" opacity="0.85"/>
         <circle cx="430" cy="250" r="3" opacity="0.85"/>
@@ -99,7 +95,7 @@
         <circle cx="150" cy="220" r="3" opacity="0.85"/>
         <circle cx="480" cy="380" r="3" opacity="0.85"/>
       </g>
-      <g stroke="rgba(255,138,61,0.3)" stroke-width="1" fill="none">
+      <g stroke="rgba(58,198,214,0.3)" stroke-width="1" fill="none">
         <line x1="300" y1="300" x2="280" y2="180"/>
         <line x1="300" y1="300" x2="430" y2="250"/>
         <line x1="300" y1="300" x2="200" y2="360"/>

@@ -19,35 +19,35 @@
     <svg class="consent-handshake" viewBox="0 0 220 220" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
         <radialGradient id="consentGlow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#FF8A3D" stop-opacity="0.35"/>
-          <stop offset="100%" stop-color="#FF8A3D" stop-opacity="0"/>
+          <stop offset="0%" stop-color="#3AC6D6" stop-opacity="0.35"/>
+          <stop offset="100%" stop-color="#3AC6D6" stop-opacity="0"/>
         </radialGradient>
       </defs>
       <circle cx="110" cy="110" r="100" fill="url(#consentGlow)"/>
-      <circle cx="110" cy="110" r="92" fill="none" stroke="rgba(255,138,61,0.18)" stroke-width="1" stroke-dasharray="2 6"/>
-      <circle cx="110" cy="110" r="68" fill="none" stroke="rgba(255,138,61,0.12)" stroke-width="1" stroke-dasharray="2 5"/>
+      <circle cx="110" cy="110" r="92" fill="none" stroke="rgba(58,198,214,0.18)" stroke-width="1" stroke-dasharray="2 6"/>
+      <circle cx="110" cy="110" r="68" fill="none" stroke="rgba(58,198,214,0.12)" stroke-width="1" stroke-dasharray="2 5"/>
 
-      <g stroke="rgba(255,138,61,0.5)" stroke-width="1.2" fill="none">
+      <g stroke="rgba(58,198,214,0.5)" stroke-width="1.2" fill="none">
         <line x1="40" y1="110" x2="92" y2="110"/>
         <line x1="180" y1="110" x2="128" y2="110"/>
       </g>
 
       <g>
-        <rect x="22" y="96" width="32" height="28" rx="5" fill="#0E1116" stroke="rgba(255,138,61,0.6)" stroke-width="1.4"/>
-        <text x="38" y="115" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="700" font-size="9" fill="#FF8A3D">RP</text>
+        <rect x="22" y="96" width="32" height="28" rx="5" fill="#0A1219" stroke="rgba(58,198,214,0.6)" stroke-width="1.4"/>
+        <text x="38" y="115" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="700" font-size="9" fill="#3AC6D6">RP</text>
       </g>
 
       <g>
-        <rect x="166" y="96" width="32" height="28" rx="5" fill="#0E1116" stroke="rgba(255,138,61,0.6)" stroke-width="1.4"/>
-        <text x="182" y="115" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="700" font-size="9" fill="#FF8A3D">IDP</text>
+        <rect x="166" y="96" width="32" height="28" rx="5" fill="#0A1219" stroke="rgba(58,198,214,0.6)" stroke-width="1.4"/>
+        <text x="182" y="115" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="700" font-size="9" fill="#3AC6D6">IDP</text>
       </g>
 
       <g>
-        <circle cx="110" cy="110" r="14" fill="#FF8A3D"/>
-        <path d="M104 110 l5 5 l9 -10" stroke="#120A04" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="110" cy="110" r="14" fill="#3AC6D6"/>
+        <path d="M104 110 l5 5 l9 -10" stroke="#08131A" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
 
-      <g fill="rgba(255,138,61,0.6)">
+      <g fill="rgba(58,198,214,0.6)">
         <circle cx="60" cy="110" r="1.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" repeatCount="indefinite"/></circle>
         <circle cx="78" cy="110" r="1.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" begin="0.2s" repeatCount="indefinite"/></circle>
         <circle cx="142" cy="110" r="1.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" begin="0.4s" repeatCount="indefinite"/></circle>
@@ -120,7 +120,7 @@
       </div>
 
       <div class="consent-identity-idp">
-        <div class="consent-avatar consent-avatar-self" aria-hidden="true">5X</div>
+        <div class="consent-avatar consent-avatar-self" aria-hidden="true">{% include "includes/tower_mark.html" %}</div>
         <div class="stack-gap-2" style="min-width:0;">
           <span class="consent-identity-name">{{ user.username }}</span>
           <span class="t-mono-sm t-muted">
@@ -399,8 +399,12 @@
   }
   .consent-avatar.consent-avatar-self {
     background: linear-gradient(135deg, var(--accent), var(--accent-deep));
-    color: #120A04;
-    box-shadow: 0 0 0 1px rgba(255,138,61,0.45), 0 0 18px var(--accent-glow);
+    color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(58,198,214,0.45), 0 0 18px var(--accent-glow);
+  }
+  .consent-avatar.consent-avatar-self svg {
+    width: 24px; height: 24px;
+    color: #08131A;
   }
 
   .consent-link {

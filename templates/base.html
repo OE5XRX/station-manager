@@ -7,11 +7,7 @@
   <title>{% block title %}{% trans "OE5XRX Station Manager" %}{% endblock %}</title>
   <meta name="description" content="{% trans 'Remote amateur radio station fleet manager for OE5XRX.' %}">
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
-        nonce="{{ csp_nonce }}">
+  <link rel="stylesheet" href="{% static 'css/fonts.css' %}" nonce="{{ csp_nonce }}">
   <link rel="stylesheet" href="{% static 'css/app.css' %}" nonce="{{ csp_nonce }}">
 
   <link rel="icon" href="{% static 'favicon.ico' %}" sizes="16x16 32x32 64x64" type="image/x-icon">
@@ -20,8 +16,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="OE5XRX">
-  <meta name="theme-color" content="#FF8A3D">
-  <link rel="apple-touch-icon" href="{% static 'webpush/icon-192.png' %}">
+  <meta name="theme-color" content="#0A1219">
+  <link rel="apple-touch-icon" href="{% static 'apple-touch-icon.png' %}">
   <script nonce="{{ csp_nonce }}">
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
