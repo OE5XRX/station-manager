@@ -30,6 +30,29 @@ _RESULT_PREFIX = "MODULE-RESULT "
 _TIMEOUT_RESULT = {"ok": False, "error": "timeout"}
 
 
+def _write_all(fd: int, data: bytes, deadline: float) -> bool:
+    """Write the whole command to a non-blocking fd, handling partial writes and
+    EAGAIN via select until `deadline`. Returns False on timeout/error so the
+    caller fails closed rather than putting a truncated command on the wire."""
+    view = memoryview(data)
+    while view:
+        try:
+            view = view[os.write(fd, view) :]
+        except (BlockingIOError, InterruptedError):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                _, writable, _ = select.select([], [fd], [], remaining)
+            except OSError:
+                return False
+            if not writable:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 class SlotControl:
     # Default read budget for one command's MODULE-RESULT. Must exceed the
     # module's worst-case firmware timeout (SA818 AT ~2 s) so a real device
@@ -89,12 +112,13 @@ class SlotControl:
     def _converse(self, fd: int, cmd: bytes, trace: bool = False) -> dict:
         from station_agent import serial_trace
 
-        try:
-            os.write(fd, cmd)
-        except OSError:
+        deadline = time.monotonic() + self._timeout
+        # os.write on the non-blocking fd may write only part of the command; a
+        # truncated line would make the firmware never answer (and mis-trace the
+        # full TX). Write it all or fail closed.
+        if not _write_all(fd, cmd, deadline):
             return dict(_TIMEOUT_RESULT)
         serial_trace.log_io(logger, "TX", cmd, trace)
-        deadline = time.monotonic() + self._timeout
         buf = b""
         while True:
             remaining = deadline - time.monotonic()

@@ -159,9 +159,15 @@ def _command(
 
     try:
         ser.reset_input_buffer()  # drop any stale bytes (prompt/echo) before this command
-        ser.write(cmd)
+        written = ser.write(cmd)
     except (serial.SerialException, OSError):
         logger.debug("slot probe: write failed on %s", control_path)
+        return None
+    if written is not None and written < len(cmd):
+        # A short write (e.g. write timeout) puts a truncated command on the wire;
+        # fail closed instead of waiting for a reply that can never arrive — and
+        # don't trace a full TX we didn't actually send.
+        logger.debug("slot probe: short write %d/%d on %s", written, len(cmd), control_path)
         return None
     serial_trace.log_io(logger, "TX", cmd, trace)
     buf = b""
