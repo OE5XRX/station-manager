@@ -113,7 +113,7 @@ page to inject the token automatically.
   <section class="panel">
     <div class="panel-head">
       <div class="panel-title">
-        <span class="dot" style="background:var(--signal);box-shadow:0 0 8px rgba(77,184,112,0.5);"></span>
+        <span class="dot" style="background:var(--signal);box-shadow:0 0 8px color-mix(in srgb, var(--signal) 50%, transparent);"></span>
         {% trans "Operators with access" %}
       </div>
       <span class="pill pill-online"><span class="dot"></span>{{ users_with_grant|length }}</span>
@@ -250,7 +250,7 @@ page to inject the token automatically.
 <section class="panel mt-20">
   <div class="panel-head">
     <div class="panel-title">
-      <span class="dot" style="background:var(--signal);box-shadow:0 0 8px rgba(77,184,112,0.5);"></span>
+      <span class="dot" style="background:var(--signal);box-shadow:0 0 8px color-mix(in srgb, var(--signal) 50%, transparent);"></span>
       {% trans "Recent sessions (last 50)" %}
     </div>
     <span class="t-label">{% trans "Token sessions" %}</span>
@@ -342,7 +342,7 @@ page to inject the token automatically.
     width: 28px; height: 28px;
     border-radius: 7px;
     background: linear-gradient(135deg, var(--accent), var(--accent-deep));
-    color: #08131A;
+    color: var(--on-accent-ink);
     font-family: var(--font-mono);
     font-weight: 700;
     font-size: 10.5px;
@@ -350,7 +350,7 @@ page to inject the token automatically.
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    box-shadow: 0 0 0 1px rgba(58,198,214,0.35);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
   }
   .user-avatar-muted {
     background: var(--bg-3);

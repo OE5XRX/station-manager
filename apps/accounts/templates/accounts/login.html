@@ -75,19 +75,19 @@
     <svg class="auth-map" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
         <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(58,198,214,0.08)" stroke-width="1"/>
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--accent)" stroke-opacity="0.08" stroke-width="1"/>
         </pattern>
         <radialGradient id="glow">
-          <stop offset="0%" stop-color="#3AC6D6" stop-opacity="0.25"/>
-          <stop offset="100%" stop-color="#3AC6D6" stop-opacity="0"/>
+          <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.25"/>
+          <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
         </radialGradient>
       </defs>
       <rect width="600" height="600" fill="url(#grid)"/>
       <circle cx="300" cy="300" r="220" fill="url(#glow)"/>
-      <circle cx="300" cy="300" r="140" fill="none" stroke="rgba(58,198,214,0.2)" stroke-width="1" stroke-dasharray="4 6"/>
-      <circle cx="300" cy="300" r="210" fill="none" stroke="rgba(58,198,214,0.12)" stroke-width="1" stroke-dasharray="4 6"/>
-      <circle cx="300" cy="300" r="280" fill="none" stroke="rgba(58,198,214,0.08)" stroke-width="1" stroke-dasharray="4 6"/>
-      <g fill="#3AC6D6">
+      <circle cx="300" cy="300" r="140" fill="none" stroke="var(--accent)" stroke-opacity="0.2" stroke-width="1" stroke-dasharray="4 6"/>
+      <circle cx="300" cy="300" r="210" fill="none" stroke="var(--accent)" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="4 6"/>
+      <circle cx="300" cy="300" r="280" fill="none" stroke="var(--accent)" stroke-opacity="0.08" stroke-width="1" stroke-dasharray="4 6"/>
+      <g fill="var(--accent)">
         <circle cx="300" cy="300" r="5"/>
         <circle cx="280" cy="180" r="3" opacity="0.85"/>
         <circle cx="430" cy="250" r="3" opacity="0.85"/>
@@ -96,7 +96,7 @@
         <circle cx="150" cy="220" r="3" opacity="0.85"/>
         <circle cx="480" cy="380" r="3" opacity="0.85"/>
       </g>
-      <g stroke="rgba(58,198,214,0.3)" stroke-width="1" fill="none">
+      <g stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1" fill="none">
         <line x1="300" y1="300" x2="280" y2="180"/>
         <line x1="300" y1="300" x2="430" y2="250"/>
         <line x1="300" y1="300" x2="200" y2="360"/>
