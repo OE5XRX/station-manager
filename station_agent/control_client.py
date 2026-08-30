@@ -100,8 +100,10 @@ class ControlClient:
             loop = asyncio.get_running_loop()
             if getattr(self._config, "slot_discovery_enabled", True):
                 try:
+                    trace = getattr(self._config, "trace_serial", False)
                     discovered = await loop.run_in_executor(
-                        None, discover_slots, self._config.slot_dev_base
+                        None,
+                        lambda: discover_slots(self._config.slot_dev_base, trace=trace),
                     )
                 except Exception:  # noqa: BLE001 — discovery must not break the control link
                     logger.exception("Control: slot discovery failed; reporting empty inventory")

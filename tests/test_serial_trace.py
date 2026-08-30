@@ -20,6 +20,24 @@ def test_log_io_emits_only_when_enabled(caplog):
         assert any("7879" in r.getMessage() for r in caplog.records)
 
 
+def test_discover_slots_forwards_trace_to_probe(tmp_path, monkeypatch):
+    # trace_serial is useless unless discover_slots (the production heartbeat path)
+    # actually forwards the flag down to probe_slot.
+    from station_agent import slot_discovery
+
+    (tmp_path / "slot0").mkdir()
+    (tmp_path / "slot0" / "control").write_text("")
+    seen = {}
+
+    def fake_probe(control, timeout=3.0, trace=False):
+        seen["trace"] = trace
+        return []
+
+    monkeypatch.setattr(slot_discovery, "probe_slot", fake_probe)
+    slot_discovery.discover_slots(str(tmp_path), trace=True)
+    assert seen["trace"] is True
+
+
 def test_probe_slot_trace_emits_tx_rx(caplog):
     from station_agent import slot_discovery
     fw = FakeFirmware({"fm1": {"identity": {}, "capabilities": []}})

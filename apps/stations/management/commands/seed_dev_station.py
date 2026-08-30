@@ -22,9 +22,13 @@ class Command(BaseCommand):
         if not settings.DEBUG:
             raise CommandError("seed_dev_station refuses to run without DEBUG (dev only).")
 
-        station, _ = Station.objects.get_or_create(
-            name=name, defaults={"callsign": callsign}
-        )
+        # Station.name is NOT unique, so get_or_create(name=...) would raise
+        # MultipleObjectsReturned on a dev DB that already has same-named rows.
+        # Reuse the first match (idempotent) and only create when none exists.
+        station = Station.objects.filter(name=name).first()
+        if station is None:
+            station = Station.objects.create(name=name, callsign=callsign)
+
         key = DeviceKey.objects.filter(station=station).first()
         if key is None:
             private_pem, public_b64 = DeviceKey.generate_keypair()
@@ -37,8 +41,18 @@ class Command(BaseCommand):
             finally:
                 os.close(fd)
             self.stderr.write(f"Wrote private key to {key_out}")
-        else:
+        elif os.path.exists(key_out):
             self.stderr.write("DeviceKey already exists; reusing (private key not re-shown).")
+        else:
+            # DB has the key but the private-key file is gone (e.g. cleaned working
+            # dir). The private key is only written once at creation, so the config
+            # below would point at a missing file — say so instead of failing silently.
+            self.stderr.write(
+                f"WARNING: DeviceKey exists in DB but no private key at {key_out}. "
+                "The private key was only shown once at creation. Delete the DeviceKey "
+                "and re-run to regenerate, or restore the key file — the printed "
+                "ed25519_key_path currently points at a nonexistent file."
+            )
 
         self.stdout.write("# --- agent config.yml (dev) ---")
         self.stdout.write(f"server_url: {server_url}")

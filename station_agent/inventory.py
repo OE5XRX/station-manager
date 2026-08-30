@@ -204,7 +204,9 @@ def _collect_modules(config) -> list[dict]:
     if config is None or not getattr(config, "slot_discovery_enabled", False):
         return []
     try:
-        return discover_slots(config.slot_dev_base)
+        return discover_slots(
+            config.slot_dev_base, trace=getattr(config, "trace_serial", False)
+        )
     except Exception:  # noqa: BLE001 — discovery must never break the heartbeat
         logger.exception("slot discovery failed")
         return []

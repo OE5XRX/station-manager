@@ -29,6 +29,20 @@ def test_control_defaults_off(tmp_path, monkeypatch):
     assert cfg.telemetry_min_floor_ms == 200
 
 
+def test_trace_serial_default_off(tmp_path, monkeypatch):
+    _write(tmp_path, "server_url: http://x\nstation_id: 1\ned25519_key_path: /k\n", monkeypatch)
+    assert load_config().trace_serial is False
+
+
+def test_trace_serial_from_yaml(tmp_path, monkeypatch):
+    _write(
+        tmp_path,
+        "server_url: http://x\nstation_id: 1\ned25519_key_path: /k\ntrace_serial: true\n",
+        monkeypatch,
+    )
+    assert load_config().trace_serial is True
+
+
 def test_control_enabled_from_yaml(tmp_path, monkeypatch):
     _write(
         tmp_path,

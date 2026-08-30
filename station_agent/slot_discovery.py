@@ -202,12 +202,18 @@ def _extract_json(buf: bytes, prefix: str) -> dict | None:
     return None
 
 
-def discover_slots(base: str = "/dev/oe5xrx", timeout: float = 3.0) -> list[dict]:
+def discover_slots(
+    base: str = "/dev/oe5xrx", timeout: float = 3.0, trace: bool = False
+) -> list[dict]:
     """Scan `base` for slotN/control, enumerate + describe modules, return inventory entries.
 
     Each entry is ``{"slot": N, "control": path, "modules": [{"id", "identity",
     "capabilities"}, ...]}``. Slots that do not answer ``module list`` are omitted.
     Returns ``[]`` if `base` does not exist. Never raises.
+
+    When `trace` is True, every TX/RX chunk on each slot's serial is hex-dumped at
+    DEBUG level (``--trace-serial`` / ``trace_serial`` config) — this is the only way
+    the production discovery path emits raw bytes for "module not found" debugging.
     """
     if not os.path.isdir(base):
         return []
@@ -224,7 +230,7 @@ def discover_slots(base: str = "/dev/oe5xrx", timeout: float = 3.0) -> list[dict
         if not match:
             continue
         try:
-            modules = probe_slot(control, timeout=timeout)
+            modules = probe_slot(control, timeout=timeout, trace=trace)
             if modules is None:
                 continue
             entries.append(

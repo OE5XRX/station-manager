@@ -22,13 +22,18 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
 
-    if args.cmd == "selftest" and args.what == "serial":
-        from station_agent import selftest
+    if args.cmd == "selftest":
+        if args.what == "serial":
+            from station_agent import selftest
 
-        path = f"{args.base}/slot{args.slot}/control"
-        return selftest.run_serial(path, timeout=args.timeout)
+            path = f"{args.base}/slot{args.slot}/control"
+            return selftest.run_serial(path, timeout=args.timeout)
+        # `selftest` with no/unknown sub-command must NOT silently start the
+        # long-running agent (a typo would otherwise boot production behaviour).
+        st.print_help(sys.stderr)
+        return 2
 
-    # Default: run the agent.
+    # Default (no sub-command): run the agent.
     StationAgent().run()
     return 0
 
