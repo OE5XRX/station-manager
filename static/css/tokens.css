@@ -78,7 +78,7 @@
   --ink-0:#0D1A24; --ink-1:#334657; --ink-2:#526070; --ink-3:#8497A6;
 
   /* Accent = brand cyan (AA-adjusted for light bg) */
-  --accent:#0E7580; --accent-soft:#3AA7B3; --accent-deep:#0B5C66;   /* accent-light-aa-override: #0E7580 */
+  --accent:#0E7580; --accent-soft:#0C6672; --accent-deep:#0B5C66;   /* accent-light-aa-override: #0E7580 */
   --accent-glow: color-mix(in srgb, var(--accent) 22%, transparent);
   --accent-tint: color-mix(in srgb, var(--accent)  8%, transparent);
 
