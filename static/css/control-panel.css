@@ -699,10 +699,9 @@
 .cp-ptt-button.cp-ptt-button--active {
   border-color: var(--danger);
   /* Darker fill than raw --danger so white bold text clears WCAG AA:
-     --sheen-color on color-mix(--danger 70%,--shadow-color) = 5.12:1 (>= 4.5).
-     The vivid --danger hue survives in the border + glow bloom, keeping the
-     "ON AIR" signal drama. */
-  background: color-mix(in srgb, var(--danger) 70%, var(--shadow-color));
+     --sheen-color on --ptt-tx = 5.12:1 (>= 4.5). The vivid --danger hue
+     survives in the border + glow bloom, keeping the "ON AIR" signal drama. */
+  background: var(--ptt-tx);
   color: var(--sheen-color);
   font-weight: 700;
   /* Carrier glow bloom */
@@ -799,7 +798,7 @@
 
 .cp-meter-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--signal) 0%, color-mix(in srgb, var(--signal) 50%, var(--sheen-color)) 100%);
+  background: linear-gradient(90deg, var(--signal) 0%, var(--meter-hi) 100%);
   border-radius: 100px;
   transition: width 0.35s var(--ease);
   position: relative;
@@ -1167,7 +1166,7 @@
 }
 
 :root[data-theme="light"] .cp-meter-fill {
-  background: linear-gradient(90deg, var(--signal) 0%, color-mix(in srgb, var(--signal) 70%, var(--shadow-color)) 100%);
+  background: linear-gradient(90deg, var(--signal) 0%, var(--meter-lo) 100%);
 }
 
 :root[data-theme="light"] .cp-readout {

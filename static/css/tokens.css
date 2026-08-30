@@ -28,6 +28,9 @@
   --cyan:#5FBFE0;   --cyan-soft:   color-mix(in srgb, var(--cyan)   12%, transparent);
   --violet:#9B6BFF; --violet-soft: color-mix(in srgb, var(--violet) 14%, transparent);
 
+  /* local decorative (not branding-anchored) */
+  --meter-hi:#5AEDAB; --meter-lo:#00A875; --ptt-tx:#D2273F;
+
   /* New dark tokens */
   --primary:#3AC6D6;
   --shadow-color:#000000;
@@ -85,6 +88,8 @@
   --warn: #C78A1E;
   --danger: #D23250;
   --violet: #6B46C1;
+  /* local decorative (not branding-anchored) */
+  --meter-hi:#5AEDAB; --meter-lo:#00A875; --ptt-tx:#D2273F;
   --shadow-sm: 0 1px 0 0 rgba(13, 20, 40, 0.04), 0 0 0 1px var(--line);
   --shadow-md: 0 6px 24px -12px rgba(13, 20, 40, 0.12), 0 0 0 1px var(--line);
   --shadow-lg: 0 32px 80px -40px rgba(13, 20, 40, 0.18), 0 0 0 1px var(--line);
