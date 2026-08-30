@@ -68,7 +68,7 @@
 .cp-lock-message {
   flex: 1;
   min-width: 0;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 /* Connection sub-indicator reuses pill/dot vocabulary */
@@ -117,7 +117,7 @@
 .cp-lock-prompt-msg {
   flex: 1;
   min-width: 0;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 /* Transient lock-loss notice — warns the operator control was taken. */
@@ -398,7 +398,7 @@
 .cp-widget-label {
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink-2);
@@ -433,7 +433,7 @@
 .cp-readout {
   font-family: var(--font-mono);
   font-size: 22px;
-  font-weight: 500;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--accent);
   background: var(--bg-0);

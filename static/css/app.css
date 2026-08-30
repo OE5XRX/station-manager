@@ -54,7 +54,7 @@
   --shadow-glow: 0 0 32px -4px var(--accent-glow);
 
   /* Typography */
-  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Menlo", monospace;
 
@@ -184,7 +184,7 @@ img { max-width: 100%; display: block; }
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-2);
-  font-weight: 500;
+  font-weight: 600;
 }
 .t-num { font-variant-numeric: tabular-nums; }
 .t-muted { color: var(--ink-2); }
@@ -313,7 +313,7 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
   border-radius: var(--radius-sm);
   color: var(--ink-1);
   font-size: 13.5px;
-  font-weight: 500;
+  font-weight: 600;
   margin: 1px 0;
   position: relative;
   transition: color 0.15s var(--ease), background 0.15s var(--ease);
@@ -615,7 +615,7 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
   font-size: 10.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-weight: 500;
+  font-weight: 600;
   background: var(--bg-3);
   color: var(--ink-1);
   border: 1px solid var(--line);
@@ -763,7 +763,7 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
   text-transform: uppercase;
   color: var(--ink-2);
   margin-bottom: 6px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .form-control, .form-select,
 input[type="text"], input[type="email"], input[type="password"],
@@ -860,7 +860,7 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink-2);
-  font-weight: 500;
+  font-weight: 600;
   padding: 11px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
@@ -940,7 +940,7 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
 .tab {
   padding: 10px 14px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--ink-2);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -1241,7 +1241,7 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   letter-spacing: -0.02em;
   color: var(--ink-0);
 }
-.summary-val.mono { font-family: var(--font-mono); font-size: 15px; letter-spacing: 0; font-weight: 500; }
+.summary-val.mono { font-family: var(--font-mono); font-size: 15px; letter-spacing: 0; font-weight: 600; }
 
 /* Definition list */
 .dlist { display: grid; grid-template-columns: 180px 1fr; gap: 8px 16px; font-size: 13px; }
@@ -1665,7 +1665,7 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
 
   /* Station callsign hero row */
   .page-title .callsign { display: block; font-size: 22px; }
-  .page-title .t-muted { display: block; font-size: 14px; font-weight: 500; margin-top: 2px; }
+  .page-title .t-muted { display: block; font-size: 14px; font-weight: 400; margin-top: 2px; }
 
   /* Deployment progress bar inline row wraps */
   .t-table td[style*="min-width"] { min-width: 0 !important; }
