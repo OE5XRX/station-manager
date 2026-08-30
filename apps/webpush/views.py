@@ -34,7 +34,7 @@ def manifest(request):
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
-        "background_color": "#120A04",
+        "background_color": "#0A1219",
         "theme_color": "#0A1219",
         "icons": [
             {

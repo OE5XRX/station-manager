@@ -107,7 +107,7 @@ body::before {
   z-index: 0;
   background:
     radial-gradient(1200px 600px at 85% -10%, var(--accent-tint), transparent 60%),
-    radial-gradient(900px 500px at -5% 110%, rgba(78, 225, 242, 0.05), transparent 60%);
+    radial-gradient(900px 500px at -5% 110%, rgba(95, 191, 224, 0.05), transparent 60%);
 }
 body::after {
   content: "";
@@ -606,40 +606,40 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
   width: 6px; height: 6px; border-radius: 50%;
   background: currentColor;
 }
-.pill-online   { background: var(--signal-soft);  color: var(--signal);  border-color: rgba(62,213,152,0.3); }
-.pill-offline  { background: var(--danger-soft);  color: var(--danger);  border-color: rgba(255,93,115,0.3); }
-.pill-updating { background: var(--cyan-soft);    color: var(--cyan);    border-color: rgba(78,225,242,0.3); }
-.pill-error    { background: var(--danger-soft);  color: var(--danger);  border-color: rgba(255,93,115,0.3); }
-.pill-warn     { background: var(--warn-soft);    color: var(--warn);    border-color: rgba(247,185,85,0.3); }
-.pill-accent   { background: var(--accent-tint);  color: var(--accent);  border-color: rgba(255,138,61,0.35); }
+.pill-online   { background: var(--signal-soft);  color: var(--signal);  border-color: rgba(77,184,112,0.3); }
+.pill-offline  { background: var(--danger-soft);  color: var(--danger);  border-color: rgba(240,96,96,0.3); }
+.pill-updating { background: var(--cyan-soft);    color: var(--cyan);    border-color: rgba(95,191,224,0.3); }
+.pill-error    { background: var(--danger-soft);  color: var(--danger);  border-color: rgba(240,96,96,0.3); }
+.pill-warn     { background: var(--warn-soft);    color: var(--warn);    border-color: rgba(255,184,77,0.3); }
+.pill-accent   { background: var(--accent-tint);  color: var(--accent);  border-color: rgba(58,198,214,0.35); }
 .pill-violet   { background: var(--violet-soft);  color: var(--violet);  border-color: rgba(155,107,255,0.3); }
 .pill-muted    { background: var(--bg-3);         color: var(--ink-2); }
 
 /* Deployment / job statuses */
 .pill-pending     { background: var(--bg-3);       color: var(--ink-1);  border-color: var(--line); }
-.pill-in-progress { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(78,225,242,0.3); }
-.pill-completed   { background: var(--signal-soft); color: var(--signal); border-color: rgba(62,213,152,0.3); }
-.pill-success     { background: var(--signal-soft); color: var(--signal); border-color: rgba(62,213,152,0.3); }
-.pill-failed      { background: var(--danger-soft); color: var(--danger); border-color: rgba(255,93,115,0.3); }
+.pill-in-progress { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(95,191,224,0.3); }
+.pill-completed   { background: var(--signal-soft); color: var(--signal); border-color: rgba(77,184,112,0.3); }
+.pill-success     { background: var(--signal-soft); color: var(--signal); border-color: rgba(77,184,112,0.3); }
+.pill-failed      { background: var(--danger-soft); color: var(--danger); border-color: rgba(240,96,96,0.3); }
 .pill-cancelled   { background: var(--bg-3);       color: var(--ink-2);  border-color: var(--line); }
 .pill-superseded  { background: var(--bg-3);       color: var(--ink-2);  border-color: var(--line); }
-.pill-building    { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(78,225,242,0.3); }
+.pill-building    { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(95,191,224,0.3); }
 .pill-downloading { background: var(--cyan-soft);  color: var(--cyan); }
 .pill-installing  { background: var(--accent-tint);color: var(--accent); }
 .pill-rebooting   { background: var(--warn-soft);  color: var(--warn); }
 .pill-verifying   { background: var(--cyan-soft);  color: var(--cyan); }
 .pill-rolled-back { background: var(--warn-soft);  color: var(--warn); }
 .pill-rolled_back { background: var(--warn-soft);  color: var(--warn); }
-.pill-in_progress { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(78,225,242,0.3); }
+.pill-in_progress { background: var(--cyan-soft);  color: var(--cyan);   border-color: rgba(95,191,224,0.3); }
 
 /* Live dot for online pill */
 .pill-online .dot {
-  box-shadow: 0 0 0 0 rgba(62, 213, 152, 0.6);
+  box-shadow: 0 0 0 0 rgba(77, 184, 112, 0.6);
   animation: pulse-dot 1.8s ease-in-out infinite;
 }
 @keyframes pulse-dot {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(62, 213, 152, 0.6); }
-  50% { box-shadow: 0 0 0 5px rgba(62, 213, 152, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(77, 184, 112, 0.6); }
+  50% { box-shadow: 0 0 0 5px rgba(77, 184, 112, 0); }
 }
 
 .tag {
@@ -687,7 +687,7 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
 
 .btn-primary {
   --btn-bg: var(--accent);
-  --btn-fg: #120A04;
+  --btn-fg: #08131A;
   --btn-border: var(--accent);
   font-weight: 600;
   box-shadow: 0 0 0 0 var(--accent-glow);
@@ -695,9 +695,9 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
 }
 .btn-primary:hover {
   --btn-bg: var(--accent-soft);
-  --btn-fg: #120A04;
+  --btn-fg: #08131A;
   box-shadow: 0 0 28px -4px var(--accent-glow);
-  color: #120A04;
+  color: #08131A;
 }
 
 .btn-ghost {
@@ -707,7 +707,7 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
 .btn-danger {
   --btn-bg: transparent;
   --btn-fg: var(--danger);
-  --btn-border: rgba(255, 93, 115, 0.35);
+  --btn-border: rgba(240, 96, 96, 0.35);
 }
 .btn-danger:hover { background: var(--danger-soft); color: var(--danger); }
 
@@ -894,9 +894,9 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   border-radius: 100px;
   box-shadow: 0 0 12px var(--accent-glow);
 }
-.progress-bar.ok { background: linear-gradient(90deg, #1C8058, var(--signal)); box-shadow: 0 0 12px rgba(62,213,152,0.35); }
-.progress-bar.warn { background: linear-gradient(90deg, #B37A0E, var(--warn)); }
-.progress-bar.danger { background: linear-gradient(90deg, #A82538, var(--danger)); }
+.progress-bar.ok { background: linear-gradient(90deg, #1C8058, var(--signal)); box-shadow: 0 0 12px rgba(77,184,112,0.35); }
+.progress-bar.warn { background: linear-gradient(90deg, #C78A1E, var(--warn)); }
+.progress-bar.danger { background: linear-gradient(90deg, #D23250, var(--danger)); }
 
 /* Stepped progress (used on deployment detail) */
 .prog-steps { display: flex; gap: 3px; align-items: center; }
@@ -1084,7 +1084,7 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   position: fixed; inset: 0; pointer-events: none;
   background:
     radial-gradient(800px 500px at 80% 20%, var(--accent-tint), transparent 60%),
-    radial-gradient(600px 400px at 20% 80%, rgba(78, 225, 242, 0.06), transparent 65%);
+    radial-gradient(600px 400px at 20% 80%, rgba(95, 191, 224, 0.06), transparent 65%);
 }
 .auth-panel {
   padding: 60px 72px;

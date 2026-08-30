@@ -294,8 +294,8 @@
       cursorBlink: true,
       fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 13,
-      theme: { background: "#000000", foreground: "#F5F7FA", cursor: "#FF8A3D",
-               selection: "rgba(255, 138, 61, 0.3)" },
+      theme: { background: "#000000", foreground: "#D8ECF5", cursor: "#3AC6D6",
+               selection: "rgba(58, 198, 214, 0.3)" },
     });
     term.open(host);
 
