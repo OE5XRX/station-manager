@@ -28,15 +28,15 @@ Diese Spec adressiert Tier 0 (Agent) und Tier 1 (Server). Tier 2 bleibt bewusst 
 
 Neues CLI-Frontend in `station_agent/__main__.py` (argparse; Default ohne Subcommand = `agent.run()`, rückwärtskompatibel):
 
-- `python -m station_agent selftest serial [--slot N] [--json]`
-- Öffnet das Slot-Control-Device **exakt wie der Betrieb**, indem es die echten Produktionspfade aufruft — keine Zweit-Implementierung: `slot_discovery.probe_slot()` (pyserial-Discovery = „Modul nicht gefunden"-Pfad) und optional `slot_control.execute()` (raw-termios Command = „Control-Knopf"-Pfad). Da `selftest` dieselben Funktionen nutzt wie Heartbeat/Broker, kann der Test niemals grün sein, während der Betriebspfad rot ist. (Ursprünglich war ein Extrahieren einer gemeinsamen `open_slot_control()` geplant; unnötig — die beiden Funktionen *sind* bereits die geteilten Betriebspfade.)
+- `python -m station_agent selftest serial [--slot N] [--base PATH] [--timeout S]`
+- Öffnet das Slot-Control-Device **exakt wie der Betrieb**, indem es die echten Produktionspfade aufruft — keine Zweit-Implementierung: es ruft `slot_discovery.probe_slot()` (pyserial-Discovery = „Modul nicht gefunden"-Pfad), denselben Betriebspfad wie der Heartbeat. Der Control-Pfad (`slot_control.execute()`, „Control-Knopf") teilt denselben Serial-Contract und wird im Betrieb über `trace_serial` byteweise mitgeschrieben. Da `selftest` dieselbe Funktion nutzt wie Heartbeat/Broker, kann der Test niemals grün sein, während der Betriebspfad rot ist. (Ursprünglich war ein Extrahieren einer gemeinsamen `open_slot_control()` geplant; unnötig — die Funktion *ist* bereits der geteilte Betriebspfad.)
 - Führt einen `describe`-Round-Trip aus und **hexdumpt TX und RX** byteweise.
 - Exit-Code spiegelt Erfolg (0 = Round-Trip ok, ≠0 = Timeout/Mismatch).
 - Läuft identisch gegen echten CM4-UART und gegen das Sim-PTY → Byte-Level-Diff Sim-vs-HW bei Divergenz.
 
 ### 2. `--trace-serial` — Rohbyte-Trace im Betrieb
 
-Flag/Config-Option, die in `broker.py` und `slot_discovery.py` jeden TX/RX auf dem Modul-Serial als Hexdump ins Log schreibt (Level DEBUG). Bei „Modul nicht gefunden" sieht man die echten Bytes statt zu raten. Aktivierbar per Config (`trace_serial: true`) und CLI.
+Config-Option, die in `broker.py` (Control-Pfad) und `slot_discovery.py` (Discovery-Pfad) jeden TX/RX auf dem Modul-Serial als Hexdump ins Log schreibt (Level DEBUG). Bei „Modul nicht gefunden" sieht man die echten Bytes statt zu raten. Aktivierbar per Config (`trace_serial: true`) — deckt beide Serialpfade ab. (Kein CLI-Flag; `selftest serial` aktiviert das Tracing für seinen Lauf implizit.)
 
 ### 3. Sim-PTY termios-Treue
 

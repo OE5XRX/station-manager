@@ -212,7 +212,7 @@ def discover_slots(
     Returns ``[]`` if `base` does not exist. Never raises.
 
     When `trace` is True, every TX/RX chunk on each slot's serial is hex-dumped at
-    DEBUG level (``--trace-serial`` / ``trace_serial`` config) — this is the only way
+    DEBUG level (enabled via the ``trace_serial`` config field) — this is the only way
     the production discovery path emits raw bytes for "module not found" debugging.
     """
     if not os.path.isdir(base):

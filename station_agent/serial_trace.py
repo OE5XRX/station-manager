@@ -1,4 +1,4 @@
-"""Rohbyte-Hexdump für Serial-I/O-Debugging (Fast-Dev-Loop, --trace-serial)."""
+"""Rohbyte-Hexdump für Serial-I/O-Debugging (Fast-Dev-Loop, `trace_serial` config)."""
 import logging
 
 

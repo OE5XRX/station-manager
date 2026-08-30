@@ -24,8 +24,9 @@ class Command(BaseCommand):
 
         # Station.name is NOT unique, so get_or_create(name=...) would raise
         # MultipleObjectsReturned on a dev DB that already has same-named rows.
-        # Reuse the first match (idempotent) and only create when none exists.
-        station = Station.objects.filter(name=name).first()
+        # Reuse the lowest-pk match (order_by pins the choice so idempotency is
+        # deterministic even with duplicates) and only create when none exists.
+        station = Station.objects.filter(name=name).order_by("pk").first()
         if station is None:
             station = Station.objects.create(name=name, callsign=callsign)
 
