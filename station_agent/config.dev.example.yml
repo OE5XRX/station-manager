@@ -1,0 +1,11 @@
+# station_agent/config.dev.example.yml
+# Dev-Config: zeigt auf den lokalen docker-compose-Server.
+# Prod-Smoke-Test = nur server_url + ed25519_key_path umbiegen.
+server_url: http://10.0.2.2:8000   # Host aus QEMU-Sicht; für CM4 die LAN-IP des Dev-Rechners
+station_id: 1
+ed25519_key_path: /etc/stationagent/device_key.pem
+log_level: DEBUG
+trace_serial: true
+heartbeat_interval: 15
+slot_discovery_enabled: true
+control_enabled: true

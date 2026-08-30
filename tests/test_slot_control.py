@@ -95,3 +95,20 @@ def test_execute_non_str_module_or_cap_fails_closed():
     sc = SlotControl("/nonexistent/control", timeout=0.2)
     assert sc.execute(123, "get", "rssi") == {"ok": False, "error": "bad_value"}
     assert sc.execute("fm", "get", None) == {"ok": False, "error": "bad_value"}
+
+
+def test_write_all_completes_over_nonblocking_fd():
+    """_write_all must put the whole command out on a non-blocking fd."""
+    import os
+    import time
+
+    from station_agent.slot_control import _write_all
+
+    r, w = os.pipe()
+    try:
+        os.set_blocking(w, False)
+        assert _write_all(w, b"module fm get freq\r\n", time.monotonic() + 1.0) is True
+        assert os.read(r, 64) == b"module fm get freq\r\n"
+    finally:
+        os.close(r)
+        os.close(w)

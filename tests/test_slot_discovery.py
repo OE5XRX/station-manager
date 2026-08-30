@@ -271,3 +271,24 @@ def test_discover_slots_reports_slot_with_modules(tmp_path):
     assert slots[0]["slot"] == 1
     assert slots[0]["modules"][0]["id"] == "fm"
     assert slots[0]["modules"][0]["identity"]["type"] == "fm_transceiver"
+
+
+def test_command_short_write_fails_closed():
+    """A short write must fail closed (return None), not wait for a reply that
+    can never arrive after a truncated command."""
+
+    class _ShortWriteSerial:
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, data):
+            return len(data) - 1  # simulate a short write
+
+        def read(self, n):
+            return b""
+
+    deadline = time.monotonic() + 0.2
+    result = slot_discovery._command(
+        _ShortWriteSerial(), b"module list\r\n", "MODULE-LIST ", deadline, "/dev/x"
+    )
+    assert result is None

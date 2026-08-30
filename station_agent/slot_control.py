@@ -30,6 +30,29 @@ _RESULT_PREFIX = "MODULE-RESULT "
 _TIMEOUT_RESULT = {"ok": False, "error": "timeout"}
 
 
+def _write_all(fd: int, data: bytes, deadline: float) -> bool:
+    """Write the whole command to a non-blocking fd, handling partial writes and
+    EAGAIN via select until `deadline`. Returns False on timeout/error so the
+    caller fails closed rather than putting a truncated command on the wire."""
+    view = memoryview(data)
+    while view:
+        try:
+            view = view[os.write(fd, view) :]
+        except (BlockingIOError, InterruptedError):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                _, writable, _ = select.select([], [fd], [], remaining)
+            except OSError:
+                return False
+            if not writable:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 class SlotControl:
     # Default read budget for one command's MODULE-RESULT. Must exceed the
     # module's worst-case firmware timeout (SA818 AT ~2 s) so a real device
@@ -39,7 +62,9 @@ class SlotControl:
         self._path = control_path
         self._timeout = timeout
 
-    def execute(self, module_id: str, op: str, cap: str, token: str | None = None) -> dict:
+    def execute(
+        self, module_id: str, op: str, cap: str, token: str | None = None, trace: bool = False
+    ) -> dict:
         """Send one command, return the parsed MODULE-RESULT (or a timeout error)."""
         # Defense-in-depth: never echo an unsafe id into the shell line, and fail
         # closed on a non-str module_id/cap so .match() can't raise TypeError.
@@ -72,7 +97,7 @@ class SlotControl:
                 tty.setraw(fd)
             except termios.error:
                 pass
-            return self._converse(fd, cmd)
+            return self._converse(fd, cmd, trace=trace)
         finally:
             if saved is not None:
                 try:
@@ -84,12 +109,16 @@ class SlotControl:
             except OSError:
                 pass
 
-    def _converse(self, fd: int, cmd: bytes) -> dict:
-        try:
-            os.write(fd, cmd)
-        except OSError:
-            return dict(_TIMEOUT_RESULT)
+    def _converse(self, fd: int, cmd: bytes, trace: bool = False) -> dict:
+        from station_agent import serial_trace
+
         deadline = time.monotonic() + self._timeout
+        # os.write on the non-blocking fd may write only part of the command; a
+        # truncated line would make the firmware never answer (and mis-trace the
+        # full TX). Write it all or fail closed.
+        if not _write_all(fd, cmd, deadline):
+            return dict(_TIMEOUT_RESULT)
+        serial_trace.log_io(logger, "TX", cmd, trace)
         buf = b""
         while True:
             remaining = deadline - time.monotonic()
@@ -111,6 +140,7 @@ class SlotControl:
                 return dict(_TIMEOUT_RESULT)
             if not chunk:
                 return dict(_TIMEOUT_RESULT)
+            serial_trace.log_io(logger, "RX", chunk, trace)
             buf += chunk
             if len(buf) > _MAX_RESPONSE_BYTES:
                 return dict(_TIMEOUT_RESULT)

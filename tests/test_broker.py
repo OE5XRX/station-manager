@@ -31,9 +31,9 @@ class CountingTransport:
         self._sc = SlotControl(path, timeout=2.0)
         CountingTransport.calls = getattr(CountingTransport, "calls", 0)
 
-    def execute(self, module, op, cap, token=None):
+    def execute(self, module, op, cap, token=None, trace=False):
         CountingTransport.calls += 1
-        return self._sc.execute(module, op, cap, token)
+        return self._sc.execute(module, op, cap, token, trace)
 
 
 FM = {
@@ -86,6 +86,24 @@ def _broker_with_fw(fw):
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def test_trace_serial_flows_to_control_transport():
+    # trace_serial must reach the CONTROL path (SlotControl.execute), not only
+    # discovery — the PR promises tracing on both serial paths.
+    recorded = {}
+
+    class RecordingTransport:
+        def __init__(self, path):
+            pass
+
+        def execute(self, module, op, cap, token=None, trace=False):
+            recorded["trace"] = trace
+            return {"ok": True}
+
+    b = Broker(lambda *a: None, transport_factory=RecordingTransport, trace_serial=True)
+    _run(b._execute(1, "fm", "get", "freq", None))
+    assert recorded["trace"] is True
 
 
 def test_command_set_valid_flows_to_fw_and_reports_result_and_state():

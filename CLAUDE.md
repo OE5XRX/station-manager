@@ -12,3 +12,11 @@ Repo-spezifische Architekturnotizen. Übergeordnete Projektstrategie, Arbeitspro
 - **iOS** benötigt eine installierte PWA (ab iOS 16.4), bevor Push-Abonnements möglich sind — kein Push an Mobile-Safari ohne Homescreen-Install.
 - **VAPID-Keys** werden einmalig per `manage.py generate_vapid_keys` erzeugt und als Env-Variablen / Secrets hinterlegt (nie in DB oder Repo). Ohne Keys ist `ALERT_WEBPUSH_ENABLED = False` und der Kanal wird still deaktiviert — kein Fehler.
 - **Subscription-Lebenszyklus:** Abgelaufene oder gesperrte Subscriptions (HTTP 404/410 vom Push-Dienst) werden beim nächsten Send automatisch aus der DB entfernt. Fehler einer Subscription isolieren die anderen.
+
+## station-agent
+
+### Serial-Boundary Ehrlichkeits-Regel
+Ein Bug am Serial-/Modul-Boundary (Modul nicht gefunden/lesbar, Control-Knopf fehlt)
+gilt erst als gefixt, wenn `python -m station_agent selftest serial` auf **echtem CM4**
+grün ist. Sim-grün (QEMU/native_sim) ist notwendig, nicht hinreichend — der Simulator
+kann Timing-/termios-Effekte des echten UART nicht vollständig nachbilden.

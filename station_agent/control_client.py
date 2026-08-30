@@ -96,12 +96,15 @@ class ControlClient:
                     self._config, "telemetry_default_interval_ms", 1000
                 ),
                 telemetry_min_floor_ms=getattr(self._config, "telemetry_min_floor_ms", 200),
+                trace_serial=getattr(self._config, "trace_serial", False),
             )
             loop = asyncio.get_running_loop()
             if getattr(self._config, "slot_discovery_enabled", True):
                 try:
+                    trace = getattr(self._config, "trace_serial", False)
                     discovered = await loop.run_in_executor(
-                        None, discover_slots, self._config.slot_dev_base
+                        None,
+                        lambda: discover_slots(self._config.slot_dev_base, trace=trace),
                     )
                 except Exception:  # noqa: BLE001 — discovery must not break the control link
                     logger.exception("Control: slot discovery failed; reporting empty inventory")

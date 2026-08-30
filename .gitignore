@@ -43,3 +43,6 @@ oidc_keys/
 
 # Git worktrees (parallel agent workspaces)
 .worktrees/
+
+# Dev secrets (covered by *.pem but listed explicitly for clarity)
+dev-device-key.pem
