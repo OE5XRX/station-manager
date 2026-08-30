@@ -33,12 +33,12 @@
       </g>
 
       <g>
-        <rect x="22" y="96" width="32" height="28" rx="5" fill="#0E1116" stroke="rgba(58,198,214,0.6)" stroke-width="1.4"/>
+        <rect x="22" y="96" width="32" height="28" rx="5" fill="#0A1219" stroke="rgba(58,198,214,0.6)" stroke-width="1.4"/>
         <text x="38" y="115" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="700" font-size="9" fill="#3AC6D6">RP</text>
       </g>
 
       <g>
-        <rect x="166" y="96" width="32" height="28" rx="5" fill="#0E1116" stroke="rgba(58,198,214,0.6)" stroke-width="1.4"/>
+        <rect x="166" y="96" width="32" height="28" rx="5" fill="#0A1219" stroke="rgba(58,198,214,0.6)" stroke-width="1.4"/>
         <text x="182" y="115" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="700" font-size="9" fill="#3AC6D6">IDP</text>
       </g>
 
@@ -120,24 +120,7 @@
       </div>
 
       <div class="consent-identity-idp">
-        <div class="consent-avatar consent-avatar-self" aria-hidden="true">
-          <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-            <g fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M52 43 a11 11 0 0 0 0 15"/>
-              <path d="M43 37 a18 18 0 0 0 0 28"/>
-              <path d="M76 43 a11 11 0 0 1 0 15"/>
-              <path d="M85 37 a18 18 0 0 1 0 28"/>
-              <path d="M64 52 L43 108"/>
-              <path d="M64 52 L85 108"/>
-              <path d="M41 108 L87 108"/>
-              <path d="M55.8 74 L72.2 74"/>
-              <path d="M55.8 74 L85 108"/>
-              <path d="M72.2 74 L43 108"/>
-            </g>
-            <circle cx="64" cy="51" r="3.8" fill="currentColor"/>
-            <path d="M67 14 L60 28 L65 28 L61 40 L73 26 L67 26 Z" fill="currentColor"/>
-          </svg>
-        </div>
+        <div class="consent-avatar consent-avatar-self" aria-hidden="true">{% include "includes/tower_mark.html" %}</div>
         <div class="stack-gap-2" style="min-width:0;">
           <span class="consent-identity-name">{{ user.username }}</span>
           <span class="t-mono-sm t-muted">
