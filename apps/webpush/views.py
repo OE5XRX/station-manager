@@ -35,7 +35,7 @@ def manifest(request):
         "scope": "/",
         "display": "standalone",
         "background_color": "#120A04",
-        "theme_color": "#FF8A3D",
+        "theme_color": "#0A1219",
         "icons": [
             {
                 "src": static("webpush/icon-192.png"),
