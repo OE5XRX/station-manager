@@ -54,7 +54,8 @@ passieren; alles andere zieht automatisch nach (Hell/Dunkel + alle Komponenten).
 | Template-SVGs | `fill/stroke/stop-color="var(--token)"` (+ `*-opacity`-Zahl für Alpha). Kein Farbcode im HTML. |
 | JS-Terminal | Farbwerte via `getComputedStyle(document.documentElement).getPropertyValue('--…')` lesen; bei Theme-Toggle neu setzen. |
 | Light-Werte | **Palette C Light** (`branding/color/tokens.json`), volle Parität zum Dark-Block. |
-| Guard | CI-Check: **kein** `#hex`/`rgb()/rgba()/hsl()` außerhalb `tokens.css`; + **Token-Parität** dark↔light. |
+| Branding-Sync | **branding als gepinntes Git-Submodul (`v0.2.5`)**; Guard erzwingt Anker-Tokens == `branding/color/tokens.json` (kein Drift). |
+| Guard | CI-Check: (a) **kein** `#hex`/`rgb()/rgba()/hsl()` außerhalb `tokens.css`; (b) **Token-Parität** dark↔light; (c) **Anker == branding**. |
 | Prozess | Feature-Branch → **ein Squash-PR** → Copilot-Loop → Deploy via `servers`-Workflow. |
 
 ## Architektur
@@ -99,18 +100,25 @@ success `#1B6B35`, warn `#8A5200`, error `#B02020`). Vorschlag (Implementer veri
 **WCAG AA ≥ 4.5:1** für Text/Muted/Accent-als-Text + Live-Look, justiert innerhalb
 Palette C):
 ```
---bg-0:#E9EEF2; --bg-1:#F4F7F9; --bg-2:#FFFFFF; --bg-3:#E8EFF4; --bg-hover:#DDE7EE;
---line:#D5E0E8; --line-bright:#C8D6E0; --line-hot:#A9BDCB;
---ink-0:#0D1A24; --ink-1:#334657; --ink-2:#526070; --ink-3:#8497A6;
---accent:#0E7580; --accent-soft:#3AA7B3; --accent-deep:#0B5C66;   /* AA als Text prüfen */
---signal:#1B6B35; --warn:#8A5200; --danger:#B02020; --cyan:#0B6E8C; --violet:#5B3CB8;
+--bg-1:#F4F7F9; --bg-2:#E8EFF4;                    /* Anker: branding bg / surface   */
+--bg-0:#E9EEF2; --bg-3:#FFFFFF; --bg-hover:#DDE7EE; /* abgeleitete Ramp (lokal)       */
+--line:#C8D6E0;                                     /* Anker: branding border         */
+--line-bright:#B4C6D3; --line-hot:#9DB3C3;          /* abgeleitet (lokal)             */
+--ink-0:#0D1A24; --ink-2:#526070;                   /* Anker: branding text / muted   */
+--ink-1:#334657; --ink-3:#8497A6;                   /* abgeleitet (lokal)             */
+--primary:#123B54;                                  /* Anker: branding primary        */
+--accent:#0F7A87; --accent-soft:#3AA7B3; --accent-deep:#0B5C66;  /* Anker accent; AA-als-Text prüfen, ggf. --accent dunkler */
+--signal:#1B6B35; --warn:#8A5200; --danger:#B02020; /* Anker: branding success/warn/error */
+--cyan:#0B6E8C; --violet:#5B3CB8;                   /* lokale Semantik (info/deploy), nicht in Palette C */
 --shadow-color:#0D1A24; --sheen-color:#FFFFFF; --on-accent-ink:#F4F7F9;
 ```
-Dark-Block behält seine Werte; erhält zusätzlich `--shadow-color:#000000`,
-`--sheen-color:#FFFFFF`, `--on-accent-ink:#08131A` (das heute hartkodierte kühle
-Near-Black auf Akzent/Warn).
+Dark-Block behält seine Werte; erhält zusätzlich `--primary:#3AC6D6` (= accent im Dark),
+`--shadow-color:#000000`, `--sheen-color:#FFFFFF`, `--on-accent-ink:#08131A` (das heute
+hartkodierte kühle Near-Black auf Akzent/Warn).
 
-**Parität:** Jedes in einem Block definierte Token existiert auch im anderen.
+**Parität:** Jedes in einem Block definierte Token existiert auch im anderen. Die
+**Anker-Tokens** (oben markiert) werden per Guard gegen `branding/color/tokens.json`
+erzwungen (siehe § Branding-Kopplung); alle übrigen sind lokale Ableitungen.
 
 ### 5. Tokenisierung der Rest-Literale
 - **`app.css` / `control-panel.css`:** jede rohe rgba/hex außerhalb `tokens.css` →
@@ -127,6 +135,40 @@ Near-Black auf Akzent/Warn).
   via Token). Beim Theme-Toggle (bestehender Handler in `app.js`) `term.options.theme`
   neu setzen, damit auch das Terminal Hell/Dunkel folgt.
 
+### 5b. Branding-Kopplung — branding als gepinntes Submodul + erzwungenes Mapping
+Die **Anker-Werte kommen aus dem branding-Repo** und dürfen nicht driften:
+
+- **`OE5XRX/branding` als Git-Submodul**, gepinnt auf **`v0.2.5`** (enthält
+  `color/tokens.json` mit exakt diesen light+dark-Werten). Pin = Drift-Kontrolle
+  (SRCREV-/Lockfile-Muster wie apply-brand@tag). Nur für Guard/CI + lokal nötig, **nicht**
+  im Docker-Runtime-Image (Submodul wird für `collectstatic`/Runtime nicht gebraucht).
+  Brand-Bump = Submodul auf neuen Tag + `tokens.css`-Anker nachziehen (Guard verifiziert).
+- Der Guard mappt die 10 branding-Semantik-Keys auf die station-Anker-Tokens und
+  **erzwingt Gleichheit pro Theme**:
+
+  | branding key | station-Token | dark | light |
+  |---|---|---|---|
+  | `bg`      | `--bg-1`        | #0A1219 | #F4F7F9 |
+  | `surface` | `--bg-2`        | #0F1C28 | #E8EFF4 |
+  | `text`    | `--ink-0`       | #D8ECF5 | #0D1A24 |
+  | `muted`   | `--ink-2`       | #7AAFCA | #526070 |
+  | `primary` | `--primary`     | #3AC6D6 | #123B54 |
+  | `accent`  | `--accent`\*    | #3AC6D6 | #0F7A87 |
+  | `border`  | `--line`        | #1A2D3D | #C8D6E0 |
+  | `success` | `--signal`      | #4DB870 | #1B6B35 |
+  | `warn`    | `--warn`        | #FFB84D | #8A5200 |
+  | `error`   | `--danger`      | #F06060 | #B02020 |
+
+  \* **Light-`--accent`-Ausnahme:** falls `#0F7A87` als Text die AA-Grenze reißt und der
+  Implementer `--accent` dunkler zieht, wird `--accent` gegen branding `accent` mit einer
+  **dokumentierten, im Guard hinterlegten Toleranz/Override** geprüft (nur dieser eine
+  Wert, mit Begründung „AA-Kontrast"). Alle anderen Anker sind exakt.
+
+  Alle **nicht** gelisteten Tokens (`--bg-0/3`, `--ink-1/3`, `--line-bright/-hot`,
+  `--accent-soft/-deep/-glow/-tint`, `--*-soft`, `--cyan`, `--violet`, `--shadow-color`,
+  `--sheen-color`, `--on-accent-ink`) sind lokale Ableitungen/Erweiterungen und werden
+  **nicht** gegen branding geprüft (nur auf Parität dark↔light).
+
 ### 6. Logout-Icon zentrieren
 `.btn` hat `align-items:center`, aber kein `justify-content`. `.btn-icon` (und die
 Desktop-40×40-Variante) bekommen `justify-content:center` → Icon zentriert.
@@ -140,9 +182,13 @@ Fail-closed, wenn:
   `none`, sowie reine Opacity-Zahlen (`*-opacity="0.3"`).
 - **(b)** Token-Parität verletzt ist: die Property-Menge in `:root` ≠ die in
   `:root[data-theme="light"]` (in `tokens.css`).
+- **(c)** ein **Anker-Token** in `tokens.css` ≠ dem gemappten Wert in
+  `branding/color/tokens.json` (Submodul, v0.2.5) — pro Theme, gemäß Mapping-Tabelle in
+  § 5b (mit der einen dokumentierten `--accent`-light-Toleranz).
 
 Fehlermeldungen mit Datei:Zeile. Analog zum bestehenden Django-Template-Comment-Guard.
-Wird in `.github/workflows/ci.yml` (`Lint`) aufgerufen; lokal ausführbar.
+Wird in `.github/workflows/ci.yml` (`Lint`) aufgerufen (Checkout mit
+`submodules: true`); lokal ausführbar (`git submodule update --init`).
 
 ## Was NICHT geändert wird
 - Der Toggle-Mechanismus (`data-theme-toggle` + `localStorage`) selbst — nur konsumiert.
@@ -153,7 +199,9 @@ Wird in `.github/workflows/ci.yml` (`Lint`) aufgerufen; lokal ausführbar.
 
 ## Testing / Verifikation
 - **Guard grün:** `scripts/check_color_tokens.py` → 0 Findings (kein Farbcode außerhalb
-  `tokens.css`; Parität ok). Der Guard ist selbst der primäre Vollständigkeits-Check.
+  `tokens.css`; Parität ok; Anker == branding). Der Guard ist selbst der primäre
+  Vollständigkeits-Check. Setzt das branding-Submodul voraus (`git submodule update --init`;
+  CI-Checkout mit `submodules: true`).
 - **Kontrast:** `--ink-0/1/2` + `--accent`-als-Text auf `--bg-0/1/2` ≥ 4.5:1 in **beiden**
   Themes (Implementer misst; justiert Light-Werte innerhalb Palette C).
 - **Django:** `manage.py check`; `collectstatic --dry-run` findet `tokens.css`.
@@ -176,6 +224,11 @@ Wird in `.github/workflows/ci.yml` (`Lint`) aufgerufen; lokal ausführbar.
   darkened innerhalb Palette C bis AA erfüllt ist (Verifikation Pflicht).
 - **SVG `var()` in Presentation-Attributen:** von allen Ziel-Browsern unterstützt; die
   Topbar-Waveform nutzt es bereits (`fill="var(--accent)"`) → Muster erprobt.
+- **Submodul-Reibung:** `tokens.css` liegt committet im station-Repo → **Runtime/Docker-
+  Build braucht das Submodul nicht** (collectstatic nutzt die committete Datei). Nur
+  Guard/CI + lokaler Dev brauchen `submodules: true` bzw. `git submodule update --init`.
+  Brand-Bump ist ein bewusster Zwei-Schritt (Submodul-Tag + `tokens.css`), vom Guard
+  abgesichert.
 
 ## Explizit NICHT in Scope
 - Neuer Toggle/UX fürs Theme (existiert schon).
