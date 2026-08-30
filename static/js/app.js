@@ -9,8 +9,17 @@
   // Theme
   // ---------------------------------------------------------------------------
   var THEME_KEY = "oe5xrx.theme";
+  function tok(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function termThemeFromTokens() {
+    return { background: tok("--term-bg"), foreground: tok("--ink-0"),
+             cursor: tok("--accent"), cursorAccent: tok("--on-accent-ink"),
+             selectionBackground: tok("--accent-tint") };
+  }
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
+    document.dispatchEvent(new CustomEvent("oe5xrx:themechange"));
     try { localStorage.setItem(THEME_KEY, theme); } catch (_) {}
   }
   var savedTheme;
@@ -294,10 +303,12 @@
       cursorBlink: true,
       fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
       fontSize: 13,
-      theme: { background: "#000000", foreground: "#D8ECF5", cursor: "#3AC6D6",
-               selection: "rgba(58, 198, 214, 0.3)" },
+      theme: termThemeFromTokens(),
     });
     term.open(host);
+    document.addEventListener("oe5xrx:themechange", function () {
+      term.options.theme = termThemeFromTokens();
+    });
 
     var ws = null;
     var userClosed = false;
