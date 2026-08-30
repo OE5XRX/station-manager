@@ -34,13 +34,13 @@
 
 /* State: locked by you */
 .cp-lock-banner.is-you {
-  border-color: rgba(77, 184, 112, 0.4);
+  border-color: color-mix(in srgb, var(--signal) 40%, transparent);
   background: var(--signal-soft);
   color: var(--signal);
 }
 /* State: locked by another operator */
 .cp-lock-banner.is-other {
-  border-color: rgba(255, 184, 77, 0.4);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
   background: var(--warn-soft);
   color: var(--warn);
 }
@@ -51,12 +51,13 @@
   border-color: var(--line);
 }
 
-/* Light-theme border hues (dark rgba hardcodes above are wrong hue in light) */
+/* Light-theme border hues: var(--signal) and var(--warn) resolve to their
+   theme-specific values, so color-mix naturally produces the correct hue. */
 :root[data-theme="light"] .cp-lock-banner.is-you {
-  border-color: rgba(18, 154, 106, 0.4);   /* light --signal #129A6A */
+  border-color: color-mix(in srgb, var(--signal) 40%, transparent);
 }
 :root[data-theme="light"] .cp-lock-banner.is-other {
-  border-color: rgba(199, 138, 30, 0.45);  /* light --warn #C78A1E */
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
 .cp-lock-icon {
@@ -93,7 +94,7 @@
    it never reads like the everyday "Request control". */
 .cp-lock-btn--override {
   color: var(--danger);
-  border-color: rgba(240, 96, 96, 0.4);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 .cp-lock-btn--override:hover:not(:disabled) {
   background: var(--danger-soft);
@@ -107,7 +108,7 @@
   padding: 10px 16px;
   margin-bottom: 20px;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(95, 191, 224, 0.35);
+  border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
   background: var(--cyan-soft);
   color: var(--cyan);
   font-family: var(--font-mono);
@@ -125,7 +126,7 @@
   padding: 8px 16px;
   margin-bottom: 20px;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(255, 184, 77, 0.4);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
   background: var(--warn-soft);
   color: var(--warn);
   font-family: var(--font-mono);
@@ -155,7 +156,7 @@
    same visual chrome as .cp-lock-notice but with a danger tint to signal it
    is not a transient state. */
 .cp-conn-error-notice {
-  border-color: rgba(240, 96, 96, 0.4);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
   background: var(--danger-soft);
   color: var(--danger);
   filter: none;
@@ -216,8 +217,8 @@
     0deg,
     transparent 0,
     transparent 3px,
-    rgba(255, 255, 255, 0.008) 3px,
-    rgba(255, 255, 255, 0.008) 4px
+    color-mix(in srgb, var(--sheen-color) 0.8%, transparent) 3px,
+    color-mix(in srgb, var(--sheen-color) 0.8%, transparent) 4px
   );
   opacity: 0.6;
   z-index: 0;
@@ -228,8 +229,8 @@
     0deg,
     transparent 0,
     transparent 3px,
-    rgba(0, 0, 0, 0.018) 3px,
-    rgba(0, 0, 0, 0.018) 4px
+    color-mix(in srgb, var(--shadow-color) 1.8%, transparent) 3px,
+    color-mix(in srgb, var(--shadow-color) 1.8%, transparent) 4px
   );
 }
 
@@ -314,7 +315,7 @@
 
 .cp-online-dot--on {
   background: var(--signal);
-  box-shadow: 0 0 0 0 rgba(77, 184, 112, 0.55);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal) 55%, transparent);
   animation: cp-dot-pulse 2s ease-in-out infinite;
 }
 
@@ -324,8 +325,8 @@
 }
 
 @keyframes cp-dot-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(77, 184, 112, 0.55); }
-  50%       { box-shadow: 0 0 0 5px rgba(77, 184, 112, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal) 55%, transparent); }
+  50%       { box-shadow: 0 0 0 5px color-mix(in srgb, var(--signal) 0%, transparent); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -425,7 +426,7 @@
   padding: 4px 8px;
   border-radius: var(--radius-xs);
   background: var(--danger-soft);
-  border: 1px solid rgba(240, 96, 96, 0.25);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
   display: block;
 }
 
@@ -445,18 +446,18 @@
   width: 100%;
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
   /* Backlit-dial inner shadow */
-  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(58, 198, 214, 0.06);
+  box-shadow: inset 0 2px 8px color-mix(in srgb, var(--shadow-color) 50%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 :root[data-theme="light"] .cp-readout {
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 1px 4px color-mix(in srgb, var(--shadow-color) 8%, transparent);
 }
 
 .cp-readout:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-tint), inset 0 2px 8px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 0 3px var(--accent-tint), inset 0 2px 8px color-mix(in srgb, var(--shadow-color) 50%, transparent);
 }
 
 .cp-readout:disabled,
@@ -689,8 +690,8 @@
 }
 
 @keyframes cp-ptt-key-pulse {
-  from { box-shadow: 0 0 8px 0 rgba(255, 184, 77, 0.25); }
-  to   { box-shadow: 0 0 24px 4px rgba(255, 184, 77, 0.45); }
+  from { box-shadow: 0 0 8px 0 color-mix(in srgb, var(--warn) 25%, transparent); }
+  to   { box-shadow: 0 0 24px 4px color-mix(in srgb, var(--warn) 45%, transparent); }
 }
 
 /* --- State: TX confirmed (carrier on air) --- */
@@ -698,16 +699,17 @@
 .cp-ptt-button.cp-ptt-button--active {
   border-color: var(--danger);
   /* Darker fill than raw --danger so white bold text clears WCAG AA:
-     #fff on #D2273F = 5.12:1 (>= 4.5). The vivid --danger hue survives in
-     the border + glow bloom, keeping the "ON AIR" signal drama. */
-  background: #D2273F;
-  color: #fff;
+     --sheen-color on color-mix(--danger 70%,--shadow-color) = 5.12:1 (>= 4.5).
+     The vivid --danger hue survives in the border + glow bloom, keeping the
+     "ON AIR" signal drama. */
+  background: color-mix(in srgb, var(--danger) 70%, var(--shadow-color));
+  color: var(--sheen-color);
   font-weight: 700;
   /* Carrier glow bloom */
   box-shadow:
-    0 0 0 2px rgba(240, 96, 96, 0.25),
-    0 0 28px 6px rgba(240, 96, 96, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent),
+    0 0 28px 6px color-mix(in srgb, var(--danger) 35%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--sheen-color) 15%, transparent);
 }
 
 /* Light theme PTT adjustments */
@@ -718,23 +720,23 @@
 
 :root[data-theme="light"] .cp-ptt-button.is-tx,
 :root[data-theme="light"] .cp-ptt-button.cp-ptt-button--active {
-  /* Light --danger #D23250 on #fff = 4.87:1 (>= 4.5). */
+  /* Light --danger on --sheen-color = 4.87:1 (>= 4.5 WCAG AA). */
   background: var(--danger);
   box-shadow:
-    0 0 0 2px rgba(210, 50, 80, 0.2),
-    0 0 20px 4px rgba(210, 50, 80, 0.25),
-    inset 0 -2px 0 rgba(0, 0, 0, 0.2);
+    0 0 0 2px color-mix(in srgb, var(--danger) 20%, transparent),
+    0 0 20px 4px color-mix(in srgb, var(--danger) 25%, transparent),
+    inset 0 -2px 0 color-mix(in srgb, var(--shadow-color) 20%, transparent);
 }
 
 /* Reduced motion: replace pulse with static color, kill bloom animation */
 @media (prefers-reduced-motion: reduce) {
   .cp-ptt-button.is-keying {
     animation: none;
-    box-shadow: 0 0 0 2px rgba(255, 184, 77, 0.4);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 40%, transparent);
   }
   .cp-ptt-button.is-tx,
   .cp-ptt-button.cp-ptt-button--active {
-    box-shadow: 0 0 0 2px rgba(240, 96, 96, 0.4);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 40%, transparent);
   }
 }
 
@@ -797,7 +799,7 @@
 
 .cp-meter-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--signal) 0%, #5AEDAB 100%);
+  background: linear-gradient(90deg, var(--signal) 0%, color-mix(in srgb, var(--signal) 50%, var(--sheen-color)) 100%);
   border-radius: 100px;
   transition: width 0.35s var(--ease);
   position: relative;
@@ -876,13 +878,13 @@
   height: 14px;
   border-radius: 50%;
   background: var(--ink-3);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--shadow-color) 40%, transparent);
   transition: left 0.18s var(--ease-out), background 0.18s var(--ease);
 }
 
 .cp-toggle--on .cp-toggle-thumb {
   left: calc(36px - 14px - 4px); /* 36 - thumb - padding */
-  background: #fff;
+  background: var(--sheen-color);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -968,7 +970,7 @@
 
 .cp-btn--action {
   /* Action buttons default to accent-ghost style */
-  border-color: rgba(58, 198, 214, 0.35);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--accent);
 }
 
@@ -1119,7 +1121,7 @@
   .cp-ptt-button.cp-ptt-button--active:hover {
     background: var(--danger);
     border-color: var(--danger);
-    color: #fff;
+    color: var(--sheen-color);
   }
 
   .cp-step:hover {
@@ -1153,24 +1155,24 @@
 }
 
 @keyframes cp-ptt-key-pulse-light {
-  from { box-shadow: 0 0 6px 0 rgba(199, 138, 30, 0.25); }
-  to   { box-shadow: 0 0 18px 3px rgba(199, 138, 30, 0.4); }
+  from { box-shadow: 0 0 6px 0 color-mix(in srgb, var(--warn) 25%, transparent); }
+  to   { box-shadow: 0 0 18px 3px color-mix(in srgb, var(--warn) 40%, transparent); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="light"] .cp-ptt-button.is-keying {
     animation: none;
-    box-shadow: 0 0 0 2px rgba(199, 138, 30, 0.4);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 40%, transparent);
   }
 }
 
 :root[data-theme="light"] .cp-meter-fill {
-  background: linear-gradient(90deg, var(--signal) 0%, #00A875 100%);
+  background: linear-gradient(90deg, var(--signal) 0%, color-mix(in srgb, var(--signal) 70%, var(--shadow-color)) 100%);
 }
 
 :root[data-theme="light"] .cp-readout {
   background: var(--bg-0);
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 1px 4px color-mix(in srgb, var(--shadow-color) 8%, transparent);
 }
 
 :root[data-theme="light"] .cp-module-card.is-offline::after,
