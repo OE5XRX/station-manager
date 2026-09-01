@@ -14,5 +14,6 @@ def render_config(*, server_url: str, station_id: int) -> str:
         terminal_enabled: true
         terminal_shell: /bin/sh
         bootloader: auto
+        control_enabled: true
         """
     )
