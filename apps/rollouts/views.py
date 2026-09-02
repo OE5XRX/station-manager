@@ -98,7 +98,9 @@ class UpgradeStationView(AdminRequiredMixin, View):
                 _("Station has not been provisioned with an image release yet."),
             )
             return redirect("stations:station_detail", pk=station.pk)
-        target = ImageRelease.objects.filter(machine=current.machine, is_latest=True).first()
+        target = ImageRelease.objects.filter(
+            machine=current.machine, channel="release", is_latest=True
+        ).first()
         if target is None:
             messages.error(
                 request,
@@ -205,7 +207,9 @@ class UpgradeGroupView(AdminRequiredMixin, View):
         skipped = unprovisioned
         with transaction.atomic():
             for machine, machine_stations in by_machine.items():
-                target = ImageRelease.objects.filter(machine=machine, is_latest=True).first()
+                target = ImageRelease.objects.filter(
+                    machine=machine, channel="release", is_latest=True
+                ).first()
                 if target is None:
                     skipped += len(machine_stations)
                     continue
@@ -297,7 +301,7 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
         grouped = group_stations_by_sequence(stations)
 
         latest_per_machine: dict[str, ImageRelease] = {
-            r.machine: r for r in ImageRelease.objects.filter(is_latest=True)
+            r.machine: r for r in ImageRelease.objects.filter(channel="release", is_latest=True)
         }
 
         # Fetch the latest active DeploymentResult per station so the

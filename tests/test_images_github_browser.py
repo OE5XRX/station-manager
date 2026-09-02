@@ -78,6 +78,18 @@ class TestGitHubReleaseAssets:
     def test_channels_for_empty_when_no_assets(self):
         assert self._release([]).channels_for("qemux86-64") == frozenset()
 
+    def test_channels_for_ignores_invalid_channel_token(self):
+        # An uppercase (non-slug) channel token has a complete triple but
+        # must not be surfaced — it would render a row QuickQueueView always
+        # rejects and could overflow ImageRelease.channel on import.
+        names = _triple("qemux86-64", "DEV", "v1-alpha")
+        assert self._release(names).channels_for("qemux86-64") == frozenset()
+
+    def test_channels_for_ignores_overlong_channel_token(self):
+        overlong = "d" * 33  # > ImageRelease.channel max_length (32)
+        names = _triple("qemux86-64", overlong, "v1-alpha")
+        assert self._release(names).channels_for("qemux86-64") == frozenset()
+
 
 def _gh_response(payload):
     """Return a fake urlopen context manager yielding JSON bytes."""
@@ -601,6 +613,17 @@ class TestQuickQueueViewValidation:
         response = client.post(
             reverse("images:gh_queue"),
             {"tag": "v1", "machine": "qemux86-64", "channel": "de v", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
+    def test_overlong_channel_returns_400(self, client, admin_user):
+        # A slug that passes the regex but exceeds ImageRelease.channel
+        # max_length (32) must 400, not 500 on a DB DataError.
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "d" * 33, "is_latest": "0"},
         )
         assert response.status_code == 400
         assert ImageImportJob.objects.count() == 0

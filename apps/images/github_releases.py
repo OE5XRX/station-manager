@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -10,6 +11,18 @@ GITHUB_API = "https://api.github.com"
 _USER_AGENT = "oe5xrx-station-manager"
 _ACCEPT = "application/vnd.github+json"
 _TIMEOUT = 10  # seconds
+
+# A channel must be a lowercase slug that fits ImageRelease.channel
+# (max_length=32) — the same rule QuickQueueView enforces on import.
+_CHANNEL_MAX_LEN = 32
+
+
+def _is_valid_channel(channel: str) -> bool:
+    return (
+        bool(channel)
+        and len(channel) <= _CHANNEL_MAX_LEN
+        and bool(re.fullmatch(r"[a-z0-9-]+", channel))
+    )
 
 
 class GitHubAPIError(Exception):
@@ -40,7 +53,14 @@ class GitHubRelease:
         for name in self.asset_names:
             if name.startswith(prefix) and name.endswith(suffix):
                 channel = name[len(prefix) : -len(suffix)]
-                if channel and self.has_assets_for(machine, channel):
+                # Only surface channels that are valid, queueable slugs
+                # (lowercase [a-z0-9-], <= the model's max_length). A
+                # malformed token would render a row QuickQueueView always
+                # rejects (400) and could overflow ImageRelease.channel on
+                # import — drop it at discovery instead.
+                if not _is_valid_channel(channel):
+                    continue
+                if self.has_assets_for(machine, channel):
                     channels.add(channel)
         return frozenset(channels)
 

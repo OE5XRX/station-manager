@@ -268,7 +268,7 @@ class QuickQueueView(AdminRequiredMixin, View):
         is_latest = request.POST.get("is_latest", "0") == "1"
         if not tag or machine not in {m.value for m in MACHINES} or not channel:
             return HttpResponseBadRequest("invalid tag/machine/channel")
-        if not re.fullmatch(r"[a-z0-9-]+", channel):
+        if not re.fullmatch(r"[a-z0-9-]+", channel) or len(channel) > 32:
             return HttpResponseBadRequest("invalid channel")
 
         if ImageRelease.all_objects.filter(tag=tag, machine=machine, channel=channel).exists():
