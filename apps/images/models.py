@@ -203,6 +203,7 @@ class ImageImportJob(models.Model):
 
     tag = models.CharField(_("release tag"), max_length=64)
     machine = models.CharField(_("machine"), max_length=32, choices=ImageRelease.Machine.choices)
+    channel = models.CharField(_("channel"), max_length=32, default="release")
     mark_as_latest = models.BooleanField(_("mark as latest"), default=True)
     status = models.CharField(
         _("status"), max_length=16, choices=Status.choices, default=Status.PENDING
