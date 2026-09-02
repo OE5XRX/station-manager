@@ -227,7 +227,7 @@ class TestImageImporterWorker:
         monkeypatch.setattr(
             github,
             "fetch_release_asset",
-            lambda repo, tag, machine: github.ReleaseAsset(
+            lambda repo, tag, machine, **kwargs: github.ReleaseAsset(
                 wic_bytes=b"wic",
                 sha256="e" * 64,
                 bundle_bytes=b"bundle",
@@ -285,7 +285,7 @@ class TestImageImporterWorker:
         monkeypatch.setattr(
             github,
             "fetch_release_asset",
-            lambda repo, tag, machine: github.ReleaseAsset(
+            lambda repo, tag, machine, **kwargs: github.ReleaseAsset(
                 wic_bytes=b"wic",
                 sha256="e" * 64,
                 bundle_bytes=b"bundle",
@@ -472,7 +472,7 @@ class TestRunImportJobRootfsExtraction:
         # Collect uploaded keys so we can assert the rootfs one is there.
         uploaded: dict[str, bytes] = {}
 
-        def fake_fetch(repo, tag, machine):
+        def fake_fetch(repo, tag, machine, **kwargs):
             return github.ReleaseAsset(
                 wic_bytes=synthetic_wic_bytes,
                 sha256="a" * 64,

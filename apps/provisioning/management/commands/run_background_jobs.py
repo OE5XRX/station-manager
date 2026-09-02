@@ -96,7 +96,9 @@ def _run_import_job(job: ImageImportJob) -> None:
     repo = getattr(settings, "LINUX_IMAGE_REPO", "OE5XRX/linux-image")
     uploaded_keys: list[str] = []
     try:
-        asset = github.fetch_release_asset(repo=repo, tag=job.tag, machine=job.machine)
+        asset = github.fetch_release_asset(
+            repo=repo, tag=job.tag, machine=job.machine, channel=job.channel
+        )
         cosign.verify_blob(
             blob_bytes=asset.wic_bytes,
             bundle_bytes=asset.bundle_bytes,
@@ -104,9 +106,9 @@ def _run_import_job(job: ImageImportJob) -> None:
             tag=job.tag,
         )
 
-        wic_key = image_storage.release_key(job.tag, job.machine)
-        bundle_key = image_storage.release_bundle_key(job.tag, job.machine)
-        rootfs_key = image_storage.release_rootfs_key(job.tag, job.machine)
+        wic_key = image_storage.release_key(job.tag, job.machine, job.channel)
+        bundle_key = image_storage.release_bundle_key(job.tag, job.machine, job.channel)
+        rootfs_key = image_storage.release_rootfs_key(job.tag, job.machine, job.channel)
 
         image_storage.upload_bytes(wic_key, asset.wic_bytes)
         uploaded_keys.append(wic_key)
@@ -130,7 +132,9 @@ def _run_import_job(job: ImageImportJob) -> None:
             release, _created = ImageRelease.all_objects.update_or_create(
                 tag=job.tag,
                 machine=job.machine,
+                channel=job.channel,
                 defaults={
+                    "channel": job.channel,
                     "s3_key": wic_key,
                     "cosign_bundle_s3_key": bundle_key,
                     "sha256": asset.sha256,
@@ -164,7 +168,9 @@ def _run_import_job(job: ImageImportJob) -> None:
         # the default manager would hide it and the cleanup below would
         # delete keys that are still in use. See Meta.base_manager_name
         # rationale in apps/images/models.py.
-        existing = ImageRelease.all_objects.filter(tag=job.tag, machine=job.machine).first()
+        existing = ImageRelease.all_objects.filter(
+            tag=job.tag, machine=job.machine, channel=job.channel
+        ).first()
         in_use: set[str] = set()
         if existing is not None:
             for key in (
