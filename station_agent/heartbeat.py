@@ -13,6 +13,8 @@ from .inventory import collect_inventory
 
 logger = logging.getLogger(__name__)
 
+_OS_RELEASE_PATH = "/etc/os-release"
+
 
 def get_hostname() -> str:
     """Return the system hostname."""
@@ -22,13 +24,25 @@ def get_hostname() -> str:
 def get_os_version() -> str:
     """Read OS version from /etc/os-release."""
     try:
-        with open("/etc/os-release") as f:
+        with open(_OS_RELEASE_PATH) as f:
             for line in f:
                 if line.startswith("PRETTY_NAME="):
                     return line.split("=", 1)[1].strip().strip('"')
     except OSError:
         logger.debug("Could not read /etc/os-release")
     return "unknown"
+
+
+def get_image_variant() -> str:
+    """Read the baked image channel (VARIANT_ID) from /etc/os-release."""
+    try:
+        with open(_OS_RELEASE_PATH) as f:
+            for line in f:
+                if line.startswith("VARIANT_ID="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        logger.debug("Could not read /etc/os-release for VARIANT_ID")
+    return ""
 
 
 def get_uptime() -> float:
@@ -75,6 +89,7 @@ def collect_system_info(config=None) -> dict:
         "uptime": get_uptime(),
         "ip_address": get_ip_address(),
         "agent_version": __version__,
+        "image_variant": get_image_variant(),
         "module_versions": get_module_versions(),
         "inventory": collect_inventory(config=config),
         "timestamp": time.time(),
