@@ -131,7 +131,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
             current = self.object.current_image_release
             if current is not None:
                 context["upgrade_target"] = ImageRelease.objects.filter(
-                    machine=current.machine, is_latest=True
+                    machine=current.machine, channel="release", is_latest=True
                 ).first()
             else:
                 context["upgrade_target"] = None

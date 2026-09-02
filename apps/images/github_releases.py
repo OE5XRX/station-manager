@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -10,6 +11,18 @@ GITHUB_API = "https://api.github.com"
 _USER_AGENT = "oe5xrx-station-manager"
 _ACCEPT = "application/vnd.github+json"
 _TIMEOUT = 10  # seconds
+
+# A channel must be a lowercase slug that fits ImageRelease.channel
+# (max_length=32) — the same rule QuickQueueView enforces on import.
+_CHANNEL_MAX_LEN = 32
+
+
+def _is_valid_channel(channel: str) -> bool:
+    return (
+        bool(channel)
+        and len(channel) <= _CHANNEL_MAX_LEN
+        and bool(re.fullmatch(r"[a-z0-9-]+", channel))
+    )
 
 
 class GitHubAPIError(Exception):
@@ -23,11 +36,33 @@ class GitHubRelease:
     is_latest: bool
     asset_names: frozenset[str]
 
-    def has_assets_for(self, machine: str) -> bool:
-        prefix = f"oe5xrx-{machine}-{self.tag}.wic.bz2"
-        return all(
-            name in self.asset_names for name in (prefix, f"{prefix}.bundle", f"{prefix}.sha256")
-        )
+    def has_assets_for(self, machine: str, channel: str) -> bool:
+        base = f"oe5xrx-{machine}-{channel}-{self.tag}.wic.bz2"
+        return all(name in self.asset_names for name in (base, f"{base}.bundle", f"{base}.sha256"))
+
+    def channels_for(self, machine: str) -> frozenset[str]:
+        """Channels with a complete (wic+sha256+bundle) asset triple.
+
+        Extract the channel token by stripping the known prefix and
+        suffix -- NEVER split on '-', because ``machine`` itself contains
+        hyphens (qemux86-64, raspberrypi4-64).
+        """
+        prefix = f"oe5xrx-{machine}-"
+        suffix = f"-{self.tag}.wic.bz2"
+        channels = set()
+        for name in self.asset_names:
+            if name.startswith(prefix) and name.endswith(suffix):
+                channel = name[len(prefix) : -len(suffix)]
+                # Only surface channels that are valid, queueable slugs
+                # (lowercase [a-z0-9-], <= the model's max_length). A
+                # malformed token would render a row QuickQueueView always
+                # rejects (400) and could overflow ImageRelease.channel on
+                # import — drop it at discovery instead.
+                if not _is_valid_channel(channel):
+                    continue
+                if self.has_assets_for(machine, channel):
+                    channels.add(channel)
+        return frozenset(channels)
 
 
 def _get_json(url: str):

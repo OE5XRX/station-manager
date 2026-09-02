@@ -23,6 +23,15 @@ class ImageRelease(models.Model):
 
     tag = models.CharField(_("release tag"), max_length=64)
     machine = models.CharField(_("machine"), max_length=32, choices=Machine.choices)
+    channel = models.CharField(
+        _("channel"),
+        max_length=32,
+        default="release",
+        help_text=_(
+            "Image variant/channel, baked at build time (release, dev, …). "
+            "Free-form slug; no governance is enforced on it."
+        ),
+    )
     s3_key = models.CharField(_("S3 object key"), max_length=512)
     sha256 = models.CharField(_("SHA-256"), max_length=64)
     cosign_bundle_s3_key = models.CharField(max_length=512, blank=True)
@@ -84,11 +93,14 @@ class ImageRelease(models.Model):
         # counts honest.
         base_manager_name = "all_objects"
         constraints = [
-            models.UniqueConstraint(fields=["tag", "machine"], name="uniq_tag_per_machine"),
             models.UniqueConstraint(
-                fields=["machine"],
+                fields=["tag", "machine", "channel"],
+                name="uniq_tag_per_machine_channel",
+            ),
+            models.UniqueConstraint(
+                fields=["machine", "channel"],
                 condition=models.Q(is_latest=True),
-                name="uniq_latest_per_machine",
+                name="uniq_latest_per_machine_channel",
             ),
         ]
         ordering = ["-imported_at"]
@@ -126,9 +138,9 @@ class ImageRelease(models.Model):
         # "single latest per machine" invariant.
         if self.is_latest:
             with transaction.atomic():
-                ImageRelease.all_objects.filter(machine=self.machine, is_latest=True).exclude(
-                    pk=self.pk
-                ).update(is_latest=False)
+                ImageRelease.all_objects.filter(
+                    machine=self.machine, channel=self.channel, is_latest=True
+                ).exclude(pk=self.pk).update(is_latest=False)
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
@@ -191,6 +203,7 @@ class ImageImportJob(models.Model):
 
     tag = models.CharField(_("release tag"), max_length=64)
     machine = models.CharField(_("machine"), max_length=32, choices=ImageRelease.Machine.choices)
+    channel = models.CharField(_("channel"), max_length=32, default="release")
     mark_as_latest = models.BooleanField(_("mark as latest"), default=True)
     status = models.CharField(
         _("status"), max_length=16, choices=Status.choices, default=Status.PENDING

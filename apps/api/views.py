@@ -69,6 +69,7 @@ class HeartbeatView(APIView):
 
         station.current_os_version = data.get("os_version", "")
         station.current_agent_version = data.get("agent_version", "")
+        station.current_image_variant = data.get("image_variant", "")
         station.last_ip_address = str(data.get("ip_address", ""))
         station.last_seen = timezone.now()
         station.status = "online"
@@ -76,6 +77,7 @@ class HeartbeatView(APIView):
             update_fields=[
                 "current_os_version",
                 "current_agent_version",
+                "current_image_variant",
                 "last_ip_address",
                 "last_seen",
                 "status",

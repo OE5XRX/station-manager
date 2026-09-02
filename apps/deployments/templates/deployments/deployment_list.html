@@ -60,7 +60,7 @@
           </td>
           <td data-label="{% trans 'Image release' %}">
             <div class="stack-gap-2">
-              <span style="font-weight:600;color:var(--ink-0);">{{ d.image_release.tag }}</span>
+              <span style="font-weight:600;color:var(--ink-0);">{{ d.image_release.tag }}</span> {% include "images/_channel_badge.html" with channel=d.image_release.channel %}
               <span class="t-mono-sm t-muted">{{ d.image_release.machine }}</span>
             </div>
           </td>

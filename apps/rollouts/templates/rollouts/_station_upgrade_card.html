@@ -14,8 +14,8 @@
         </p>
       {% else %}
         <p>
-          {% trans "Current" %}: <code class="t-mono">{{ station.current_image_release.tag|default:'-' }}</code><br>
-          {% trans "Target" %}: <code class="t-mono">{{ upgrade_target.tag }}</code>
+          {% trans "Current" %}: <code class="t-mono">{{ station.current_image_release.tag|default:'-' }}</code> {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}<br>
+          {% trans "Target" %}: <code class="t-mono">{{ upgrade_target.tag }}</code> {% include "images/_channel_badge.html" with channel=upgrade_target.channel %}
           <span class="t-muted">({% trans "latest for" %} {{ upgrade_target.machine }})</span>
         </p>
         {% blocktrans asvar confirm_msg with t=upgrade_target.tag %}Upgrade this station to {{ t }}?{% endblocktrans %}

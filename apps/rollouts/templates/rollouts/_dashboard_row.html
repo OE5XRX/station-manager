@@ -16,10 +16,10 @@
     {% endif %}
   </td>
   <td class="t-mono" data-label="{% trans 'Current → Target' %}">
-    <span>{{ station.current_image_release.tag|default:"—" }}</span>
+    <span>{{ station.current_image_release.tag|default:"—" }}</span>{% if station.current_image_release %} {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}{% endif %}
     {% if target %}
       <span class="t-muted" aria-hidden="true" style="margin:0 6px;">→</span>
-      <span style="color:var(--accent);font-weight:600;">{{ target.tag }}</span>
+      <span style="color:var(--accent);font-weight:600;">{{ target.tag }}</span> {% include "images/_channel_badge.html" with channel=target.channel %}
     {% else %}
       <span class="t-muted" style="margin-left:6px;">{% trans "no target" %}</span>
     {% endif %}

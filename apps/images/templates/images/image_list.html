@@ -150,6 +150,7 @@
             {% else %}
               <span class="pill pill-muted">{{ rel.get_machine_display }}</span>
             {% endif %}
+            {% include "images/_channel_badge.html" with channel=rel.channel %}
           </td>
           <td data-label="{% trans 'Latest' %}">
             {% if rel.is_latest %}

@@ -163,10 +163,12 @@ class TestStorageKeys:
     def test_release_key_layout(self):
         from apps.images.storage import release_bundle_key, release_key
 
-        assert release_key("v1-alpha", "qemux86-64") == "images/v1-alpha/qemux86-64.wic.bz2"
+        assert (
+            release_key("v1-alpha", "qemux86-64") == "images/v1-alpha/release/qemux86-64.wic.bz2"
+        )
         assert (
             release_bundle_key("v1-alpha", "qemux86-64")
-            == "images/v1-alpha/qemux86-64.wic.bz2.bundle"
+            == "images/v1-alpha/release/qemux86-64.wic.bz2.bundle"
         )
 
 
@@ -227,7 +229,7 @@ class TestImageImporterWorker:
         monkeypatch.setattr(
             github,
             "fetch_release_asset",
-            lambda repo, tag, machine: github.ReleaseAsset(
+            lambda repo, tag, machine, **kwargs: github.ReleaseAsset(
                 wic_bytes=b"wic",
                 sha256="e" * 64,
                 bundle_bytes=b"bundle",
@@ -263,8 +265,8 @@ class TestImageImporterWorker:
         assert job.image_release.tag == "v1-alpha"
         assert job.image_release.is_latest is True
         assert ImageRelease.objects.count() == 1
-        assert ("images/v1-alpha/qemux86-64.wic.bz2", b"wic") in uploads
-        assert ("images/v1-alpha/qemux86-64.wic.bz2.bundle", b"bundle") in uploads
+        assert ("images/v1-alpha/release/qemux86-64.wic.bz2", b"wic") in uploads
+        assert ("images/v1-alpha/release/qemux86-64.wic.bz2.bundle", b"bundle") in uploads
 
     def test_cosign_failure_marks_job_failed_and_skips_release(
         self, admin_user, monkeypatch, settings
@@ -285,7 +287,7 @@ class TestImageImporterWorker:
         monkeypatch.setattr(
             github,
             "fetch_release_asset",
-            lambda repo, tag, machine: github.ReleaseAsset(
+            lambda repo, tag, machine, **kwargs: github.ReleaseAsset(
                 wic_bytes=b"wic",
                 sha256="e" * 64,
                 bundle_bytes=b"bundle",
@@ -472,7 +474,7 @@ class TestRunImportJobRootfsExtraction:
         # Collect uploaded keys so we can assert the rootfs one is there.
         uploaded: dict[str, bytes] = {}
 
-        def fake_fetch(repo, tag, machine):
+        def fake_fetch(repo, tag, machine, **kwargs):
             return github.ReleaseAsset(
                 wic_bytes=synthetic_wic_bytes,
                 sha256="a" * 64,
@@ -502,7 +504,7 @@ class TestRunImportJobRootfsExtraction:
 
         assert job.status == ImageImportJob.Status.READY, job.error_message
         release = ImageRelease.objects.get(tag="test-1", machine=ImageRelease.Machine.QEMU)
-        assert release.rootfs_s3_key == "images/test-1/qemux86-64.rootfs.bz2"
+        assert release.rootfs_s3_key == "images/test-1/release/qemux86-64.rootfs.bz2"
         assert release.rootfs_s3_key in uploaded
         assert release.rootfs_size_bytes == len(uploaded[release.rootfs_s3_key])
         assert len(release.rootfs_sha256) == 64
