@@ -186,6 +186,8 @@ class Station(models.Model):
             self.current_os_version = data["os_version"]
         if "agent_version" in data:
             self.current_agent_version = data["agent_version"]
+        if "image_variant" in data:
+            self.current_image_variant = data["image_variant"]
         if "ip_address" in data:
             self.last_ip_address = data["ip_address"]
         if "status" in data and data["status"] in self.Status.values:
@@ -195,6 +197,7 @@ class Station(models.Model):
             update_fields=[
                 "current_os_version",
                 "current_agent_version",
+                "current_image_variant",
                 "last_ip_address",
                 "last_seen",
                 "status",
