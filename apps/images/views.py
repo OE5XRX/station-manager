@@ -245,11 +245,7 @@ class GitHubReleasesPartialView(AdminRequiredMixin, View):
                         continue
                     # channels_for() only returns channels with a complete
                     # asset triple, so there is no NO_ASSET state here.
-                    state = (
-                        _RowState.QUEUED.value
-                        if key in in_flight
-                        else _RowState.READY.value
-                    )
+                    state = _RowState.QUEUED.value if key in in_flight else _RowState.READY.value
                     rows.append((m.value, channel, state))
             if rows:
                 rows_by_tag.append((rel, rows))

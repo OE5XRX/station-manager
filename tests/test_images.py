@@ -163,7 +163,9 @@ class TestStorageKeys:
     def test_release_key_layout(self):
         from apps.images.storage import release_bundle_key, release_key
 
-        assert release_key("v1-alpha", "qemux86-64") == "images/v1-alpha/release/qemux86-64.wic.bz2"
+        assert (
+            release_key("v1-alpha", "qemux86-64") == "images/v1-alpha/release/qemux86-64.wic.bz2"
+        )
         assert (
             release_bundle_key("v1-alpha", "qemux86-64")
             == "images/v1-alpha/release/qemux86-64.wic.bz2.bundle"

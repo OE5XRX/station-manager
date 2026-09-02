@@ -25,9 +25,7 @@ class GitHubRelease:
 
     def has_assets_for(self, machine: str, channel: str) -> bool:
         base = f"oe5xrx-{machine}-{channel}-{self.tag}.wic.bz2"
-        return all(
-            name in self.asset_names for name in (base, f"{base}.bundle", f"{base}.sha256")
-        )
+        return all(name in self.asset_names for name in (base, f"{base}.bundle", f"{base}.sha256"))
 
     def channels_for(self, machine: str) -> frozenset[str]:
         """Channels with a complete (wic+sha256+bundle) asset triple.

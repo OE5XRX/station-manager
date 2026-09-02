@@ -18,7 +18,9 @@ def test_get_image_variant_missing_returns_empty(tmp_path, monkeypatch):
 
 
 def test_get_image_variant_file_missing_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(heartbeat, "_OS_RELEASE_PATH", str(tmp_path / "nonexistent"), raising=False)
+    monkeypatch.setattr(
+        heartbeat, "_OS_RELEASE_PATH", str(tmp_path / "nonexistent"), raising=False
+    )
     assert heartbeat.get_image_variant() == ""
 
 

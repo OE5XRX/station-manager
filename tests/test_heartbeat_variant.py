@@ -9,7 +9,9 @@ from tests.conftest import device_auth_headers
 
 
 def test_serializer_accepts_optional_image_variant():
-    base = dict(hostname="h", os_version="o", uptime=1.0, module_versions={}, ip_address="10.0.0.1")
+    base = dict(
+        hostname="h", os_version="o", uptime=1.0, module_versions={}, ip_address="10.0.0.1"
+    )
     s = HeartbeatSerializer(data={**base, "image_variant": "dev"})
     assert s.is_valid(), s.errors
     assert s.validated_data["image_variant"] == "dev"

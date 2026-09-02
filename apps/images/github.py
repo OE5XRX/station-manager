@@ -5,8 +5,7 @@ import urllib.request
 from dataclasses import dataclass
 
 RELEASE_URL_FMT = (
-    "https://github.com/{repo}/releases/download/{tag}/"
-    "oe5xrx-{machine}-{channel}-{tag}.{ext}"
+    "https://github.com/{repo}/releases/download/{tag}/oe5xrx-{machine}-{channel}-{tag}.{ext}"
 )
 
 # GitHub asset downloads are ~70 MB; a healthy connection finishes in seconds.
@@ -26,8 +25,12 @@ def _get(url: str) -> bytes:
         return resp.read()
 
 
-def fetch_release_asset(repo: str, tag: str, machine: str, channel: str = "release") -> ReleaseAsset:
-    base = RELEASE_URL_FMT.format(repo=repo, tag=tag, machine=machine, channel=channel, ext="wic.bz2")
+def fetch_release_asset(
+    repo: str, tag: str, machine: str, channel: str = "release"
+) -> ReleaseAsset:
+    base = RELEASE_URL_FMT.format(
+        repo=repo, tag=tag, machine=machine, channel=channel, ext="wic.bz2"
+    )
     wic_bytes = _get(base)
     sha_text = _get(base + ".sha256").decode("utf-8").strip()
     # Format from `sha256sum`: "<64-hex>  <filename>"

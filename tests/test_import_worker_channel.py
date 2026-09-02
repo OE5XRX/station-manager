@@ -1,8 +1,10 @@
 """Tests that channel is threaded through the image import worker."""
+
 from __future__ import annotations
 
-import pytest
 from unittest import mock
+
+import pytest
 
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning.management.commands import run_background_jobs as rbj
