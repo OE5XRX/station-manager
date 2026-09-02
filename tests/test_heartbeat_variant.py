@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from django.core.cache import cache
 from django.urls import reverse
 
 from apps.api.serializers import HeartbeatSerializer
@@ -20,6 +21,15 @@ def test_serializer_accepts_optional_image_variant():
 
 @pytest.mark.django_db
 class TestHeartbeatPersistsImageVariant:
+    @pytest.fixture(autouse=True)
+    def _clear_throttle_bucket(self):
+        # The heartbeat endpoint uses a ScopedRateThrottle ("heartbeat", 10/min)
+        # whose counter lives in the shared Django cache, which pytest does not
+        # reset between tests. Earlier heartbeat tests can exhaust the bucket and
+        # cause 429s here. Clear it before each test to make these tests
+        # throttle-independent.
+        cache.clear()
+
     def _heartbeat_payload(self, image_variant=None):
         payload = {
             "hostname": "station-01",
