@@ -23,11 +23,28 @@ class GitHubRelease:
     is_latest: bool
     asset_names: frozenset[str]
 
-    def has_assets_for(self, machine: str) -> bool:
-        prefix = f"oe5xrx-{machine}-{self.tag}.wic.bz2"
+    def has_assets_for(self, machine: str, channel: str) -> bool:
+        base = f"oe5xrx-{machine}-{channel}-{self.tag}.wic.bz2"
         return all(
-            name in self.asset_names for name in (prefix, f"{prefix}.bundle", f"{prefix}.sha256")
+            name in self.asset_names for name in (base, f"{base}.bundle", f"{base}.sha256")
         )
+
+    def channels_for(self, machine: str) -> frozenset[str]:
+        """Channels with a complete (wic+sha256+bundle) asset triple.
+
+        Extract the channel token by stripping the known prefix and
+        suffix -- NEVER split on '-', because ``machine`` itself contains
+        hyphens (qemux86-64, raspberrypi4-64).
+        """
+        prefix = f"oe5xrx-{machine}-"
+        suffix = f"-{self.tag}.wic.bz2"
+        channels = set()
+        for name in self.asset_names:
+            if name.startswith(prefix) and name.endswith(suffix):
+                channel = name[len(prefix) : -len(suffix)]
+                if channel and self.has_assets_for(machine, channel):
+                    channels.add(channel)
+        return frozenset(channels)
 
 
 def _get_json(url: str):
