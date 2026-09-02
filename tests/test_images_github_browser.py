@@ -587,6 +587,33 @@ class TestQuickQueueViewValidation:
         assert response.status_code == 400
         assert ImageImportJob.objects.count() == 0
 
+    def test_invalid_channel_slug_uppercase_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "DEV", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
+    def test_invalid_channel_slug_space_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "de v", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
+    def test_invalid_channel_slug_slash_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "dev/x", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
 
 @pytest.mark.django_db
 class TestDottedTagSelectorRegression:
