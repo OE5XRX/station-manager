@@ -123,7 +123,7 @@
                   <span class="dot"></span>{{ station.get_status_display|upper }}
                 </span>
               </td>
-              <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—" }}</td>
+              <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—" }} {% include "images/_channel_badge.html" with channel=station.current_image_variant %}</td>
               <td class="t-mono" data-station-ip data-label="{% trans 'IP' %}">{{ station.last_ip_address|default:"—" }}</td>
               <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">{{ station.last_seen|timesince|default:"—" }}{% if station.last_seen %} {% trans "ago" %}{% endif %}</td>
               <td class="actions">

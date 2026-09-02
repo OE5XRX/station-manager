@@ -71,6 +71,7 @@ def broadcast_deployment_status(deployment, result=None):
             "completed_at": result.completed_at.isoformat() if result.completed_at else None,
             "tag": image.tag if image else "",
             "machine": image.machine if image else "",
+            "channel": image.channel if image else "",
         }
 
     async_to_sync(channel_layer.group_send)(

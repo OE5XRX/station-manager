@@ -58,6 +58,7 @@
               <span style="margin:0 6px;opacity:0.5;">→</span>
               <span class="t-mono" style="font-weight:600;">{{ release.tag }}</span>
             </span>
+            {% include "images/_channel_badge.html" with channel=release.channel %}
           {% endfor %}
         </div>
       {% else %}
@@ -166,7 +167,7 @@
                   </a>
                 </td>
                 <td class="t-mono" data-label="{% trans 'Machine' %}">{{ station.current_image_release.machine }}</td>
-                <td class="t-mono" data-label="{% trans 'Tag' %}">{{ station.current_image_release.tag }}</td>
+                <td class="t-mono" data-label="{% trans 'Tag' %}">{{ station.current_image_release.tag }} {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}</td>
                 <td data-label="{% trans 'OK' %}" style="color:var(--signal);font-weight:700;">&#10003;</td>
               </tr>
             {% endfor %}

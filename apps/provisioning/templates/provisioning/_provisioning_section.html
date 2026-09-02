@@ -33,7 +33,7 @@
               {% for img in image_releases %}
                 {% if img.machine == machine_value %}
                   <option value="{{ img.pk }}"{% if img.is_latest %} selected{% endif %}>
-                    {{ img.tag }}{% if img.is_latest %} ({% trans "latest" %}){% endif %}
+                    {{ img.tag }}{% if img.channel %} [{{ img.channel }}]{% endif %}{% if img.is_latest %} ({% trans "latest" %}){% endif %}
                   </option>
                 {% endif %}
               {% endfor %}
