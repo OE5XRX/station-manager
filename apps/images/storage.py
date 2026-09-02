@@ -4,21 +4,21 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
 
-def release_key(tag: str, machine: str) -> str:
-    return f"images/{tag}/{machine}.wic.bz2"
+def release_key(tag: str, machine: str, channel: str = "release") -> str:
+    return f"images/{tag}/{channel}/{machine}.wic.bz2"
 
 
-def release_bundle_key(tag: str, machine: str) -> str:
-    return f"{release_key(tag, machine)}.bundle"
+def release_bundle_key(tag: str, machine: str, channel: str = "release") -> str:
+    return f"{release_key(tag, machine, channel)}.bundle"
 
 
-def release_rootfs_key(tag: str, machine: str) -> str:
+def release_rootfs_key(tag: str, machine: str, channel: str = "release") -> str:
     """S3 key for the extracted root partition artifact.
 
-    Lives alongside the full wic under the same ``images/<tag>/``
+    Lives alongside the full wic under the same ``images/<tag>/<channel>/``
     prefix so cleanup of a given release can delete the whole folder.
     """
-    return f"images/{tag}/{machine}.rootfs.bz2"
+    return f"images/{tag}/{channel}/{machine}.rootfs.bz2"
 
 
 def upload_bytes(key: str, data: bytes) -> None:
