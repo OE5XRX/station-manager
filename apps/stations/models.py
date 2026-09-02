@@ -124,6 +124,13 @@ class Station(models.Model):
     # Agent-reported state
     current_os_version = models.CharField(_("current OS version"), max_length=100, blank=True)
     current_agent_version = models.CharField(_("current agent version"), max_length=50, blank=True)
+    current_image_variant = models.CharField(
+        _("current image variant"),
+        max_length=32,
+        blank=True,
+        default="",
+        help_text=_("Baked image channel (VARIANT_ID) reported by the agent heartbeat."),
+    )
     last_ip_address = models.GenericIPAddressField(_("last IP address"), null=True, blank=True)
     last_seen = models.DateTimeField(_("last seen"), null=True, blank=True)
     status = models.CharField(
