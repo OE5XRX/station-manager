@@ -58,6 +58,10 @@ class TestConfigRender:
         assert "ed25519_key_path: /etc/stationagent/device_key.pem" in yaml_text
         assert "terminal_enabled: true" in yaml_text
         assert "terminal_shell: /bin/sh" in yaml_text
+        # Control channel must be enabled for provisioned stations so the
+        # browser control panel + TX-lock work (control_enabled defaults to
+        # False in the agent, so provisioning must set it explicitly).
+        assert "control_enabled: true" in yaml_text
 
 
 @pytest.mark.skipif(shutil.which("guestfish") is None, reason="guestfish not installed")
