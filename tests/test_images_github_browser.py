@@ -16,6 +16,12 @@ from apps.images.github_releases import (
 from apps.images.models import ImageImportJob, ImageRelease
 
 
+def _triple(machine, channel, tag):
+    """Symmetric asset triple: oe5xrx-<machine>-<channel>-<tag>.wic.bz2 (+sidecars)."""
+    base = f"oe5xrx-{machine}-{channel}-{tag}.wic.bz2"
+    return {base, f"{base}.bundle", f"{base}.sha256"}
+
+
 class TestGitHubReleaseAssets:
     def _release(self, names):
         return GitHubRelease(
@@ -26,51 +32,51 @@ class TestGitHubReleaseAssets:
         )
 
     def test_all_three_assets_present_returns_true(self):
-        rel = self._release(
-            [
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
-            ]
-        )
-        assert rel.has_assets_for("qemux86-64") is True
+        rel = self._release(_triple("qemux86-64", "release", "v1-alpha"))
+        assert rel.has_assets_for("qemux86-64", "release") is True
 
     def test_missing_bundle_returns_false(self):
-        rel = self._release(
-            [
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
-            ]
-        )
-        assert rel.has_assets_for("qemux86-64") is False
+        base = "oe5xrx-qemux86-64-release-v1-alpha.wic.bz2"
+        rel = self._release([base, f"{base}.sha256"])
+        assert rel.has_assets_for("qemux86-64", "release") is False
 
     def test_missing_sha256_returns_false(self):
-        rel = self._release(
-            [
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
-            ]
-        )
-        assert rel.has_assets_for("qemux86-64") is False
+        base = "oe5xrx-qemux86-64-release-v1-alpha.wic.bz2"
+        rel = self._release([base, f"{base}.bundle"])
+        assert rel.has_assets_for("qemux86-64", "release") is False
 
     def test_missing_wic_returns_false(self):
-        rel = self._release(
-            [
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
-            ]
-        )
-        assert rel.has_assets_for("qemux86-64") is False
+        base = "oe5xrx-qemux86-64-release-v1-alpha.wic.bz2"
+        rel = self._release([f"{base}.bundle", f"{base}.sha256"])
+        assert rel.has_assets_for("qemux86-64", "release") is False
 
     def test_other_machine_assets_dont_satisfy(self):
-        rel = self._release(
-            [
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.bundle",
-                "oe5xrx-qemux86-64-v1-alpha.wic.bz2.sha256",
-            ]
+        rel = self._release(_triple("qemux86-64", "release", "v1-alpha"))
+        assert rel.has_assets_for("raspberrypi4-64", "release") is False
+
+    def test_other_channel_assets_dont_satisfy(self):
+        rel = self._release(_triple("qemux86-64", "release", "v1-alpha"))
+        assert rel.has_assets_for("qemux86-64", "dev") is False
+
+    def test_channels_for_extracts_dev_and_release(self):
+        names = _triple("qemux86-64", "release", "v1-alpha") | _triple(
+            "qemux86-64", "dev", "v1-alpha"
         )
-        assert rel.has_assets_for("raspberrypi4-64") is False
+        assert self._release(names).channels_for("qemux86-64") == frozenset({"release", "dev"})
+
+    def test_channels_for_handles_hyphenated_machine(self):
+        # raspberrypi4-64 contains a hyphen; channel must be extracted by
+        # prefix/suffix strip, not by splitting on '-'.
+        names = _triple("raspberrypi4-64", "dev", "v1-alpha")
+        assert self._release(names).channels_for("raspberrypi4-64") == frozenset({"dev"})
+
+    def test_channels_for_ignores_incomplete_triple(self):
+        base = "oe5xrx-qemux86-64-dev-v1-alpha.wic.bz2"
+        names = {base, f"{base}.sha256"}  # missing .bundle
+        assert self._release(names).channels_for("qemux86-64") == frozenset()
+
+    def test_channels_for_empty_when_no_assets(self):
+        assert self._release([]).channels_for("qemux86-64") == frozenset()
 
 
 def _gh_response(payload):
@@ -236,11 +242,21 @@ class TestRoutingAndAuth:
         assert response.status_code == 302
 
 
-def _mk_release(tag, is_latest=False, machines=("qemux86-64", "raspberrypi4-64")):
+def _mk_release(
+    tag,
+    is_latest=False,
+    machines=("qemux86-64", "raspberrypi4-64"),
+    channels=("release",),
+):
+    """Build a release with symmetric channel-aware asset names.
+
+    By default each machine gets a complete release-channel triple. Pass
+    ``channels`` to add/replace which channels are present per machine.
+    """
     names = set()
     for m in machines:
-        prefix = f"oe5xrx-{m}-{tag}.wic.bz2"
-        names.update([prefix, f"{prefix}.bundle", f"{prefix}.sha256"])
+        for channel in channels:
+            names.update(_triple(m, channel, tag))
     return GitHubRelease(
         tag=tag,
         html_url=f"https://github.com/x/{tag}",
@@ -273,10 +289,10 @@ class TestGitHubReleasesPartialViewHappy:
         body = response.content.decode()
         # 10 newest tags visible
         for tag in [f"v{i}" for i in range(12, 2, -1)]:
-            assert f"gh-row-{tag}-qemux86-64" in body
+            assert f"gh-row-{tag}-qemux86-64-release" in body
         # v2 and v1 hidden
-        assert "gh-row-v2-qemux86-64" not in body
-        assert "gh-row-v1-qemux86-64" not in body
+        assert "gh-row-v2-qemux86-64-release" not in body
+        assert "gh-row-v1-qemux86-64-release" not in body
 
     def test_show_all_widens_to_full_list(self, client, admin_user, monkeypatch):
         releases = [_mk_release(f"v{i}") for i in range(12, 0, -1)]
@@ -287,8 +303,8 @@ class TestGitHubReleasesPartialViewHappy:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial") + "?show=all")
         body = response.content.decode()
-        assert "gh-row-v1-qemux86-64" in body
-        assert "gh-row-v12-qemux86-64" in body
+        assert "gh-row-v1-qemux86-64-release" in body
+        assert "gh-row-v12-qemux86-64-release" in body
 
     def test_imported_machine_row_is_omitted(self, client, admin_user, monkeypatch):
         ImageRelease.objects.create(
@@ -306,8 +322,9 @@ class TestGitHubReleasesPartialViewHappy:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial"))
         body = response.content.decode()
-        assert "gh-row-v1-qemux86-64" not in body  # imported → omitted
-        assert "gh-row-v1-raspberrypi4-64" in body  # missing → visible
+        # qemu/release imported → omitted; rpi/release not imported → visible
+        assert "gh-row-v1-qemux86-64-release" not in body
+        assert "gh-row-v1-raspberrypi4-64-release" in body
 
     def test_tag_fully_imported_is_omitted_entirely(self, client, admin_user, monkeypatch):
         for m in ("qemux86-64", "raspberrypi4-64"):
@@ -326,8 +343,9 @@ class TestGitHubReleasesPartialViewHappy:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial"))
         body = response.content.decode()
+        # Every (machine, release) combo of v1 is imported → whole tag omitted.
         assert "gh-row-v1-" not in body
-        assert "gh-row-v2-qemux86-64" in body
+        assert "gh-row-v2-qemux86-64-release" in body
 
     def test_pending_job_shows_queued_state(self, client, admin_user, monkeypatch):
         ImageImportJob.objects.create(
@@ -344,15 +362,18 @@ class TestGitHubReleasesPartialViewHappy:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial"))
         body = response.content.decode()
-        assert "gh-row-v1-qemux86-64" in body
+        assert "gh-row-v1-qemux86-64-release" in body
         # Queued-row contains the QUEUED pill, no submit button
-        row_start = body.index("gh-row-v1-qemux86-64")
+        row_start = body.index("gh-row-v1-qemux86-64-release")
         row_end = body.index("</tr>", row_start)
         row = body[row_start:row_end]
         assert "QUEUED" in row
         assert "hx-post" not in row
 
-    def test_missing_asset_disables_queue(self, client, admin_user, monkeypatch):
+    def test_machine_without_complete_triple_has_no_row(self, client, admin_user, monkeypatch):
+        # Only qemu has a complete triple; rpi has none. With dynamic
+        # discovery an undiscovered machine/channel simply produces no row
+        # (there is no "no asset" disabled state anymore).
         rel = _mk_release("v1", machines=("qemux86-64",))  # no rpi assets
         monkeypatch.setattr(
             "apps.images.views.github_releases.fetch_releases",
@@ -361,11 +382,24 @@ class TestGitHubReleasesPartialViewHappy:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial"))
         body = response.content.decode()
-        rpi_row_start = body.index("gh-row-v1-raspberrypi4-64")
-        rpi_row_end = body.index("</tr>", rpi_row_start)
-        rpi_row = body[rpi_row_start:rpi_row_end]
-        assert "no asset" in rpi_row
-        assert "disabled" in rpi_row
+        assert "gh-row-v1-qemux86-64-release" in body
+        assert "gh-row-v1-raspberrypi4-64" not in body
+
+    def test_multiple_channels_render_separate_rows(self, client, admin_user, monkeypatch):
+        rel = _mk_release("v1", machines=("qemux86-64",), channels=("release", "dev"))
+        monkeypatch.setattr(
+            "apps.images.views.github_releases.fetch_releases",
+            lambda repo, limit: [rel],
+        )
+        client.force_login(admin_user)
+        response = client.get(reverse("images:gh_partial"))
+        body = response.content.decode()
+        assert "gh-row-v1-qemux86-64-release" in body
+        assert "gh-row-v1-qemux86-64-dev" in body
+        # Non-release channel gets a prominent accent pill labelled DEV.
+        dev_start = body.index("gh-row-v1-qemux86-64-dev")
+        dev_end = body.index("</tr>", dev_start)
+        assert "DEV" in body[dev_start:dev_end]
 
     def test_is_latest_renders_pill(self, client, admin_user, monkeypatch):
         rel = _mk_release("v1", is_latest=True)
@@ -376,7 +410,7 @@ class TestGitHubReleasesPartialViewHappy:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial"))
         body = response.content.decode()
-        row_start = body.index("gh-row-v1-qemux86-64")
+        row_start = body.index("gh-row-v1-qemux86-64-release")
         row_end = body.index("</tr>", row_start)
         assert "LATEST" in body[row_start:row_end]
 
@@ -403,17 +437,51 @@ class TestQuickQueueViewCore:
         client.force_login(admin_user)
         response = client.post(
             reverse("images:gh_queue"),
-            {"tag": "v1", "machine": "qemux86-64", "is_latest": "1"},
+            {"tag": "v1", "machine": "qemux86-64", "channel": "release", "is_latest": "1"},
         )
         assert response.status_code == 200
         job = ImageImportJob.objects.get()
         assert job.tag == "v1"
         assert job.machine == "qemux86-64"
+        assert job.channel == "release"
         assert job.mark_as_latest is True
         assert job.status == ImageImportJob.Status.PENDING
         assert job.requested_by == admin_user
         assert b"QUEUED" in response.content
-        assert b"gh-row-v1-qemux86-64" in response.content
+        assert b"gh-row-v1-qemux86-64-release" in response.content
+
+    def test_creates_job_with_dev_channel(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "dev", "is_latest": "1"},
+        )
+        assert response.status_code == 200
+        job = ImageImportJob.objects.get()
+        assert job.channel == "dev"
+        assert b"gh-row-v1-qemux86-64-dev" in response.content
+
+    def test_omitted_channel_defaults_release(self, client, admin_user):
+        client.force_login(admin_user)
+        client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "is_latest": "0"},
+        )
+        job = ImageImportJob.objects.get()
+        assert job.channel == "release"
+
+    def test_same_tag_machine_different_channel_creates_two_jobs(self, client, admin_user):
+        client.force_login(admin_user)
+        client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "release"},
+        )
+        client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "dev"},
+        )
+        assert ImageImportJob.objects.count() == 2
+        assert set(ImageImportJob.objects.values_list("channel", flat=True)) == {"release", "dev"}
 
     def test_creates_job_with_is_latest_false(self, client, admin_user):
         client.force_login(admin_user)
@@ -510,6 +578,15 @@ class TestQuickQueueViewValidation:
         assert response.status_code == 400
         assert ImageImportJob.objects.count() == 0
 
+    def test_empty_channel_returns_400(self, client, admin_user):
+        client.force_login(admin_user)
+        response = client.post(
+            reverse("images:gh_queue"),
+            {"tag": "v1", "machine": "qemux86-64", "channel": "   ", "is_latest": "0"},
+        )
+        assert response.status_code == 400
+        assert ImageImportJob.objects.count() == 0
+
 
 @pytest.mark.django_db
 class TestDottedTagSelectorRegression:
@@ -530,30 +607,30 @@ class TestDottedTagSelectorRegression:
         body = response.content.decode()
         # Row is still findable by id (HTML id allows dots, only CSS selector
         # parsing trips up).
-        assert f'id="gh-row-{tag}-qemux86-64"' in body
+        assert f'id="gh-row-{tag}-qemux86-64-release"' in body
         # hx-target must NOT use the bare id selector.
-        bad_selector = f'hx-target="#gh-row-{tag}-qemux86-64"'
+        bad_selector = f'hx-target="#gh-row-{tag}-qemux86-64-release"'
         assert bad_selector not in body, (
             "hx-target uses bare id selector which CSS misparses on dots; "
             "switch to attribute selector"
         )
         # Verify our actual fix is in place.
-        assert f'data-gh-row="{tag}-qemux86-64"' in body
-        assert f"hx-target=\"[data-gh-row='{tag}-qemux86-64']\"" in body
+        assert f'data-gh-row="{tag}-qemux86-64-release"' in body
+        assert f"hx-target=\"[data-gh-row='{tag}-qemux86-64-release']\"" in body
 
     def test_dotted_tag_quick_queue_returns_swappable_row(self, client, admin_user):
         tag = "2026.04.24-18"
         client.force_login(admin_user)
         response = client.post(
             reverse("images:gh_queue"),
-            {"tag": tag, "machine": "qemux86-64", "is_latest": "1"},
+            {"tag": tag, "machine": "qemux86-64", "channel": "release", "is_latest": "1"},
         )
         assert response.status_code == 200
         body = response.content.decode()
         # The returned row still carries both the id and the data attribute
         # so HTMX outerHTML-swap finds it via the original attribute selector.
-        assert f'id="gh-row-{tag}-qemux86-64"' in body
-        assert f'data-gh-row="{tag}-qemux86-64"' in body
+        assert f'id="gh-row-{tag}-qemux86-64-release"' in body
+        assert f'data-gh-row="{tag}-qemux86-64-release"' in body
 
 
 @pytest.mark.django_db
@@ -643,8 +720,8 @@ class TestArchivedReleaseHandling:
         client.force_login(admin_user)
         response = client.get(reverse("images:gh_partial"))
         body = response.content.decode()
-        # Archived (tag,machine) must be treated as imported -> row omitted.
-        assert "gh-row-v1-qemux86-64" not in body
+        # Archived (tag,machine,channel) must be treated as imported -> row omitted.
+        assert "gh-row-v1-qemux86-64-release" not in body
 
     def test_archived_release_quick_queue_returns_imported(self, client, admin_user):
         release = ImageRelease.objects.create(

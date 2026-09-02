@@ -22,7 +22,6 @@ ALL_LIMIT = 30
 class _RowState(StrEnum):
     READY = "ready"
     QUEUED = "queued"
-    NO_ASSET = "no_asset"
 
 
 def _storage_backend_label() -> str:
@@ -225,32 +224,34 @@ class GitHubReleasesPartialView(AdminRequiredMixin, View):
                 {"error": str(exc), "show": show},
             )
 
-        imported = set(ImageRelease.all_objects.values_list("tag", "machine"))
+        imported = set(ImageRelease.all_objects.values_list("tag", "machine", "channel"))
         in_flight = set(
             ImageImportJob.objects.filter(
                 status__in=[
                     ImageImportJob.Status.PENDING,
                     ImageImportJob.Status.RUNNING,
                 ]
-            ).values_list("tag", "machine")
+            ).values_list("tag", "machine", "channel")
         )
 
         rows_by_tag = []
         for rel in releases:
-            machine_rows = []
+            rows = []
             for m in MACHINES:
-                key = (rel.tag, m.value)
-                if key in imported:
-                    continue
-                if key in in_flight:
-                    state = _RowState.QUEUED.value
-                elif not rel.has_assets_for(m.value):
-                    state = _RowState.NO_ASSET.value
-                else:
-                    state = _RowState.READY.value
-                machine_rows.append((m.value, state))
-            if machine_rows:
-                rows_by_tag.append((rel, machine_rows))
+                for channel in sorted(rel.channels_for(m.value)):
+                    key = (rel.tag, m.value, channel)
+                    if key in imported:
+                        continue
+                    # channels_for() only returns channels with a complete
+                    # asset triple, so there is no NO_ASSET state here.
+                    state = (
+                        _RowState.QUEUED.value
+                        if key in in_flight
+                        else _RowState.READY.value
+                    )
+                    rows.append((m.value, channel, state))
+            if rows:
+                rows_by_tag.append((rel, rows))
 
         if show != "all":
             rows_by_tag = rows_by_tag[:NEWEST_LIMIT]
@@ -266,39 +267,49 @@ class QuickQueueView(AdminRequiredMixin, View):
     def post(self, request):
         tag = request.POST.get("tag", "").strip()
         machine = request.POST.get("machine", "").strip()
+        channel = request.POST.get("channel", "release").strip()
         is_latest = request.POST.get("is_latest", "0") == "1"
-        if not tag or machine not in {m.value for m in MACHINES}:
-            return HttpResponseBadRequest("invalid tag/machine")
+        if not tag or machine not in {m.value for m in MACHINES} or not channel:
+            return HttpResponseBadRequest("invalid tag/machine/channel")
 
-        if ImageRelease.all_objects.filter(tag=tag, machine=machine).exists():
-            return _render_row(request, tag, machine, is_latest=is_latest, state="imported")
+        if ImageRelease.all_objects.filter(tag=tag, machine=machine, channel=channel).exists():
+            return _render_row(
+                request, tag, machine, channel=channel, is_latest=is_latest, state="imported"
+            )
         existing = ImageImportJob.objects.filter(
             tag=tag,
             machine=machine,
+            channel=channel,
             status__in=[
                 ImageImportJob.Status.PENDING,
                 ImageImportJob.Status.RUNNING,
             ],
         ).first()
         if existing:
-            return _render_row(request, tag, machine, is_latest=is_latest, state="queued")
+            return _render_row(
+                request, tag, machine, channel=channel, is_latest=is_latest, state="queued"
+            )
 
         ImageImportJob.objects.create(
             tag=tag,
             machine=machine,
+            channel=channel,
             mark_as_latest=is_latest,
             requested_by=request.user,
         )
-        return _render_row(request, tag, machine, is_latest=is_latest, state="queued")
+        return _render_row(
+            request, tag, machine, channel=channel, is_latest=is_latest, state="queued"
+        )
 
 
-def _render_row(request, tag, machine, *, is_latest, state, html_url=""):
+def _render_row(request, tag, machine, *, channel, is_latest, state, html_url=""):
     return render(
         request,
         "images/_github_release_row.html",
         {
             "tag": tag,
             "machine": machine,
+            "channel": channel,
             "is_latest": is_latest,
             "state": state,
             "html_url": html_url,
