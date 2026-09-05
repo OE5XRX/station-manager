@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "apps.deployments",
     "apps.tunnel",
     "apps.control",
+    "apps.audio",
     "apps.audit",
     "apps.monitoring",
     "apps.webpush",
