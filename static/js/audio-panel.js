@@ -92,7 +92,8 @@
       _micSeq: 0,
       _micTs: 0,
       _micPrevKeyed: false,     // to detect unkeyed→keyed edge for mic_open/close
-      _sidetoneGain: null,      // GainNode for sidetone path (on _micCtx)
+      _sidetoneSource: null,    // MediaStreamAudioSourceNode on _audioCtx (sidetone monitor)
+      _sidetoneGain: null,      // GainNode for sidetone path (on _audioCtx)
       _workletLoaded: false,
       _micWarnedNoRef: false,   // one-shot warn when op.mic ref is missing
 
@@ -1001,13 +1002,19 @@
           this._sendJSON({ v: 1, type: "mic_close" });
         }
 
-        // Sidetone gain node lives on the mic context — disconnect + drop it so
-        // it does not survive an enable/disable cycle.
+        // Sidetone nodes live on the main playback context — disconnect + drop
+        // them so they do not survive an enable/disable cycle.
         if (this._sidetoneGain) {
           try {
             this._sidetoneGain.disconnect();
           } catch (_) {}
           this._sidetoneGain = null;
+        }
+        if (this._sidetoneSource) {
+          try {
+            this._sidetoneSource.disconnect();
+          } catch (_) {}
+          this._sidetoneSource = null;
         }
 
         if (this._micWorkletNode) {
@@ -1062,25 +1069,41 @@
       },
 
       _updateSidetone: function () {
-        // Sidetone is a browser-local monitor path. The mic lives on its own
-        // 16 kHz context, and Web Audio nodes cannot connect across contexts,
-        // so the sidetone gain routes to the mic context's own destination.
-        if (!this._micCtx || !this._micSource) return;
+        // Sidetone is a browser-local monitor path. The mic ENCODE path lives on
+        // _micCtx (16 kHz capture context). Web Audio nodes cannot connect across
+        // contexts, so the sidetone monitor is built on the MAIN _audioCtx using
+        // a separate MediaStreamAudioSourceNode fed by the same _micStream
+        // (sharing a MediaStream across contexts is allowed; sharing nodes is not).
+        if (!this._micStream || !this._audioCtx) return;
 
         if (!this._sidetoneGain) {
-          this._sidetoneGain = this._micCtx.createGain();
-          this._sidetoneGain.connect(this._micCtx.destination);
-        }
-        this._sidetoneGain.gain.value = A.dbToLinear(this.sidetoneGainDb);
-
-        if (this.sidetone) {
-          try {
-            this._micSource.connect(this._sidetoneGain);
-          } catch (_) {}
+          // Build the sidetone graph on the main playback context.
+          this._sidetoneSource = this._audioCtx.createMediaStreamSource(
+            this._micStream
+          );
+          this._sidetoneGain = this._audioCtx.createGain();
+          this._sidetoneGain.gain.value = A.dbToLinear(
+            A.clampGainDb(this.sidetoneGainDb)
+          );
+          // Wire: sidetoneSource → sidetoneGain → _masterGain (reaches speakers).
+          this._sidetoneSource.connect(this._sidetoneGain);
+          this._sidetoneGain.connect(this._masterGain);
         } else {
+          this._sidetoneGain.gain.value = A.dbToLinear(
+            A.clampGainDb(this.sidetoneGainDb)
+          );
+        }
+
+        if (!this.sidetone) {
+          // Sidetone toggled off — disconnect and drop both nodes.
           try {
-            this._micSource.disconnect(this._sidetoneGain);
+            this._sidetoneGain.disconnect();
           } catch (_) {}
+          this._sidetoneGain = null;
+          try {
+            this._sidetoneSource.disconnect();
+          } catch (_) {}
+          this._sidetoneSource = null;
         }
       },
     };
