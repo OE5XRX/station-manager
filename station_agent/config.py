@@ -37,6 +37,15 @@ class AgentConfig:
     slot_command_timeout: float = 5.0
     telemetry_default_interval_ms: int = 1000
     telemetry_min_floor_ms: int = 200
+    # Audio subsystem (Session B). Off by default; needs the audio-capable image (PipeWire +
+    # GStreamer) on the target. The runtime shells out to gst-launch/pw-*/wpctl — no new deps.
+    audio_enabled: bool = False
+    audio_rx_rate: int = 8000  # FM module native (8 kHz NB); op.mic uplink is 16 kHz WB
+    audio_mic_rate: int = 16000
+    audio_udp_port_base: int = 47000
+    audio_dead_man_timeout: float = 1.5
+    audio_router_slot: int = 1000  # synthetic control-plane slot for the audio-router module
+    audio_sysfs_sound: str = "/sys/class/sound"
 
     def validate(self):
         """Validate that required fields are present."""
@@ -92,6 +101,13 @@ def load_config() -> AgentConfig:
         slot_command_timeout=float(data.get("slot_command_timeout", 5.0)),
         telemetry_default_interval_ms=int(data.get("telemetry_default_interval_ms", 1000)),
         telemetry_min_floor_ms=int(data.get("telemetry_min_floor_ms", 200)),
+        audio_enabled=bool(data.get("audio_enabled", False)),
+        audio_rx_rate=int(data.get("audio_rx_rate", 8000)),
+        audio_mic_rate=int(data.get("audio_mic_rate", 16000)),
+        audio_udp_port_base=int(data.get("audio_udp_port_base", 47000)),
+        audio_dead_man_timeout=float(data.get("audio_dead_man_timeout", 1.5)),
+        audio_router_slot=int(data.get("audio_router_slot", 1000)),
+        audio_sysfs_sound=str(data.get("audio_sysfs_sound", "/sys/class/sound")),
     )
     config.validate()
     return config

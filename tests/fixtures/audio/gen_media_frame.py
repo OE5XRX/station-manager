@@ -22,7 +22,7 @@ import av  # type: ignore
 
 # Import the production packer so the fixture stays byte-identical to what the agent emits.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
-from station_agent.audio import frame as F  # noqa: E402
+from station_agent.audio import frame  # noqa: E402
 
 RATE = 8000
 TONE_HZ = 1000
@@ -63,9 +63,9 @@ def main() -> int:
         print("ERROR: encoder produced no Opus packet", file=sys.stderr)
         return 1
 
-    frame = F.pack_frame(stream_ref=0, seq=0, ts=0, flags=0, payload=packet_bytes)
-    OUT.write_bytes(frame)
-    print(f"wrote {OUT} ({len(frame)} bytes; opus payload {len(packet_bytes)} bytes)")
+    data = frame.pack_frame(stream_ref=0, seq=0, ts=0, flags=0, payload=packet_bytes)
+    OUT.write_bytes(data)
+    print(f"wrote {OUT} ({len(data)} bytes; opus payload {len(packet_bytes)} bytes)")
     return 0
 
 

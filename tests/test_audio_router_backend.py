@@ -6,9 +6,12 @@ import pytest
 
 from station_agent.audio.router_backend import PipeWireRouterBackend, RunResult
 
-
 # A pw-dump snapshot reflecting Finding 2: on REAL HW the node.name carries the module
 # serial, NOT the USB port — so resolution MUST key on api.alsa.card, never the name.
+_SERIAL = "2031394D3646500E004B004F"
+RX_NODE = f"alsa_input.usb-OE5XRX_FM_Transceiver_Board_{_SERIAL}-03.mono-fallback"
+TX_NODE = f"alsa_output.usb-OE5XRX_FM_Transceiver_Board_{_SERIAL}-03.mono-fallback"
+
 PW_DUMP = json.dumps(
     [
         {"id": 30, "type": "PipeWire:Interface:Core"},
@@ -19,7 +22,7 @@ PW_DUMP = json.dumps(
                 "props": {
                     "media.class": "Audio/Source",
                     "api.alsa.card": 1,
-                    "node.name": "alsa_input.usb-OE5XRX_FM_Transceiver_Board_2031394D3646500E004B004F-03.mono-fallback",
+                    "node.name": RX_NODE,
                 }
             },
         },
@@ -30,7 +33,7 @@ PW_DUMP = json.dumps(
                 "props": {
                     "media.class": "Audio/Sink",
                     "api.alsa.card": 1,
-                    "node.name": "alsa_output.usb-OE5XRX_FM_Transceiver_Board_2031394D3646500E004B004F-03.mono-fallback",
+                    "node.name": TX_NODE,
                 }
             },
         },
@@ -82,7 +85,8 @@ def test_resolve_rx_node_by_alsa_card_not_name(tmp_path):
     b = make_backend(tmp_path)
     node = b.resolve_node(1, "rx")
     # slot 1 → card 1 → the Audio/Source on card 1 (serial-based name; port is NOT in it)
-    assert node == "alsa_input.usb-OE5XRX_FM_Transceiver_Board_2031394D3646500E004B004F-03.mono-fallback"
+    assert node == RX_NODE
+    assert "1.3" not in node  # Finding 2: the USB port is absent from the real node.name
 
 
 def test_resolve_tx_node_is_the_sink(tmp_path):

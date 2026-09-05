@@ -187,7 +187,7 @@ class RxBridge:
         while not self._stop.is_set():
             try:
                 datagram, _addr = self._sock.recvfrom(4096)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 return  # socket closed on stop()

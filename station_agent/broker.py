@@ -48,9 +48,14 @@ class Broker:
         telemetry_default_interval_ms: int = 1000,
         telemetry_min_floor_ms: int = 200,
         trace_serial: bool = False,
+        virtual_modules=None,
         now=time.monotonic,
     ):
         self._send = send
+        # Virtual modules (e.g. the audio-router, Spec 0 §5.6) present a descriptor + their
+        # own command handler on the existing control-plane. Keyed by (slot, module_id).
+        # Empty by default ⇒ byte-identical behaviour to the physical-only broker.
+        self._virtual = {(vm.slot, vm.module_id): vm for vm in (virtual_modules or [])}
         # Hex-dump every control-path TX/RX (SlotControl.execute) when tracing is
         # on, so `trace_serial` covers BOTH serial paths (discovery + control),
         # not just discovery.
@@ -99,6 +104,10 @@ class Broker:
                     "identity": module.get("identity", {}),
                     "capabilities": module.get("capabilities", []),
                 }
+        # Register virtual modules alongside the discovered physical ones so they appear in
+        # inventory and command routing. They carry no control device.
+        for (slot, mid), vm in self._virtual.items():
+            self._descriptors[(slot, mid)] = vm.descriptor()
 
     def _descriptor(self, slot, module) -> dict | None:
         return self._descriptors.get((slot, module))
@@ -160,6 +169,13 @@ class Broker:
             )
             return
 
+        # Virtual modules validate + execute their own commands (their value types are not
+        # the physical FW token vocabulary), so route to them before the descriptor path.
+        vm = self._virtual.get((slot, module))
+        if vm is not None:
+            await self._handle_virtual_command(request_id, slot, module, vm, op, capability, value)
+            return
+
         caps = desc.index_capabilities(descriptor)
         cap = caps.get(capability)
         try:
@@ -187,6 +203,29 @@ class Broker:
             err_code = result.get("error", proto.TIMEOUT)
             await self._send(proto.build_result(request_id, False, error=(err_code, "")))
 
+    async def _handle_virtual_command(
+        self, request_id, slot, module, vm, op, capability, value
+    ) -> None:
+        try:
+            result = await vm.handle_command(op, capability, value)
+        except Exception:  # noqa: BLE001 — a virtual handler must not break the control link
+            logger.exception("broker: virtual module %s/%s handler raised", slot, module)
+            await self._send(
+                proto.build_result(
+                    request_id, False, error=(proto.VALIDATION_FAILED, "handler error")
+                )
+            )
+            return
+        if result.get("ok"):
+            await self._send(proto.build_result(request_id, True, value=result.get("value")))
+            await self._send(
+                proto.build_state(slot, module, {capability: result.get("value")}, self._ts())
+            )
+        else:
+            err = result.get("error", (proto.VALIDATION_FAILED, ""))
+            code, emsg = err if isinstance(err, tuple) else (err, "")
+            await self._send(proto.build_result(request_id, False, error=(code, emsg)))
+
     async def emit_inventory(self) -> None:
         slots_out = []
         # Deterministic order: sort by slot number.
@@ -199,6 +238,19 @@ class Broker:
                 caps = descriptor.get("capabilities", [])
                 if not isinstance(caps, list):
                     caps = []
+                vm = self._virtual.get((slot, module))
+                if vm is not None:
+                    # Virtual modules have no control device; snapshot their own state
+                    # instead of polling a serial line.
+                    modules_out.append(
+                        {
+                            "module": module,
+                            "identity": descriptor.get("identity", {}),
+                            "capabilities": caps,
+                            "state": vm.state(),
+                        }
+                    )
+                    continue
                 state = {}
                 for cap in caps:
                     if not isinstance(cap, dict):

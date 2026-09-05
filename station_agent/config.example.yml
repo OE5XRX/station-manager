@@ -34,3 +34,14 @@ slot_command_timeout: 5.0
 # Telemetry subscription: default poll interval and the hard floor (ms).
 telemetry_default_interval_ms: 1000
 telemetry_min_floor_ms: 200
+
+# Audio subsystem (Session B). Off by default; needs the audio-capable image
+# (PipeWire + WirePlumber + GStreamer). Streams FM RX to the browser and injects
+# the browser mic into the module TX over the audio-WebSocket. When enabled together
+# with control_enabled, the audio-router appears as a virtual control-plane module.
+audio_enabled: false
+audio_rx_rate: 8000    # FM module native (8 kHz NB)
+audio_mic_rate: 16000  # operator mic uplink (16 kHz WB)
+audio_udp_port_base: 47000  # loopback UDP ports for the gst-launch <-> agent bridge
+audio_dead_man_timeout: 1.5  # tear down mic→TX if no mic media within this many seconds
+audio_router_slot: 1000  # synthetic control-plane slot for the audio-router module

@@ -2,7 +2,7 @@
 """Pure-Python Goertzel single-frequency power detector for the audio selftest."""
 import math
 
-from station_agent.audio.goertzel import goertzel_power, dominant_bin
+from station_agent.audio.goertzel import dominant_bin, goertzel_power
 
 
 def _sine(freq, rate, n, amp=0.5):

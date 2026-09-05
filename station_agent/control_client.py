@@ -36,8 +36,11 @@ BACKOFF_FACTOR = 2.0
 
 
 class ControlClient:
-    def __init__(self, config: AgentConfig):
+    def __init__(self, config: AgentConfig, *, virtual_modules=None):
         self._config = config
+        # Virtual control-plane modules (e.g. the audio-router, Spec 0 §5.6) forwarded to the
+        # Broker on connect. None ⇒ physical-only behaviour, unchanged.
+        self._virtual_modules = virtual_modules
         self._ws = None
         self._shutdown = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -97,6 +100,7 @@ class ControlClient:
                 ),
                 telemetry_min_floor_ms=getattr(self._config, "telemetry_min_floor_ms", 200),
                 trace_serial=getattr(self._config, "trace_serial", False),
+                virtual_modules=self._virtual_modules,
             )
             loop = asyncio.get_running_loop()
             if getattr(self._config, "slot_discovery_enabled", True):

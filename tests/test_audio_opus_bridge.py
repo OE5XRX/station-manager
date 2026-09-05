@@ -1,6 +1,5 @@
 # tests/test_audio_opus_bridge.py
 """Opus bridge: gst-launch pipeline argv builders + RTP/UDP datagram seams."""
-import pytest
 
 from station_agent.audio import opus_bridge as ob
 from station_agent.audio import rtp

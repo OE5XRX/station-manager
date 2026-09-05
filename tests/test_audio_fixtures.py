@@ -10,7 +10,7 @@ import struct
 
 import pytest
 
-from station_agent.audio import frame as F
+from station_agent.audio import frame
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "audio"
 
@@ -27,6 +27,11 @@ def test_advertise_fixture_matches_spec_5():
     assert by_id["slot0.rx"]["direction"] == "rx" and by_id["slot0.rx"]["codec"] == "opus"
     assert by_id["op.mic"]["slot"] is None
     assert by_id["op.mic"]["format"] == {"rate": 16000, "channels": 1}
+    # §5.3: advertise establishes the stream_ref↔stream_id mapping. slot0.rx's ref must
+    # match the media-frame fixture's header (both 0) so B and C interoperate.
+    assert by_id["slot0.rx"]["stream_ref"] == 0
+    frame_ref = frame.parse_frame((FIX / "media_frame_slot0rx.bin").read_bytes()).stream_ref
+    assert by_id["slot0.rx"]["stream_ref"] == frame_ref
 
 
 def test_signaling_fixtures_have_versioned_envelope():
@@ -49,7 +54,7 @@ def test_error_fixture_is_not_locked():
 
 def test_media_frame_fixture_header_parses():
     data = (FIX / "media_frame_slot0rx.bin").read_bytes()
-    mf = F.parse_frame(data)
+    mf = frame.parse_frame(data)
     assert mf.stream_ref == 0  # slot0.rx
     assert mf.seq == 0 and mf.ts == 0
     assert len(mf.payload) > 0  # a real Opus packet
@@ -60,7 +65,7 @@ def test_media_frame_fixture_opus_decodes_to_1khz_peak():
     from station_agent.audio.goertzel import dominant_bin
 
     data = (FIX / "media_frame_slot0rx.bin").read_bytes()
-    payload = F.parse_frame(data).payload
+    payload = frame.parse_frame(data).payload
     cc = av.CodecContext.create("libopus", "r")
     cc.sample_rate = 48000
     cc.format = "s16"
@@ -71,6 +76,6 @@ def test_media_frame_fixture_opus_decodes_to_1khz_peak():
         for fr in cc.decode(pkt):
             rate = fr.sample_rate
             pcm = bytes(fr.planes[0])[: fr.samples * 2]
-            samples += list(struct.unpack("<%dh" % (len(pcm) // 2), pcm))
+            samples += list(struct.unpack(f"<{len(pcm) // 2}h", pcm))
     assert samples, "opus payload decoded to no audio"
     assert dominant_bin(samples, [500, 1000, 1500, 2000, 3000], rate) == 1000

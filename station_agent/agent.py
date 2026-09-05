@@ -450,6 +450,25 @@ class StationAgent:
         else:
             logger.info("Remote terminal disabled")
 
+        # Build the audio-router virtual control-plane module (Spec 0 §5.6) when audio is on,
+        # so the control inventory advertises audio streams + the tx_route capability.
+        audio_router_module = None
+        if config.audio_enabled:
+            from .audio.router_backend import PipeWireRouterBackend
+            from .audio.router_module import AudioRouterModule
+            from .audio.streams import StreamRegistry
+
+            router_backend = PipeWireRouterBackend(sysfs_sound=config.audio_sysfs_sound)
+
+            def _list_audio_streams():
+                reg = StreamRegistry(rx_rate=config.audio_rx_rate, mic_rate=config.audio_mic_rate)
+                reg.rebuild(router_backend.list_audio_slots())
+                return reg.advertise_payload()["streams"]
+
+            audio_router_module = AudioRouterModule(
+                slot=config.audio_router_slot, list_streams=_list_audio_streams
+            )
+
         # Start control client in a background thread if enabled
         control_client = None
         control_thread = None
@@ -459,13 +478,37 @@ class StationAgent:
             from .control_client import ControlClient
 
             logger.info("Control channel enabled")
-            control_client = ControlClient(config)
+            virtual = [audio_router_module] if audio_router_module is not None else None
+            control_client = ControlClient(config, virtual_modules=virtual)
             control_thread = threading.Thread(
                 target=control_client.run, name="control-client", daemon=True
             )
             control_thread.start()
         else:
             logger.info("Control channel disabled")
+            if config.audio_enabled:
+                logger.warning(
+                    "Audio enabled but control channel disabled — the audio-router will not "
+                    "appear on the control-plane (Spec 0 §5.6 needs the control channel)."
+                )
+
+        # Start audio client in a background thread if enabled
+        audio_client = None
+        audio_thread = None
+        if config.audio_enabled:
+            from .audio.bridge_factory import BridgeFactory
+            from .audio.ws_client import AudioClient
+
+            logger.info("Audio channel enabled")
+            audio_client = AudioClient(
+                config, bridge_factory=BridgeFactory(port_base=config.audio_udp_port_base)
+            )
+            audio_thread = threading.Thread(
+                target=audio_client.run, name="audio-client", daemon=True
+            )
+            audio_thread.start()
+        else:
+            logger.info("Audio channel disabled")
 
         # Main heartbeat loop
         heartbeat_count = 0
@@ -493,5 +536,11 @@ class StationAgent:
             control_client.stop()
         if control_thread is not None:
             control_thread.join(timeout=5)
+
+        # Stop audio client on shutdown
+        if audio_client is not None:
+            audio_client.stop()
+        if audio_thread is not None:
+            audio_thread.join(timeout=5)
 
         logger.info("Station Agent stopped")
