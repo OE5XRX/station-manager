@@ -292,7 +292,9 @@ def test_browser_anon_reject():
         connected, _ = await comm.connect()
         assert connected is True  # accept-then-error pattern
         err = await _drain_until(comm, "error")
-        assert err["code"] == "4401"
+        # §5.2 error enum — numeric close code lives in the WS close frame, not here.
+        assert err["code"] == "not_authorized"
+        assert "sign" in err["detail"].lower()
         await comm.disconnect()
 
     asyncio.run(scenario())
@@ -311,7 +313,7 @@ def test_browser_no_permission_reject():
         connected, _ = await comm.connect()
         assert connected is True
         err = await _drain_until(comm, "error")
-        assert err["code"] == "4403"
+        assert err["code"] == "not_authorized"
         await comm.disconnect()
 
     asyncio.run(scenario())
@@ -330,7 +332,7 @@ def test_browser_unknown_station_reject():
         connected, _ = await comm.connect()
         assert connected is True
         err = await _drain_until(comm, "error")
-        assert err["code"] == "4404"
+        assert err["code"] == "not_authorized"
         await comm.disconnect()
 
     asyncio.run(scenario())
@@ -654,14 +656,18 @@ def test_uplink_lock_ptt_tx_relays_to_agent(audio_agent_auth):
         b_listener = _browser(listener, station.id)
         assert (await b_listener.connect())[0] is True
 
-        # Listener subscribes to op.mic so fan-out is exercised.
+        # Listener subscribes to op.mic so fan-out is exercised. op.mic is
+        # browser-produced, so the server must NOT send source_subscribe to the
+        # agent for it (§5.2) — only join the fan-out group.
         await b_listener.send_json_to(
             {"v": V, "type": "subscribe", "stream_ids": ["op.mic"]}
         )
-        # Agent receives source_subscribe for op.mic.
-        sub = await asyncio.wait_for(agent.receive_json_from(), timeout=2.0)
-        assert sub["type"] == "source_subscribe"
-        assert sub["stream_id"] == "op.mic"
+        # Agent must NOT receive a source_subscribe for op.mic.
+        try:
+            unexpected = await asyncio.wait_for(agent.receive_json_from(), timeout=0.5)
+            raise AssertionError(f"agent got unexpected JSON for op.mic: {unexpected}")
+        except TimeoutError:
+            pass  # correct — no demand signal for the browser-produced source
 
         # Browser sends mic frame → should relay.
         await browser.send_to(bytes_data=mic_frame)

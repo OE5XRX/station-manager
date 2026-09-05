@@ -4,6 +4,13 @@ from django.conf import settings
 
 AUDIO_PROTOCOL_VERSION = 1
 
+# The operator-mic stream id. Special-cased in demand gating: op.mic media is
+# produced by the browser (uplink), NOT by the agent, so the server never sends
+# source_subscribe/source_unsubscribe for it to the agent (§5.2 producer
+# semantics; the Session-B agent would no-op it anyway). It IS a normal fan-out
+# source so listeners can subscribe to hear the operator.
+OP_MIC_STREAM_ID = "op.mic"
+
 # Dead-man TTL for PTT (seconds). Must exceed the 1 s control keepalive cadence.
 # Default 3.0 s gives 2 missed keepalives before the gate closes.
 AUDIO_PTT_TTL: float = getattr(settings, "AUDIO_PTT_TTL_SECONDS", 3.0)

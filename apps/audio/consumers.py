@@ -45,6 +45,9 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         self.stream_refs: dict[str, int] = {}
         # Reverse map: stream_ref -> stream_id
         self._ref_to_id: dict[int, str] = {}
+        # Last advertised streams list, cached so a browser that connects AFTER
+        # the agent's one-shot advertise can request a replay (audio_request_advertise).
+        self._last_streams: list = []
 
         # Assign groups BEFORE the auth guard so disconnect() can safely
         # reference self.agent_group / self.browser_group on the reject path
@@ -132,6 +135,7 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
                 new_ref_to_id[ref] = sid
         self.stream_refs = new_refs
         self._ref_to_id = new_ref_to_id
+        self._last_streams = streams
 
         # Relay filtered streams list to all browsers.
         await self.channel_layer.group_send(
@@ -150,6 +154,9 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         # advertise arrived), re-send source_subscribe to the agent.
         if self.station is not None:
             for sid in new_refs:
+                # op.mic is browser-produced — never demand-subscribe it (§5.2).
+                if sid == constants.OP_MIC_STREAM_ID:
+                    continue
                 cnt = await self._sub_count(self.station, sid)
                 if cnt > 0:
                     await self.send(
@@ -195,6 +202,31 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
     async def audio_media(self, event):
         """Uplink mic frame from browser -> forward to agent byte-identically."""
         await self.send(bytes_data=event["data"])
+
+    async def audio_request_advertise(self, event):
+        """A browser (re)connected -> replay the cached streams to just that browser.
+
+        The agent advertises once on connect/hotplug; a browser that connects
+        afterwards would otherwise never learn the streams.  We reply only to
+        the requesting channel (reply_channel) so we don't re-broadcast to all
+        browsers on every new connection.  No-op if nothing is advertised yet.
+        """
+        if not self._last_streams:
+            return
+        reply_channel = event.get("reply_channel")
+        if not reply_channel:
+            return
+        await self.channel_layer.send(
+            reply_channel,
+            {
+                "type": "audio.streams",
+                "msg": {
+                    "v": constants.AUDIO_PROTOCOL_VERSION,
+                    "type": "streams",
+                    "streams": self._last_streams,
+                },
+            },
+        )
 
     async def audio_gate(self, event):
         """Gate state changed -> recompute and send mic_state to agent.
@@ -346,21 +378,36 @@ class AudioConsumer(AsyncWebsocketConsumer):
         # decision is then a pure in-memory check — no per-frame DB query.
         self._gate_cache = await self._get_wire_state(station)
 
-    async def _reject(self, code, reason):
-        """Accept-then-error reject so the browser sees a human-readable reason."""
+        # Ask the agent to replay its advertised streams to THIS browser.  The
+        # agent advertises once (on connect/hotplug); without this a browser
+        # that connects afterwards would never learn the current streams
+        # (mirrors ControlConsumer sending an inventory snapshot on connect).
+        # Sent after joining browser_group so the reply is not missed.
+        await self.channel_layer.group_send(
+            constants.agent_group(self.station_id),
+            {"type": "audio.request_advertise", "reply_channel": self.channel_name},
+        )
+
+    async def _reject(self, close_code, reason, err_code="not_authorized"):
+        """Accept-then-error reject so the browser sees a human-readable reason.
+
+        ``err_code`` is the §5.2 error enum (default ``not_authorized``); the
+        numeric ``close_code`` (4401/4403/4404) is carried only in the WS close
+        frame, not in the contract ``error`` payload.
+        """
         try:
             await self.send(
                 text_data=json.dumps(
                     {
                         "v": constants.AUDIO_PROTOCOL_VERSION,
                         "type": "error",
-                        "code": str(code),
+                        "code": err_code,
                         "detail": reason,
                     }
                 )
             )
         finally:
-            await self.close(code=code)
+            await self.close(code=close_code)
 
     async def disconnect(self, close_code):
         try:
@@ -368,6 +415,9 @@ class AudioConsumer(AsyncWebsocketConsumer):
             if station is not None:
                 zero_streams = await self._drop_channel(station, self.channel_name)
                 for sid in zero_streams:
+                    # op.mic is browser-produced — no agent demand signal (§5.2).
+                    if sid == constants.OP_MIC_STREAM_ID:
+                        continue
                     await self.channel_layer.group_send(
                         constants.agent_group(self.station_id),
                         {
@@ -416,6 +466,19 @@ class AudioConsumer(AsyncWebsocketConsumer):
             self._not_locked_error_sent = False
         # Unknown types ignored (forward-compat).
 
+    async def _send_invalid_stream_error(self, sid):
+        """Send an unknown_stream error for a rejected stream_id."""
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "v": constants.AUDIO_PROTOCOL_VERSION,
+                    "type": "error",
+                    "code": "unknown_stream",
+                    "detail": f"invalid stream_id: {sid!r}",
+                }
+            )
+        )
+
     async def _handle_subscribe(self, station, msg):
         # Cap list length and validate each stream_id before touching the DB
         # or channel-layer groups (malformed ids would raise TypeError in
@@ -423,19 +486,12 @@ class AudioConsumer(AsyncWebsocketConsumer):
         stream_ids = msg.get("stream_ids", [])[:32]
         for sid in stream_ids:
             if not VALID_STREAM_ID.match(str(sid)):
-                await self.send(
-                    text_data=json.dumps(
-                        {
-                            "v": constants.AUDIO_PROTOCOL_VERSION,
-                            "type": "error",
-                            "code": "unknown_stream",
-                            "detail": f"invalid stream_id: {sid!r}",
-                        }
-                    )
-                )
+                await self._send_invalid_stream_error(sid)
                 continue
             result = await self._subscribe(station, sid, self.channel_name)
-            if result["first"]:
+            # op.mic is browser-produced — never demand-subscribe it at the agent
+            # (§5.2); still join the fan-out group below so listeners hear it.
+            if result["first"] and sid != constants.OP_MIC_STREAM_ID:
                 # First subscriber -> tell the agent to start producing.
                 await self.channel_layer.group_send(
                     constants.agent_group(self.station_id),
@@ -459,19 +515,10 @@ class AudioConsumer(AsyncWebsocketConsumer):
         stream_ids = msg.get("stream_ids", [])[:32]
         for sid in stream_ids:
             if not VALID_STREAM_ID.match(str(sid)):
-                await self.send(
-                    text_data=json.dumps(
-                        {
-                            "v": constants.AUDIO_PROTOCOL_VERSION,
-                            "type": "error",
-                            "code": "unknown_stream",
-                            "detail": f"invalid stream_id: {sid!r}",
-                        }
-                    )
-                )
+                await self._send_invalid_stream_error(sid)
                 continue
             result = await self._unsubscribe(station, sid, self.channel_name)
-            if result["last"]:
+            if result["last"] and sid != constants.OP_MIC_STREAM_ID:
                 # Last subscriber gone -> tell the agent to stop producing.
                 await self.channel_layer.group_send(
                     constants.agent_group(self.station_id),

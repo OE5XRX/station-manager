@@ -142,6 +142,48 @@ async def _spy_until(
     raise AssertionError(f"spy never saw event type={etype!r} in {tries} events")
 
 
+# Non-relay events that also land in the agent group and must be skipped when a
+# spy is looking for actual server→agent relay traffic (audio.to_agent / audio.media).
+# audio.request_advertise is sent to the agent group on every browser connect;
+# audio.gate on every gate change.
+_SPY_NOISE = {"audio.request_advertise", "audio.gate", "audio.streams", "audio.stream_state"}
+
+
+async def _spy_next_relay(layer, channel: str, timeout: float = 3.0, tries: int = 16) -> dict:
+    """Next real relay event (audio.to_agent / audio.media) on a spied group, skip noise."""
+    for _ in range(tries):
+        try:
+            evt = await asyncio.wait_for(layer.receive(channel), timeout=timeout)
+        except TimeoutError:
+            raise AssertionError("timed out waiting for a relay event")
+        if evt.get("type") in _SPY_NOISE:
+            continue
+        return evt
+    raise AssertionError("no relay event seen among spy traffic")
+
+
+async def _spy_no_relay(layer, channel: str, msg_type: str, settle: float = 0.5) -> None:
+    """Assert no relay event whose msg.type == msg_type arrives; drain+ignore noise."""
+    while True:
+        try:
+            evt = await asyncio.wait_for(layer.receive(channel), timeout=settle)
+        except TimeoutError:
+            return  # quiet — no such relay
+        if evt.get("type") in _SPY_NOISE:
+            continue
+        assert evt.get("msg", {}).get("type") != msg_type, f"unexpected {msg_type}: {evt}"
+
+
+async def _spy_no_media(layer, channel: str, settle: float = 0.5) -> None:
+    """Assert NO audio.media relay reaches the agent group; drain+ignore all else."""
+    while True:
+        try:
+            evt = await asyncio.wait_for(layer.receive(channel), timeout=settle)
+        except TimeoutError:
+            return  # quiet — no media leaked through the gate
+        assert evt.get("type") != "audio.media", f"dropped frame reached agent: {evt}"
+
+
 async def _no_bytes(comm: WebsocketCommunicator, timeout: float = 0.4) -> None:
     """Assert that no binary frame arrives within timeout seconds."""
     try:
@@ -232,7 +274,7 @@ def test_downlink_rx_fanout_two_browsers(audio_agent_auth):
         await _browser_subscribe_slot0rx(b1)
 
         # Drain: first subscribe triggers source_subscribe in agent group.
-        evt = await asyncio.wait_for(layer.receive(agent_spy), timeout=3.0)
+        evt = await _spy_next_relay(layer, agent_spy)
         assert evt["type"] == "audio.to_agent"
         assert evt["msg"]["type"] == "source_subscribe"
         assert evt["msg"]["stream_id"] == "slot0.rx"
@@ -242,15 +284,7 @@ def test_downlink_rx_fanout_two_browsers(audio_agent_auth):
         assert (await b2.connect())[0] is True
         await _browser_subscribe_slot0rx(b2)
         # Second subscriber must NOT trigger another source_subscribe.
-        # Drain any pending events with a short timeout; must not be source_subscribe.
-        try:
-            evt2 = await asyncio.wait_for(layer.receive(agent_spy), timeout=0.5)
-            # If something arrived it must NOT be source_subscribe (it may be gate or other).
-            assert evt2.get("msg", {}).get("type") != "source_subscribe", (
-                f"second subscriber triggered an extra source_subscribe: {evt2}"
-            )
-        except TimeoutError:
-            pass  # nothing arrived — correct, no duplicate source_subscribe
+        await _spy_no_relay(layer, agent_spy, "source_subscribe")
 
         # --- 3. Agent sends the golden §5.3 frame → both browsers receive it ---
         await agent.send_to(bytes_data=_RAW_FRAME_SLOT0RX)
@@ -272,18 +306,11 @@ def test_downlink_rx_fanout_two_browsers(audio_agent_auth):
 
         # --- 4. Browser-1 unsubscribes → NO source_unsubscribe ---
         await b1.send_json_to({"v": V, "type": "unsubscribe", "stream_ids": ["slot0.rx"]})
-        # Wait briefly; spy must NOT receive a source_unsubscribe.
-        try:
-            evt_unsub = await asyncio.wait_for(layer.receive(agent_spy), timeout=0.5)
-            assert evt_unsub.get("msg", {}).get("type") != "source_unsubscribe", (
-                f"premature source_unsubscribe after first unsubscribe: {evt_unsub}"
-            )
-        except TimeoutError:
-            pass  # nothing — correct
+        await _spy_no_relay(layer, agent_spy, "source_unsubscribe")
 
         # --- 5. Browser-2 unsubscribes → source_unsubscribe MUST arrive ---
         await b2.send_json_to({"v": V, "type": "unsubscribe", "stream_ids": ["slot0.rx"]})
-        evt_final = await asyncio.wait_for(layer.receive(agent_spy), timeout=3.0)
+        evt_final = await _spy_next_relay(layer, agent_spy)
         assert evt_final["type"] == "audio.to_agent"
         assert evt_final["msg"]["type"] == "source_unsubscribe"
         assert evt_final["msg"]["stream_id"] == "slot0.rx"
@@ -522,14 +549,7 @@ def test_gate_denies_mic_frame_without_lock(audio_agent_auth):
 
         # Sending a mic frame while gate is closed → DROPPED (no bytes at agent).
         await b.send_to(bytes_data=_RAW_FRAME_OMIC)
-        # Agent spy must receive nothing audio.media.
-        try:
-            evt = await asyncio.wait_for(layer.receive(agent_spy), timeout=0.5)
-            assert evt.get("type") != "audio.media", (
-                f"dropped frame reached agent: {evt}"
-            )
-        except TimeoutError:
-            pass  # nothing — correct
+        await _spy_no_media(layer, agent_spy)
 
         await b.disconnect()
         await audio_agent.disconnect()
@@ -635,13 +655,7 @@ def test_gate_denies_mic_frame_after_lock_release(audio_agent_auth, control_agen
 
         # The subsequent mic frame must also be dropped.
         await ha.send_to(bytes_data=_RAW_FRAME_OMIC)
-        try:
-            evt_closed = await asyncio.wait_for(layer.receive(agent_spy), timeout=0.5)
-            assert evt_closed.get("type") != "audio.media", (
-                f"post-release mic frame reached agent: {evt_closed}"
-            )
-        except TimeoutError:
-            pass  # nothing — correct
+        await _spy_no_media(layer, agent_spy)
 
         await ha.disconnect()
         await hc.disconnect()
@@ -683,13 +697,13 @@ def test_browser_disconnect_reaps_subscriptions_and_source_unsubscribes(audio_ag
 
         # Subscribe to slot0.rx (first subscriber → source_subscribe).
         await _browser_subscribe_slot0rx(b)
-        evt = await asyncio.wait_for(layer.receive(agent_spy), timeout=3.0)
+        evt = await _spy_next_relay(layer, agent_spy)
         assert evt["msg"]["type"] == "source_subscribe"
 
         # Disconnect → demand row deleted → source_unsubscribe sent.
         await b.disconnect()
 
-        evt_unsub = await asyncio.wait_for(layer.receive(agent_spy), timeout=3.0)
+        evt_unsub = await _spy_next_relay(layer, agent_spy)
         assert evt_unsub["type"] == "audio.to_agent"
         assert evt_unsub["msg"]["type"] == "source_unsubscribe"
         assert evt_unsub["msg"]["stream_id"] == "slot0.rx"

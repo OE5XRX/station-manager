@@ -688,7 +688,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         """
         from apps.audio import constants as audio_constants
 
-        state = await self._get_gate_state_cc(station)
+        state = await self._get_gate_state(station)
         payload = {"type": "audio.gate", "state": state}
         await self.channel_layer.group_send(
             audio_constants.browser_group(station.pk), payload
@@ -698,7 +698,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _get_gate_state_cc(self, station):
+    def _get_gate_state(self, station):
         from apps.audio import gate as audio_gate
 
         return audio_gate.get_wire_state(station)
