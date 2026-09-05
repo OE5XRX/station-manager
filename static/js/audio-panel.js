@@ -1068,6 +1068,17 @@
         this._updateSidetone();
       },
 
+      // Live sidetone gain update. Clamps the dB value and, if the sidetone
+      // graph already exists, applies the new gain to the live GainNode
+      // immediately. Never builds the graph when sidetone is off — only updates
+      // an existing node. Null-safe.
+      setSidetoneGain: function (raw) {
+        this.sidetoneGainDb = A.clampGainDb(raw);
+        if (this._sidetoneGain) {
+          this._sidetoneGain.gain.value = A.dbToLinear(this.sidetoneGainDb);
+        }
+      },
+
       _updateSidetone: function () {
         // Sidetone is a browser-local monitor path. The mic ENCODE path lives on
         // _micCtx (16 kHz capture context). Web Audio nodes cannot connect across

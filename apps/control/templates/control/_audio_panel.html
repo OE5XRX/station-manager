@@ -278,7 +278,7 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
           <span class="cp-toggle-track" aria-hidden="true">
             <span class="cp-toggle-thumb"></span>
           </span>
-          <span class="cp-toggle-label" x-text="sidetone ? '{% trans "Side" %}' : '{% trans "Side" %}'">{% trans "Side" %}</span>
+          <span class="cp-toggle-label" x-text="sidetone ? '{% trans "Side On" %}' : '{% trans "Side Off" %}'">{% trans "Side Off" %}</span>
         </button>
 
         {% comment %}Sidetone gain — lang=en for dot decimal (DE-locale rule){% endcomment %}
@@ -295,7 +295,7 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
                  max="12"
                  step="0.5"
                  :value="sidetoneGainDb"
-                 @change="sidetoneGainDb = parseFloat($event.target.value) || -12"
+                 @input="setSidetoneGain($event.target.value)"
                  aria-label="{% trans "Sidetone gain (dB)" %}"
                  class="cp-readout cp-readout--number"
                  style="width:70px;font-size:13px;padding:4px 8px;text-align:right;">
