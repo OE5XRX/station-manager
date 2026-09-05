@@ -231,7 +231,7 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
                   try { if (v) { var p = JSON.parse(v); setTxRoute(p.slot, p.module); } else { setTxRoute(null, null); } } catch (e) { setTxRoute(null, null); }
                 ">
           <option value="">— {% trans "none" %} —</option>
-          <template x-for="s in streams.filter(function(s){ return s.direction === 'rx'; })" :key="s.stream_id">
+          <template x-for="s in streams.filter(function(s){ return s.direction === 'rx' && s.module !== 'operator' && s.stream_id !== 'op.mic'; })" :key="s.stream_id">
             <option :value="JSON.stringify({slot: s.slot, module: s.module})"
                     :selected="txRoute && txRoute.slot === s.slot && txRoute.module === s.module"
                     x-text="(s.slot !== undefined ? s.slot + '/' : '') + (s.module || s.stream_id)">

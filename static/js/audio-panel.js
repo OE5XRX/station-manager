@@ -306,11 +306,18 @@
         }
 
         // Re-send subscribe for any subs we still want (refs may have changed).
+        // Only re-subscribe ids that are truthy AND present in the new index;
+        // drop stale entries whose stream_id is no longer advertised.
         var wantIds = [];
         for (var sid in this.subs) {
-          if (Object.prototype.hasOwnProperty.call(this.subs, sid) && this.subs[sid]) {
-            wantIds.push(sid);
+          if (!Object.prototype.hasOwnProperty.call(this.subs, sid)) continue;
+          if (!this.subs[sid]) continue;
+          if (!this._index.byId[sid]) {
+            // Stream no longer advertised — remove stale entry.
+            delete this.subs[sid];
+            continue;
           }
+          wantIds.push(sid);
         }
         if (wantIds.length > 0) {
           this._sendJSON({ v: 1, type: "subscribe", stream_ids: wantIds });
@@ -371,7 +378,13 @@
         for (var i = 0; i < result.out.length; i++) {
           var item = result.out[i];
           if (item.plc) {
-            // PLC: skip chunk — Opus decoder handles concealment inherently.
+            // PLC: advance playhead by one 20 ms frame so the timeline stays
+            // in sync (silent gap) rather than letting the next real frame
+            // play early and cause a speed-up/desync.
+            var plcCtx = this._streamCtx[streamId];
+            if (plcCtx) {
+              plcCtx.playhead += 0.020;
+            }
             continue;
           }
           this._decodeChunk(streamId, ctx, item.frame);
@@ -394,12 +407,6 @@
         var mixerEntry = this.mixer[streamId] || A.defaultMixerEntry();
         gainNode.gain.value = A.effectiveGain(mixerEntry);
         gainNode.connect(this._masterGain);
-
-        // AnalyserNode for RMS level metering.
-        var analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = LEVEL_SMOOTHING;
-        gainNode.connect(analyser);
 
         var sampleRate = entry.format ? entry.format.rate : 8000;
         var channels = entry.format ? entry.format.channels : 1;
@@ -424,7 +431,6 @@
           console.error("[audio] decoder configure failed for", streamId, e);
           decoder.close();
           gainNode.disconnect();
-          analyser.disconnect();
           return;
         }
 
@@ -433,11 +439,9 @@
           decoder: decoder,
           jitter: A.createJitter({ depth: 3 }),
           gainNode: gainNode,
-          analyser: analyser,
           playhead: audioCtx.currentTime + 0.05, // 50 ms initial buffer
           sampleRate: sampleRate,
           channels: channels,
-          levelBuf: null, // allocated lazily on first analyser read
         };
       },
 
@@ -520,9 +524,6 @@
         try {
           ctx.gainNode.disconnect();
         } catch (_) {}
-        try {
-          ctx.analyser.disconnect();
-        } catch (_) {}
         delete this._streamCtx[streamId];
         delete this.levels[streamId];
       },
@@ -543,7 +544,7 @@
           this.subs[streamId] = true;
           this._sendJSON({ v: 1, type: "subscribe", stream_ids: [streamId] });
         }
-        // Any manual toggle makes this "custom" unless it already matches a preset.
+        // Any manual toggle unconditionally sets the preset to "custom".
         this.preset = "custom";
         this._saveState();
       },
@@ -875,8 +876,13 @@
           })
           .catch(function (e) {
             console.error("[audio] enableMic failed:", e);
-            self.micError =
-              "Microphone unavailable: audio worklet failed to load";
+            if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) {
+              self.micError = "Microphone permission denied";
+            } else if (e && e.name === "NotFoundError") {
+              self.micError = "No microphone found";
+            } else {
+              self.micError = "Microphone unavailable: " + (e && (e.message || e.name) || "unknown error");
+            }
             // Stop any track we already opened and drop the mic context.
             self._disableMicInternal(false);
           });
