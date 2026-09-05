@@ -33,6 +33,11 @@
   // How long to suppress duplicate "not_locked" toasts (ms).
   var NOT_LOCKED_SUPPRESS_MS = 5000;
 
+  // Audio-router virtual module address (station_agent/audio/router_module.py:
+  // slot default 1000, MODULE_ID "audio-router", capability "tx_route").
+  var ROUTER_SLOT = 1000;
+  var ROUTER_MODULE = "audio-router";
+
   function audioPanel() {
     return {
       // -- reactive state -------------------------------------------------------
@@ -46,12 +51,14 @@
       preset: "fm",             // 'fm' | 'satellite' | 'custom'
 
       micEnabled: false,
+      micError: null,           // string if mic could not be enabled
       sidetone: false,
       sidetoneGainDb: -12,
 
       txRoute: null,            // {slot, module} | null — mirrors store
 
       levels: {},               // {[stream_id]: 0..1} for meters
+      streamState: {},          // {[stream_id]: 'live'|'idle'|'error'} for badges
 
       // -- non-reactive internals -----------------------------------------------
       _ws: null,
@@ -72,16 +79,22 @@
       _audioCtx: null,
       _masterGain: null,
 
+      // request_id sequence for addressed control commands (tx_route).
+      _reqSeq: 0,
+
       // Mic pipeline (Task 7).
+      _micCtx: null,            // dedicated 16 kHz AudioContext for capture/encode
       _micStream: null,         // MediaStream from getUserMedia
-      _micSource: null,         // MediaStreamAudioSourceNode
-      _micWorkletNode: null,    // AudioWorkletNode (oe5xrx-mic)
+      _micSource: null,         // MediaStreamAudioSourceNode (on _micCtx)
+      _micWorkletNode: null,    // AudioWorkletNode (oe5xrx-mic, on _micCtx)
       _micEncoder: null,        // AudioEncoder
+      _micRate: 16000,          // actual mic context sample rate
       _micSeq: 0,
       _micTs: 0,
-      _micPrevKeyed: false,     // to detect keyed→unkeyed edge for mic_close
-      _sidetoneGain: null,      // GainNode for sidetone path
+      _micPrevKeyed: false,     // to detect unkeyed→keyed edge for mic_open/close
+      _sidetoneGain: null,      // GainNode for sidetone path (on _micCtx)
       _workletLoaded: false,
+      _micWarnedNoRef: false,   // one-shot warn when op.mic ref is missing
 
       // Suppress repeated not_locked toasts.
       _notLockedTimer: null,
@@ -93,6 +106,14 @@
       init: function () {
         var root = this.$el;
         this._stationId = root.getAttribute("data-station-id");
+
+        // Guard load order: audio-logic.js must be loaded before this file.
+        if (!A) {
+          this.supported = false;
+          this.unsupportedReason = "audio-logic.js not loaded";
+          this.conn = "closed";
+          return;
+        }
 
         // WebCodecs feature-detect — before anything else.
         if (
@@ -227,18 +248,9 @@
       // Message routing
       // ---------------------------------------------------------------------
       _onMessage: function (ev) {
+        // binaryType is "arraybuffer", so media frames arrive as ArrayBuffer.
         if (ev.data instanceof ArrayBuffer) {
           this._onBinaryFrame(ev.data);
-          return;
-        }
-        // Blob fallback (should not happen with binaryType="arraybuffer" but be safe).
-        if (typeof Blob !== "undefined" && ev.data instanceof Blob) {
-          var self = this;
-          var reader = new FileReader();
-          reader.onload = function () {
-            self._onBinaryFrame(reader.result);
-          };
-          reader.readAsArrayBuffer(ev.data);
           return;
         }
         // JSON text frame.
@@ -305,12 +317,8 @@
       },
 
       _onStreamState: function (msg) {
-        // Stored in a per-stream state map for UI badges.
-        // _streamState is non-reactive, but streams array is reactive so templates
-        // should derive badges from a method call if needed. For simplicity we
-        // expose a reactive streamStates object updated here.
-        if (!this._streamState) this._streamState = {};
-        this._streamState[msg.stream_id] = msg.state || "idle";
+        // Reactive per-stream state map for UI badges (Task 8 renders live/idle/error).
+        this.streamState[msg.stream_id] = msg.state || "idle";
       },
 
       _onError: function (msg) {
@@ -457,7 +465,7 @@
 
         // Resume context if suspended (autoplay policy).
         if (audioCtx.state === "suspended") {
-          audioCtx.resume();
+          audioCtx.resume().catch(function () {});
         }
 
         var numChannels = audioData.numberOfChannels;
@@ -491,6 +499,13 @@
         var source = audioCtx.createBufferSource();
         source.buffer = buffer;
         source.connect(ctx.gainNode);
+        // Drop the node once it finishes so stale sources don't accumulate
+        // during rapid subscribe/unsubscribe.
+        source.onended = function () {
+          try {
+            source.disconnect();
+          } catch (e) {}
+        };
         source.start(ctx.playhead);
         ctx.playhead += buffer.duration;
       },
@@ -607,19 +622,27 @@
       },
 
       // ---------------------------------------------------------------------
-      // txRoute — delegates to control store's sendCommand
+      // txRoute — addressed to the audio-router virtual module; the TX target
+      // (slot/module args) goes ONLY into `value`. A null slot clears the route.
+      // Delegates to the control store's sendCommand (lock-holding control WS).
       // ---------------------------------------------------------------------
       setTxRoute: function (slot, module) {
-        this.txRoute = { slot: slot, module: module };
+        var value =
+          slot === null || slot === undefined
+            ? null
+            : { slot: slot, module: module };
+        this.txRoute = value;
         var store = window.Alpine.store && window.Alpine.store("control");
         if (store) {
+          this._reqSeq += 1;
           store.sendCommand({
             type: "command",
+            request_id: "audio-tx-" + this._reqSeq + "-" + Date.now(),
+            slot: ROUTER_SLOT,
+            module: ROUTER_MODULE,
             capability: "tx_route",
             op: "set",
-            value: { slot: slot, module: module },
-            slot: slot,
-            module: module,
+            value: value,
           });
         }
       },
@@ -708,6 +731,8 @@
           this._ws = null;
         }
 
+        this.streamState = {};
+
         if (this._notLockedTimer) clearTimeout(this._notLockedTimer);
       },
 
@@ -720,25 +745,53 @@
       // ---------------------------------------------------------------------
       enableMic: function () {
         if (this.micEnabled) return;
-        if (!this._audioCtx) return;
         var self = this;
+        this.micError = null;
 
-        // Load worklet module if not yet done.
-        // The worklet URL comes from data-worklet-url on the panel root element.
+        // The worklet is REQUIRED. Its URL comes from data-worklet-url on the
+        // panel root element (never hardcoded).
         var workletUrl = this.$el
           ? this.$el.getAttribute("data-worklet-url")
           : null;
+        if (!workletUrl) {
+          this.micError = "Microphone unavailable: audio worklet failed to load";
+          return;
+        }
 
-        var loadWorklet = this._workletLoaded || !workletUrl
-          ? Promise.resolve()
-          : this._audioCtx.audioWorklet
-              .addModule(workletUrl)
-              .then(function () {
-                self._workletLoaded = true;
-              });
+        // Dedicated 16 kHz capture context — WebCodecs AudioEncoder does NOT
+        // resample, so the mic must be captured at the encoder's rate.
+        var AudioContext = window.AudioContext || window.webkitAudioContext;
+        var micCtx;
+        try {
+          micCtx = new AudioContext({ sampleRate: 16000 });
+        } catch (_) {
+          // Fall back to the main context only if the constructor throws.
+          micCtx = this._audioCtx;
+        }
+        if (!micCtx) {
+          this.micError = "Microphone unavailable: no audio context";
+          return;
+        }
+        if (micCtx.sampleRate !== 16000) {
+          this.micError =
+            "Microphone unavailable: 16 kHz capture unsupported (got " +
+            micCtx.sampleRate +
+            " Hz)";
+          if (micCtx !== this._audioCtx) {
+            try {
+              micCtx.close();
+            } catch (_) {}
+          }
+          return;
+        }
+        this._micCtx = micCtx;
+        this._micRate = micCtx.sampleRate;
 
-        loadWorklet
+        // Load the worklet on the mic context; on failure, bail cleanly.
+        micCtx.audioWorklet
+          .addModule(workletUrl)
           .then(function () {
+            self._workletLoaded = true;
             return navigator.mediaDevices.getUserMedia({
               audio: {
                 channelCount: 1,
@@ -748,77 +801,83 @@
             });
           })
           .then(function (stream) {
-            self._micStream = stream;
-            self._micSource = self._audioCtx.createMediaStreamSource(stream);
-
-            // Worklet node for buffering.
-            if (workletUrl && self._workletLoaded) {
-              self._micWorkletNode = new window.AudioWorkletNode(
-                self._audioCtx,
-                "oe5xrx-mic"
-              );
-              self._micSource.connect(self._micWorkletNode);
-              self._micWorkletNode.port.onmessage = function (ev) {
-                self._onMicChunk(ev.data);
-              };
-            } else {
-              // Fallback: use ScriptProcessor if worklet unavailable (e.g. no URL).
-              // Note: ScriptProcessor is deprecated but ensures mic works without worklet.
-              var bufSize = MIC_SAMPLES_PER_FRAME;
-              var sp = self._audioCtx.createScriptProcessor(bufSize, 1, 1);
-              sp.onaudioprocess = function (e) {
-                var buf = e.inputBuffer.getChannelData(0);
-                self._onMicChunk(new Float32Array(buf));
-              };
-              self._micSource.connect(sp);
-              sp.connect(self._audioCtx.destination); // must connect or Chrome skips
-              self._micWorkletNode = sp; // store for disconnect in disableMic
+            // A concurrent disableMic()/teardown may have cleared _micCtx.
+            if (self._micCtx !== micCtx) {
+              stream.getTracks().forEach(function (t) {
+                t.stop();
+              });
+              return null;
             }
+            self._micStream = stream;
+            self._micSource = micCtx.createMediaStreamSource(stream);
 
-            // AudioEncoder — opus, 16 kHz, mono, VOIP/FEC where supported.
-            var encoderConfig = {
+            self._micWorkletNode = new window.AudioWorkletNode(
+              micCtx,
+              "oe5xrx-mic"
+            );
+            self._micSource.connect(self._micWorkletNode);
+            self._micWorkletNode.port.onmessage = function (ev) {
+              self._onMicChunk(ev.data);
+            };
+
+            // Resolve the encoder config ONCE before creating the encoder:
+            // prefer VOIP + in-band FEC if supported, else baseline.
+            var baseConfig = {
               codec: "opus",
-              sampleRate: 16000,
+              sampleRate: self._micRate,
               numberOfChannels: 1,
               bitrate: MIC_BITRATE,
             };
-            // Feature-detect opus-specific config keys.
-            if (typeof window.AudioEncoder.isConfigSupported === "function") {
-              // Try to add VOIP/FEC config — ignore if unsupported.
-              try {
-                var opusExtra = Object.assign({}, encoderConfig, {
-                  opus: { application: "voip", useinbandfec: true },
-                });
-                window.AudioEncoder.isConfigSupported(opusExtra).then(
-                  function (support) {
-                    if (support && support.supported) {
-                      self._micEncoder.configure(opusExtra);
-                    }
-                  }
-                );
-              } catch (_) {}
+            var voipConfig = Object.assign({}, baseConfig, {
+              opus: { application: "voip", useinbandfec: true },
+            });
+            if (
+              window.AudioEncoder &&
+              typeof window.AudioEncoder.isConfigSupported === "function"
+            ) {
+              return window.AudioEncoder.isConfigSupported(voipConfig).then(
+                function (support) {
+                  return support && support.supported ? voipConfig : baseConfig;
+                },
+                function () {
+                  return baseConfig;
+                }
+              );
             }
+            return baseConfig;
+          })
+          .then(function (config) {
+            if (!config) return; // superseded by teardown above
+            // Guard against a concurrent disableMic().
+            if (self._micCtx !== micCtx || !self._micSource) return;
 
             self._micSeq = 0;
             self._micTs = 0;
             self._micPrevKeyed = false;
 
-            self._micEncoder = new window.AudioEncoder({
-              output: function (chunk, metadata) {
-                self._onEncodedMic(chunk, metadata);
+            var encoder = new window.AudioEncoder({
+              output: function (chunk) {
+                if (!self._micEncoder) return; // superseded by disableMic
+                self._onEncodedMic(chunk);
               },
               error: function (e) {
                 console.error("[audio] mic encoder error", e);
               },
             });
-
-            // Initial configure (without VOIP extras — they may be applied above).
-            self._micEncoder.configure(encoderConfig);
+            encoder.configure(config);
+            self._micEncoder = encoder;
 
             self.micEnabled = true;
+
+            // Re-apply sidetone routing now that _micSource exists.
+            if (self.sidetone) self._updateSidetone();
           })
           .catch(function (e) {
             console.error("[audio] enableMic failed:", e);
+            self.micError =
+              "Microphone unavailable: audio worklet failed to load";
+            // Stop any track we already opened and drop the mic context.
+            self._disableMicInternal(false);
           });
       },
 
@@ -827,18 +886,15 @@
       // ---------------------------------------------------------------------
       _onMicChunk: function (float32Chunk) {
         if (!this._micEncoder || !this.micEnabled) return;
-        if (!this._audioCtx) return;
 
-        // Build an AudioData for the encoder.
+        // Build an AudioData for the encoder at the mic context's actual rate.
         try {
           var data = new window.AudioData({
             format: "f32",
-            sampleRate: 16000,
+            sampleRate: this._micRate,
             numberOfChannels: 1,
             numberOfFrames: float32Chunk.length,
-            timestamp: Math.round(
-              (this._micTs / 16000) * 1e6
-            ),
+            timestamp: Math.round((this._micTs / this._micRate) * 1e6),
             data: float32Chunk,
           });
           this._micEncoder.encode(data);
@@ -865,7 +921,7 @@
         // Detect keying edge transitions.
         var keyed = !!(store.keyed && store.youHold);
         if (keyed && !this._micPrevKeyed) {
-          // Keyed→unkeyed → keyed edge: send mic_open.
+          // UNKEYED→KEYED edge: send mic_open once.
           this._sendJSON({
             v: 1,
             type: "mic_open",
@@ -873,7 +929,7 @@
             codec: "opus",
           });
         } else if (!keyed && this._micPrevKeyed) {
-          // Keyed → unkeyed edge: send mic_close.
+          // KEYED→UNKEYED edge: send mic_close once.
           this._sendJSON({ v: 1, type: "mic_close" });
         }
         this._micPrevKeyed = keyed;
@@ -884,10 +940,20 @@
           return;
         }
 
-        // Get the op.mic stream_ref from the index.
+        // Resolve the op.mic stream_ref from the index. If absent, DROP the
+        // frame — never send with a fabricated stream_ref.
         var micStreamId = this._findMicStreamId();
         var micEntry = micStreamId ? this._index.byId[micStreamId] : null;
-        var micRef = micEntry ? micEntry.stream_ref : 0;
+        if (!micEntry || micEntry.stream_ref === undefined || micEntry.stream_ref === null) {
+          if (!this._micWarnedNoRef) {
+            this._micWarnedNoRef = true;
+            console.warn("[audio] op.mic stream_ref not in index — dropping uplink frames");
+          }
+          this._micTs += MIC_SAMPLES_PER_FRAME;
+          return;
+        }
+        this._micWarnedNoRef = false;
+        var micRef = micEntry.stream_ref;
 
         // Copy encoded bytes out of the chunk.
         var payload = new Uint8Array(chunk.byteLength);
@@ -922,17 +988,26 @@
       },
 
       _disableMicInternal: function (sendClose) {
-        if (!this.micEnabled && !this._micStream) return;
+        if (
+          !this.micEnabled &&
+          !this._micStream &&
+          !this._micCtx &&
+          !this._micEncoder
+        ) {
+          return;
+        }
 
         if (sendClose) {
           this._sendJSON({ v: 1, type: "mic_close" });
         }
 
-        // Disconnect sidetone if active.
-        if (this.sidetone && this._sidetoneGain && this._micSource) {
+        // Sidetone gain node lives on the mic context — disconnect + drop it so
+        // it does not survive an enable/disable cycle.
+        if (this._sidetoneGain) {
           try {
-            this._micSource.disconnect(this._sidetoneGain);
+            this._sidetoneGain.disconnect();
           } catch (_) {}
+          this._sidetoneGain = null;
         }
 
         if (this._micWorkletNode) {
@@ -965,8 +1040,17 @@
           this._micStream = null;
         }
 
+        // Close the dedicated mic context (unless it was the shared main ctx).
+        if (this._micCtx && this._micCtx !== this._audioCtx) {
+          try {
+            this._micCtx.close();
+          } catch (_) {}
+        }
+        this._micCtx = null;
+
         this.micEnabled = false;
         this._micPrevKeyed = false;
+        this._micWarnedNoRef = false;
       },
 
       // ---------------------------------------------------------------------
@@ -978,11 +1062,14 @@
       },
 
       _updateSidetone: function () {
-        if (!this._audioCtx || !this._micSource) return;
+        // Sidetone is a browser-local monitor path. The mic lives on its own
+        // 16 kHz context, and Web Audio nodes cannot connect across contexts,
+        // so the sidetone gain routes to the mic context's own destination.
+        if (!this._micCtx || !this._micSource) return;
 
         if (!this._sidetoneGain) {
-          this._sidetoneGain = this._audioCtx.createGain();
-          this._sidetoneGain.connect(this._masterGain);
+          this._sidetoneGain = this._micCtx.createGain();
+          this._sidetoneGain.connect(this._micCtx.destination);
         }
         this._sidetoneGain.gain.value = A.dbToLinear(this.sidetoneGainDb);
 
