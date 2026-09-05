@@ -61,6 +61,11 @@
       init: function () {
         var root = this.$el;
         this.stationId = root.getAttribute("data-station-id");
+        var store = window.Alpine.store && window.Alpine.store("control");
+        if (store) {
+          store.stationId = this.stationId;
+          store._send = this._send.bind(this);
+        }
         this.canAdmin = root.getAttribute("data-can-admin") === "1";
         var defaultKey = root.getAttribute("data-ptt-default-key");
         if (defaultKey === null || defaultKey === "") defaultKey = " ";
@@ -79,6 +84,15 @@
 
       destroy: function () {
         this._teardown();
+      },
+
+      _publishControlStore: function () {
+        var s = window.Alpine.store && window.Alpine.store("control");
+        if (!s) return;
+        s.youHold = this.youHold;
+        s.keyed = this._anyKeyed();
+        s.canControl = this.canControl;
+        s.connected = this.conn === "open" && !this.agentOffline;
       },
 
       // ---------------------------------------------------------------------
@@ -149,6 +163,7 @@
             if (this.ptt[mkey] === undefined) this.ptt[mkey] = "armed";
           }
         }
+        this._publishControlStore();
       },
 
       // ---------------------------------------------------------------------
@@ -176,6 +191,7 @@
           self.conn = "open";
           self.agentOffline = false;
           self._subscribeAll();
+          self._publishControlStore();
         });
         ws.addEventListener("message", function (ev) {
           var msg;
@@ -190,6 +206,7 @@
           self._closeCode = ev.code || null;
           self._onDisconnect();
           self._scheduleReconnect();
+          self._publishControlStore();
         });
         ws.addEventListener("error", function () {
           try {
@@ -320,6 +337,7 @@
             this._unkeyModule(mkey, false);
           }
         }
+        this._publishControlStore();
       },
 
       _onResult: function (msg) {
@@ -395,6 +413,7 @@
         }
         // A stale request prompt for a lock we no longer hold is meaningless.
         if (!this.youHold) this.pendingRequest = null;
+        this._publishControlStore();
       },
 
       _showLossNotice: function () {
@@ -620,6 +639,10 @@
           delete this._reqWidget[rid];
           this.errors[wkey] = L.errorMessage("timeout");
         }
+        if (cap === "tx_route") {
+          var s = window.Alpine.store && window.Alpine.store("control");
+          if (s) s.txRoute = value;
+        }
       },
 
       _nextReqId: function () {
@@ -647,6 +670,7 @@
         this.ptt[mkey] = L.nextPttPhase("armed", "down");
         this._sendPtt(slot, module, true);
         this._startKeepalive(slot, module, mkey);
+        this._publishControlStore();
       },
 
       pttUp: function (slot, module) {
@@ -664,6 +688,7 @@
           var parts = mkey.split(" ");
           this._sendPtt(parts[0], parts.slice(1).join(" "), false);
         }
+        this._publishControlStore();
       },
 
       _unkeyOthers: function (keepMkey) {
@@ -828,6 +853,18 @@
   }
 
   document.addEventListener("alpine:init", function () {
+    window.Alpine.store("control", {
+      stationId: null,
+      youHold: false,
+      keyed: false,
+      canControl: false,
+      connected: false,
+      txRoute: null,
+      _send: null, // set by the controlPanel init
+      sendCommand: function (obj) {
+        return typeof this._send === "function" ? this._send(obj) : false;
+      },
+    });
     window.Alpine.data("controlPanel", controlPanel);
   });
 })();
