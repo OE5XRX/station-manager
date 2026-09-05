@@ -82,6 +82,10 @@ ok("satellite preset = rx sources only, no op.mic", () => {
 ok("custom preset = empty (explicit set supplied by caller)", () => {
   assert.deepEqual(A.presetSubscriptions("custom", STREAMS.streams), []);
 });
+ok("isRxSource excludes op.mic even with direction rx", () => {
+  assert.equal(A.isRxSource({ module:"operator", direction:"rx", stream_id:"op.mic" }), false);
+  assert.equal(A.isRxSource({ module:"fm", direction:"rx", stream_id:"slot0.rx" }), true);
+});
 // --- mixer -----------------------------------------------------------------
 ok("dbToLinear: 0dB=1, -6dB≈0.501, floor to 0", () => {
   assert.equal(A.dbToLinear(0), 1);

@@ -140,14 +140,10 @@
   /* Parse a user- or server-supplied numeric value defensively.
      Accepts comma OR dot decimal separator (de_AT keyboards emit comma).
      Returns a JS number, or null when the value is not a finite number.
-     If window.OE5XRXControlLogic is available (browser) we reuse it;
-     otherwise we inline the same logic for standalone Node use. */
+     Inlined (identical to OE5XRXControlLogic.parseNumber) so this module has
+     exactly one code path and no dependency on control-logic.js load order —
+     it must run standalone in Node where that global never exists. */
   function _parseNumber(raw) {
-    if (typeof root !== "undefined" &&
-        root.OE5XRXControlLogic &&
-        typeof root.OE5XRXControlLogic.parseNumber === "function") {
-      return root.OE5XRXControlLogic.parseNumber(raw);
-    }
     if (raw === null || raw === undefined) return null;
     if (typeof raw === "number") return isFinite(raw) ? raw : null;
     var s = String(raw).trim();
