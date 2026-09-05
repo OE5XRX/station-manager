@@ -54,11 +54,13 @@ def unsubscribe(station, stream_id: str, channel_name: str) -> dict:
     # Row-lock on the per-station anchor (mirror of subscribe).
     AudioGate.objects.select_for_update().get_or_create(station=station)
 
-    AudioSubscription.objects.filter(
+    deleted, _ = AudioSubscription.objects.filter(
         station=station, stream_id=stream_id, channel_name=channel_name
     ).delete()
     after = AudioSubscription.objects.filter(station=station, stream_id=stream_id).count()
-    return {"last": after == 0, "count": after}
+    # last=True only on a real 1→0 transition — an idempotent unsubscribe of a
+    # stream we were never subscribed to deletes nothing and must NOT re-signal.
+    return {"last": deleted > 0 and after == 0, "count": after}
 
 
 @transaction.atomic
@@ -69,11 +71,16 @@ def drop_channel(station, channel_name: str) -> list[str]:
     should receive source_unsubscribe for each of them).  Called on browser
     disconnect.
     """
+    # Row-lock on the per-station anchor (mirror of subscribe/unsubscribe) so a
+    # concurrent subscribe/unsubscribe can't race the delete+recount and cause a
+    # missed or spurious zero-stream detection across workers.
+    AudioGate.objects.select_for_update().get_or_create(station=station)
+
     # Collect stream_ids that have rows for this channel.
     stream_ids = list(
-        AudioSubscription.objects.filter(
-            station=station, channel_name=channel_name
-        ).values_list("stream_id", flat=True).distinct()
+        AudioSubscription.objects.filter(station=station, channel_name=channel_name)
+        .values_list("stream_id", flat=True)
+        .distinct()
     )
     # Delete the rows.
     AudioSubscription.objects.filter(station=station, channel_name=channel_name).delete()

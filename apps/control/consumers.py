@@ -253,12 +253,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
         state = await self._get_gate_state(station)
         payload = {"type": "audio.gate", "state": state}
-        await self.channel_layer.group_send(
-            audio_constants.browser_group(station.pk), payload
-        )
-        await self.channel_layer.group_send(
-            audio_constants.agent_group(station.pk), payload
-        )
+        await self.channel_layer.group_send(audio_constants.browser_group(station.pk), payload)
+        await self.channel_layer.group_send(audio_constants.agent_group(station.pk), payload)
 
     @database_sync_to_async
     def _get_gate_state(self, station):
@@ -434,13 +430,15 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self._bridge_gate(station)
         elif capability == "tx_route":
             value = msg.get("value")
-            if value is not None:
-                tx_slot = value.get("slot")
-                tx_module = value.get("module", "")
-                await self._audio_set_tx_route(station, tx_slot, tx_module)
-            else:
+            if isinstance(value, dict):
+                await self._audio_set_tx_route(station, value.get("slot"), value.get("module", ""))
+                await self._bridge_gate(station)
+            elif value is None:
                 await self._audio_clear_tx_route(station)
-            await self._bridge_gate(station)
+                await self._bridge_gate(station)
+            # A malformed value (e.g. a bool/str) is ignored here — it was
+            # already relayed to the agent; we just don't crash the socket or
+            # corrupt the gate. No bridge broadcast on a no-op.
 
     async def _command_timeout(self, request_id):
         """Fire a timeout error to the browser if no result arrives in time.
@@ -690,12 +688,8 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
         state = await self._get_gate_state(station)
         payload = {"type": "audio.gate", "state": state}
-        await self.channel_layer.group_send(
-            audio_constants.browser_group(station.pk), payload
-        )
-        await self.channel_layer.group_send(
-            audio_constants.agent_group(station.pk), payload
-        )
+        await self.channel_layer.group_send(audio_constants.browser_group(station.pk), payload)
+        await self.channel_layer.group_send(audio_constants.agent_group(station.pk), payload)
 
     @database_sync_to_async
     def _get_gate_state(self, station):

@@ -241,13 +241,9 @@ def test_agent_real_ed25519_accept():
 
     station = Station.objects.create(name="a3_ed25519", status="online")
     private_key = Ed25519PrivateKey.generate()
-    pub_raw = private_key.public_key().public_bytes(
-        encoding=Encoding.Raw, format=PublicFormat.Raw
-    )
+    pub_raw = private_key.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
     pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-    DeviceKey.objects.create(
-        station=station, current_public_key=pub_b64, is_active=True
-    )
+    DeviceKey.objects.create(station=station, current_public_key=pub_b64, is_active=True)
 
     def _make_qs(timestamp_str, priv_key):
         from urllib.parse import quote
@@ -322,9 +318,7 @@ def test_browser_no_permission_reject():
 @pytest.mark.django_db(transaction=True)
 def test_browser_unknown_station_reject():
     """Unknown station_id → 4404."""
-    user = User.objects.create(
-        username="member_b3", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_b3", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
         comm = WebsocketCommunicator(application, "/ws/audio/999999/")
@@ -342,9 +336,7 @@ def test_browser_unknown_station_reject():
 def test_browser_valid_accept():
     """Valid member → successful connect."""
     station = Station.objects.create(name="b4", status="online")
-    user = User.objects.create(
-        username="member_b4", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_b4", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
         comm = _browser(user, station.id)
@@ -364,9 +356,7 @@ def test_browser_valid_accept():
 def test_advertise_relays_streams_to_browser(audio_agent_auth):
     """Agent sends advertise.json → browser sees streams with correct stream_refs."""
     station = Station.objects.create(name="c1", status="online")
-    user = User.objects.create(
-        username="member_c1", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_c1", membership_level=User.MembershipLevel.MEMBER)
     advertise = _load_json("advertise.json")
 
     async def scenario():
@@ -409,12 +399,8 @@ def test_subscribe_sends_source_subscribe_once(audio_agent_auth):
     from apps.audio.models import AudioSubscription
 
     station = Station.objects.create(name="d1", status="online")
-    user1 = User.objects.create(
-        username="u1_d1", membership_level=User.MembershipLevel.MEMBER
-    )
-    user2 = User.objects.create(
-        username="u2_d1", membership_level=User.MembershipLevel.MEMBER
-    )
+    user1 = User.objects.create(username="u1_d1", membership_level=User.MembershipLevel.MEMBER)
+    user2 = User.objects.create(username="u2_d1", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
         agent = _agent_comm(station.id)
@@ -439,8 +425,7 @@ def test_subscribe_sends_source_subscribe_once(audio_agent_auth):
             extra = await asyncio.wait_for(agent.receive_json_from(), timeout=0.3)
             # If something arrived, it must NOT be a second source_subscribe for slot0.rx
             assert not (
-                extra.get("type") == "source_subscribe"
-                and extra.get("stream_id") == "slot0.rx"
+                extra.get("type") == "source_subscribe" and extra.get("stream_id") == "slot0.rx"
             ), f"unexpected second source_subscribe: {extra}"
         except TimeoutError:
             pass
@@ -461,12 +446,8 @@ def test_media_fan_out_to_two_browsers(audio_agent_auth):
     from station_agent.audio.frame import parse_frame
 
     station = Station.objects.create(name="d2", status="online")
-    user1 = User.objects.create(
-        username="u1_d2", membership_level=User.MembershipLevel.MEMBER
-    )
-    user2 = User.objects.create(
-        username="u2_d2", membership_level=User.MembershipLevel.MEMBER
-    )
+    user1 = User.objects.create(username="u1_d2", membership_level=User.MembershipLevel.MEMBER)
+    user2 = User.objects.create(username="u2_d2", membership_level=User.MembershipLevel.MEMBER)
     advertise = _load_json("advertise.json")
     media_frame = _load_bin("media_frame_slot0rx.bin")
 
@@ -526,12 +507,8 @@ def test_media_fan_out_to_two_browsers(audio_agent_auth):
 def test_source_unsubscribe_at_zero(audio_agent_auth):
     """Two browsers → both unsubscribe → agent receives source_unsubscribe exactly once."""
     station = Station.objects.create(name="d3", status="online")
-    user1 = User.objects.create(
-        username="u1_d3", membership_level=User.MembershipLevel.MEMBER
-    )
-    user2 = User.objects.create(
-        username="u2_d3", membership_level=User.MembershipLevel.MEMBER
-    )
+    user1 = User.objects.create(username="u1_d3", membership_level=User.MembershipLevel.MEMBER)
+    user2 = User.objects.create(username="u2_d3", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
         agent = _agent_comm(station.id)
@@ -555,8 +532,7 @@ def test_source_unsubscribe_at_zero(audio_agent_auth):
         try:
             msg = await asyncio.wait_for(agent.receive_json_from(), timeout=0.3)
             assert not (
-                msg.get("type") == "source_unsubscribe"
-                and msg.get("stream_id") == "slot0.rx"
+                msg.get("type") == "source_unsubscribe" and msg.get("stream_id") == "slot0.rx"
             ), "premature source_unsubscribe"
         except TimeoutError:
             pass
@@ -585,9 +561,7 @@ def test_uplink_no_lock_drops_frame_and_errors(audio_agent_auth):
     from station_agent.audio.frame import pack_frame
 
     station = Station.objects.create(name="e1", status="online")
-    user = User.objects.create(
-        username="member_e1", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_e1", membership_level=User.MembershipLevel.MEMBER)
     mic_frame = pack_frame(stream_ref=1, seq=0, ts=0, flags=0, payload=b"\x01\x02")
 
     async def scenario():
@@ -597,6 +571,7 @@ def test_uplink_no_lock_drops_frame_and_errors(audio_agent_auth):
         layer = get_channel_layer()
         agent_spy = "agent_spy_e1"
         from apps.audio.constants import agent_group
+
         await layer.group_add(agent_group(station.id), agent_spy)
 
         browser = _browser(user, station.id)
@@ -631,9 +606,7 @@ def test_uplink_lock_ptt_tx_relays_to_agent(audio_agent_auth):
     from station_agent.audio.frame import pack_frame, parse_frame
 
     station = Station.objects.create(name="e2", status="online")
-    user = User.objects.create(
-        username="member_e2", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_e2", membership_level=User.MembershipLevel.MEMBER)
     # Also subscribe a second browser to op.mic to verify fan-out.
     listener = User.objects.create(
         username="listener_e2", membership_level=User.MembershipLevel.MEMBER
@@ -659,9 +632,7 @@ def test_uplink_lock_ptt_tx_relays_to_agent(audio_agent_auth):
         # Listener subscribes to op.mic so fan-out is exercised. op.mic is
         # browser-produced, so the server must NOT send source_subscribe to the
         # agent for it (§5.2) — only join the fan-out group.
-        await b_listener.send_json_to(
-            {"v": V, "type": "subscribe", "stream_ids": ["op.mic"]}
-        )
+        await b_listener.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["op.mic"]})
         # Agent must NOT receive a source_subscribe for op.mic.
         try:
             unexpected = await asyncio.wait_for(agent.receive_json_from(), timeout=0.5)
@@ -695,9 +666,7 @@ def test_uplink_lock_no_ptt_drops(audio_agent_auth):
     from station_agent.audio.frame import pack_frame
 
     station = Station.objects.create(name="e3", status="online")
-    user = User.objects.create(
-        username="member_e3", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_e3", membership_level=User.MembershipLevel.MEMBER)
     mic_frame = pack_frame(stream_ref=1, seq=0, ts=0, flags=0, payload=b"\x01")
 
     # Acquire lock BEFORE entering async context (DB ops must be sync here).
@@ -815,9 +784,7 @@ def test_byte_identical_passthrough(audio_agent_auth):
     from station_agent.audio.frame import parse_frame
 
     station = Station.objects.create(name="f1", status="online")
-    user = User.objects.create(
-        username="member_f1", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_f1", membership_level=User.MembershipLevel.MEMBER)
     advertise = _load_json("advertise.json")
     media_frame = _load_bin("media_frame_slot0rx.bin")
     expected = parse_frame(media_frame)
@@ -888,9 +855,7 @@ def test_browser_reconnect_no_leaked_demand(audio_agent_auth):
     from apps.audio.models import AudioSubscription
 
     station = Station.objects.create(name="g2", status="online")
-    user = User.objects.create(
-        username="member_g2", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_g2", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
         agent = _agent_comm(station.id)
@@ -988,14 +953,16 @@ def test_control_tx_route_updates_gate(control_agent_auth, audio_agent_auth):
                 break
 
         # Send tx_route command.
-        await hc.send_json_to({
-            "type": "command",
-            "capability": "tx_route",
-            "op": "set",
-            "slot": 1000,
-            "module": "audio-router",
-            "value": {"slot": 0, "module": "fm"},
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "capability": "tx_route",
+                "op": "set",
+                "slot": 1000,
+                "module": "audio-router",
+                "value": {"slot": 0, "module": "fm"},
+            }
+        )
         # Drain agent frame (relayed command).
         await asyncio.wait_for(ctrl_agent.receive_json_from(), timeout=2.0)
 
@@ -1058,14 +1025,16 @@ def test_audio_gate_broadcast_is_msgpack_serializable(control_agent_auth, audio_
                 break
 
         # PTT on → the control glue broadcasts audio.gate to browser_group.
-        await hc.send_json_to({
-            "type": "command",
-            "capability": "ptt",
-            "op": "do",
-            "value": True,
-            "slot": 0,
-            "module": "fm",
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "capability": "ptt",
+                "op": "do",
+                "value": True,
+                "slot": 0,
+                "module": "fm",
+            }
+        )
         # Drain the relayed command from the agent.
         await asyncio.wait_for(ctrl_agent.receive_json_from(), timeout=2.0)
 
@@ -1130,38 +1099,44 @@ def test_control_ptt_on_off_updates_gate(control_agent_auth, audio_agent_auth):
                 break
 
         # PTT on.
-        await hc.send_json_to({
-            "type": "command",
-            "capability": "ptt",
-            "op": "do",
-            "value": True,
-            "slot": 0,
-            "module": "fm",
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "capability": "ptt",
+                "op": "do",
+                "value": True,
+                "slot": 0,
+                "module": "fm",
+            }
+        )
         await asyncio.wait_for(ctrl_agent.receive_json_from(), timeout=2.0)
         await asyncio.sleep(0.1)
 
         # PTT off.
-        await hc.send_json_to({
-            "type": "command",
-            "capability": "ptt",
-            "op": "do",
-            "value": False,
-            "slot": 0,
-            "module": "fm",
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "capability": "ptt",
+                "op": "do",
+                "value": False,
+                "slot": 0,
+                "module": "fm",
+            }
+        )
         await asyncio.wait_for(ctrl_agent.receive_json_from(), timeout=2.0)
         await asyncio.sleep(0.1)
 
         # PTT back on.
-        await hc.send_json_to({
-            "type": "command",
-            "capability": "ptt",
-            "op": "do",
-            "value": True,
-            "slot": 0,
-            "module": "fm",
-        })
+        await hc.send_json_to(
+            {
+                "type": "command",
+                "capability": "ptt",
+                "op": "do",
+                "value": True,
+                "slot": 0,
+                "module": "fm",
+            }
+        )
         await asyncio.wait_for(ctrl_agent.receive_json_from(), timeout=2.0)
         await asyncio.sleep(0.1)
 
@@ -1268,18 +1243,14 @@ def test_subscribe_malformed_stream_id_yields_error_no_db_row(audio_agent_auth):
         assert (await browser.connect())[0] is True
 
         # Send subscribe with malformed stream_id (slash is forbidden).
-        await browser.send_json_to(
-            {"v": V, "type": "subscribe", "stream_ids": ["slot0/rx"]}
-        )
+        await browser.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["slot0/rx"]})
 
         # Consumer must send back an error frame.
         err = await _drain_until(browser, "error")
         assert err["code"] == "unknown_stream"
 
         # Consumer must still be alive (send a valid subscribe and get response).
-        await browser.send_json_to(
-            {"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]}
-        )
+        await browser.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]})
         # The valid subscribe triggers source_subscribe to the agent.
         sub = await asyncio.wait_for(agent.receive_json_from(), timeout=2.0)
         assert sub["type"] == "source_subscribe"
@@ -1303,9 +1274,7 @@ def test_subscribe_before_agent_connect_demand_resend(audio_agent_auth):
     (Exercises _handle_advertise's 'cnt > 0' re-send loop — m-4.)
     """
     station = Station.objects.create(name="m4", status="online")
-    user = User.objects.create(
-        username="member_m4", membership_level=User.MembershipLevel.MEMBER
-    )
+    user = User.objects.create(username="member_m4", membership_level=User.MembershipLevel.MEMBER)
     advertise = _load_json("advertise.json")
 
     async def scenario():
@@ -1313,9 +1282,7 @@ def test_subscribe_before_agent_connect_demand_resend(audio_agent_auth):
         browser = _browser(user, station.id)
         assert (await browser.connect())[0] is True
 
-        await browser.send_json_to(
-            {"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]}
-        )
+        await browser.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]})
         # No agent yet → no source_subscribe can arrive anywhere; that is fine.
         # Give the subscribe DB write a moment.
         await asyncio.sleep(0.1)
@@ -1384,3 +1351,53 @@ def test_agent_auth_reject_no_exception_during_teardown():
     # raised inside the consumer's disconnect() (they bubble via the Channels
     # test layer).
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# 8. subscriptions.py demand-counting contract (Copilot round 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unsubscribe_idempotent_does_not_resignal_last():
+    """unsubscribe() returns last=True only on a real 1→0 delete, not on 0→0.
+
+    An idempotent unsubscribe of a stream we were never subscribed to deletes
+    no row and must NOT report last=True (which would emit a spurious
+    source_unsubscribe to the agent).
+    """
+    from apps.audio import subscriptions
+
+    station = Station.objects.create(name="sub-idem", status="online")
+
+    # Never subscribed → unsubscribe deletes nothing → last must be False.
+    res = subscriptions.unsubscribe(station, "slot0.rx", "chan-A")
+    assert res == {"last": False, "count": 0}
+
+    # Real subscribe then unsubscribe → genuine 1→0 → last True.
+    subscriptions.subscribe(station, "slot0.rx", "chan-A")
+    res = subscriptions.unsubscribe(station, "slot0.rx", "chan-A")
+    assert res == {"last": True, "count": 0}
+
+    # Repeat unsubscribe (already gone) → 0→0 → last False again.
+    res = subscriptions.unsubscribe(station, "slot0.rx", "chan-A")
+    assert res == {"last": False, "count": 0}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_drop_channel_reports_only_zeroed_streams():
+    """drop_channel returns exactly the streams that hit zero for the channel.
+
+    A stream another channel still holds must NOT be reported.
+    """
+    from apps.audio import subscriptions
+
+    station = Station.objects.create(name="sub-drop", status="online")
+    subscriptions.subscribe(station, "slot0.rx", "chan-A")
+    subscriptions.subscribe(station, "slot0.rx", "chan-B")  # second holder
+    subscriptions.subscribe(station, "op.mic", "chan-A")
+
+    zeroed = subscriptions.drop_channel(station, "chan-A")
+    # op.mic hit zero (only chan-A held it); slot0.rx still held by chan-B.
+    assert set(zeroed) == {"op.mic"}
+    assert subscriptions.count(station, "slot0.rx") == 1

@@ -8,6 +8,7 @@ The server is a dumb relay: it authenticates both ends, fans out opaque Opus
 frames (§5.3), and enforces lock+PTT gating on the uplink.  No DSP, no
 decode, no re-encode.
 """
+
 import json
 import logging
 import re
@@ -130,7 +131,10 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         for entry in streams:
             sid = entry.get("stream_id")
             ref = entry.get("stream_ref")
-            if sid is not None and ref is not None:
+            # Validate the stream_id: it becomes part of a Channels group name
+            # (audio_<st>_src_<sid>) in _handle_media, and an invalid id (e.g.
+            # containing '/') would raise in group_send and crash the consumer.
+            if sid is not None and ref is not None and VALID_STREAM_ID.match(str(sid)):
                 new_refs[sid] = ref
                 new_ref_to_id[ref] = sid
         self.stream_refs = new_refs
@@ -602,7 +606,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
             {"type": "audio.media", "data": data},
         )
         # Fan out to op.mic subscribers (including this browser if it subscribed).
-        omic_grp = constants.src_group(self.station_id, "op.mic")
+        omic_grp = constants.src_group(self.station_id, constants.OP_MIC_STREAM_ID)
         await self.channel_layer.group_send(
             omic_grp,
             {"type": "audio.media", "data": data},
@@ -647,9 +651,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _can_use(self, station):
         return (
-            bool(self.user)
-            and not self.user.is_anonymous
-            and self.user.can_use_station(station)
+            bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
         )
 
     @database_sync_to_async

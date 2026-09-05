@@ -192,9 +192,7 @@ def mic_allowed(station, user) -> bool:
     from apps.control.models import ControlLock
 
     try:
-        lock = ControlLock.objects.select_related("holder").get(
-            station=station, scope="station"
-        )
+        lock = ControlLock.objects.select_related("holder").get(station=station, scope="station")
     except ControlLock.DoesNotExist:
         return False
     if lock.holder_id != user.id:

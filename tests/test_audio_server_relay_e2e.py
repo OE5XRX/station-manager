@@ -217,9 +217,7 @@ def _load_json(name: str) -> dict:
 
 def _make_member(username: str) -> User:
     """Create a MEMBER user who can_use_station."""
-    return User.objects.create(
-        username=username, membership_level=User.MembershipLevel.MEMBER
-    )
+    return User.objects.create(username=username, membership_level=User.MembershipLevel.MEMBER)
 
 
 async def _agent_advertise(agent: WebsocketCommunicator) -> None:
@@ -229,9 +227,7 @@ async def _agent_advertise(agent: WebsocketCommunicator) -> None:
 
 async def _browser_subscribe_slot0rx(browser: WebsocketCommunicator) -> None:
     """Browser subscribes to slot0.rx."""
-    await browser.send_json_to(
-        {"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]}
-    )
+    await browser.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]})
 
 
 # ===========================================================================
@@ -413,9 +409,7 @@ def test_uplink_mic_through_ptt_lock_gate(audio_agent_auth, control_agent_auth):
                             {
                                 "module": "fm",
                                 "identity": {"type": "fm"},
-                                "capabilities": [
-                                    {"name": "ptt", "kind": "command"}
-                                ],
+                                "capabilities": [{"name": "ptt", "kind": "command"}],
                                 "state": {},
                             }
                         ],
@@ -441,9 +435,7 @@ def test_uplink_mic_through_ptt_lock_gate(audio_agent_auth, control_agent_auth):
         # Listener browser connects to audio + subscribes to op.mic for fan-out check.
         listener_a = _browser_audio(listener, station.id)
         assert (await listener_a.connect())[0] is True
-        await listener_a.send_json_to(
-            {"v": V, "type": "subscribe", "stream_ids": ["op.mic"]}
-        )
+        await listener_a.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["op.mic"]})
 
         # --- Holder acquires lock on control. ---
         await hc.send_json_to({"type": "lock_acquire"})
