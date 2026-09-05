@@ -69,22 +69,34 @@ async def _drain_bytes_until(comm, tries=5):
 
 
 async def _no_bytes(comm, timeout=0.3):
-    """Assert no binary frame arrives within timeout."""
+    """Assert no binary frame arrives within timeout.
+
+    Also fails if a JSON (text) frame arrives — a text frame where silence is
+    expected is equally surprising and should surface immediately.
+    """
     try:
         data = await asyncio.wait_for(comm.receive_from(), timeout=timeout)
         if isinstance(data, bytes):
             raise AssertionError(f"unexpected binary frame: {data[:16]!r}...")
+        # A text frame arriving when we expected silence is also a failure.
+        raise AssertionError(f"unexpected text frame when expecting silence: {data!r}")
     except TimeoutError:
         pass
 
 
 async def _no_json(comm, timeout=0.3):
-    """Assert no JSON frame arrives within timeout."""
+    """Assert no JSON frame arrives within timeout.
+
+    Also fails if a binary frame arrives — binary where silence is expected is
+    equally surprising.
+    """
     try:
         data = await asyncio.wait_for(comm.receive_from(), timeout=timeout)
         if isinstance(data, str):
             msg = json.loads(data)
             raise AssertionError(f"unexpected JSON frame: {msg}")
+        # A binary frame arriving when we expected silence is also a failure.
+        raise AssertionError(f"unexpected binary frame when expecting silence: {data[:16]!r}...")
     except TimeoutError:
         pass
 
@@ -1221,3 +1233,148 @@ def test_control_keepalive_refreshes_ptt(control_agent_auth, audio_agent_auth):
     # Keepalive must have extended the expiry.
     assert captured.get("expires_at") is not None
     assert captured["expires_at"] >= original_expires
+
+
+# ---------------------------------------------------------------------------
+# 8. Security / validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_subscribe_malformed_stream_id_yields_error_no_db_row(audio_agent_auth):
+    """Browser sends subscribe with malformed stream_id 'slot0/rx' (contains slash).
+
+    Slash is not in [a-zA-Z\\d\\-_.] → must be rejected with an error frame,
+    must NOT crash the consumer, and must leave NO AudioSubscription row.
+    """
+    from apps.audio.models import AudioSubscription
+
+    station = Station.objects.create(name="sec1", status="online")
+    user = User.objects.create(
+        username="member_sec1", membership_level=User.MembershipLevel.MEMBER
+    )
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+
+        browser = _browser(user, station.id)
+        assert (await browser.connect())[0] is True
+
+        # Send subscribe with malformed stream_id (slash is forbidden).
+        await browser.send_json_to(
+            {"v": V, "type": "subscribe", "stream_ids": ["slot0/rx"]}
+        )
+
+        # Consumer must send back an error frame.
+        err = await _drain_until(browser, "error")
+        assert err["code"] == "unknown_stream"
+
+        # Consumer must still be alive (send a valid subscribe and get response).
+        await browser.send_json_to(
+            {"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]}
+        )
+        # The valid subscribe triggers source_subscribe to the agent.
+        sub = await asyncio.wait_for(agent.receive_json_from(), timeout=2.0)
+        assert sub["type"] == "source_subscribe"
+        assert sub["stream_id"] == "slot0.rx"
+
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+
+    # No demand row for the malformed id.
+    assert AudioSubscription.objects.filter(station=station, stream_id="slot0/rx").count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_subscribe_before_agent_connect_demand_resend(audio_agent_auth):
+    """Browser subscribes to slot0.rx BEFORE the agent connects.
+
+    When the agent then connects and sends advertise, the _handle_advertise
+    demand re-send path must issue source_subscribe for slot0.rx to the agent.
+    (Exercises _handle_advertise's 'cnt > 0' re-send loop — m-4.)
+    """
+    station = Station.objects.create(name="m4", status="online")
+    user = User.objects.create(
+        username="member_m4", membership_level=User.MembershipLevel.MEMBER
+    )
+    advertise = _load_json("advertise.json")
+
+    async def scenario():
+        # Browser connects and subscribes FIRST — no agent yet.
+        browser = _browser(user, station.id)
+        assert (await browser.connect())[0] is True
+
+        await browser.send_json_to(
+            {"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]}
+        )
+        # No agent yet → no source_subscribe can arrive anywhere; that is fine.
+        # Give the subscribe DB write a moment.
+        await asyncio.sleep(0.1)
+
+        # Now the agent connects.
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+
+        # Agent sends advertise → _handle_advertise detects demand (cnt > 0) and
+        # re-sends source_subscribe for slot0.rx.
+        await agent.send_json_to(advertise)
+
+        # The agent must receive source_subscribe for slot0.rx.
+        msg = await asyncio.wait_for(agent.receive_json_from(), timeout=2.0)
+        assert msg["type"] == "source_subscribe"
+        assert msg["stream_id"] == "slot0.rx"
+
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_auth_reject_no_exception_during_teardown():
+    """Full connect(fail-sig)→disconnect on the auth-reject path.
+
+    Guards B-1: disconnect() must NOT raise AttributeError when station is None
+    (the reject path never sets self.station) nor when it references
+    self.browser_group (now assigned before the auth guard).
+
+    Does NOT use the audio_agent_auth fixture so the real reject path runs.
+    Instead we monkeypatch _verify_agent to return False via an async function.
+    """
+    import unittest.mock
+
+    from apps.audio import consumers as audio_consumers
+
+    station = Station.objects.create(name="m5", status="online")
+
+    async def _reject_verify(self, station, params):
+        return False
+
+    async def scenario():
+        # Patch _verify_agent to always return False (auth rejected).
+        with unittest.mock.patch.object(
+            audio_consumers.AgentAudioConsumer,
+            "_verify_agent",
+            new=_reject_verify,
+        ):
+            agent = WebsocketCommunicator(
+                application,
+                f"/ws/agent/audio/{station.id}/?signature=bad&timestamp=0",
+            )
+            # connect() should fail with code 4401.
+            connected, code = await agent.connect()
+            assert connected is False
+            assert code == 4401
+            # disconnect() must not raise — in particular no AttributeError on
+            # self.browser_group / self.agent_group (B-1 fix).
+            # WebsocketCommunicator.disconnect() is a no-op on an already-closed
+            # socket but exercises the teardown path; errors surface as exceptions.
+            await agent.disconnect()
+
+    # asyncio.run propagates any exception from the coroutine including ones
+    # raised inside the consumer's disconnect() (they bubble via the Channels
+    # test layer).
+    asyncio.run(scenario())

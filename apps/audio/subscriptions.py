@@ -7,7 +7,7 @@ mirroring the TerminalSession keepalive pattern.
 
 from django.db import IntegrityError, transaction
 
-from .models import AudioSubscription
+from .models import AudioGate, AudioSubscription
 
 
 @transaction.atomic
@@ -17,7 +17,16 @@ def subscribe(station, stream_id: str, channel_name: str) -> dict:
     Returns {"first": bool, "count": int} where first=True iff the count for
     (station, stream_id) went 0 -> 1 (i.e. this is the first subscriber and
     the agent should be told to start producing the source).
+
+    Serializes per-station via a row lock on the AudioGate anchor so that two
+    concurrent first-subscribers under Postgres READ COMMITTED cannot both see
+    before=0 and both return first=True (double source_subscribe bug).
     """
+    # Row-lock on the per-station anchor to serialize concurrent subscribe /
+    # unsubscribe calls for this station.  get_or_create is safe here because
+    # AudioGate has a OneToOne relation to station.
+    AudioGate.objects.select_for_update().get_or_create(station=station)
+
     before = AudioSubscription.objects.filter(station=station, stream_id=stream_id).count()
     try:
         AudioSubscription.objects.create(
@@ -37,7 +46,14 @@ def unsubscribe(station, stream_id: str, channel_name: str) -> dict:
 
     Returns {"last": bool, "count": int} where last=True iff the count went
     1 -> 0 (agent should be told to stop producing the source).
+
+    Serializes per-station via a row lock on the AudioGate anchor (same as
+    subscribe) to prevent a concurrent subscribe from racing the count-after-
+    delete check and seeing last=True incorrectly.
     """
+    # Row-lock on the per-station anchor (mirror of subscribe).
+    AudioGate.objects.select_for_update().get_or_create(station=station)
+
     AudioSubscription.objects.filter(
         station=station, stream_id=stream_id, channel_name=channel_name
     ).delete()

@@ -7,10 +7,10 @@ database_sync_to_async.
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .constants import AUDIO_PTT_TTL
 from .models import AudioGate  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,8 @@ def _coerce_slot(slot):
 def set_ptt(station, slot, module, ttl: float | None = None) -> None:
     """Activate PTT for slot/module with a dead-man expiry."""
     if ttl is None:
-        ttl = AUDIO_PTT_TTL
+        # Resolve at call time so override_settings works in tests.
+        ttl = getattr(settings, "AUDIO_PTT_TTL_SECONDS", 3.0)
     gate = _locked(station)
     gate.ptt_active = True
     gate.ptt_slot = _coerce_slot(slot)
@@ -73,7 +74,8 @@ def set_ptt(station, slot, module, ttl: float | None = None) -> None:
 def refresh_ptt(station, ttl: float | None = None) -> None:
     """Extend PTT dead-man expiry (called on each keepalive tick)."""
     if ttl is None:
-        ttl = AUDIO_PTT_TTL
+        # Resolve at call time so override_settings works in tests.
+        ttl = getattr(settings, "AUDIO_PTT_TTL_SECONDS", 3.0)
     gate = _locked(station)
     if gate.ptt_active:
         gate.ptt_expires_at = timezone.now() + timedelta(seconds=ttl)

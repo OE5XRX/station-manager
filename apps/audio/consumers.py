@@ -10,12 +10,18 @@ decode, no re-encode.
 """
 import json
 import logging
+import re
 import time
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from . import constants, gate, subscriptions
+
+# Channels group names must match ^[a-zA-Z\d\-_.]+$ and be <100 chars.
+# We further restrict stream_ids to [a-zA-Z\d\-_.]{1,80} to keep group names
+# like "audio_<id>_src_<stream_id>" safely under the 100-char limit.
+VALID_STREAM_ID = re.compile(r"^[a-zA-Z\d\-_.]{1,80}$")
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +46,15 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         # Reverse map: stream_ref -> stream_id
         self._ref_to_id: dict[int, str] = {}
 
+        # Assign groups BEFORE the auth guard so disconnect() can safely
+        # reference self.agent_group / self.browser_group on the reject path
+        # (B-1: auth-reject teardown must not raise AttributeError).
+        self.agent_group = constants.agent_group(self.station_id)
+        # The browser fan-out group is used only for SENDING (streams /
+        # stream_state broadcasts).  The agent must NOT join it — joining would
+        # only echo its own broadcasts back to itself.
+        self.browser_group = constants.browser_group(self.station_id)
+
         query_string = self.scope.get("query_string", b"").decode()
         params = {k: v[0] for k, v in parse_qs(query_string).items() if v}
 
@@ -53,12 +68,6 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        self.agent_group = constants.agent_group(self.station_id)
-        # The browser fan-out group is used only for SENDING (streams /
-        # stream_state broadcasts).  The agent must NOT join it — joining would
-        # only echo its own broadcasts back to itself.
-        self.browser_group = constants.browser_group(self.station_id)
-
         await self.channel_layer.group_add(self.agent_group, self.channel_name)
         await self.accept()
 
@@ -67,6 +76,9 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
             station = self.station
             if station is not None:
                 await self._clear_ptt(station)
+                # Broadcast the cleared gate state so browser _gate_cache
+                # does not stay stale (ptt_active=True) after the agent drops.
+                await self._bridge_gate(station)
                 # Notify browsers that streams are gone.  Use the audio.stream_state
                 # event type so the browser's audio_stream_state handler relays it
                 # (a bare "stream_state" type is silently dropped on the browser).
@@ -83,6 +95,8 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
                     },
                 )
         finally:
+            # agent_group is always set (even on reject path) so no hasattr needed,
+            # but guard defensively in case connect() raised before assignment.
             if hasattr(self, "agent_group"):
                 await self.channel_layer.group_discard(self.agent_group, self.channel_name)
 
@@ -210,6 +224,23 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
     # NOTE: the agent no longer joins browser_group, so streams / stream_state /
     # audio.gate-echo handlers are unreachable and intentionally omitted.  The
     # agent still receives audio.gate via agent_group (audio_gate handler above).
+
+    async def _bridge_gate(self, station):
+        """Read gate state and broadcast audio.gate to browser + agent groups.
+
+        Called after PTT clear on agent disconnect so that AudioConsumers
+        refresh their _gate_cache immediately (mirrors ControlConsumer /
+        AgentControlConsumer._bridge_gate).  Broadcasts the msgpack-safe wire
+        state (no datetime) to survive the prod channels_redis (msgpack) layer.
+        """
+        state = await self._get_gate_state(station)
+        payload = {"type": "audio.gate", "state": state}
+        await self.channel_layer.group_send(self.browser_group, payload)
+        await self.channel_layer.group_send(self.agent_group, payload)
+
+    @database_sync_to_async
+    def _get_gate_state(self, station):
+        return gate.get_wire_state(station)
 
     # -- DB helpers ------------------------------------------------------------
 
@@ -386,8 +417,23 @@ class AudioConsumer(AsyncWebsocketConsumer):
         # Unknown types ignored (forward-compat).
 
     async def _handle_subscribe(self, station, msg):
-        stream_ids = msg.get("stream_ids", [])
+        # Cap list length and validate each stream_id before touching the DB
+        # or channel-layer groups (malformed ids would raise TypeError in
+        # group_add and crash the consumer).
+        stream_ids = msg.get("stream_ids", [])[:32]
         for sid in stream_ids:
+            if not VALID_STREAM_ID.match(str(sid)):
+                await self.send(
+                    text_data=json.dumps(
+                        {
+                            "v": constants.AUDIO_PROTOCOL_VERSION,
+                            "type": "error",
+                            "code": "unknown_stream",
+                            "detail": f"invalid stream_id: {sid!r}",
+                        }
+                    )
+                )
+                continue
             result = await self._subscribe(station, sid, self.channel_name)
             if result["first"]:
                 # First subscriber -> tell the agent to start producing.
@@ -409,8 +455,21 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 self._src_groups.add(grp)
 
     async def _handle_unsubscribe(self, station, msg):
-        stream_ids = msg.get("stream_ids", [])
+        # Cap list length and validate each stream_id.
+        stream_ids = msg.get("stream_ids", [])[:32]
         for sid in stream_ids:
+            if not VALID_STREAM_ID.match(str(sid)):
+                await self.send(
+                    text_data=json.dumps(
+                        {
+                            "v": constants.AUDIO_PROTOCOL_VERSION,
+                            "type": "error",
+                            "code": "unknown_stream",
+                            "detail": f"invalid stream_id: {sid!r}",
+                        }
+                    )
+                )
+                continue
             result = await self._unsubscribe(station, sid, self.channel_name)
             if result["last"]:
                 # Last subscriber gone -> tell the agent to stop producing.
@@ -526,10 +585,6 @@ class AudioConsumer(AsyncWebsocketConsumer):
         self._gate_cache = event.get("state", {})
         if not self._cache_mic_allowed():
             self._not_locked_error_sent = False
-
-    async def stream_state(self, event):
-        """Ignore stream_state echo on the browser group."""
-        pass
 
     # -- DB helpers ------------------------------------------------------------
 
