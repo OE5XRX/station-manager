@@ -388,6 +388,42 @@ def test_advertise_relays_streams_to_browser(audio_agent_auth):
     asyncio.run(scenario())
 
 
+@pytest.mark.django_db(transaction=True)
+def test_advertise_drops_invalid_stream_id(audio_agent_auth):
+    """An advertise entry with an invalid stream_id (bad group-name chars) is
+    filtered from the ref map AND the streams broadcast to browsers."""
+    station = Station.objects.create(name="c1b", status="online")
+    user = User.objects.create(username="member_c1b", membership_level=User.MembershipLevel.MEMBER)
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(user, station.id)
+        assert (await browser.connect())[0] is True
+        await asyncio.sleep(0.1)
+
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "advertise",
+                "streams": [
+                    {"stream_id": "slot0.rx", "stream_ref": 0, "format": {"rate": 8000}},
+                    # Invalid: '/' is not allowed in a Channels group name.
+                    {"stream_id": "slot0/rx", "stream_ref": 9, "format": {"rate": 8000}},
+                ],
+            }
+        )
+
+        msg = await _drain_until(browser, "streams")
+        ids = [s["stream_id"] for s in msg["streams"]]
+        assert ids == ["slot0.rx"]  # invalid entry dropped
+
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+
+
 # ---------------------------------------------------------------------------
 # 3. Demand gating + fan-out
 # ---------------------------------------------------------------------------

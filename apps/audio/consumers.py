@@ -133,23 +133,29 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
     async def _handle_advertise(self, msg):
         """Rebuild stream_refs map; relay streams to browsers; re-subscribe demanded sources."""
         streams = msg.get("streams", [])
-        # Rebuild maps.
+        # Rebuild maps AND the filtered stream list in one pass. The stream_id
+        # becomes part of a Channels group name (audio_<st>_src_<sid>) in
+        # _handle_media; an invalid id (e.g. containing '/') would raise in
+        # group_send. We drop invalid entries from the ref map, the browser
+        # broadcast, AND the cached _last_streams so all three stay consistent
+        # (no advertising a stream the server can never route or emit state for).
         new_refs: dict[str, int] = {}
         new_ref_to_id: dict[int, str] = {}
+        valid_streams: list = []
         for entry in streams:
+            if not isinstance(entry, dict):
+                continue
             sid = entry.get("stream_id")
             ref = entry.get("stream_ref")
-            # Validate the stream_id: it becomes part of a Channels group name
-            # (audio_<st>_src_<sid>) in _handle_media, and an invalid id (e.g.
-            # containing '/') would raise in group_send and crash the consumer.
             if sid is not None and ref is not None and VALID_STREAM_ID.match(str(sid)):
                 new_refs[sid] = ref
                 new_ref_to_id[ref] = sid
+                valid_streams.append(entry)
         self.stream_refs = new_refs
         self._ref_to_id = new_ref_to_id
-        self._last_streams = streams
+        self._last_streams = valid_streams
 
-        # Relay filtered streams list to all browsers.
+        # Relay the validated streams list to all browsers.
         await self.channel_layer.group_send(
             self.browser_group,
             {
@@ -157,7 +163,7 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
                 "msg": {
                     "v": constants.AUDIO_PROTOCOL_VERSION,
                     "type": "streams",
-                    "streams": streams,
+                    "streams": valid_streams,
                 },
             },
         )
