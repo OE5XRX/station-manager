@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "type": "mic_state",
+  "active": true,
+  "tx_slot": 0,
+  "tx_module": "fm"
+}

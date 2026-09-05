@@ -1,0 +1,6 @@
+{
+  "v": 1,
+  "type": "mic_open",
+  "format": { "rate": 16000, "channels": 1 },
+  "codec": "opus"
+}
