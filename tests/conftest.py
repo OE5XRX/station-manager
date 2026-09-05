@@ -279,3 +279,14 @@ def control_agent_auth(monkeypatch):
         return True
 
     monkeypatch.setattr(consumers.AgentControlConsumer, "_verify_agent", _ok)
+
+
+@pytest.fixture
+def audio_agent_auth(monkeypatch):
+    """Bypass Ed25519 verification for AgentAudioConsumer in tests."""
+    from apps.audio import consumers
+
+    async def _ok(self, station, params):
+        return True
+
+    monkeypatch.setattr(consumers.AgentAudioConsumer, "_verify_agent", _ok)

@@ -64,6 +64,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if station is not None:
                 await self._mark_offline(station)
                 freed = await self._force_free(station)
+                if freed:
+                    # Agent disconnect clears any held lock -> PTT must die too.
+                    await self._do_clear_ptt(station)
+                    await self._bridge_gate(station)
                 await self._broadcast("control.agent_offline", {})
                 if freed:
                     status = await self._lock_status(station)
@@ -141,6 +145,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         continue
                     freed = await self._sweep(station)
                     if freed:
+                        # Lock swept (idle/grace) -> PTT must die.
+                        await self._do_clear_ptt(station)
+                        await self._bridge_gate(station)
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
                 except asyncio.CancelledError:
@@ -231,6 +238,35 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         ):
             return True
         return False
+
+    async def _bridge_gate(self, station):
+        """Read gate state and broadcast audio.gate to browser + agent audio groups.
+
+        Called after any PTT / tx_route / lock change so that AudioConsumers
+        and AgentAudioConsumer update their cached state.  Lazy import of the
+        audio app avoids a circular import at module load time.
+
+        Broadcasts the msgpack-safe wire state (no datetime) so the payload
+        round-trips through the prod channels_redis (msgpack) layer.
+        """
+        from apps.audio import constants as audio_constants
+
+        state = await self._get_gate_state(station)
+        payload = {"type": "audio.gate", "state": state}
+        await self.channel_layer.group_send(audio_constants.browser_group(station.pk), payload)
+        await self.channel_layer.group_send(audio_constants.agent_group(station.pk), payload)
+
+    @database_sync_to_async
+    def _get_gate_state(self, station):
+        from apps.audio import gate as audio_gate
+
+        return audio_gate.get_wire_state(station)
+
+    @database_sync_to_async
+    def _do_clear_ptt(self, station):
+        from apps.audio import gate as audio_gate
+
+        audio_gate.clear_ptt(station)
 
 
 def _lock_with_holder(station, scope="station"):
@@ -336,6 +372,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
         elif mtype == "ptt_keepalive":
             if await self._touch_if_holder(station):
                 await self._relay(msg)
+                # Refresh PTT dead-man and notify audio consumers.
+                await self._audio_refresh_ptt(station)
+                await self._bridge_gate(station)
             else:
                 await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
         elif mtype in ("subscribe", "unsubscribe"):
@@ -379,6 +418,27 @@ class ControlConsumer(AsyncWebsocketConsumer):
             event_type,
             f"{self.user.username} {msg.get('op')} {capability}",
         )
+        # Audio cross-plane glue (lazy import to avoid app-cycle at module load).
+        if capability == "ptt":
+            value = msg.get("value")
+            if value:
+                slot = msg.get("slot")
+                module = msg.get("module", "")
+                await self._audio_set_ptt(station, slot, module)
+            else:
+                await self._audio_clear_ptt(station)
+            await self._bridge_gate(station)
+        elif capability == "tx_route":
+            value = msg.get("value")
+            if isinstance(value, dict):
+                await self._audio_set_tx_route(station, value.get("slot"), value.get("module", ""))
+                await self._bridge_gate(station)
+            elif value is None:
+                await self._audio_clear_tx_route(station)
+                await self._bridge_gate(station)
+            # A malformed value (e.g. a bool/str) is ignored here — it was
+            # already relayed to the agent; we just don't crash the socket or
+            # corrupt the gate. No bridge broadcast on a no-op.
 
     async def _command_timeout(self, request_id):
         """Fire a timeout error to the browser if no result arrives in time.
@@ -425,10 +485,14 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self._broadcast_lock(station)
 
     async def _lock_release(self, station):
-        if await self._release(station):
+        released = await self._release(station)
+        if released:
             await self._audit(
                 station, "control_lock_released", f"{self.user.username} released control"
             )
+            # Lock loss -> clear PTT and notify audio consumers.
+            await self._audio_clear_ptt(station)
+            await self._bridge_gate(station)
         await self._broadcast_lock(station)
 
     async def _lock_request(self, station):
@@ -450,6 +514,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
                 "control_lock_transferred",
                 f"{self.user.username} -> user {to_user_id}",
             )
+            # Holder changed -> old holder can no longer key TX.
+            await self._audio_clear_ptt(station)
+            await self._bridge_gate(station)
         await self._broadcast_lock(station)
 
     async def _lock_preempt(self, station):
@@ -460,6 +527,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self._audit(
             station, "control_lock_preempted", f"{self.user.username} preempted control"
         )
+        # Holder changed by preempt -> PTT dies.
+        await self._audio_clear_ptt(station)
+        await self._bridge_gate(station)
         await self._broadcast_lock(station)
 
     async def _broadcast_lock(self, station):
@@ -605,3 +675,54 @@ class ControlConsumer(AsyncWebsocketConsumer):
         StationAuditLog.log(
             station=station, event_type=event_type, message=message, user=self.user
         )
+
+    # -- audio cross-plane glue (lazy import to avoid circular app dependency) --
+
+    async def _bridge_gate(self, station):
+        """Broadcast audio.gate to browser and agent audio groups.
+
+        Broadcasts the msgpack-safe wire state (no datetime) so the payload
+        round-trips through the prod channels_redis (msgpack) layer.
+        """
+        from apps.audio import constants as audio_constants
+
+        state = await self._get_gate_state(station)
+        payload = {"type": "audio.gate", "state": state}
+        await self.channel_layer.group_send(audio_constants.browser_group(station.pk), payload)
+        await self.channel_layer.group_send(audio_constants.agent_group(station.pk), payload)
+
+    @database_sync_to_async
+    def _get_gate_state(self, station):
+        from apps.audio import gate as audio_gate
+
+        return audio_gate.get_wire_state(station)
+
+    @database_sync_to_async
+    def _audio_set_ptt(self, station, slot, module):
+        from apps.audio import gate as audio_gate
+
+        audio_gate.set_ptt(station, slot, module)
+
+    @database_sync_to_async
+    def _audio_clear_ptt(self, station):
+        from apps.audio import gate as audio_gate
+
+        audio_gate.clear_ptt(station)
+
+    @database_sync_to_async
+    def _audio_refresh_ptt(self, station):
+        from apps.audio import gate as audio_gate
+
+        audio_gate.refresh_ptt(station)
+
+    @database_sync_to_async
+    def _audio_set_tx_route(self, station, slot, module):
+        from apps.audio import gate as audio_gate
+
+        audio_gate.set_tx_route(station, slot, module)
+
+    @database_sync_to_async
+    def _audio_clear_tx_route(self, station):
+        from apps.audio import gate as audio_gate
+
+        audio_gate.clear_tx_route(station)

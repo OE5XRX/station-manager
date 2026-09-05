@@ -234,8 +234,13 @@ FEC data is present). bit1 (DTX) is set heuristically for ≤2-byte comfort pack
   the receiver, DTX allowed. Bitrate adaptive; NB/WB per negotiated rate.
 - Encode rate = negotiated stream rate (PipeWire resamples the module's native rate to
   it). MVP FM: 8 kHz NB or 16 kHz WB (decided in Session B spec).
-- Receivers MUST implement PLC (conceal) on gaps and MUST use FEC data when `flags`
-  bit0 is set.
+- Receivers MUST implement PLC (conceal) on gaps. **`flags` bit0 (FEC-present) is an
+  optional hint, not authoritative** (§5.3): the MVP leaves it 0 and carries in-band FEC
+  inside the Opus packet, so a receiver MUST NOT gate FEC handling on the bit. Loss is
+  detected via `seq`; the receiver recovers using Opus **in-band FEC / PLC at decode time
+  independent of bit0** (WebCodecs / `opusdec use-inband-fec=true plc=true`). (Reconciled in
+  Session C to match the §5.3 amendment — the earlier "MUST use FEC when bit0 is set" wording
+  contradicted it.)
 
 ### 5.5 Gating rules (server-enforced)
 
