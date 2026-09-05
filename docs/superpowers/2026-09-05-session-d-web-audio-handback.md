@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05
 **Branch:** `feat/web-audio-client` (off `origin/main` @ `1c29bb9`)
-**PR:** see the pull request this handback accompanies (opened from `feat/web-audio-client`; **not merged** — awaiting human review)
+**PR:** [#123](https://github.com/OE5XRX/station-manager/pull/123) (from `feat/web-audio-client`; **not merged** — awaiting human review)
 **Scope:** Browser/frontend only. No server (Session C, #122, in main), no agent (Session B, #121, in main).
 **Spec:** `docs/superpowers/specs/2026-09-03-audio-subsystem-design.md` — §5 (normative browser side), §3 (presets/local mix), §5.3 (frames), §5.4 (Opus), §5.6 (tx_route on control-plane).
 **Plan:** `docs/superpowers/plans/2026-09-05-web-audio-client.md` (executed via subagent-driven-development, two-stage review per task + final whole-branch review).
