@@ -70,6 +70,9 @@ def build_rx_argv(rx_node: str, port: int, rate: int) -> list[str]:
 def build_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
     """gst-launch pipeline: UDP ``port`` → RTP jitter buffer → Opus decode (PLC + FEC)
     → resample → inject into ``tx_node``."""
+    # No surrounding quotes: this argv element is passed straight to Popen (shell=False), so
+    # embedded quotes would be literal and break GStreamer's caps parse. The comma-separated
+    # caps string is a single argv token — no shell word-splitting to protect against.
     caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
     return [
         "gst-launch-1.0",
@@ -82,7 +85,7 @@ def build_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
         # 127.0.0.1), so loopback is correct and closes the remote-injection vector.
         f"address={_LOOPBACK}",
         f"port={port}",
-        f'caps="{caps}"',
+        f"caps={caps}",
         "!",
         "rtpjitterbuffer",
         "!",

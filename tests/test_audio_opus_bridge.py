@@ -27,6 +27,10 @@ def test_build_tx_argv_has_jitterbuffer_plc_and_target():
     assert "rtpopusdepay" in joined
     assert "opusdec" in joined and "plc=true" in joined  # §5.4 PLC on
     assert "pipewiresink" in joined and "target-object=oe5xrx.slot1.tx" in joined
+    # caps must be a bare token (no embedded quotes) — argv is passed shell=False, so
+    # surrounding quotes would be literal and break GStreamer's caps parse.
+    caps_arg = next(a for a in argv if a.startswith("caps="))
+    assert '"' not in caps_arg and caps_arg.startswith("caps=application/x-rtp")
 
 
 class FakeProc:
