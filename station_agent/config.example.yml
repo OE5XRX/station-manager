@@ -44,4 +44,8 @@ audio_rx_rate: 8000    # FM module native (8 kHz NB)
 audio_mic_rate: 16000  # operator mic uplink (16 kHz WB)
 audio_udp_port_base: 47000  # loopback UDP ports for the gst-launch <-> agent bridge
 audio_dead_man_timeout: 1.5  # tear down mic→TX if no mic media within this many seconds
+# Absolute mic time-out-timer (TOT): force-stop TX audio after this many seconds of
+# continuous keying regardless of media (amateur-radio TOT; bounds a looping uplink).
+audio_max_tx_seconds: 180.0
 audio_router_slot: 1000  # synthetic control-plane slot for the audio-router module
+audio_sysfs_sound: /sys/class/sound  # where ALSA cards are enumerated for slot→node

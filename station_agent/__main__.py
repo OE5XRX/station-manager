@@ -26,7 +26,6 @@ def main(argv=None) -> int:
     audio_p.add_argument("--slot", type=int, default=1)  # sim=slot1; bench=slot3
     audio_p.add_argument("--tx-freq", type=int, default=1500)
     audio_p.add_argument("--rate", type=int, default=8000)
-    audio_p.add_argument("--base", default="/dev/oe5xrx")
     audio_p.add_argument("--duration", type=float, default=1.0)
 
     args = parser.parse_args(argv)
@@ -44,7 +43,6 @@ def main(argv=None) -> int:
                 slot=args.slot,
                 tx_freq=args.tx_freq,
                 rate=args.rate,
-                base=args.base,
                 duration=args.duration,
             )
         # `selftest` with no/unknown sub-command must NOT silently start the

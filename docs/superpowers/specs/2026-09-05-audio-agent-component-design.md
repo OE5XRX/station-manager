@@ -265,5 +265,3 @@ the injected Opus). No cross-repo reach-back.
 - Station-local idle services, occupancy signal, cross-band links (Spec 0 §11) — seams left, not built.
 - QUIC datagram leg (Spec 0 Phase 2 / Session F).
 - No linux-image companion PR required (minimal path uses only A-image tools).
-</content>
-</invoke>

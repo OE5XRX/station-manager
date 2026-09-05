@@ -241,13 +241,17 @@ class Broker:
                 vm = self._virtual.get((slot, module))
                 if vm is not None:
                     # Virtual modules have no control device; snapshot their own state
-                    # instead of polling a serial line.
+                    # instead of polling a serial line. state() may shell out (the
+                    # audio-router enumerates PipeWire nodes), so run it off the event
+                    # loop to keep the control WebSocket responsive during inventory.
+                    loop = asyncio.get_running_loop()
+                    state = await loop.run_in_executor(None, vm.state)
                     modules_out.append(
                         {
                             "module": module,
                             "identity": descriptor.get("identity", {}),
                             "capabilities": caps,
-                            "state": vm.state(),
+                            "state": state,
                         }
                     )
                     continue

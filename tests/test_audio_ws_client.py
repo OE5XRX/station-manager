@@ -1,5 +1,6 @@
 # tests/test_audio_ws_client.py
 """AudioClient vs a fake server speaking the §5 contract (analog to test_control_client)."""
+
 import asyncio
 import json
 import time

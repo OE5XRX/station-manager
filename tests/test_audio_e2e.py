@@ -15,6 +15,7 @@ Header/round-trip assertions run everywhere. The Opus decode + 1 kHz Goertzel-pe
 gated on ``pytest.importorskip("av")`` — a dev-box/CI convenience, never a station_agent
 runtime dependency, so the test is green when PyAV is absent (as on this machine).
 """
+
 import asyncio
 import json
 import pathlib
@@ -198,9 +199,9 @@ def test_rx_tone_flows_agent_to_server_as_media_frame(tmp_path):
             loop = asyncio.get_running_loop()
             t = loop.run_in_executor(None, client.run)
             try:
-                assert await loop.run_in_executor(
-                    None, _wait_for, lambda: len(factory.rx) == 1
-                ), "engine never built the RX bridge after source_subscribe"
+                assert await loop.run_in_executor(None, _wait_for, lambda: len(factory.rx) == 1), (
+                    "engine never built the RX bridge after source_subscribe"
+                )
                 rx = factory.rx[0]
                 assert rx.node == "oe5xrx.slot1" and rx.started
                 # Drive the bridge with the REAL 1 kHz Opus tone → §5.3 media frame out.
@@ -276,9 +277,7 @@ def test_tx_tone_flows_server_to_agent_into_tx_bridge(tmp_path):
                 )
                 # Inject the REAL 1 kHz Opus tone as an op.mic §5.3 media frame.
                 await ws.send(
-                    frame.pack_frame(
-                        stream_ref=mic_ref, seq=0, ts=0, flags=0, payload=TONE_OPUS
-                    )
+                    frame.pack_frame(stream_ref=mic_ref, seq=0, ts=0, flags=0, payload=TONE_OPUS)
                 )
 
     async def scenario():
@@ -289,9 +288,9 @@ def test_tx_tone_flows_server_to_agent_into_tx_bridge(tmp_path):
             loop = asyncio.get_running_loop()
             t = loop.run_in_executor(None, client.run)
             try:
-                assert await loop.run_in_executor(
-                    None, _wait_for, lambda: len(factory.tx) == 1
-                ), "engine never built the TX bridge after mic_state(active)"
+                assert await loop.run_in_executor(None, _wait_for, lambda: len(factory.tx) == 1), (
+                    "engine never built the TX bridge after mic_state(active)"
+                )
                 tx = factory.tx[0]
                 assert tx.node == "oe5xrx.slot2.tx" and tx.started
                 # The op.mic media frame is parsed and its Opus payload injected into TX.

@@ -1,5 +1,6 @@
 # tests/test_audio_selftest.py
 """selftest audio orchestration logic (pipelines built + Goertzel verdicts), no GStreamer."""
+
 import math
 import struct
 
@@ -60,8 +61,14 @@ def test_run_audio_passes_when_both_tones_detected():
         return _pcm_s16(1500, rate, 1600)
 
     rc = selftest.run_audio(
-        slot=1, tx_freq=1500, rate=rate, backend=backend,
-        capture=capture, play=play, capture_tx=capture_after_play, duration=0.2,
+        slot=1,
+        tx_freq=1500,
+        rate=rate,
+        backend=backend,
+        capture=capture,
+        play=play,
+        capture_tx=capture_after_play,
+        duration=0.2,
     )
     assert rc == 0
     assert calls["played"], "TX tone was never played"
@@ -71,7 +78,10 @@ def test_run_audio_fails_when_rx_tone_absent():
     rate = 8000
     backend = FakeBackend({(1, "rx"): "n", (1, "tx"): "n.tx"})
     rc = selftest.run_audio(
-        slot=1, tx_freq=1500, rate=rate, backend=backend,
+        slot=1,
+        tx_freq=1500,
+        rate=rate,
+        backend=backend,
         capture=lambda a, d: _pcm_s16(3000, rate, 1600),  # wrong tone → RX fails
         play=lambda a, d: None,
         capture_tx=lambda a, d: _pcm_s16(1500, rate, 1600),
@@ -83,8 +93,13 @@ def test_run_audio_fails_when_rx_tone_absent():
 def test_run_audio_fails_when_node_unresolved():
     backend = FakeBackend({})  # no nodes
     rc = selftest.run_audio(
-        slot=1, tx_freq=1500, rate=8000, backend=backend,
-        capture=lambda a, d: b"", play=lambda a, d: None, capture_tx=lambda a, d: b"",
+        slot=1,
+        tx_freq=1500,
+        rate=8000,
+        backend=backend,
+        capture=lambda a, d: b"",
+        play=lambda a, d: None,
+        capture_tx=lambda a, d: b"",
         duration=0.2,
     )
     assert rc == 1

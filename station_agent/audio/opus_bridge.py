@@ -70,10 +70,7 @@ def build_rx_argv(rx_node: str, port: int, rate: int) -> list[str]:
 def build_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
     """gst-launch pipeline: UDP ``port`` → RTP jitter buffer → Opus decode (PLC + FEC)
     → resample → inject into ``tx_node``."""
-    caps = (
-        "application/x-rtp,media=audio,clock-rate=48000,"
-        f"encoding-name=OPUS,payload={_RTP_PT}"
-    )
+    caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
     return [
         "gst-launch-1.0",
         "-q",
@@ -269,9 +266,7 @@ class TxBridge:
         if self._sock is None:
             logger.debug("tx-bridge: feed before start; dropping")
             return
-        datagram = rtp.wrap_rtp(
-            payload, seq=self._seq, ts=self._ts, ssrc=self._ssrc, pt=_RTP_PT
-        )
+        datagram = rtp.wrap_rtp(payload, seq=self._seq, ts=self._ts, ssrc=self._ssrc, pt=_RTP_PT)
         try:
             self._sock.sendto(datagram, (_LOOPBACK, self._port))
         except OSError as exc:

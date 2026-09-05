@@ -1,5 +1,6 @@
 # tests/test_audio_router_backend.py
 """PipeWireRouterBackend: slot→node via OE5XRX_SLOT→api.alsa.card (Spec 0 §12 Finding 2)."""
+
 import json
 
 import pytest

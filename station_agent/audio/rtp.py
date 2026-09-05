@@ -45,7 +45,7 @@ def wrap_rtp(
     monotonic caller counter never overflows.
     """
     first = RTP_VERSION << 6  # P=0, X=0, CC=0
-    second = ((0x80 if marker else 0x00) | (pt & 0x7F))
+    second = (0x80 if marker else 0x00) | (pt & 0x7F)
     header = _FIXED.pack(first, second, seq & _U16, ts & _U32, ssrc & _U32)
     return header + bytes(payload)
 

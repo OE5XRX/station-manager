@@ -1,5 +1,6 @@
 # tests/test_audio_router_module.py
 """audio-router virtual module (§5.6) + its Broker integration seam."""
+
 import asyncio
 
 from station_agent.audio.router_module import MODULE_ID, AudioRouterModule

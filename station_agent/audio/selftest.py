@@ -34,29 +34,62 @@ _LOUD_MARGIN = 4.0  # dominant bin must beat the runner-up comfortably (guards a
 def build_rx_check_argv(rx_node: str, rate: int) -> list[str]:
     """Tap ``rx_node`` → Opus encode → Opus decode → raw S16LE PCM on stdout."""
     return [
-        "gst-launch-1.0", "-q",
-        "pipewiresrc", f"target-object={rx_node}", "!",
-        "audioconvert", "!", "audioresample", "!",
-        f"audio/x-raw,rate={rate},channels=1", "!",
-        "opusenc", "audio-type=voip", "frame-size=20", "inband-fec=true", "!",
-        "opusdec", "plc=true", "!",
-        "audioconvert", "!", "audioresample", "!",
-        f"audio/x-raw,format=S16LE,rate={rate},channels=1", "!",
-        "fdsink", "fd=1",
+        "gst-launch-1.0",
+        "-q",
+        "pipewiresrc",
+        f"target-object={rx_node}",
+        "!",
+        "audioconvert",
+        "!",
+        "audioresample",
+        "!",
+        f"audio/x-raw,rate={rate},channels=1",
+        "!",
+        "opusenc",
+        "audio-type=voip",
+        "frame-size=20",
+        "inband-fec=true",
+        "!",
+        "opusdec",
+        "plc=true",
+        "!",
+        "audioconvert",
+        "!",
+        "audioresample",
+        "!",
+        f"audio/x-raw,format=S16LE,rate={rate},channels=1",
+        "!",
+        "fdsink",
+        "fd=1",
     ]
 
 
 def build_tx_play_argv(tx_node: str, freq: int, rate: int) -> list[str]:
     """Generate a ``freq`` sine → Opus roundtrip → inject into ``tx_node``."""
     return [
-        "gst-launch-1.0", "-q",
-        "audiotestsrc", "wave=sine", f"freq={freq}", "!",
-        f"audio/x-raw,rate={rate},channels=1", "!",
-        "audioconvert", "!",
-        "opusenc", "audio-type=voip", "frame-size=20", "!",
-        "audioconvert", "!", "audioresample", "!",
-        f"audio/x-raw,rate={rate},channels=1", "!",
-        "pipewiresink", f"target-object={tx_node}", "sync=false",
+        "gst-launch-1.0",
+        "-q",
+        "audiotestsrc",
+        "wave=sine",
+        f"freq={freq}",
+        "!",
+        f"audio/x-raw,rate={rate},channels=1",
+        "!",
+        "audioconvert",
+        "!",
+        "opusenc",
+        "audio-type=voip",
+        "frame-size=20",
+        "!",
+        "audioconvert",
+        "!",
+        "audioresample",
+        "!",
+        f"audio/x-raw,rate={rate},channels=1",
+        "!",
+        "pipewiresink",
+        f"target-object={tx_node}",
+        "sync=false",
     ]
 
 
@@ -108,7 +141,6 @@ def run_audio(
     slot: int,
     tx_freq: int = 1500,
     rate: int = 8000,
-    base: str = "/dev/oe5xrx",
     duration: float = 1.0,
     backend=None,
     capture=_capture,
@@ -127,8 +159,12 @@ def run_audio(
     rx_node = backend.resolve_node(slot, "rx")
     tx_node = backend.resolve_node(slot, "tx")
     if rx_node is None or tx_node is None:
-        logger.error("selftest audio: FAIL — could not resolve slot %s nodes (rx=%s tx=%s)",
-                     slot, rx_node, tx_node)
+        logger.error(
+            "selftest audio: FAIL — could not resolve slot %s nodes (rx=%s tx=%s)",
+            slot,
+            rx_node,
+            tx_node,
+        )
         return 1
 
     # --- RX: 1 kHz shim tone survives the Opus roundtrip ---

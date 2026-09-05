@@ -4,6 +4,7 @@
 Header/JSON assertions run everywhere. The Opus round-trip decode (1 kHz peak) is gated on
 PyAV being importable — a dev-box/CI convenience, never a station_agent runtime dependency.
 """
+
 import json
 import pathlib
 import struct
