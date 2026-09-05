@@ -66,12 +66,16 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         if station is None:
             await self.close(code=4404)
             return
-        self.station = station
 
         if not await self._verify_agent(station, params):
             await self.close(code=4401)
             return
 
+        # Only bind self.station AFTER auth succeeds. disconnect() gates its
+        # teardown (clear_ptt + gate/stream_state broadcasts) on self.station,
+        # so an unauthenticated/rejected handshake must never run it — otherwise
+        # a bad-sig connect could clear an active operator's PTT gate.
+        self.station = station
         await self.channel_layer.group_add(self.agent_group, self.channel_name)
         await self.accept()
 

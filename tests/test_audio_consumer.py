@@ -228,6 +228,54 @@ def test_agent_auth_reject_bad_sig():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_agent_bad_sig_does_not_touch_gate_or_broadcast():
+    """A rejected (bad-sig) agent handshake must NOT run teardown: an
+    unauthenticated connect may not clear an active operator's PTT gate nor
+    emit any gate/stream_state broadcast (self.station is bound only post-auth)."""
+    from apps.api.models import DeviceKey
+    from apps.audio import gate as audio_gate
+    from apps.control import lock as control_lock
+
+    station = Station.objects.create(name="a2b", status="online")
+    DeviceKey.objects.create(
+        station=station,
+        current_public_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        is_active=True,
+    )
+    holder = User.objects.create(
+        username="a2b_holder", membership_level=User.MembershipLevel.MEMBER
+    )
+    # Active operator: holds the lock and has PTT keyed.
+    control_lock.acquire(station, holder)
+    audio_gate.set_ptt(station, slot=0, module="fm")
+    assert audio_gate.mic_allowed(station, holder) is True
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "browser-spy-a2b"
+        await layer.group_add(f"audio_{station.id}", spy)
+
+        agent = WebsocketCommunicator(
+            application, f"/ws/agent/audio/{station.id}/?signature=x&timestamp=0"
+        )
+        connected, code = await agent.connect()
+        assert connected is False
+        assert code == 4401
+
+        # No gate/stream_state broadcast reached the browser group.
+        try:
+            evt = await asyncio.wait_for(layer.receive(spy), timeout=0.4)
+            raise AssertionError(f"rejected agent emitted a broadcast: {evt}")
+        except TimeoutError:
+            pass
+
+    asyncio.run(scenario())
+
+    # The operator's PTT gate is untouched by the rejected handshake.
+    assert audio_gate.mic_allowed(station, holder) is True
+
+
+@pytest.mark.django_db(transaction=True)
 def test_agent_real_ed25519_accept():
     """Real Ed25519 keypair — correct sig → accept; tampered sig → reject."""
     import base64
