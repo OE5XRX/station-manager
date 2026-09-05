@@ -227,6 +227,7 @@ SECURE_CSP = {
     "font-src": [CSP.SELF, "https://cdn.jsdelivr.net", "https://fonts.gstatic.com"],
     "img-src": [CSP.SELF, "data:"],
     "connect-src": [CSP.SELF, "ws:", "wss:"],
+    "worker-src": [CSP.SELF],
 }
 
 # Session security

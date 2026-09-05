@@ -59,13 +59,12 @@
   <div id="result"></div>
 
   <!--
-    audio-logic.js is loaded relative — place this file next to the static/js/ directory.
-    If serving from static/audio-selftest.html, the script path below resolves correctly
-    when opened as: http://localhost:8000/static/audio-selftest.html
+    audio-logic.js is loaded relative — this file lives at tests/manual/audio-selftest.html,
+    so the path below resolves to static/js/audio-logic.js at the repo root.
     For offline use (file://) the relative script may be blocked by CORS; in that case
     copy audio-logic.js contents inline as a fallback (see INLINE FALLBACK comment below).
   -->
-  <script src="js/audio-logic.js"></script>
+  <script src="../../static/js/audio-logic.js"></script>
 
   <script>
     // INLINE FALLBACK: if audio-logic.js cannot be loaded via <script src>,

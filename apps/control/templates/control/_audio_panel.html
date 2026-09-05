@@ -228,8 +228,7 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
                 :disabled="conn !== 'open'"
                 @change="
                   var v = $event.target.value;
-                  if (!v) { setTxRoute(null, null); }
-                  else { var p = JSON.parse(v); setTxRoute(p.slot, p.module); }
+                  try { if (v) { var p = JSON.parse(v); setTxRoute(p.slot, p.module); } else { setTxRoute(null, null); } } catch (e) { setTxRoute(null, null); }
                 ">
           <option value="">— {% trans "none" %} —</option>
           <template x-for="s in streams.filter(function(s){ return s.direction === 'rx'; })" :key="s.stream_id">
