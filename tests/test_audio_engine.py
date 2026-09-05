@@ -218,6 +218,52 @@ def test_media_frame_before_mic_active_is_dropped():
     assert not factory.tx
 
 
+def test_tot_force_stops_tx_even_with_continuous_media():
+    nodes = {(2, "tx"): "n.tx"}
+    eng, factory, _, _ = make_engine(slots=(2,), nodes=nodes, dead_man=10.0)
+    eng._max_tx_seconds = 0.05  # tiny absolute ceiling
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        # keep feeding media so the dead-man never fires; the TOT must still tear down
+        ref = eng.registry.mic_ref
+        for _ in range(3):
+            f = frame.pack_frame(stream_ref=ref, seq=0, ts=0, flags=0, payload=b"x")
+            await eng.on_media_frame(f)
+            await asyncio.sleep(0.03)
+
+    asyncio.run(scenario())
+    assert factory.tx[0].stopped
+
+
+def test_mic_state_rejects_non_int_slot():
+    eng, factory, _, _ = make_engine(slots=(2,))
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot="2", tx_module="fm")  # str, not int
+        await eng.on_mic_state(active=True, tx_slot=True, tx_module="fm")  # bool, not int
+
+    asyncio.run(scenario())
+    assert not factory.tx  # neither malformed slot started a TX bridge
+
+
+def test_late_rx_callback_after_unsubscribe_is_dropped():
+    nodes = {(1, "rx"): "n"}
+    eng, factory, _, sent_bin = make_engine(slots=(1,), nodes=nodes)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        await eng.on_source_unsubscribe("slot1.rx")
+
+    asyncio.run(scenario())
+    # a reader-thread callback that fires after unsubscribe must not emit a frame
+    factory.rx[0].on_opus(b"\xfc" * 20)
+    assert sent_bin == []
+
+
 def test_tx_route_is_stored():
     eng, _, _, _ = make_engine(slots=(1, 3))
 

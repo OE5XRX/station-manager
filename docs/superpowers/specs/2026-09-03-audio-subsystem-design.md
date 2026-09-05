@@ -161,11 +161,16 @@ control protocol; `v` is the audio-protocol version, independent of Opus/format)
   ```json
   { "v":1, "type":"advertise", "streams":[
     { "stream_id":"slot0.rx", "slot":0, "module":"fm", "direction":"rx",
-      "format":{"rate":8000,"channels":1}, "codec":"opus" },
+      "format":{"rate":8000,"channels":1}, "codec":"opus", "stream_ref":0 },
     { "stream_id":"op.mic", "slot":null, "module":"operator", "direction":"rx",
-      "format":{"rate":16000,"channels":1}, "codec":"opus" }
+      "format":{"rate":16000,"channels":1}, "codec":"opus", "stream_ref":1 }
   ]}
   ```
+  Each entry carries an explicit **`stream_ref`** (u16): the agent produces the media and
+  therefore owns ref assignment, so `advertise` is where the `stream_ref ↔ stream_id`
+  mapping is established (§5.3). Consumers MUST read `stream_ref` from `advertise`/`streams`
+  rather than infer it from array position. (Amended in Session B to make §5.3's "mapping
+  established in advertise" concrete.)
 - `stream_state` — a source started/stopped/errored: `{ "v":1,"type":"stream_state",
   "stream_id":"slot0.rx","state":"live|idle|error","detail":"..." }`
 
@@ -212,7 +217,16 @@ Little-endian header, then the raw Opus packet:
 | 12 | … | `payload` | one Opus packet (20 ms frame) |
 
 `stream_ref` avoids sending the string id per frame; the mapping `stream_ref ↔
-stream_id` is established in `advertise`/`streams` and `subscribe` acks.
+stream_id` is established in `advertise`/`streams` (explicit `stream_ref` field, §5.2) and
+`subscribe` acks.
+
+**`flags` bit0 (FEC-present) is advisory, not authoritative.** The MVP agent uses Opus
+*in-band* FEC (carried inside the Opus packet, `inband-fec=true`) and leaves bit0 = 0; a
+receiver recovers FEC from the packet itself (WebCodecs/`opusdec`) regardless of the bit.
+The gst-launch bridge boundary gives the agent no per-packet signal to set bit0 accurately,
+so consumers MUST NOT gate FEC handling on bit0 (treat it as a hint that may be 0 even when
+FEC data is present). bit1 (DTX) is set heuristically for ≤2-byte comfort packets; bit2
+(marker) on talk-onset.
 
 ### 5.4 Opus profile (normative defaults)
 

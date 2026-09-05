@@ -21,6 +21,8 @@ def test_build_tx_argv_has_jitterbuffer_plc_and_target():
     argv = ob.build_tx_argv("oe5xrx.slot1.tx", 47002, 8000)
     joined = " ".join(argv)
     assert "udpsrc" in joined and "port=47002" in joined
+    # SECURITY: the transmitter's RTP receive socket must bind loopback only, never 0.0.0.0
+    assert "address=127.0.0.1" in joined
     assert "rtpjitterbuffer" in joined  # §2 adaptive jitter buffer
     assert "rtpopusdepay" in joined
     assert "opusdec" in joined and "plc=true" in joined  # §5.4 PLC on

@@ -84,29 +84,32 @@ class AudioClient:
             await self._ws.send(json.dumps(msg))
         except websockets.exceptions.ConnectionClosed:
             self._ws = None
-        except Exception as exc:  # noqa: BLE001
+        except (TypeError, ValueError):
+            # A non-serializable payload is a programming bug, not a transport hiccup — surface
+            # it loudly rather than dropping it at debug.
+            logger.exception("Audio: _send_json could not serialize message %r", msg.get("type"))
+        except OSError as exc:
             logger.debug("Audio: _send_json failed (%s), dropping", type(exc).__name__)
 
     def _emit_binary(self, data: bytes) -> None:
         """Thread-safe hand-off: RX bridge reader threads call this to ship a media frame.
 
         Scheduled onto the client's event loop, so the actual ``ws.send`` happens on the
-        one thread that owns the socket."""
+        one thread that owns the socket. The captured ``ws`` is passed through so a frame
+        produced for this connection never lands on a different socket after a reconnect."""
         loop, ws = self._loop, self._ws
         if loop is None or ws is None:
             return
         try:
-            asyncio.run_coroutine_threadsafe(self._ws_send_binary(data), loop)
+            asyncio.run_coroutine_threadsafe(self._ws_send_binary(ws, data), loop)
         except RuntimeError:
             pass  # loop closing
 
-    async def _ws_send_binary(self, data: bytes) -> None:
-        if self._ws is None:
-            return
+    async def _ws_send_binary(self, ws, data: bytes) -> None:
         try:
-            await self._ws.send(data)
+            await ws.send(data)
         except websockets.exceptions.ConnectionClosed:
-            self._ws = None
+            pass  # this connection is gone; the reconnect path rebuilds the engine
         except Exception as exc:  # noqa: BLE001
             logger.debug("Audio: binary send failed (%s), dropping", type(exc).__name__)
 
@@ -126,6 +129,7 @@ class AudioClient:
                 rx_rate=getattr(self._config, "audio_rx_rate", 8000),
                 mic_rate=getattr(self._config, "audio_mic_rate", 16000),
                 dead_man_timeout=getattr(self._config, "audio_dead_man_timeout", 1.5),
+                max_tx_seconds=getattr(self._config, "audio_max_tx_seconds", 180.0),
             )
             await self._engine.start()
             logger.info("Audio: connected, advertise sent")
@@ -201,5 +205,8 @@ class AudioClient:
     def stop(self) -> None:
         logger.info("Audio: stop requested")
         self._shutdown.set()
-        if self._ws is not None and self._loop is not None and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._ws.close(), self._loop)
+        # Capture both locally: a reconnect on the loop thread may null self._ws between the
+        # check and the schedule.
+        ws, loop = self._ws, self._loop
+        if ws is not None and loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(ws.close(), loop)

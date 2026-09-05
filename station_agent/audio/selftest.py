@@ -22,7 +22,7 @@ import struct
 import subprocess
 import sys
 
-from station_agent.audio.goertzel import dominant_bin
+from station_agent.audio.goertzel import dominant_bin, goertzel_power
 from station_agent.audio.router_backend import PipeWireRouterBackend
 
 logger = logging.getLogger("station_agent.audio.selftest")
@@ -60,22 +60,26 @@ def build_tx_play_argv(tx_node: str, freq: int, rate: int) -> list[str]:
     ]
 
 
-def analyze_pcm(pcm: bytes, candidates: list[int], rate: int) -> int | None:
-    """Return the dominant candidate frequency in S16LE ``pcm``, or None if empty."""
+def _unpack_s16le(pcm: bytes) -> tuple[int, ...]:
+    """Decode S16LE ``pcm`` to signed samples (empty tuple if there are none)."""
     n = len(pcm) // 2
     if n == 0:
+        return ()
+    return struct.unpack(f"<{n}h", pcm[: n * 2])
+
+
+def analyze_pcm(pcm: bytes, candidates: list[int], rate: int) -> int | None:
+    """Return the dominant candidate frequency in S16LE ``pcm``, or None if empty."""
+    samples = _unpack_s16le(pcm)
+    if not samples:
         return None
-    samples = struct.unpack(f"<{n}h", pcm[: n * 2])
     return dominant_bin(samples, candidates, rate)
 
 
 def _dominates(pcm: bytes, target: int, others: list[int], rate: int) -> bool:
-    from station_agent.audio.goertzel import goertzel_power
-
-    n = len(pcm) // 2
-    if n == 0:
+    samples = _unpack_s16le(pcm)
+    if not samples:
         return False
-    samples = struct.unpack(f"<{n}h", pcm[: n * 2])
     p_target = goertzel_power(samples, target, rate)
     p_other = max((goertzel_power(samples, f, rate) for f in others), default=0.0)
     return p_target > _LOUD_MARGIN * max(p_other, 1e-12)

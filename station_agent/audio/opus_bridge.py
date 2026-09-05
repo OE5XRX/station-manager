@@ -78,6 +78,12 @@ def build_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
         "gst-launch-1.0",
         "-q",
         "udpsrc",
+        # SECURITY: bind the transmitter's RTP receive socket to loopback ONLY. udpsrc
+        # defaults address to 0.0.0.0 (all interfaces), which would let any host on the
+        # network inject Opus RTP straight into the module TX sink — i.e. spoof audio onto
+        # a keyed amateur transmitter. The producer is always the local agent (feed_opus →
+        # 127.0.0.1), so loopback is correct and closes the remote-injection vector.
+        f"address={_LOOPBACK}",
         f"port={port}",
         f'caps="{caps}"',
         "!",
@@ -113,21 +119,28 @@ def _udp_socket() -> socket.socket:
 
 
 class PortAllocator:
-    """Hands out distinct UDP ports for concurrent bridges; reuses released ports."""
+    """Hands out distinct UDP ports for concurrent bridges; reuses released ports.
+
+    Thread-safe: bridges are created on the WS loop thread today, but a lock keeps this
+    correct if a future caller acquires off-thread.
+    """
 
     def __init__(self, base: int = 47000):
         self._base = base
         self._in_use: set[int] = set()
+        self._lock = threading.Lock()
 
     def acquire(self) -> int:
-        port = self._base
-        while port in self._in_use:
-            port += 1
-        self._in_use.add(port)
-        return port
+        with self._lock:
+            port = self._base
+            while port in self._in_use:
+                port += 1
+            self._in_use.add(port)
+            return port
 
     def release(self, port: int) -> None:
-        self._in_use.discard(port)
+        with self._lock:
+            self._in_use.discard(port)
 
 
 def _terminate(proc) -> None:

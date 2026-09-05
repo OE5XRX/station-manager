@@ -185,9 +185,11 @@ coroutine for commands. `AudioRouterModule`:
   `audio-router`.
 - Descriptor capabilities:
   - `streams` — telemetry, dynamic list of available audio streams (mirrors `advertise`).
-  - `tx_route` — `kind:action`, `type:string|null` (value `{slot,module}` serialized, or `null`),
-    `op:set`. **Lock-gated by the server** (same path as every other write command; the agent
-    executes what the server, which enforces the lock, forwards). Calls `AudioEngine.set_tx_route`.
+  - `tx_route` — `kind:action`, `type:"route"` (a control-plane-internal value type: a
+    `{slot,module}` object or `null` to clear), `op:set`. **Lock-gated by the server** (same
+    path as every other write command; the agent executes what the server, which enforces the
+    lock, forwards). Records the route; the authoritative mic-injection target reaches the
+    agent via `mic_state` on the audio-WS, so no cross-thread call to the live engine is needed.
 - **Non-preclusion hooks (Spec 0 §11):** `set_tx_route` accepts a non-human requester later
   (no hardcoded "browser lock holder"); the occupancy signal is out of scope but the seam is
   left. Not built now.

@@ -44,6 +44,9 @@ class AgentConfig:
     audio_mic_rate: int = 16000
     audio_udp_port_base: int = 47000
     audio_dead_man_timeout: float = 1.5
+    # Absolute mic time-out-timer: force-stop TX audio after this many seconds of continuous
+    # keying regardless of media (amateur-radio TOT; bounds a looping/injected uplink).
+    audio_max_tx_seconds: float = 180.0
     audio_router_slot: int = 1000  # synthetic control-plane slot for the audio-router module
     audio_sysfs_sound: str = "/sys/class/sound"
 
@@ -106,6 +109,7 @@ def load_config() -> AgentConfig:
         audio_mic_rate=int(data.get("audio_mic_rate", 16000)),
         audio_udp_port_base=int(data.get("audio_udp_port_base", 47000)),
         audio_dead_man_timeout=float(data.get("audio_dead_man_timeout", 1.5)),
+        audio_max_tx_seconds=float(data.get("audio_max_tx_seconds", 180.0)),
         audio_router_slot=int(data.get("audio_router_slot", 1000)),
         audio_sysfs_sound=str(data.get("audio_sysfs_sound", "/sys/class/sound")),
     )
