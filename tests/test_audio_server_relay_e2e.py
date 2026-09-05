@@ -194,6 +194,26 @@ async def _no_bytes(comm: WebsocketCommunicator, timeout: float = 0.4) -> None:
         pass
 
 
+async def _no_error(comm: WebsocketCommunicator, settle: float = 0.4) -> None:
+    """Assert NO {type:"error"} JSON (and no binary) frame arrives — mic_open success path.
+
+    Drains the socket until quiet; fails on an error frame (the expected FAILURE
+    mode of mic_open) so a regression can't slip through a text-ignoring check.
+    """
+    while True:
+        try:
+            raw = await asyncio.wait_for(comm.receive_from(), timeout=settle)
+        except TimeoutError:
+            return  # quiet — no error emitted
+        if isinstance(raw, (bytes, bytearray)):
+            raise AssertionError(f"unexpected binary frame: {bytes(raw)[:16]!r}...")
+        try:
+            msg = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        assert msg.get("type") != "error", f"mic_open unexpectedly errored: {msg}"
+
+
 async def _until_lock_held(comm: WebsocketCommunicator, tries: int = 10) -> dict:
     """Drain control frames until lock{state=held} arrives."""
     for _ in range(tries):
@@ -472,8 +492,8 @@ def test_uplink_mic_through_ptt_lock_gate(audio_agent_auth, control_agent_auth):
         await ha.send_json_to(
             {"v": V, "type": "mic_open", "format": {"rate": 16000, "channels": 1}, "codec": "opus"}
         )
-        # Must NOT produce an error (gate is open).
-        await _no_bytes(ha, timeout=0.3)
+        # Must NOT produce an error (gate is open) — fails on any error JSON.
+        await _no_error(ha)
 
         # --- Holder sends op.mic binary frame. ---
         await ha.send_to(bytes_data=_RAW_FRAME_OMIC)

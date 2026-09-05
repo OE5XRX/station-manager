@@ -83,21 +83,29 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
                 # Broadcast the cleared gate state so browser _gate_cache
                 # does not stay stale (ptt_active=True) after the agent drops.
                 await self._bridge_gate(station)
-                # Notify browsers that streams are gone.  Use the audio.stream_state
-                # event type so the browser's audio_stream_state handler relays it
-                # (a bare "stream_state" type is silently dropped on the browser).
-                await self.channel_layer.group_send(
-                    self.browser_group,
-                    {
-                        "type": "audio.stream_state",
-                        "msg": {
-                            "v": constants.AUDIO_PROTOCOL_VERSION,
-                            "type": "stream_state",
-                            "state": "idle",
-                            "detail": "agent disconnected",
+                # Notify browsers that each advertised source went idle.  §5.2
+                # requires stream_state to carry a stream_id, so emit one frame
+                # per known stream rather than a single id-less "all gone" frame.
+                # Use the audio.stream_state event type so the browser's
+                # audio_stream_state handler relays it (a bare "stream_state"
+                # type is silently dropped on the browser).
+                for entry in self._last_streams:
+                    sid = entry.get("stream_id") if isinstance(entry, dict) else None
+                    if not sid:
+                        continue
+                    await self.channel_layer.group_send(
+                        self.browser_group,
+                        {
+                            "type": "audio.stream_state",
+                            "msg": {
+                                "v": constants.AUDIO_PROTOCOL_VERSION,
+                                "type": "stream_state",
+                                "stream_id": sid,
+                                "state": "idle",
+                                "detail": "agent disconnected",
+                            },
                         },
-                    },
-                )
+                    )
         finally:
             # agent_group is always set (even on reject path) so no hasattr needed,
             # but guard defensively in case connect() raised before assignment.
