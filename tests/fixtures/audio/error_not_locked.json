@@ -1,0 +1,6 @@
+{
+  "v": 1,
+  "type": "error",
+  "code": "not_locked",
+  "detail": "uplink requires holding the station ControlLock"
+}

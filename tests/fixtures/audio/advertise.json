@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "type": "advertise",
+  "streams": [
+    {
+      "stream_id": "slot0.rx",
+      "slot": 0,
+      "module": "fm",
+      "direction": "rx",
+      "format": { "rate": 8000, "channels": 1 },
+      "codec": "opus",
+      "stream_ref": 0
+    },
+    {
+      "stream_id": "op.mic",
+      "slot": null,
+      "module": "operator",
+      "direction": "rx",
+      "format": { "rate": 16000, "channels": 1 },
+      "codec": "opus",
+      "stream_ref": 1
+    }
+  ]
+}

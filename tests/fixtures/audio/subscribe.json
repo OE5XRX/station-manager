@@ -1,0 +1,5 @@
+{
+  "v": 1,
+  "type": "subscribe",
+  "stream_ids": ["slot0.rx", "op.mic"]
+}
