@@ -68,6 +68,24 @@ async def _drain_bytes_until(comm, tries=5):
     raise AssertionError("never received a binary frame")
 
 
+async def _wait_demand(station, stream_id, target, tries=100):
+    """Block until the server-side demand count for (station, stream_id) reaches
+    target. Two browsers on separate WS connections are processed on independent
+    tasks, so a test must synchronize on committed demand before asserting on
+    subscribe/unsubscribe ordering — otherwise a later-scheduled subscribe can
+    race an earlier unsubscribe (flaky under Postgres/CI scheduling)."""
+    from channels.db import database_sync_to_async
+
+    from apps.audio import subscriptions
+
+    for _ in range(tries):
+        n = await database_sync_to_async(subscriptions.count)(station, stream_id)
+        if n >= target:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"demand for {stream_id!r} never reached {target}")
+
+
 async def _no_bytes(comm, timeout=0.3):
     """Assert no binary frame arrives within timeout.
 
@@ -609,7 +627,10 @@ def test_source_unsubscribe_at_zero(audio_agent_auth):
         assert sub1["type"] == "source_subscribe"
 
         await b2.send_json_to({"v": V, "type": "subscribe", "stream_ids": ["slot0.rx"]})
-        # No second source_subscribe expected.
+        # Barrier: wait until BOTH subscriptions are committed before unsubscribing
+        # b1 — otherwise b1's unsubscribe can race b2's not-yet-processed subscribe
+        # and (correctly) see demand 1→0, emitting a source_unsubscribe.
+        await _wait_demand(station, "slot0.rx", 2)
 
         # First browser unsubscribes — demand still 1 → no source_unsubscribe yet.
         await b1.send_json_to({"v": V, "type": "unsubscribe", "stream_ids": ["slot0.rx"]})
