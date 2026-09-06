@@ -55,7 +55,7 @@ def build_rx_check_argv(rx_node: str, rate: int) -> list[str]:
         f"audio/x-raw,rate={rate},channels=1",
         "!",
         "opusenc",
-        "audio-type=voip",
+        "audio-type=voice",
         "frame-size=20",
         "inband-fec=true",
         "!",
@@ -94,7 +94,7 @@ def build_tx_play_argv(tx_node: str, freq: int, rate: int) -> list[str]:
         "audioconvert",
         "!",
         "opusenc",
-        "audio-type=voip",
+        "audio-type=voice",
         "frame-size=20",
         "inband-fec=true",
         "!",
@@ -175,6 +175,17 @@ def _capture(argv: list[str], duration: float) -> bytes:
         proc = subprocess.run(  # noqa: S603 — fixed tool + resolved node/hw device
             argv, capture_output=True, timeout=duration + 5.0
         )
+        # A pipeline that error-exits (bad element/property/caps) returns fast with empty
+        # stdout — surface its stderr so the failure is diagnosable instead of a silent
+        # ratio=0.00 (this is how a bad opusenc property would otherwise hide).
+        if proc.returncode != 0 or not proc.stdout:
+            err = (proc.stderr or b"").decode("utf-8", "replace").strip()
+            if err:
+                logger.warning(
+                    "selftest audio: capture pipeline rc=%s, stderr: %s",
+                    proc.returncode,
+                    err[-800:],
+                )
         return proc.stdout
     except subprocess.TimeoutExpired as exc:
         # EXPECTED for the RX pipeline: `gst-launch pipewiresrc ! … ! fdsink` has no

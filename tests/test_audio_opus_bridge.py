@@ -11,6 +11,9 @@ def test_build_rx_argv_has_opus_profile_and_target():
     assert argv[0] == "gst-launch-1.0"
     assert "pipewiresrc" in joined and "target-object=oe5xrx.slot1" in joined
     assert "opusenc" in joined
+    # audio-type must be a VALID GstOpusEncAudioType nick (generic/voice/restricted-lowdelay);
+    # "voip" is NOT valid and makes gst-launch reject the whole pipeline (Session E finding).
+    assert "audio-type=voice" in joined and "audio-type=voip" not in joined
     assert "inband-fec=true" in joined  # §5.4 FEC on
     assert "rate=8000" in joined
     assert "rtpopuspay" in joined

@@ -18,6 +18,8 @@ def test_build_rx_check_argv_roundtrips_opus_to_pcm():
     j = " ".join(argv)
     assert "pipewiresrc" in j and "target-object=oe5xrx.slot1" in j
     assert "opusenc" in j and "opusdec" in j  # proves the full RX Opus roundtrip
+    # valid opusenc audio-type nick (voip is invalid → gst rejects the pipeline; Session E)
+    assert "audio-type=voice" in j and "audio-type=voip" not in j
     assert "format=S16LE" in j and "rate=8000" in j
     assert "fdsink" in j
 
@@ -31,6 +33,7 @@ def test_build_tx_play_argv_is_a_live_opus_roundtrip_into_the_sink():
     # feeding it opusenc output directly is a caps mismatch that never links.
     assert "opusenc" in j and "opusdec" in j
     assert j.index("opusenc") < j.index("opusdec")
+    assert "audio-type=voice" in j and "audio-type=voip" not in j
     assert "pipewiresink" in j and "target-object=oe5xrx.slot1.tx" in j
 
 
