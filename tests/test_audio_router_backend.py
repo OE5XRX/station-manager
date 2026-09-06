@@ -213,14 +213,24 @@ def _mixed_card_backend(tmp_path):
             {
                 "id": 60,
                 "type": "PipeWire:Interface:Node",
-                "info": {"props": {"media.class": "Audio/Source", "api.alsa.card": 0,
-                                   "node.name": "alsa_input.pci-hda"}},
+                "info": {
+                    "props": {
+                        "media.class": "Audio/Source",
+                        "api.alsa.card": 0,
+                        "node.name": "alsa_input.pci-hda",
+                    }
+                },
             },
             {
                 "id": 61,
                 "type": "PipeWire:Interface:Node",
-                "info": {"props": {"media.class": "Audio/Source", "node.name": "oe5xrx.slot1",
-                                   "object.path": "alsa:pcm:oe5xrxslot1:1:capture"}},
+                "info": {
+                    "props": {
+                        "media.class": "Audio/Source",
+                        "node.name": "oe5xrx.slot1",
+                        "object.path": "alsa:pcm:oe5xrxslot1:1:capture",
+                    }
+                },
             },
         ]
     )
