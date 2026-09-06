@@ -52,7 +52,7 @@ def build_rx_argv(rx_node: str, port: int, rate: int) -> list[str]:
         "!",
         "opusenc",
         "bitrate-type=vbr",
-        "audio-type=voip",
+        "audio-type=voice",
         "frame-size=20",
         "inband-fec=true",
         "dtx=true",

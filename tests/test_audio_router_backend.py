@@ -96,6 +96,69 @@ def test_resolve_tx_node_is_the_sink(tmp_path):
     assert node.startswith("alsa_output.usb-OE5XRX_FM_Transceiver_Board")
 
 
+def _aloop_backend(tmp_path, rx_props, tx_props, *, card=7, card_id="oe5xrxslot1"):
+    """A backend mimicking the sim snd-aloop card: sysfs card<N>/id + udev OE5XRX_SLOT=1."""
+    sound = tmp_path / "sound"
+    (sound / f"card{card}").mkdir(parents=True)
+    (sound / f"card{card}" / "id").write_text(card_id + "\n")
+    pw = json.dumps(
+        [
+            {"id": 43, "type": "PipeWire:Interface:Node", "info": {"props": rx_props}},
+            {"id": 42, "type": "PipeWire:Interface:Node", "info": {"props": tx_props}},
+        ]
+    )
+
+    def fake_run(argv, timeout=5.0):
+        if argv[0] == "udevadm":
+            cidx = int(argv[-1].rsplit("card", 1)[1])
+            return RunResult(0, "OE5XRX_SLOT=1\n" if cidx == card else "", "")
+        if argv[0] == "pw-dump":
+            return RunResult(0, pw, "")
+        return RunResult(1, "", "unknown")
+
+    return PipeWireRouterBackend(run=fake_run, sysfs_sound=str(sound))
+
+
+def test_resolve_raw_pcm_aloop_node_by_card_id_when_api_alsa_card_absent(tmp_path):
+    # Reproduces the Session E QEMU failure: snd-aloop raw-PCM nodes (use-acp=false) carry
+    # NO api.alsa.card == <int> — they identify the card via object.path "alsa:pcm:<id>:..".
+    # The old `api.alsa.card == card` check returned None though the nodes clearly existed.
+    b = _aloop_backend(
+        tmp_path,
+        rx_props={
+            "media.class": "Audio/Source",
+            "node.name": "oe5xrx.slot1",
+            "object.path": "alsa:pcm:oe5xrxslot1:1:capture",
+        },
+        tx_props={
+            "media.class": "Audio/Sink",
+            "node.name": "oe5xrx.slot1.tx",
+            "object.path": "alsa:pcm:oe5xrxslot1:1:playback",
+        },
+    )
+    assert b.resolve_node(1, "rx") == "oe5xrx.slot1"
+    assert b.resolve_node(1, "tx") == "oe5xrx.slot1.tx"
+
+
+def test_resolve_matches_string_typed_api_alsa_card(tmp_path):
+    # pw-dump may emit api.alsa.card as a STRING; the int == "7" comparison must not fail.
+    b = _aloop_backend(
+        tmp_path,
+        rx_props={
+            "media.class": "Audio/Source",
+            "node.name": "oe5xrx.slot1",
+            "api.alsa.card": "7",
+        },
+        tx_props={
+            "media.class": "Audio/Sink",
+            "node.name": "oe5xrx.slot1.tx",
+            "api.alsa.card": "7",
+        },
+    )
+    assert b.resolve_node(1, "rx") == "oe5xrx.slot1"
+    assert b.resolve_node(1, "tx") == "oe5xrx.slot1.tx"
+
+
 def test_resolve_unknown_slot_returns_none(tmp_path):
     b = make_backend(tmp_path)
     assert b.resolve_node(3, "rx") is None  # no card tagged OE5XRX_SLOT=3
