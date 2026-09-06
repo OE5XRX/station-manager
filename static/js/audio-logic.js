@@ -29,6 +29,9 @@
   var FLAG_DTX = 0x02;
   var FLAG_MARKER = 0x04;
   var AUDIO_PROTOCOL_VERSION = 1;
+  // Fixed scale from mic time-domain RMS to a 0..1 meter level (see
+  // micLevelFromRms). Kept here so the JS component and its Node test agree.
+  var MIC_LEVEL_SCALE = 4;
 
   // ---------------------------------------------------------------------------
   // FrameError
@@ -267,6 +270,16 @@
     return !!(opts.micEnabled && opts.keyed && opts.youHold);
   }
 
+  /* Map a raw time-domain RMS (0..~1) to a 0..1 meter level for the local mic
+     input indicator. Speech RMS sits well below 1.0, so a fixed scale (×4)
+     makes normal talking fill a useful fraction of the bar without clipping
+     instantly. Clamped to [0, 1]; non-finite / negative input → 0. */
+  function micLevelFromRms(rms) {
+    if (typeof rms !== "number" || !isFinite(rms) || rms <= 0) return 0;
+    var v = rms * MIC_LEVEL_SCALE;
+    return v > 1 ? 1 : v;
+  }
+
   // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
@@ -451,6 +464,7 @@
 
     // Uplink coupling
     micWantsUplink: micWantsUplink,
+    micLevelFromRms: micLevelFromRms,
 
     // Seq math
     seqDelta: seqDelta,

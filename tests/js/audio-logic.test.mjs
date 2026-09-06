@@ -110,6 +110,27 @@ ok("micWantsUplink requires micEnabled AND keyed AND youHold", () => {
   assert.equal(A.micWantsUplink({ micEnabled:false, keyed:true, youHold:true }), false);
 });
 
+ok("micLevelFromRms maps RMS to a clamped 0..1 meter level", () => {
+  // Silence / non-signal → 0.
+  assert.equal(A.micLevelFromRms(0), 0);
+  // Fixed ×4 scale below the clamp.
+  assert.equal(A.micLevelFromRms(0.1), 0.4);
+  assert.equal(A.micLevelFromRms(0.25), 1); // exactly at the ceiling
+  // Loud input clamps to 1 (never overshoots the bar).
+  assert.equal(A.micLevelFromRms(0.5), 1);
+  assert.equal(A.micLevelFromRms(1), 1);
+  // Monotonic in the linear region.
+  assert.ok(A.micLevelFromRms(0.05) < A.micLevelFromRms(0.15));
+});
+
+ok("micLevelFromRms rejects garbage / negative / non-finite input", () => {
+  assert.equal(A.micLevelFromRms(-0.3), 0);
+  assert.equal(A.micLevelFromRms(NaN), 0);
+  assert.equal(A.micLevelFromRms(Infinity), 0);
+  assert.equal(A.micLevelFromRms(undefined), 0);
+  assert.equal(A.micLevelFromRms("0.2"), 0); // strings are not accepted
+});
+
 // --- seq math (u16 wrap) ---------------------------------------------------
 ok("seqDelta wrap-aware", () => {
   assert.equal(A.seqDelta(10, 11), 1);
