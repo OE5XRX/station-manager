@@ -14,7 +14,7 @@ PipeWire in the image, FFT-proven in QEMU). Tier 2 scoped + planned, not built.
 
 | Repo | Branch | PR | Contents |
 |---|---|---|---|
-| station-manager | `feat/audio-e2e-selftest-fix` | **#124** | Repairs the never-run `selftest audio` **TX** path (3 coupled defects) + `_capture` timeout-salvage BLOCKER + TX-spawn guard; `RouterBackend.alsa_card_for_slot()`; this handback. |
+| station-manager | `feat/audio-e2e-selftest-fix` | **#124** | Six integration-bug fixes surfaced by the QEMU gate (§3): `selftest audio` TX path (3 defects) + `_capture` timeout-salvage + `resolve_node` raw-PCM matching + `opusenc audio-type=voice` (incl. **production `opus_bridge.py`**) + `station_agent.audio` packaging; TX-spawn guard, `_capture` stderr logging, `RouterBackend.alsa_card_for_slot()`, `tests/test_agent_packaging.py`; this handback. |
 | linux-image | `feat/audio-agent-e2e` | **#86** | New QEMU okay-gate `test_audio_agent_e2e.py` (`-m qemu`) + `tests/audio/agent_audio_selfcheck.sh` running `python -m station_agent selftest audio --slot 1` in the guest; ci.yml shellcheck; **temporary** station-agent test-pin to #124. |
 
 **Cross-repo pin (must resolve before merge):** #86's `station-agent_0.1.0.bb` pins
@@ -57,26 +57,54 @@ readers); the TX sink is the only exclusive resource, hence the stop.
 
 ### FFT-peak evidence (green QEMU run)
 
-> **⟨FILLED IN ON GREEN CI — see PR #86 run below⟩**
->
-> ```
-> <paste the `----- station_agent selftest audio guest output -----` block here:
->  selftest audio: RX OK — 1000 Hz recovered through Opus (P(1000)/P(runner-up)=…x)
->  selftest audio: TX OK — 1500 Hz on reverse tap (P(1500)/P(runner-up)=…x)
->  selftest audio: PASS (slot 1) …
->  AGENT-AUDIO-E2E result=PASS slot=1>
-> ```
-> Run: <link to the green `Boot & OTA (qemux86-64)` job on PR #86>
+`python -m station_agent selftest audio --slot 1` run **inside the booted qemux86-64
+image**, driving the agent's RouterBackend + Opus bridge against the real PipeWire +
+snd-aloop substrate. The resolution-evidence dump confirms the agent resolved the
+raw-PCM aloop nodes on-target (the bug-5 fix), then the Goertzel FFT verdicts:
+
+```
+EV: card7 id=oe5xrxslot1 OE5XRX_SLOT=1 OE5XRX_SLOT_ROLE=audio
+EV: node 43 {'node.name': 'oe5xrx.slot1', 'media.class': 'Audio/Source',
+             'api.alsa.card': None, 'api.alsa.pcm.card': 7,
+             'object.path': 'alsa:pcm:oe5xrxslot1:1:capture', 'api.alsa.path': 'hw:7,1'}
+EV: node 42 {'node.name': 'oe5xrx.slot1.tx', 'media.class': 'Audio/Sink',
+             'api.alsa.card': None, 'api.alsa.pcm.card': 7,
+             'object.path': 'alsa:pcm:oe5xrxslot1:1:playback', 'api.alsa.path': 'hw:7,1'}
+
+selftest audio: RX tapping oe5xrx.slot1 (expect 1000 Hz)
+selftest audio: RX OK — 1000 Hz recovered through Opus (P(1000)/P(runner-up)=901080.3x)
+selftest audio: TX playing 1500 Hz into oe5xrx.slot1.tx, tapping reverse cable hw:7,0,0
+selftest audio: TX OK — 1500 Hz on reverse tap (P(1500)/P(runner-up)=6585005.2x)
+selftest audio: PASS (slot 1) — only truly green on real CM4/bench HW
+
+tests/ota-integration/test_audio_agent_e2e.py::test_e_agent_audio_e2e PASSED
+=========== 4 passed, 1 skipped, 37 deselected in 335.06s ============
+```
+
+- **RX:** the sim 1 kHz shim, tapped off `oe5xrx.slot1` and pushed through the agent's
+  Opus **encode→decode** roundtrip, comes back with the 1 kHz bin **≈9.0×10⁵×** above the
+  strongest other candidate — the tone survives the real 8 k→48 k→8 k resample + Opus path.
+- **TX:** a 1500 Hz tone Opus-roundtripped and injected into `oe5xrx.slot1.tx` lands on the
+  aloop reverse-cable dev0 tap with the 1500 Hz bin **≈6.6×10⁶×** dominant — mic→TX proven
+  in sim. (The host-side gate independently re-parses both ratios and requires `>4×`.)
+- Green run: <https://github.com/OE5XRX/linux-image/actions/runs/34019967442> (PR #86).
+
+**Milestone:** the station-agent funks the sim tones **end-to-end through the real
+PipeWire + Opus pipeline in the merged image** — Sessions A + B proven together on the
+agent side, in CI, on every future image build.
 
 ---
 
-## 3. Integration bugs found & fixed (in B's `selftest audio`)
+## 3. Integration bugs found & fixed
 
-Running `selftest audio` against A's **real** substrate for the first time surfaced
-that B's TX self-check **had never executed end-to-end** — B's unit tests injected the
-capture/play seams and only asserted argv contents (`test_audio_selftest.py` even
-codified `opusdec not in j`). Four defects, all fixed minimally (RX path, engine,
-bridge, WS client, and the §5 wire contract untouched):
+Running the agent's `selftest audio` against A's **real** substrate in QEMU for the
+first time surfaced **six** integration bugs across Session B — all invisible to B's
+unit tests, which mocked the gst/subprocess/pw seams and only asserted argv strings.
+Each was found by an actual CI run, fixed minimally, and locked with a regression test.
+The §5 wire contract and A/C/D components were **not** touched.
+
+**Bugs 1–4 — the TX self-check (never executed end-to-end; `test_audio_selftest.py`
+even codified `opusdec not in j`):**
 
 1. **`build_tx_play_argv`: `opusenc ! audioconvert` never links.** opusenc emits
    `audio/x-opus`; audioconvert wants raw PCM → the pipeline can't negotiate caps.
@@ -97,8 +125,35 @@ bridge, WS client, and the §5 wire contract untouched):
    TX** captured nothing on real gst (final proof the selftest never ran end-to-end).
    Now salvages `exc.stdout` (the PCM captured up to the kill).
 
+**Bug 5 — `resolve_node` never matched the sim nodes (also blocks the production engine
+path).** The agent maps slot→PipeWire-node via `OE5XRX_SLOT` udev → ALSA card →
+`api.alsa.card` (§12 Finding 2). But the snd-aloop nodes are **raw-PCM nodes**
+(`use-acp=false`) that carry **no `api.alsa.card == <int>`** — they expose
+`api.alsa.pcm.card = 7` and `object.path = "alsa:pcm:oe5xrxslot1:1:capture"`. B's exact
+`api.alsa.card == card` (int) check (mocked with `api.alsa.card: 1` in unit tests)
+matched nothing on-target → `could not resolve slot 1 nodes (rx=None tx=None)` despite
+the nodes clearly existing in `wpctl`/`pw-dump`. `resolve_node` now matches via any
+numeric card-index prop (`api.alsa.card`/`api.alsa.pcm.card`/`alsa.card`, string-compared)
+**or** the card-id token in `object.path`/`api.alsa.path`. Works for sim
+(`card_id=oe5xrxslot1`) and real HW (`card_id=Board`, §12). *(Evidence: a resolution-
+evidence dump added to `agent_audio_selfcheck.sh` printed the exact on-target props.)*
+
+**Bug 6 — invalid `opusenc audio-type=voip` (also in the PRODUCTION `opus_bridge.py`).**
+GStreamer's `GstOpusEncAudioType` nicks are `generic`/`voice`/`restricted-lowdelay`
+(confirmed via `gst-inspect-1.0 opusenc`) — **`voip` is not valid**, so `gst-launch`
+rejects the whole pipeline instantly (empty capture → `RX 1000 Hz not dominant
+(ratio=0.00)`, the pipeline error-exiting in ~10 ms). VoIP is the `voice` nick. This was
+in the selftest **and** the real RX Opus bridge (`opus_bridge.py`), which would have
+failed identically in production; it hid because opus_bridge's gst subprocess is mocked.
+Fixed all three occurrences; validated every other opusenc/opusdec prop
+(`frame-size=20`, `inband-fec`, `dtx`, `bitrate-type=vbr`, `plc`) against the real element.
+
 Also hardened: a raising TX `spawn` (missing gst-launch/plugin) now returns a clean
-`rc=1` instead of a traceback; added public `RouterBackend.alsa_card_for_slot()`.
+`rc=1` instead of a traceback; `_capture` logs the pipeline **stderr** when it error-exits
+(so a bad element/property surfaces its gst error instead of a silent `ratio=0.00`); added
+public `RouterBackend.alsa_card_for_slot()`. A separate **packaging** fix (bug, §1) ships
+`station_agent.audio` in the wheel (it was missing from pyproject's explicit `packages`
+list → `ModuleNotFoundError` on-target) + `tests/test_agent_packaging.py` guard.
 
 **Honesty rule.** The TX check is a **sim-loopback capability** by design — the reverse
 cable exists only in `snd-aloop`. On the real UAC2 FM module the TX playback EP does not
@@ -119,8 +174,9 @@ follow-up. The code fails **closed** (no reverse tap → FAIL, not false-pass).
   `_capture` timeout BLOCKER (fixed, §3.4), the TX-spawn traceback MAJOR (fixed), and a
   ruff line-length + brittle-assert MINOR (fixed). Confirmed the `try/finally` process
   lifecycle, fail-closed logic, and POSIX-sh portability are sound.
-- **Unit verification (station-manager, local):** `pytest tests/test_audio_*.py` →
-  **119 passed, 1 skipped** (av-gated Opus decode); `ruff check` + `ruff format --check`
+- **Unit verification (station-manager, local):** `pytest tests/test_audio_*.py
+  tests/test_agent_packaging.py` → **123 passed, 1 skipped** (av-gated Opus decode);
+  `ruff check` + `ruff format --check`
   clean. New regression tests lock every fixed defect (incl. the exact "tapped cable A"
   bug and the timeout-salvage).
 - **E2E verification:** the green QEMU run on PR #86 (§2 evidence) — the real proof.
