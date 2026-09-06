@@ -312,7 +312,12 @@ class Broker:
         try:
             state = await loop.run_in_executor(None, vm.state)
         except Exception:  # noqa: BLE001 — a virtual snapshot must not break the control link
-            logger.exception("broker: virtual module state() raised for cap %r", capability)
+            logger.exception(
+                "broker: virtual module state() raised for slot %r module %r cap %r",
+                getattr(vm, "slot", None),
+                getattr(vm, "module_id", None),
+                capability,
+            )
             return {"ok": False, "error": proto.VALIDATION_FAILED}
         if isinstance(state, dict) and capability in state:
             return {"ok": True, "value": state[capability]}
