@@ -58,6 +58,7 @@ def _default_run(argv: list[str], timeout: float = _DEFAULT_TIMEOUT) -> RunResul
 
 class RouterBackend(Protocol):
     def resolve_node(self, slot: int, direction: str) -> str | None: ...
+    def alsa_card_for_slot(self, slot: int) -> int | None: ...
     def list_audio_slots(self) -> list[int]: ...
     def link(self, out_node: str, in_node: str) -> bool: ...
     def unlink(self, out_node: str, in_node: str) -> bool: ...
@@ -92,6 +93,16 @@ class PipeWireRouterBackend:
                     return name
         logger.debug("router: no %s node for slot %s (card %s)", want_class, slot, card)
         return None
+
+    def alsa_card_for_slot(self, slot: int) -> int | None:
+        """Public ALSA card index for ``slot`` (via the ``OE5XRX_SLOT`` udev tag).
+
+        Same resolution as :meth:`resolve_node`, exposed for callers that need the raw ALSA
+        device rather than the PipeWire node — e.g. the ``selftest audio`` TX check taps the sim
+        reverse cable on the raw ``hw:<card>,0,0`` dev0 capture (Spec 0 §8), which WirePlumber
+        intentionally does not expose as a PipeWire node.
+        """
+        return self._card_for_slot(slot)
 
     def list_audio_slots(self) -> list[int]:
         slots = set()
