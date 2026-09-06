@@ -157,6 +157,39 @@ def test_run_audio_fails_when_tx_tone_absent_on_reverse_tap():
     assert rc == 1
 
 
+def test_capture_salvages_pcm_on_timeout(monkeypatch):
+    # The RX pipeline (pipewiresrc ! … ! fdsink) never self-terminates, so _capture
+    # ALWAYS hits the timeout — the captured PCM lives on TimeoutExpired.stdout and must
+    # be returned, not discarded as b"" (the latent bug that made RX/TX always fail).
+    def fake_run(argv, capture_output, timeout):
+        raise selftest.subprocess.TimeoutExpired(argv, timeout, output=b"PCMDATA")
+
+    monkeypatch.setattr(selftest.subprocess, "run", fake_run)
+    assert selftest._capture(["gst-launch-1.0"], 0.1) == b"PCMDATA"
+
+
+def test_run_audio_fails_cleanly_when_tx_spawn_raises():
+    # A missing GStreamer plugin / gst-launch → spawn raises. Must return rc=1 (a clean
+    # FAIL), not propagate a traceback out of the CLI.
+    rate = 8000
+    backend = FakeBackend({(1, "rx"): "oe5xrx.slot1", (1, "tx"): "oe5xrx.slot1.tx"}, cards={1: 7})
+
+    def boom(argv):
+        raise OSError("gst-launch-1.0 not found")
+
+    rc = selftest.run_audio(
+        slot=1,
+        rate=rate,
+        backend=backend,
+        capture=lambda a, d: _pcm_s16(1000, rate, 1600),
+        capture_tx=lambda a, d: _pcm_s16(1500, rate, 1600),
+        spawn=boom,
+        wait_running=lambda: None,
+        duration=0.2,
+    )
+    assert rc == 1
+
+
 def test_run_audio_fails_when_node_unresolved():
     backend = FakeBackend({})  # no nodes
     rc = selftest.run_audio(

@@ -176,6 +176,12 @@ def _capture(argv: list[str], duration: float) -> bytes:
             argv, capture_output=True, timeout=duration + 5.0
         )
         return proc.stdout
+    except subprocess.TimeoutExpired as exc:
+        # EXPECTED for the RX pipeline: `gst-launch pipewiresrc ! … ! fdsink` has no
+        # num-buffers, so it streams until we kill it at the timeout. The captured PCM
+        # lives on the exception (capture_output=True) — salvage it rather than discard
+        # the whole recording as b"" (which would make RX/TX always fail with no signal).
+        return exc.stdout or b""
     except (OSError, subprocess.SubprocessError) as exc:
         logger.error("selftest audio: capture failed: %s", exc)
         return b""
@@ -321,7 +327,11 @@ def run_audio(
         tx_node,
         tx_tap,
     )
-    proc = spawn(build_tx_play_argv(tx_node, tx_freq, rate))
+    try:
+        proc = spawn(build_tx_play_argv(tx_node, tx_freq, rate))
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.error("selftest audio: FAIL — could not start TX tone: %s", exc)
+        return 1
     try:
         wait_running()
         tx_pcm = capture_tx(build_tx_capture_argv(tx_tap, rate, duration), duration)
