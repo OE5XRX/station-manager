@@ -87,6 +87,7 @@
       _micStream: null,         // MediaStream from getUserMedia
       _micSource: null,         // MediaStreamAudioSourceNode (on _micCtx)
       _micWorkletNode: null,    // AudioWorkletNode (oe5xrx-mic, on _micCtx)
+      _micSink: null,           // muted gain → destination, so the worklet is pulled
       _micEncoder: null,        // AudioEncoder
       _micRate: 16000,          // actual mic context sample rate
       _micSeq: 0,
@@ -822,6 +823,14 @@
               "oe5xrx-mic"
             );
             self._micSource.connect(self._micWorkletNode);
+            // A source→worklet branch with no path to the destination is never
+            // rendered — process() never runs, so no mic chunks/uplink. Pull the
+            // worklet through a MUTED gain into the destination (gain 0 = no
+            // speaker feedback; sidetone is a separate path).
+            self._micSink = micCtx.createGain();
+            self._micSink.gain.value = 0;
+            self._micWorkletNode.connect(self._micSink);
+            self._micSink.connect(micCtx.destination);
             self._micWorkletNode.port.onmessage = function (ev) {
               self._onMicChunk(ev.data);
             };
@@ -1032,6 +1041,13 @@
             this._micWorkletNode.disconnect();
           } catch (_) {}
           this._micWorkletNode = null;
+        }
+
+        if (this._micSink) {
+          try {
+            this._micSink.disconnect();
+          } catch (_) {}
+          this._micSink = null;
         }
 
         if (this._micEncoder) {
