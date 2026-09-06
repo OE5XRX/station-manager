@@ -52,6 +52,10 @@
 
       micEnabled: false,
       micError: null,           // string if mic could not be enabled
+      micLevel: 0,              // 0..1 — local mic input RMS, measured right at
+                                // the browser capture boundary (before worklet/
+                                // encode/uplink). Diagnostic: moves ⇒ mic reaches
+                                // the browser; flat ⇒ capture itself is silent.
       sidetone: false,
       sidetoneGainDb: -12,
 
@@ -88,6 +92,12 @@
       _micSource: null,         // MediaStreamAudioSourceNode (on _micCtx)
       _micWorkletNode: null,    // AudioWorkletNode (oe5xrx-mic, on _micCtx)
       _micSink: null,           // muted gain → destination, so the worklet is pulled
+      _micAnalyser: null,       // AnalyserNode tapping _micSource for the input meter
+      _micMeterSink: null,      // muted gain → destination, pulls the analyser branch
+                                // independently of the worklet path (so the meter
+                                // reports mic capture even if uplink is broken)
+      _micMeterBuf: null,       // Float32Array scratch for analyser time-domain reads
+      _micMeterRAF: null,       // requestAnimationFrame handle for the meter loop
       _micEncoder: null,        // AudioEncoder
       _micRate: 16000,          // actual mic context sample rate
       _micSeq: 0,
@@ -835,6 +845,14 @@
               self._onMicChunk(ev.data);
             };
 
+            // Independent input-level meter: tap the raw mic source with an
+            // AnalyserNode and pull it through its own muted gain → destination.
+            // This branch does NOT depend on the worklet/encoder path, so the
+            // meter answers exactly one question — does the mic reach the
+            // browser at all? (moves ⇒ yes, problem is downstream; flat ⇒ the
+            // capture itself is silent: device, permission, or a muted track.)
+            self._startMicMeter(micCtx);
+
             // Resolve the encoder config ONCE before creating the encoder:
             // prefer VOIP + in-band FEC if supported, else baseline.
             var baseConfig = {
@@ -899,6 +917,78 @@
             // Stop any track we already opened and drop the mic context.
             self._disableMicInternal(false);
           });
+      },
+
+      // ---------------------------------------------------------------------
+      // Local mic input meter — AnalyserNode tap on the raw capture source.
+      // Independent of the worklet/encoder chain; drives this.micLevel (0..1).
+      // ---------------------------------------------------------------------
+      _startMicMeter: function (micCtx) {
+        var self = this;
+        if (!micCtx || !this._micSource) return;
+        try {
+          var analyser = micCtx.createAnalyser();
+          analyser.fftSize = 1024;
+          analyser.smoothingTimeConstant = 0.2;
+
+          // source → analyser → muted gain → destination. The muted gain keeps
+          // the analyser branch in an active render path (so it is pulled) while
+          // contributing no audible signal.
+          var meterSink = micCtx.createGain();
+          meterSink.gain.value = 0;
+          this._micSource.connect(analyser);
+          analyser.connect(meterSink);
+          meterSink.connect(micCtx.destination);
+
+          this._micAnalyser = analyser;
+          this._micMeterSink = meterSink;
+          this._micMeterBuf = new Float32Array(analyser.fftSize);
+        } catch (e) {
+          console.warn("[audio] mic meter unavailable:", e);
+          return;
+        }
+
+        var raf = window.requestAnimationFrame;
+        if (typeof raf !== "function") return;
+
+        var tick = function () {
+          // Bail if the mic was torn down (or a new context replaced this one).
+          if (self._micCtx !== micCtx || !self._micAnalyser) {
+            self._micMeterRAF = null;
+            return;
+          }
+          var buf = self._micMeterBuf;
+          self._micAnalyser.getFloatTimeDomainData(buf);
+          var sumSq = 0;
+          for (var i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+          var rms = Math.sqrt(sumSq / buf.length);
+          self.micLevel = A.micLevelFromRms(rms);
+          self._micMeterRAF = raf(tick);
+        };
+        this._micMeterRAF = raf(tick);
+      },
+
+      _stopMicMeter: function () {
+        if (this._micMeterRAF !== null && window.cancelAnimationFrame) {
+          try {
+            window.cancelAnimationFrame(this._micMeterRAF);
+          } catch (_) {}
+        }
+        this._micMeterRAF = null;
+        if (this._micAnalyser) {
+          try {
+            this._micAnalyser.disconnect();
+          } catch (_) {}
+          this._micAnalyser = null;
+        }
+        if (this._micMeterSink) {
+          try {
+            this._micMeterSink.disconnect();
+          } catch (_) {}
+          this._micMeterSink = null;
+        }
+        this._micMeterBuf = null;
+        this.micLevel = 0;
       },
 
       // ---------------------------------------------------------------------
@@ -1035,6 +1125,9 @@
           } catch (_) {}
           this._sidetoneSource = null;
         }
+
+        // Stop the input meter (cancels its RAF + drops analyser/meter nodes).
+        this._stopMicMeter();
 
         if (this._micWorkletNode) {
           try {
