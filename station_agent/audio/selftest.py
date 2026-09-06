@@ -13,11 +13,13 @@ tagged ``OE5XRX_SLOT``). Two checks, both asserted with the pure-Python Goertzel
    The distinct frequency keeps RX (1 kHz) from being confused with TX (1500 Hz).
 
 This needs the audio-capable image (PipeWire + GStreamer + alsa-utils). Per the audio-boundary
-honesty rule (analog to the serial rule in station-manager/CLAUDE.md) it is only truly green on
-real CM4/bench HW — sim-green is necessary, not sufficient. **The TX check is a sim-loopback
-capability:** the reverse cable exists only in the ``snd-aloop`` substrate. On the real UAC2 FM
-module the TX playback EP does not loop back to the RX capture EP (TX leaves as RF), so real-HW
-TX verification is an RF/bench concern (documented follow-up), not this electrical self-check.
+honesty rule (analog to the serial rule in station-manager/CLAUDE.md), **sim-green is necessary,
+not sufficient — the RX path must still be confirmed on real CM4/bench HW.** The RX check is
+substrate-agnostic (it works identically in sim and on real HW). **The TX check, by contrast, is
+a sim-loopback capability:** the reverse cable exists only in the ``snd-aloop`` substrate; on the
+real UAC2 FM module the TX playback EP does not loop back to the RX capture EP (TX leaves as RF),
+so ``run_audio`` **fails closed** there (no reverse tap → FAIL) and real-HW TX verification is a
+separate RF/bench concern (documented follow-up), not this electrical self-check.
 
 The pipeline builders + verdict logic are pure and unit-tested; the subprocess capture/play/spawn
 seams are injected so CI needs no GStreamer.
@@ -367,5 +369,9 @@ def run_audio(
         tx_ratio,
     )
 
-    logger.info("selftest audio: PASS (slot %s) — only truly green on real CM4/bench HW", slot)
+    logger.info(
+        "selftest audio: PASS (slot %s) — sim substrate; confirm RX on real CM4/bench HW "
+        "(TX loopback is sim-only)",
+        slot,
+    )
     return 0
