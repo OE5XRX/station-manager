@@ -1,0 +1,446 @@
+{% load i18n static %}
+{% comment %}
+Audio panel partial — binds to the audioPanel Alpine component (audio-panel.js).
+Rendered as a sibling to #control-panel (outside that div's x-data scope).
+All state/method names match audio-panel.js exactly (read 2026-09-05).
+
+Visual direction: marine/cyan control-panel aesthetic.
+Reuses cp-* classes from control-panel.css and tokens.css custom properties.
+Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
+{% endcomment %}
+<div x-data="audioPanel"
+     data-station-id="{{ station.id }}"
+     data-worklet-url="{% static 'js/mic-worklet.js' %}"
+     class="cp-module-card mt-4"
+     style="border-radius:var(--radius-lg);overflow:hidden;">
+
+  {% comment %}Panel header — mirrors cp-module-header chrome{% endcomment %}
+  <header class="cp-module-header" style="justify-content:space-between;gap:10px;">
+    <div class="cp-module-identity">
+      <span class="cp-module-slot">Audio</span>
+      <span class="cp-module-sep" aria-hidden="true">&#8202;&#8226;&#8202;</span>
+      <span class="cp-module-type">{% trans "Web Audio Client" %}</span>
+    </div>
+
+    {% comment %}Connection + TX-ready status pills{% endcomment %}
+    <div class="d-flex align-items-center gap-2 flex-shrink-0">
+      <span class="pill"
+            :class="conn === 'open' ? 'pill-online' : (unsupportedReason ? 'pill-error' : 'pill-warn')"
+            aria-live="polite"
+            :aria-label="conn === 'open' ? '{% trans "Audio connected" %}' : '{% trans "Audio disconnected" %}'">
+        <span class="dot" aria-hidden="true"></span>
+        <span x-text="conn === 'open' ? '{% trans "Live" %}' : (conn === 'connecting' ? '{% trans "Connecting" %}' : '{% trans "Offline" %}')">{% trans "Connecting" %}</span>
+      </span>
+
+      {% comment %}TX-ready badge — reflects $store.control lock + key state{% endcomment %}
+      <template x-if="$store.control && $store.control.keyed && $store.control.youHold">
+        <span class="pill"
+              style="background:color-mix(in srgb,var(--danger) 18%,transparent);border:1px solid color-mix(in srgb,var(--danger) 40%,transparent);color:var(--danger);font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;padding:3px 8px;border-radius:100px;"
+              aria-live="assertive">
+          <span class="dot" style="background:var(--danger);" aria-hidden="true"></span>
+          {% trans "KEYED" %}
+        </span>
+      </template>
+      <template x-if="$store.control && $store.control.youHold && !($store.control.keyed)">
+        <span class="pill"
+              style="background:color-mix(in srgb,var(--signal) 12%,transparent);border:1px solid color-mix(in srgb,var(--signal) 35%,transparent);color:var(--signal);font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;padding:3px 8px;border-radius:100px;"
+              aria-live="polite">
+          {% trans "TX Ready" %}
+        </span>
+      </template>
+    </div>
+  </header>
+
+  <div class="cp-module-widgets" style="gap:16px;">
+
+    {% comment %}WebCodecs-unsupported banner{% endcomment %}
+    <div x-show="!supported"
+         x-cloak
+         class="cp-lock-notice"
+         style="border-color:color-mix(in srgb,var(--danger) 40%,transparent);background:var(--danger-soft);color:var(--danger);text-align:left;"
+         role="alert">
+      <span class="cp-widget-label" style="color:var(--danger);margin-bottom:4px;display:block;">{% trans "Browser not supported" %}</span>
+      <span x-text="unsupportedReason" style="font-family:var(--font-mono);font-size:11px;"></span>
+    </div>
+
+    {% comment %}Mic permission error{% endcomment %}
+    <div x-show="micError"
+         x-cloak
+         class="cp-lock-notice"
+         style="border-color:color-mix(in srgb,var(--warn) 40%,transparent);background:var(--warn-soft);color:var(--warn);text-align:left;"
+         role="alert">
+      <span class="cp-widget-label" style="color:var(--warn);margin-bottom:4px;display:block;">{% trans "Microphone error" %}</span>
+      <span x-text="micError" style="font-family:var(--font-mono);font-size:11px;"></span>
+    </div>
+
+    {% comment %}======================================================
+    Section: What I'm hearing
+    Per-stream rows: subscribe toggle, state badge, gain slider, mute, level meter.
+    ======================================================{% endcomment %}
+    <section aria-labelledby="ap-rx-heading">
+      <h3 id="ap-rx-heading" class="cp-widget-label mb-2" style="font-size:11px;">{% trans "What I'm hearing" %}</h3>
+
+      <div x-show="streams.length === 0 && supported"
+           x-cloak
+           style="font-family:var(--font-mono);font-size:11px;color:var(--ink-3);letter-spacing:.06em;">
+        {% trans "No audio streams available." %}
+      </div>
+
+      <div class="d-flex flex-column gap-2">
+        <template x-for="s in streams" :key="s.stream_id">
+          <div class="d-flex align-items-center gap-2 flex-wrap"
+               style="padding:8px 10px;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--radius-sm);">
+
+            {% comment %}Subscribe toggle button{% endcomment %}
+            <button type="button"
+                    class="cp-btn"
+                    :class="isSubscribed(s.stream_id) ? 'cp-btn--action' : ''"
+                    :aria-pressed="isSubscribed(s.stream_id)"
+                    :aria-label="'{% trans "Subscribe to" %} ' + (s.module || s.stream_id)"
+                    @click="toggleSub(s.stream_id)"
+                    :disabled="conn !== 'open'"
+                    style="min-width:72px;font-size:10px;padding:4px 10px;min-height:28px;">
+              <span x-text="isSubscribed(s.stream_id) ? '{% trans "Unsub" %}' : '{% trans "Listen" %}'"></span>
+            </button>
+
+            {% comment %}Stream identity{% endcomment %}
+            <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;color:var(--ink-1);min-width:90px;flex-shrink:0;"
+                  x-text="(s.slot !== undefined ? s.slot + '/' : '') + (s.module || s.stream_id)"></span>
+
+            {% comment %}Direction tag{% endcomment %}
+            <span style="font-family:var(--font-mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);flex-shrink:0;"
+                  x-text="s.direction || ''"></span>
+
+            {% comment %}Stream state badge{% endcomment %}
+            <span class="pill"
+                  :class="streamState[s.stream_id] === 'live' ? 'pill-online' : (streamState[s.stream_id] === 'error' ? 'pill-error' : 'pill-warn')"
+                  style="font-size:9px;"
+                  :aria-label="'{% trans "Stream state" %}: ' + (streamState[s.stream_id] || 'idle')"
+                  x-text="streamState[s.stream_id] || 'idle'">
+            </span>
+
+            {% comment %}Gain slider — lang=en enforces dot decimal (DE-locale rule){% endcomment %}
+            <div class="d-flex align-items-center gap-1 flex-grow-1" style="min-width:120px;">
+              <label :for="'ap-gain-' + s.stream_id"
+                     class="cp-widget-label"
+                     style="font-size:9px;white-space:nowrap;margin-bottom:0;flex-shrink:0;">
+                {% trans "Gain" %}
+              </label>
+              <input type="range"
+                     lang="en"
+                     :id="'ap-gain-' + s.stream_id"
+                     min="-60"
+                     max="12"
+                     step="0.5"
+                     :value="mixer[s.stream_id] ? mixer[s.stream_id].gainDb : 0"
+                     @input="setGain(s.stream_id, $event.target.value)"
+                     :aria-label="'{% trans "Gain for" %} ' + (s.module || s.stream_id) + ' (dB)'"
+                     :aria-valuemin="-60"
+                     :aria-valuemax="12"
+                     :aria-valuenow="mixer[s.stream_id] ? mixer[s.stream_id].gainDb : 0"
+                     style="flex:1;accent-color:var(--accent);">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-2);min-width:36px;text-align:right;font-variant-numeric:tabular-nums;"
+                    x-text="(mixer[s.stream_id] ? mixer[s.stream_id].gainDb : 0) + ' dB'"></span>
+            </div>
+
+            {% comment %}Mute button{% endcomment %}
+            <button type="button"
+                    class="cp-btn"
+                    :class="mixer[s.stream_id] && mixer[s.stream_id].muted ? 'cp-lock-btn--override' : ''"
+                    :aria-pressed="mixer[s.stream_id] && mixer[s.stream_id].muted"
+                    :aria-label="'{% trans "Mute" %} ' + (s.module || s.stream_id)"
+                    @click="toggleMute(s.stream_id)"
+                    style="font-size:10px;padding:4px 10px;min-height:28px;min-width:52px;"
+                    :style="mixer[s.stream_id] && mixer[s.stream_id].muted ? 'color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,transparent);' : ''">
+              <span x-text="mixer[s.stream_id] && mixer[s.stream_id].muted ? '{% trans "Muted" %}' : '{% trans "Mute" %}'"></span>
+            </button>
+
+            {% comment %}Level meter{% endcomment %}
+            <div class="cp-meter-track"
+                 role="meter"
+                 :aria-label="'{% trans "Level for" %} ' + (s.module || s.stream_id)"
+                 :aria-valuenow="Math.round((levels[s.stream_id] || 0) * 100)"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 style="width:72px;height:6px;flex-shrink:0;">
+              <div class="cp-meter-fill"
+                   :class="(levels[s.stream_id] || 0) > 0.85 ? 'is-peak' : ''"
+                   :style="'width:' + Math.round((levels[s.stream_id] || 0) * 100) + '%'">
+              </div>
+            </div>
+
+          </div>
+        </template>
+      </div>
+    </section>
+
+    {% comment %}======================================================
+    Section: Preset selector
+    ======================================================{% endcomment %}
+    <section aria-labelledby="ap-preset-heading">
+      <h3 id="ap-preset-heading" class="cp-widget-label mb-2" style="font-size:11px;">{% trans "Preset" %}</h3>
+      <div class="d-flex gap-2 flex-wrap" role="group" aria-labelledby="ap-preset-heading">
+        <button type="button"
+                class="cp-btn"
+                :class="preset === 'fm' ? 'cp-btn--action' : ''"
+                :aria-pressed="preset === 'fm'"
+                @click="applyPreset('fm')"
+                :disabled="conn !== 'open'"
+                style="font-size:10px;padding:4px 14px;min-height:28px;">
+          FM
+        </button>
+        <button type="button"
+                class="cp-btn"
+                :class="preset === 'satellite' ? 'cp-btn--action' : ''"
+                :aria-pressed="preset === 'satellite'"
+                @click="applyPreset('satellite')"
+                :disabled="conn !== 'open'"
+                style="font-size:10px;padding:4px 14px;min-height:28px;">
+          {% trans "Satellite" %}
+        </button>
+        <button type="button"
+                class="cp-btn"
+                :class="preset === 'custom' ? 'cp-btn--action' : ''"
+                :aria-pressed="preset === 'custom'"
+                @click="applyPreset('custom')"
+                :disabled="conn !== 'open'"
+                style="font-size:10px;padding:4px 14px;min-height:28px;">
+          {% trans "Custom" %}
+        </button>
+      </div>
+    </section>
+
+    {% comment %}======================================================
+    Section: TX route — what I'm transmitting with
+    ======================================================{% endcomment %}
+    <section aria-labelledby="ap-tx-heading">
+      <h3 id="ap-tx-heading" class="cp-widget-label mb-1" style="font-size:11px;">{% trans "What I'm transmitting with" %}</h3>
+      <p style="font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3);letter-spacing:.05em;margin-bottom:8px;">
+        {% trans "PTT and lock live in the control panel above. TX requires holding the lock." %}
+      </p>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <label for="ap-tx-route" class="cp-widget-label" style="font-size:9px;margin-bottom:0;flex-shrink:0;">
+          {% trans "TX module" %}
+        </label>
+        <select id="ap-tx-route"
+                class="cp-readout cp-readout--select"
+                style="font-size:12px;padding:5px 32px 5px 10px;min-width:160px;max-width:280px;"
+                :disabled="conn !== 'open'"
+                @change="
+                  var v = $event.target.value;
+                  try { if (v) { var p = JSON.parse(v); setTxRoute(p.slot, p.module); } else { setTxRoute(null, null); } } catch (e) { setTxRoute(null, null); }
+                ">
+          <option value="">— {% trans "none" %} —</option>
+          <template x-for="s in streams.filter(function(s){ return s.direction === 'rx' && s.module !== 'operator' && s.stream_id !== 'op.mic'; })" :key="s.stream_id">
+            <option :value="JSON.stringify({slot: s.slot, module: s.module})"
+                    :selected="txRoute && txRoute.slot === s.slot && txRoute.module === s.module"
+                    x-text="(s.slot !== undefined ? s.slot + '/' : '') + (s.module || s.stream_id)">
+            </option>
+          </template>
+        </select>
+
+        {% comment %}Show current txRoute value{% endcomment %}
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-3);letter-spacing:.06em;"
+              x-show="txRoute"
+              x-cloak>
+          <span x-text="txRoute ? (txRoute.slot + '/' + txRoute.module) : ''"></span>
+        </span>
+      </div>
+    </section>
+
+    {% comment %}======================================================
+    Section: Mic + sidetone
+    ======================================================{% endcomment %}
+    <section aria-labelledby="ap-mic-heading">
+      <h3 id="ap-mic-heading" class="cp-widget-label mb-2" style="font-size:11px;">{% trans "Microphone" %}</h3>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+
+        {% comment %}Mic enable/disable{% endcomment %}
+        <button type="button"
+                class="cp-btn"
+                :class="micEnabled ? 'cp-btn--action' : ''"
+                :aria-pressed="micEnabled"
+                @click="micEnabled ? disableMic() : enableMic()"
+                :disabled="conn !== 'open'"
+                style="font-size:10px;padding:4px 14px;min-height:28px;min-width:100px;">
+          <span x-text="micEnabled ? '{% trans "Mic On" %}' : '{% trans "Enable Mic" %}'"></span>
+        </button>
+
+        {% comment %}Sidetone toggle{% endcomment %}
+        <button type="button"
+                class="cp-toggle"
+                :class="sidetone ? 'cp-toggle--on' : ''"
+                :aria-pressed="sidetone"
+                :aria-label="'{% trans "Sidetone" %}'"
+                @click="toggleSidetone()"
+                :disabled="!micEnabled">
+          <span class="cp-toggle-track" aria-hidden="true">
+            <span class="cp-toggle-thumb"></span>
+          </span>
+          <span class="cp-toggle-label" x-text="sidetone ? '{% trans "Side On" %}' : '{% trans "Side Off" %}'">{% trans "Side Off" %}</span>
+        </button>
+
+        {% comment %}Sidetone gain — lang=en for dot decimal (DE-locale rule){% endcomment %}
+        <div class="d-flex align-items-center gap-1" x-show="micEnabled && sidetone" x-cloak>
+          <label for="ap-sidetone-gain"
+                 class="cp-widget-label"
+                 style="font-size:9px;white-space:nowrap;margin-bottom:0;flex-shrink:0;">
+            {% trans "ST gain" %}
+          </label>
+          <input type="number"
+                 lang="en"
+                 id="ap-sidetone-gain"
+                 min="-60"
+                 max="12"
+                 step="0.5"
+                 :value="sidetoneGainDb"
+                 @input="setSidetoneGain($event.target.value)"
+                 aria-label="{% trans "Sidetone gain (dB)" %}"
+                 class="cp-readout cp-readout--number"
+                 style="width:70px;font-size:13px;padding:4px 8px;text-align:right;">
+          <span class="cp-unit">dB</span>
+        </div>
+
+      </div>
+    </section>
+
+    {% comment %}======================================================
+    Section: Mixer matrix (collapsible)
+    All streams × [subscribe, gain dB, mute, level] — keyboard-focusable, ARIA.
+    ======================================================{% endcomment %}
+    <section aria-labelledby="ap-mixer-heading">
+      <button type="button"
+              class="cp-widget-label d-flex align-items-center gap-2 w-100"
+              style="background:none;border:none;cursor:pointer;padding:0;font-size:11px;text-align:left;"
+              id="ap-mixer-heading"
+              aria-expanded="false"
+              @click="$el.setAttribute('aria-expanded', $el.getAttribute('aria-expanded') === 'true' ? 'false' : 'true'); $refs.mixerBody.hidden = !$refs.mixerBody.hidden">
+        <span>{% trans "Mixer" %}</span>
+        <span aria-hidden="true" style="font-size:9px;color:var(--ink-3);">&#9660;</span>
+      </button>
+
+      <div x-ref="mixerBody"
+           hidden
+           role="region"
+           aria-labelledby="ap-mixer-heading"
+           style="margin-top:8px;overflow-x:auto;">
+        <table class="w-100"
+               style="border-collapse:collapse;font-family:var(--font-mono);font-size:11px;background:var(--bg-0);border:1px solid var(--line);border-radius:var(--radius-sm);"
+               role="grid"
+               aria-label="{% trans "Mixer matrix" %}">
+          <thead>
+            <tr style="border-bottom:1px solid var(--line-bright);">
+              <th scope="col"
+                  style="padding:6px 10px;text-align:left;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);font-weight:600;white-space:nowrap;">
+                {% trans "Source" %}
+              </th>
+              <th scope="col"
+                  style="padding:6px 8px;text-align:center;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);font-weight:600;white-space:nowrap;">
+                {% trans "Sub" %}
+              </th>
+              <th scope="col"
+                  style="padding:6px 8px;text-align:left;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);font-weight:600;white-space:nowrap;min-width:160px;">
+                {% trans "Gain dB" %}
+              </th>
+              <th scope="col"
+                  style="padding:6px 8px;text-align:center;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);font-weight:600;white-space:nowrap;">
+                {% trans "Mute" %}
+              </th>
+              <th scope="col"
+                  style="padding:6px 8px;text-align:left;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);font-weight:600;white-space:nowrap;min-width:80px;">
+                {% trans "Level" %}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-if="streams.length === 0">
+              <tr>
+                <td colspan="5"
+                    style="padding:16px 10px;text-align:center;color:var(--ink-3);font-size:11px;letter-spacing:.08em;">
+                  {% trans "No streams" %}
+                </td>
+              </tr>
+            </template>
+            <template x-for="s in streams" :key="s.stream_id">
+              <tr style="border-bottom:1px solid var(--line);"
+                  :style="isSubscribed(s.stream_id) ? 'background:color-mix(in srgb,var(--accent) 5%,transparent);' : ''">
+
+                {% comment %}Source label{% endcomment %}
+                <th scope="row"
+                    style="padding:6px 10px;font-weight:400;color:var(--ink-1);white-space:nowrap;"
+                    x-text="(s.slot !== undefined ? s.slot + '/' : '') + (s.module || s.stream_id)">
+                </th>
+
+                {% comment %}Subscribe cell{% endcomment %}
+                <td style="padding:6px 8px;text-align:center;">
+                  <button type="button"
+                          class="cp-btn"
+                          :class="isSubscribed(s.stream_id) ? 'cp-btn--action' : ''"
+                          :aria-pressed="isSubscribed(s.stream_id)"
+                          :aria-label="'{% trans "Subscribe to" %} ' + (s.module || s.stream_id)"
+                          @click="toggleSub(s.stream_id)"
+                          :disabled="conn !== 'open'"
+                          style="font-size:9px;padding:3px 8px;min-height:24px;min-width:48px;">
+                    <span x-text="isSubscribed(s.stream_id) ? '{% trans "On" %}' : '{% trans "Off" %}'"></span>
+                  </button>
+                </td>
+
+                {% comment %}Gain slider cell — lang=en for dot decimal (DE-locale rule){% endcomment %}
+                <td style="padding:6px 8px;">
+                  <div class="d-flex align-items-center gap-1">
+                    <input type="range"
+                           lang="en"
+                           :id="'ap-mx-gain-' + s.stream_id"
+                           min="-60"
+                           max="12"
+                           step="0.5"
+                           :value="mixer[s.stream_id] ? mixer[s.stream_id].gainDb : 0"
+                           @input="setGain(s.stream_id, $event.target.value)"
+                           :aria-label="'{% trans "Gain for" %} ' + (s.module || s.stream_id) + ' (dB)'"
+                           :aria-valuemin="-60"
+                           :aria-valuemax="12"
+                           :aria-valuenow="mixer[s.stream_id] ? mixer[s.stream_id].gainDb : 0"
+                           style="width:100px;accent-color:var(--accent);">
+                    <span style="font-size:10px;color:var(--ink-2);min-width:40px;font-variant-numeric:tabular-nums;"
+                          x-text="(mixer[s.stream_id] ? mixer[s.stream_id].gainDb : 0) + ' dB'"></span>
+                  </div>
+                </td>
+
+                {% comment %}Mute cell{% endcomment %}
+                <td style="padding:6px 8px;text-align:center;">
+                  <button type="button"
+                          class="cp-btn"
+                          :aria-pressed="mixer[s.stream_id] && mixer[s.stream_id].muted"
+                          :aria-label="'{% trans "Mute" %} ' + (s.module || s.stream_id)"
+                          @click="toggleMute(s.stream_id)"
+                          style="font-size:9px;padding:3px 8px;min-height:24px;min-width:48px;"
+                          :style="mixer[s.stream_id] && mixer[s.stream_id].muted ? 'color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,transparent);' : ''">
+                    <span x-text="mixer[s.stream_id] && mixer[s.stream_id].muted ? '{% trans "Muted" %}' : '{% trans "Mute" %}'"></span>
+                  </button>
+                </td>
+
+                {% comment %}Level meter cell{% endcomment %}
+                <td style="padding:6px 8px;">
+                  <div class="cp-meter-track"
+                       role="meter"
+                       :aria-label="'{% trans "Level for" %} ' + (s.module || s.stream_id)"
+                       :aria-valuenow="Math.round((levels[s.stream_id] || 0) * 100)"
+                       aria-valuemin="0"
+                       aria-valuemax="100"
+                       style="width:72px;height:5px;">
+                    <div class="cp-meter-fill"
+                         :class="(levels[s.stream_id] || 0) > 0.85 ? 'is-peak' : ''"
+                         :style="'width:' + Math.round((levels[s.stream_id] || 0) * 100) + '%'">
+                    </div>
+                  </div>
+                </td>
+
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>{# end cp-module-widgets #}
+</div>{# end audioPanel root #}
