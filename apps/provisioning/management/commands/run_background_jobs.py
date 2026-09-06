@@ -270,6 +270,7 @@ def _run_provisioning_job(job: ProvisioningJob) -> None:
                 config_yaml=render_config(
                     server_url=server_url,
                     station_id=job.station_id,
+                    audio_enabled=job.station.audio_enabled,
                 ),
                 private_key_pem=private_pem,
             )

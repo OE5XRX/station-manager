@@ -60,7 +60,7 @@ class StationAdmin(admin.ModelAdmin):
         (
             _("Hardware"),
             {
-                "fields": ("hardware_revision",),
+                "fields": ("hardware_revision", "audio_enabled"),
             },
         ),
         (

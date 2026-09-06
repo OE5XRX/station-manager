@@ -279,6 +279,15 @@ class Broker:
         await self._send(proto.build_inventory(slots_out))
 
     async def _execute(self, slot, module, op, capability, token) -> dict:
+        vm = self._virtual.get((slot, module))
+        if vm is not None:
+            # Virtual modules (e.g. the audio-router on a synthetic slot) have no control
+            # device: _control_path() returns None for them, so building a serial transport
+            # would os.open(None) and raise a TypeError that the telemetry poll logs ~1×/s
+            # (RC#2). The command and inventory paths already divert virtual modules; the
+            # telemetry poll reaches _execute directly, so guard here too. Snapshot the
+            # module's own state off the event loop (state() may shell out to PipeWire/udev).
+            return await self._execute_virtual(vm, capability)
         transport = self._transport_factory(self._control_path(slot))
         loop = asyncio.get_running_loop()
         lock = self._slot_locks.get(slot)
@@ -291,6 +300,29 @@ class Broker:
             return await loop.run_in_executor(
                 None, transport.execute, module, op, capability, token, self._trace
             )
+
+    async def _execute_virtual(self, vm, capability) -> dict:
+        """Read a virtual module's telemetry capability from its own ``state()`` snapshot.
+
+        Mirrors :meth:`emit_inventory`: ``state()`` may shell out (the audio-router
+        enumerates PipeWire nodes / ALSA cards), so it runs off the event loop. A missing
+        capability fails closed so the poll loop simply skips it — never a serial open.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            state = await loop.run_in_executor(None, vm.state)
+        except Exception:  # noqa: BLE001 — a virtual snapshot must not break the control link
+            logger.exception(
+                "broker: virtual module state() raised for slot %r module %r cap %r",
+                getattr(vm, "slot", None),
+                getattr(vm, "module_id", None),
+                capability,
+            )
+            return {"ok": False, "error": proto.VALIDATION_FAILED}
+        if isinstance(state, dict) and capability in state:
+            return {"ok": True, "value": state[capability]}
+        # The module is known; the capability is not present in its snapshot.
+        return {"ok": False, "error": proto.UNKNOWN_CAPABILITY}
 
     # --- telemetry subscription --------------------------------------------
     def _poll_interval_s(self, slot, module) -> float | None:
