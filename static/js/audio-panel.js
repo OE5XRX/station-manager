@@ -95,6 +95,7 @@
       _sidetoneSource: null,    // MediaStreamAudioSourceNode on _audioCtx (sidetone monitor)
       _sidetoneGain: null,      // GainNode for sidetone path (on _audioCtx)
       _workletLoaded: false,
+      _workletUrl: null,        // cached in init() from the panel root (see enableMic)
       _micWarnedNoRef: false,   // one-shot warn when op.mic ref is missing
 
       // Suppress repeated not_locked toasts.
@@ -107,6 +108,11 @@
       init: function () {
         var root = this.$el;
         this._stationId = root.getAttribute("data-station-id");
+        // Cache the worklet URL now, while this.$el is reliably the panel root.
+        // enableMic() may run with this.$el pointing at a different element (it is
+        // reachable via the control-panel PTT path), where getAttribute returned
+        // empty and failed the mic with "audio worklet failed to load".
+        this._workletUrl = root.getAttribute("data-worklet-url");
 
         // Guard load order: audio-logic.js must be loaded before this file.
         if (!A) {
@@ -752,9 +758,7 @@
 
         // The worklet is REQUIRED. Its URL comes from data-worklet-url on the
         // panel root element (never hardcoded).
-        var workletUrl = this.$el
-          ? this.$el.getAttribute("data-worklet-url")
-          : null;
+        var workletUrl = this._workletUrl;
         if (!workletUrl) {
           this.micError = "Microphone unavailable: audio worklet failed to load";
           return;

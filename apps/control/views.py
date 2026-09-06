@@ -25,7 +25,12 @@ class StationControlView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         station = self.object
-        ctx["modules"] = list(station.modules.all())
+        # The audio-router is a virtual control-plane module (stream enumeration +
+        # tx_route) owned by the dedicated audio panel — not a generic module card.
+        # Rendering its `streams` (a list) in the generic widget shows
+        # "[object Object],[object Object]". tx_route still flows over the control-WS
+        # command path, so hiding the card changes nothing functional.
+        ctx["modules"] = [m for m in station.modules.all() if m.type != "audio_router"]
         ctx["initial_inventory"] = serializers.snapshot(station)
         u = self.request.user
         ctx["can_admin"] = (
