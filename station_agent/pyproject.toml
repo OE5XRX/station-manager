@@ -21,6 +21,11 @@ Homepage = "https://github.com/OE5XRX/station-manager"
 
 # Flat layout: package files live next to pyproject.toml (not in a subdir).
 # Map the package name "station_agent" to "." so setuptools finds __init__.py here.
+# NOTE: this is an EXPLICIT package list — every subpackage MUST be listed here or it is
+# silently dropped from the installed wheel/image (works in editable/source dev, but
+# `python -m station_agent selftest audio` then fails with ModuleNotFoundError on-target).
+# station_agent.audio (the Session B audio engine) was exactly such a miss — caught by
+# the Session E QEMU E2E gate. Add every new subpackage here + its package-dir mapping.
 [tool.setuptools]
-packages = ["station_agent"]
-package-dir = { "station_agent" = "." }
+packages = ["station_agent", "station_agent.audio"]
+package-dir = { "station_agent" = ".", "station_agent.audio" = "audio" }
