@@ -123,6 +123,8 @@ class PipeWireRouterBackend:
 
     def _card_id(self, card: int) -> str | None:
         """The ALSA card id string (``/sys/class/sound/card<N>/id``), e.g. ``oe5xrxslot1``."""
+        if not self._sysfs_sound:
+            return None  # never open() a path derived from a None/empty sysfs base
         try:
             with open(os.path.join(self._sysfs_sound, f"card{card}", "id")) as fh:
                 return fh.read().strip() or None
@@ -148,6 +150,8 @@ class PipeWireRouterBackend:
         return sorted(slots)
 
     def _card_indices(self) -> list[int]:
+        if not self._sysfs_sound:
+            return []  # no sysfs base → nothing to enumerate (fail closed, never crash)
         out = []
         for path in glob.glob(os.path.join(self._sysfs_sound, "card*")):
             m = _CARD_RE.search(os.path.basename(path))

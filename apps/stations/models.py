@@ -105,6 +105,15 @@ class Station(models.Model):
 
     # Hardware
     hardware_revision = models.CharField(_("hardware revision"), max_length=50, blank=True)
+    audio_enabled = models.BooleanField(
+        _("audio enabled"),
+        default=False,
+        help_text=_(
+            "Whether this station has audio hardware and should run the audio engine. "
+            "Written into the provisioning config.yml; existing stations pick up a change "
+            "only via re-provisioning (config.yml is preserved across OTA)."
+        ),
+    )
     region = models.ForeignKey(
         Region,
         verbose_name=_("region"),

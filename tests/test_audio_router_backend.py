@@ -199,3 +199,62 @@ def test_bad_direction_raises(tmp_path):
     b = make_backend(tmp_path)
     with pytest.raises(ValueError):
         b.resolve_node(1, "sideways")
+
+
+def _mixed_card_backend(tmp_path):
+    """sysfs with a FOREIGN untagged card (HDA-like, no `id` file, no OE5XRX_SLOT) next to a
+    tagged aloop card — mirrors the QEMU box where an Intel-HDA card0 sits beside snd-aloop."""
+    sound = tmp_path / "sound"
+    (sound / "card0").mkdir(parents=True)  # foreign HDA: NO id file, NOT tagged
+    (sound / "card7").mkdir(parents=True)  # tagged aloop
+    (sound / "card7" / "id").write_text("oe5xrxslot1\n")
+    pw = json.dumps(
+        [
+            {
+                "id": 60,
+                "type": "PipeWire:Interface:Node",
+                "info": {"props": {"media.class": "Audio/Source", "api.alsa.card": 0,
+                                   "node.name": "alsa_input.pci-hda"}},
+            },
+            {
+                "id": 61,
+                "type": "PipeWire:Interface:Node",
+                "info": {"props": {"media.class": "Audio/Source", "node.name": "oe5xrx.slot1",
+                                   "object.path": "alsa:pcm:oe5xrxslot1:1:capture"}},
+            },
+        ]
+    )
+
+    def fake_run(argv, timeout=5.0):
+        if argv[0] == "udevadm":
+            cidx = int(argv[-1].rsplit("card", 1)[1])
+            # Foreign card returns properties but NO OE5XRX_SLOT; tagged card carries it.
+            return RunResult(0, "OE5XRX_SLOT=1\n" if cidx == 7 else "ID_BUS=pci\n", "")
+        if argv[0] == "pw-dump":
+            return RunResult(0, pw, "")
+        return RunResult(1, "", "unknown")
+
+    return PipeWireRouterBackend(run=fake_run, sysfs_sound=str(sound))
+
+
+def test_foreign_untagged_card_is_skipped_and_does_not_crash(tmp_path):
+    # RC#2 hardening: a foreign sound card (no OE5XRX_SLOT, no `id` sysfs attr) must never
+    # crash enumeration; only the tagged slot is returned.
+    b = _mixed_card_backend(tmp_path)
+    assert b.list_audio_slots() == [1]
+
+
+def test_resolve_ignores_foreign_card_node(tmp_path):
+    # The tagged aloop RX node resolves even with a foreign HDA source node also present.
+    b = _mixed_card_backend(tmp_path)
+    assert b.resolve_node(1, "rx") == "oe5xrx.slot1"
+
+
+def test_enumeration_fails_closed_on_missing_sysfs_base(tmp_path):
+    # Defensive: a None/empty sysfs base must fail closed (empty list / None), never
+    # os.path.join(None, ...) or open(None).
+    for bad in (None, ""):
+        b = PipeWireRouterBackend(run=lambda *a, **k: RunResult(1, "", ""), sysfs_sound=bad)
+        assert b.list_audio_slots() == []
+        assert b.resolve_node(1, "rx") is None
+        assert b.alsa_card_for_slot(1) is None
