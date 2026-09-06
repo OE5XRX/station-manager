@@ -84,15 +84,50 @@ class PipeWireRouterBackend:
         if card is None:
             logger.debug("router: no ALSA card tagged OE5XRX_SLOT=%s", slot)
             return None
+        card_id = self._card_id(card)
         want_class = _DIRECTION_CLASS[direction]
         for node in self._pw_nodes():
             props = node.get("info", {}).get("props", {})
-            if props.get("api.alsa.card") == card and props.get("media.class") == want_class:
+            if props.get("media.class") == want_class and self._node_on_card(props, card, card_id):
                 name = props.get("node.name")
                 if isinstance(name, str) and name:
                     return name
-        logger.debug("router: no %s node for slot %s (card %s)", want_class, slot, card)
+        logger.debug(
+            "router: no %s node for slot %s (card %s id %s)", want_class, slot, card, card_id
+        )
         return None
+
+    @staticmethod
+    def _node_on_card(props: dict, card: int, card_id: str | None) -> bool:
+        """Does this PipeWire node belong to ALSA card ``card`` (index) / ``card_id`` (name)?
+
+        Defense-in-depth over how PipeWire labels ALSA nodes (Session E finding: the aloop
+        RX/TX nodes are raw-PCM nodes created with ``use-acp=false`` and did not match a bare
+        ``api.alsa.card == <int>`` check):
+        1. any numeric card-index prop, compared as STRINGS (pw-dump may emit "7" or 7);
+        2. the card *id* string embedded in the ALSA object/device path — raw-PCM nodes carry
+           ``object.path = "alsa:pcm:<card_id>:<dev>:<dir>"`` / ``api.alsa.path = "hw:<card_id>"``.
+        Works for sim (``card_id="oe5xrxslot1"``) and real HW (``card_id="Board"``, Spec 0 §12).
+        """
+        for key in ("api.alsa.card", "api.alsa.pcm.card", "alsa.card"):
+            v = props.get(key)
+            if v is not None and str(v) == str(card):
+                return True
+        if card_id:
+            needles = (f":{card_id}:", f"hw:{card_id}")
+            for key in ("object.path", "api.alsa.path", "device.name", "api.alsa.pcm.name"):
+                v = props.get(key)
+                if isinstance(v, str) and (v == card_id or any(n in v for n in needles)):
+                    return True
+        return False
+
+    def _card_id(self, card: int) -> str | None:
+        """The ALSA card id string (``/sys/class/sound/card<N>/id``), e.g. ``oe5xrxslot1``."""
+        try:
+            with open(os.path.join(self._sysfs_sound, f"card{card}", "id")) as fh:
+                return fh.read().strip() or None
+        except OSError:
+            return None
 
     def alsa_card_for_slot(self, slot: int) -> int | None:
         """Public ALSA card index for ``slot`` (via the ``OE5XRX_SLOT`` udev tag).
