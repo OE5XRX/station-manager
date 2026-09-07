@@ -422,10 +422,7 @@
         var ctx = this._streamCtx[streamId];
         if (!ctx) return;
 
-        var nowMs =
-          window.performance && window.performance.now
-            ? window.performance.now()
-            : 0;
+        var nowMs = this._nowMs();
         // A media frame arrived for a subscribed stream (drives recv + jitter).
         A.linkRecord(ctx.stats, "recv", { tMs: nowMs });
 
@@ -574,12 +571,7 @@
           // discontinuity, so record it as an underrun (the key stutter signal).
           ctx.playhead = now + 0.02;
           if (ctx.stats) {
-            A.linkRecord(ctx.stats, "underrun", {
-              tMs:
-                window.performance && window.performance.now
-                  ? window.performance.now()
-                  : 0,
-            });
+            A.linkRecord(ctx.stats, "underrun", { tMs: this._nowMs() });
           }
         }
         var source = audioCtx.createBufferSource();
@@ -610,14 +602,21 @@
         delete this.linkStats[streamId];
       },
 
+      // Monotonic-ish millisecond clock for link-stats event timing. Falls back
+      // to Date.now() (not 0) if performance.now is missing, so jitter/window
+      // math stays meaningful — a fixed 0 would collapse every inter-arrival.
+      _nowMs: function () {
+        if (window.performance && window.performance.now) {
+          return window.performance.now();
+        }
+        return Date.now();
+      },
+
       // ---------------------------------------------------------------------
       // RX link-quality snapshot refresh (driven by _linkTimer ~1 Hz)
       // ---------------------------------------------------------------------
       _refreshLinkStats: function () {
-        var now =
-          window.performance && window.performance.now
-            ? window.performance.now()
-            : 0;
+        var now = this._nowMs();
         var out = {};
         for (var sid in this._streamCtx) {
           if (!Object.prototype.hasOwnProperty.call(this._streamCtx, sid)) continue;

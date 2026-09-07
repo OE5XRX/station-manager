@@ -472,9 +472,15 @@ class AudioConsumer(AsyncWebsocketConsumer):
             await self.close(code=close_code)
 
     async def disconnect(self, close_code):
-        # Stop the link-stats push loop.
+        # Stop the link-stats push loop and await it so it finishes cleanly
+        # before the consumer is GC'd (avoids "Task was destroyed but it is
+        # pending" warnings).
         if getattr(self, "_link_task", None) is not None:
             self._link_task.cancel()
+            try:
+                await self._link_task
+            except asyncio.CancelledError:
+                pass
             self._link_task = None
         try:
             station = self.station
