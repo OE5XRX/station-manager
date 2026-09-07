@@ -9,61 +9,58 @@
      port.postMessage(Float32Array) — one message per 20 ms chunk (mono).
 
    The chunk size is derived from the AudioContext sampleRate at construction
-   time (sampleRate global provided by the AudioWorklet runtime). */
+   time (sampleRate global provided by the AudioWorklet runtime).
+
+   IMPORTANT: AudioWorkletProcessor is a real ES class. It MUST be subclassed
+   with `class ... extends AudioWorkletProcessor` and `super()`. ES5-style
+   pseudo-inheritance (`AudioWorkletProcessor.call(this)`) throws
+   "Class constructor cannot be invoked without 'new'" on the audio thread,
+   the processor never instantiates, and process() is never called — the mic
+   silently produces zero frames. The AudioWorklet global scope is always
+   modern (ES2017+), so a native class is safe here. */
 
 /* global AudioWorkletProcessor, registerProcessor, sampleRate */
 
-(function () {
-  "use strict";
+"use strict";
 
-  // Target chunk duration: 20 ms.
-  var CHUNK_MS = 20;
+// Target chunk duration: 20 ms.
+const CHUNK_MS = 20;
 
-  var MicProcessor = (function () {
-    // Inherit from AudioWorkletProcessor.
-    // In the worklet global, AudioWorkletProcessor is always defined.
-    function MicProcessor(options) {
-      // super() — call parent constructor.
-      AudioWorkletProcessor.call(this, options);
+class MicProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super(options);
 
-      // Number of mono samples for 20 ms at the context rate.
-      this._chunkSize = Math.round((sampleRate * CHUNK_MS) / 1000);
-      this._buffer = new Float32Array(this._chunkSize);
-      this._writePos = 0;
+    // Number of mono samples for 20 ms at the context rate.
+    this._chunkSize = Math.round((sampleRate * CHUNK_MS) / 1000);
+    this._buffer = new Float32Array(this._chunkSize);
+    this._writePos = 0;
+  }
+
+  process(inputs) {
+    // inputs[0] is the first input; inputs[0][0] is channel 0 (mono).
+    const input = inputs[0];
+    if (!input || !input[0]) {
+      // No input data yet: keep the processor alive.
+      return true;
     }
 
-    // Prototype chain.
-    MicProcessor.prototype = Object.create(AudioWorkletProcessor.prototype);
-    MicProcessor.prototype.constructor = MicProcessor;
+    const samples = input[0];
 
-    MicProcessor.prototype.process = function (inputs) {
-      // inputs[0] is the first input; inputs[0][0] is channel 0 (mono).
-      var input = inputs[0];
-      if (!input || !input[0]) {
-        // No input data: keep processor alive.
-        return true;
+    for (let i = 0; i < samples.length; i++) {
+      this._buffer[this._writePos] = samples[i];
+      this._writePos += 1;
+
+      if (this._writePos >= this._chunkSize) {
+        // Chunk complete — post a copy to the main thread (transfer the buffer).
+        const chunk = new Float32Array(this._buffer);
+        this.port.postMessage(chunk, [chunk.buffer]);
+        this._writePos = 0;
       }
+    }
 
-      var samples = input[0];
+    // Return true to keep the processor alive.
+    return true;
+  }
+}
 
-      for (var i = 0; i < samples.length; i++) {
-        this._buffer[this._writePos] = samples[i];
-        this._writePos += 1;
-
-        if (this._writePos >= this._chunkSize) {
-          // Chunk complete — post a copy to the main thread.
-          var chunk = new Float32Array(this._buffer);
-          this.port.postMessage(chunk, [chunk.buffer]);
-          this._writePos = 0;
-        }
-      }
-
-      // Return true to keep the processor alive.
-      return true;
-    };
-
-    return MicProcessor;
-  }());
-
-  registerProcessor("oe5xrx-mic", MicProcessor);
-})();
+registerProcessor("oe5xrx-mic", MicProcessor);
