@@ -191,6 +191,10 @@ ok("jitterDepthFor gives op.mic a deeper buffer than RX sources", () => {
   const micDepth = A.jitterDepthFor(opMic);
   const rxDepth = A.jitterDepthFor(rx);
   assert.equal(rxDepth, 3);
+  // Floor, not exact: guards against silently REDUCING op.mic buffering below
+  // the depth chosen to absorb encoder burstiness (which would reintroduce
+  // stutter), while still allowing a future increase for more smoothing.
+  assert.ok(micDepth >= 5, `op.mic depth ${micDepth} >= 5`);
   assert.ok(micDepth > rxDepth, `mic ${micDepth} > rx ${rxDepth}`);
 });
 
