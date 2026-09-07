@@ -199,6 +199,18 @@
     return entry.direction === "rx" && !isOpMic(entry);
   }
 
+  // Jitter-buffer depth (20 ms frames). RX sources arrive at the agent's steady
+  // cadence, so a shallow buffer keeps latency low. op.mic is produced by the
+  // browser's own encoder, whose output pacing is burstier, so it needs a
+  // deeper buffer to absorb late frames instead of concealing them.
+  var RX_JITTER_DEPTH = 3; // ~60 ms
+  var MIC_JITTER_DEPTH = 5; // ~100 ms
+
+  /* Jitter-buffer depth to use for a stream entry. */
+  function jitterDepthFor(entry) {
+    return isOpMic(entry) ? MIC_JITTER_DEPTH : RX_JITTER_DEPTH;
+  }
+
   // ---------------------------------------------------------------------------
   // Presets
   // ---------------------------------------------------------------------------
@@ -613,6 +625,9 @@
     // Uplink coupling
     micWantsUplink: micWantsUplink,
     micLevelFromRms: micLevelFromRms,
+
+    // Jitter-buffer sizing
+    jitterDepthFor: jitterDepthFor,
 
     // Resampling
     makeResampler: makeResampler,
