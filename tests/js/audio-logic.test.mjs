@@ -184,6 +184,52 @@ ok("resample ratio 1 (16k→16k) passes samples through in order", () => {
   assert.deepEqual(all.slice(0, 5), [1, 2, 3, 4, 5]);
 });
 
+// --- link-quality stats ---------------------------------------------------
+ok("linkStats starts at zero", () => {
+  const s = A.makeLinkStats();
+  const snap = A.linkSnapshot(s, 0);
+  assert.deepEqual(
+    [snap.recv, snap.lost, snap.reorder, snap.conceal, snap.underruns, snap.jitterMs],
+    [0, 0, 0, 0, 0, 0]
+  );
+});
+
+ok("linkStats jitter is ~0 for a steady 20 ms cadence, rises when irregular", () => {
+  const steady = A.makeLinkStats();
+  for (let t = 0; t <= 200; t += 20) A.linkRecord(steady, "recv", { tMs: t });
+  assert.ok(A.linkSnapshot(steady, 200).jitterMs < 0.001, "steady jitter ~0");
+
+  const bursty = A.makeLinkStats();
+  const times = [0, 5, 40, 45, 90, 95]; // clumped arrivals
+  for (const t of times) A.linkRecord(bursty, "recv", { tMs: t });
+  assert.ok(A.linkSnapshot(bursty, 95).jitterMs > 1, "bursty jitter rises");
+});
+
+ok("linkStats totals accumulate; reorder is total-only (not windowed)", () => {
+  const s = A.makeLinkStats();
+  A.linkRecord(s, "lost", { n: 2, tMs: 1000 });
+  A.linkRecord(s, "conceal", { n: 1, tMs: 1000 });
+  A.linkRecord(s, "underrun", { tMs: 1000 });
+  A.linkRecord(s, "reorder", { n: 3, tMs: 1000 });
+  const snap = A.linkSnapshot(s, 1000);
+  assert.equal(snap.lost, 2);
+  assert.equal(snap.conceal, 1);
+  assert.equal(snap.underruns, 1);
+  assert.equal(snap.reorder, 3);
+  assert.deepEqual(snap.win, { lost: 2, conceal: 1, underruns: 1 });
+});
+
+ok("linkStats rolling window drops events older than 5 s", () => {
+  const s = A.makeLinkStats();
+  A.linkRecord(s, "lost", { n: 1, tMs: 0 });
+  A.linkRecord(s, "underrun", { tMs: 500 });
+  // At t=6000 both are >5 s old → window empty, totals unchanged.
+  const snap = A.linkSnapshot(s, 6000);
+  assert.deepEqual(snap.win, { lost: 0, conceal: 0, underruns: 0 });
+  assert.equal(snap.lost, 1);
+  assert.equal(snap.underruns, 1);
+});
+
 // --- seq math (u16 wrap) ---------------------------------------------------
 ok("seqDelta wrap-aware", () => {
   assert.equal(A.seqDelta(10, 11), 1);

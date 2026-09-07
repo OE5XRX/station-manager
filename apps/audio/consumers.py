@@ -9,6 +9,7 @@ frames (§5.3), and enforces lock+PTT gating on the uplink.  No DSP, no
 decode, no re-encode.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -371,6 +372,13 @@ class AudioConsumer(AsyncWebsocketConsumer):
         # reject before joining any group.
         self._src_groups: set[str] = set()
 
+        # Relay counters for the link-quality readout: frames this connection
+        # sent to the browser (downlink) and received from it (uplink). Pushed
+        # to the browser periodically by _link_stats_loop.
+        self._dl_frames = 0
+        self._ul_frames = 0
+        self._link_task = None
+
         await self.accept()
 
         if not self.user or self.user.is_anonymous:
@@ -410,6 +418,38 @@ class AudioConsumer(AsyncWebsocketConsumer):
             {"type": "audio.request_advertise", "reply_channel": self.channel_name},
         )
 
+        # Start the periodic link-stats push now that the socket is authorized.
+        self._link_task = asyncio.ensure_future(self._link_stats_loop())
+
+    async def _link_stats_loop(self):
+        """Push server-side relay counters to the browser every 2 s.
+
+        The server is a dumb relay, so its useful smoothness signal is simply
+        how many frames it forwarded each way; the browser compares its own
+        received count against ``downlink_frames`` to isolate server→client
+        WebSocket loss from agent→server loss.
+        """
+        try:
+            while True:
+                await asyncio.sleep(2)
+                await self.send(text_data=json.dumps(self._link_stats_payload()))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Never let telemetry take down the socket.
+            logger.debug("audio link_stats loop stopped", exc_info=True)
+
+    def _link_stats_payload(self) -> dict:
+        """Build the §5 ``link_stats`` message from the current relay counters."""
+        return {
+            "v": constants.AUDIO_PROTOCOL_VERSION,
+            "type": "link_stats",
+            "server": {
+                "downlink_frames": self._dl_frames,
+                "uplink_frames": self._ul_frames,
+            },
+        }
+
     async def _reject(self, close_code, reason, err_code="not_authorized"):
         """Accept-then-error reject so the browser sees a human-readable reason.
 
@@ -432,6 +472,16 @@ class AudioConsumer(AsyncWebsocketConsumer):
             await self.close(code=close_code)
 
     async def disconnect(self, close_code):
+        # Stop the link-stats push loop and await it so it finishes cleanly
+        # before the consumer is GC'd (avoids "Task was destroyed but it is
+        # pending" warnings).
+        if getattr(self, "_link_task", None) is not None:
+            self._link_task.cancel()
+            try:
+                await self._link_task
+            except asyncio.CancelledError:
+                pass
+            self._link_task = None
         try:
             station = self.station
             if station is not None:
@@ -618,6 +668,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
             return
 
         # Authorized: forward to agent and fan out to op.mic subscribers.
+        self._ul_frames += 1
         agent_grp = constants.agent_group(self.station_id)
         await self.channel_layer.group_send(
             agent_grp,
@@ -634,6 +685,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
     async def audio_media(self, event):
         """Downlink media frame -> send to browser byte-identically."""
+        self._dl_frames += 1
         await self.send(bytes_data=event["data"])
 
     async def audio_streams(self, event):
