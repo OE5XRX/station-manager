@@ -1011,8 +1011,12 @@
       _onMicChunk: function (float32Chunk) {
         // Count every chunk the worklet delivers — this is the proof that the
         // worklet's process() actually runs (independent of the input meter,
-        // which taps a separate analyser branch).
+        // which taps a separate analyser branch). Refresh the diagnostic HERE
+        // too, not only from the encoded path: if the worklet runs but the
+        // encoder produces nothing, the encoded path never fires and 'wkl'
+        // would wrongly read 0 — masking the exact "enc==0" fault we want to see.
         this._txChunks++;
+        this._refreshTxDiag();
         if (!this._micEncoder || !this.micEnabled) return;
 
         // Build an AudioData for the encoder at the mic context's actual rate.
@@ -1110,12 +1114,13 @@
       },
 
       // Mirror the raw _tx* counters into the reactive micTx object for display.
-      // Throttled to ~every 5th encoded frame (≈10 Hz at 20 ms frames) so Alpine
-      // is not re-rendered 50×/s; always refreshes immediately on a reason change
-      // so keying/drop transitions show up without lag.
+      // Throttled on _txChunks (which ticks whenever the worklet runs, even if
+      // the encoder is silent) to ~every 5th chunk (≈10 Hz at 20 ms frames) so
+      // Alpine is not re-rendered 50×/s; always refreshes immediately on a
+      // reason change so keying/drop transitions show up without lag.
       _refreshTxDiag: function (reason) {
         var reasonChanged = reason && reason !== this._txLastReason;
-        if (!reasonChanged && this._txEncoded % 5 !== 0) return;
+        if (!reasonChanged && this._txChunks % 5 !== 0) return;
         if (reason) this._txLastReason = reason;
         this.micTx.chunks = this._txChunks;
         this.micTx.encoded = this._txEncoded;
