@@ -325,6 +325,24 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
         <span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-2);min-width:34px;text-align:right;font-variant-numeric:tabular-nums;"
               x-text="Math.round(micLevel * 100) + '%'"></span>
       </div>
+
+      {% comment %}TX-path diagnostic — counts each stage of the uplink so a stall
+      is localised at a glance: wkl (worklet chunks) 0 ⇒ worklet not running;
+      enc (encoded) 0 ⇒ encoder silent; tx (frames sent) 0 while enc climbs ⇒
+      gated/dropped, see the reason (e.g. "not keyed" ⇒ hold PTT + lock).{% endcomment %}
+      <div x-show="micEnabled" x-cloak class="mt-1"
+           style="font-family:var(--font-mono);font-size:10px;color:var(--ink-3);letter-spacing:.04em;">
+        <span>{% trans "TX" %}:</span>
+        <span x-text="'wkl ' + micTx.chunks"></span>
+        <span aria-hidden="true"> · </span>
+        <span x-text="'enc ' + micTx.encoded"></span>
+        <span aria-hidden="true"> · </span>
+        <span :style="micTx.sent > 0 ? 'color:var(--signal);' : ''"
+              x-text="'tx ' + micTx.sent"></span>
+        <span aria-hidden="true"> · </span>
+        <span :style="micTx.reason === 'transmitting' ? 'color:var(--signal);' : (micTx.sent === 0 && micTx.encoded > 0 ? 'color:var(--warn);' : '')"
+              x-text="micTx.reason"></span>
+      </div>
     </section>
 
     {% comment %}======================================================
