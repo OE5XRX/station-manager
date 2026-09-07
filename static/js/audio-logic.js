@@ -281,6 +281,60 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Streaming resampler (linear interpolation)
+  // ---------------------------------------------------------------------------
+
+  /* Create a streaming linear-interpolation resampler from srcRate → dstRate.
+     Firefox refuses to connect a MediaStreamSource into an AudioContext of a
+     different sample rate (it does not resample; Chrome does), so the mic must
+     be captured at the context's NATIVE rate and downsampled to the encoder's
+     16 kHz in JS. This state carries phase across successive resample() calls,
+     so there are no clicks at chunk boundaries.
+
+     Linear interpolation is adequate for narrow-band voice (FM ~300–3400 Hz);
+     it is NOT a brick-wall anti-alias filter. getUserMedia's own processing
+     already limits high-frequency content, so residual aliasing is negligible
+     for speech. */
+  function makeResampler(srcRate, dstRate) {
+    return {
+      ratio: srcRate / dstRate, // input samples consumed per output sample
+      pos: 0, // fractional read cursor within `queue`
+      queue: [], // pending input samples not yet fully consumed
+    };
+  }
+
+  /* Push one input chunk through the resampler; returns a Float32Array of
+     output samples at dstRate. Mutates `state`. Phase-continuous: feeding
+     [a] then [b] yields the same stream as feeding [a concat b]. */
+  function resample(state, input) {
+    var queue = state.queue;
+    for (var k = 0; k < input.length; k++) {
+      queue.push(input[k]);
+    }
+
+    var out = [];
+    var pos = state.pos;
+    var ratio = state.ratio;
+    // Need queue[i] and queue[i+1] to interpolate the sample at `pos`.
+    while (Math.floor(pos) + 1 < queue.length) {
+      var i = Math.floor(pos);
+      var frac = pos - i;
+      out.push(queue[i] * (1 - frac) + queue[i + 1] * frac);
+      pos += ratio;
+    }
+
+    // Drop fully-consumed samples, keep the fractional remainder + the last
+    // sample still needed as the left interpolation point next time.
+    var consumed = Math.floor(pos);
+    if (consumed > 0) {
+      queue.splice(0, consumed);
+      pos -= consumed;
+    }
+    state.pos = pos;
+    return new Float32Array(out);
+  }
+
+  // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
 
@@ -465,6 +519,10 @@
     // Uplink coupling
     micWantsUplink: micWantsUplink,
     micLevelFromRms: micLevelFromRms,
+
+    // Resampling
+    makeResampler: makeResampler,
+    resample: resample,
 
     // Seq math
     seqDelta: seqDelta,
