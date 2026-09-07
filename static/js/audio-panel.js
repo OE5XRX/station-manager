@@ -56,6 +56,11 @@
                                 // the browser capture boundary (before worklet/
                                 // encode/uplink). Diagnostic: moves ⇒ mic reaches
                                 // the browser; flat ⇒ capture itself is silent.
+      // Live TX-path diagnostic (reactive mirror of the _tx* counters below).
+      // Pinpoints where the uplink breaks: chunks==0 ⇒ worklet not running;
+      // encoded==0 ⇒ encoder not producing; sent==0 while encoded climbs ⇒
+      // gated/dropped (see reason). "reason" is the last uplink decision.
+      micTx: { chunks: 0, encoded: 0, sent: 0, reason: "idle" },
       sidetone: false,
       sidetoneGainDb: -12,
 
@@ -98,6 +103,10 @@
                                 // reports mic capture even if uplink is broken)
       _micMeterBuf: null,       // Float32Array scratch for analyser time-domain reads
       _micMeterRAF: null,       // requestAnimationFrame handle for the meter loop
+      _txChunks: 0,             // raw worklet chunks received (→ micTx.chunks)
+      _txEncoded: 0,            // raw encoded frames produced (→ micTx.encoded)
+      _txSent: 0,               // raw frames actually put on the wire (→ micTx.sent)
+      _txLastReason: "",        // last uplink decision, to detect reason changes
       _micEncoder: null,        // AudioEncoder
       _micRate: 16000,          // actual mic context sample rate
       _micSeq: 0,
@@ -887,6 +896,11 @@
             self._micSeq = 0;
             self._micTs = 0;
             self._micPrevKeyed = false;
+            self._txChunks = 0;
+            self._txEncoded = 0;
+            self._txSent = 0;
+            self._txLastReason = "";
+            self.micTx = { chunks: 0, encoded: 0, sent: 0, reason: "idle" };
 
             var encoder = new window.AudioEncoder({
               output: function (chunk) {
@@ -995,6 +1009,14 @@
       // Mic chunk from worklet → encode
       // ---------------------------------------------------------------------
       _onMicChunk: function (float32Chunk) {
+        // Count every chunk the worklet delivers — this is the proof that the
+        // worklet's process() actually runs (independent of the input meter,
+        // which taps a separate analyser branch). Refresh the diagnostic HERE
+        // too, not only from the encoded path: if the worklet runs but the
+        // encoder produces nothing, the encoded path never fires and 'wkl'
+        // would wrongly read 0 — masking the exact "enc==0" fault we want to see.
+        this._txChunks++;
+        this._refreshTxDiag();
         if (!this._micEncoder || !this.micEnabled) return;
 
         // Build an AudioData for the encoder at the mic context's actual rate.
@@ -1019,8 +1041,12 @@
       // ---------------------------------------------------------------------
       _onEncodedMic: function (chunk) {
         if (!this.micEnabled) return;
+        this._txEncoded++;
         var store = window.Alpine.store && window.Alpine.store("control");
-        if (!store) return;
+        if (!store) {
+          this._refreshTxDiag("no control store");
+          return;
+        }
 
         var wantsUplink = A.micWantsUplink({
           micEnabled: this.micEnabled,
@@ -1047,6 +1073,7 @@
         if (!wantsUplink) {
           // Advance ts to keep encoder clock running even when not transmitting.
           this._micTs += MIC_SAMPLES_PER_FRAME;
+          this._refreshTxDiag("not keyed — hold PTT + lock");
           return;
         }
 
@@ -1060,6 +1087,7 @@
             console.warn("[audio] op.mic stream_ref not in index — dropping uplink frames");
           }
           this._micTs += MIC_SAMPLES_PER_FRAME;
+          this._refreshTxDiag("no op.mic stream in index");
           return;
         }
         this._micWarnedNoRef = false;
@@ -1081,6 +1109,23 @@
         this._micTs += MIC_SAMPLES_PER_FRAME;
 
         this._sendBinary(frame.buffer);
+        this._txSent++;
+        this._refreshTxDiag("transmitting");
+      },
+
+      // Mirror the raw _tx* counters into the reactive micTx object for display.
+      // Throttled on _txChunks (which ticks whenever the worklet runs, even if
+      // the encoder is silent) to ~every 5th chunk (≈10 Hz at 20 ms frames) so
+      // Alpine is not re-rendered 50×/s; always refreshes immediately on a
+      // reason change so keying/drop transitions show up without lag.
+      _refreshTxDiag: function (reason) {
+        var reasonChanged = reason && reason !== this._txLastReason;
+        if (!reasonChanged && this._txChunks % 5 !== 0) return;
+        if (reason) this._txLastReason = reason;
+        this.micTx.chunks = this._txChunks;
+        this.micTx.encoded = this._txEncoded;
+        this.micTx.sent = this._txSent;
+        if (reason) this.micTx.reason = reason;
       },
 
       _findMicStreamId: function () {
@@ -1177,6 +1222,11 @@
         this.micEnabled = false;
         this._micPrevKeyed = false;
         this._micWarnedNoRef = false;
+        this._txChunks = 0;
+        this._txEncoded = 0;
+        this._txSent = 0;
+        this._txLastReason = "";
+        this.micTx = { chunks: 0, encoded: 0, sent: 0, reason: "idle" };
       },
 
       // ---------------------------------------------------------------------
