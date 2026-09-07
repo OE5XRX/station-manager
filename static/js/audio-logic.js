@@ -342,6 +342,93 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Link-quality stats (RX smoothness telemetry)
+  // ---------------------------------------------------------------------------
+
+  var LINK_WINDOW_MS = 5000; // rolling window for rare-event counts
+  var LINK_FRAME_MS = 20; // nominal Opus frame interval
+  var LINK_JITTER_ALPHA = 0.1; // EWMA weight for inter-arrival jitter
+
+  /* Per-stream receive-quality accumulator. Totals are cumulative; rare events
+     (loss / conceal / underrun) are also kept in a 5 s rolling window so the
+     UI can show "recently" instead of only lifetime counts. jitterMs is an
+     EWMA of how far each frame's inter-arrival strays from the nominal 20 ms. */
+  function makeLinkStats() {
+    return {
+      recv: 0, // media frames accepted
+      lost: 0, // packets detected missing (seq gaps)
+      reorder: 0, // late/duplicate frames dropped by the jitter buffer
+      conceal: 0, // PLC placeholders emitted for missing frames
+      underruns: 0, // playback fell behind and had to reset the playhead
+      jitterMs: 0, // EWMA of |inter-arrival − 20 ms|
+      _lastArrivalMs: null,
+      _events: [], // rolling {t,type} for lost|conceal|underrun
+    };
+  }
+
+  function _linkPrune(state, nowMs) {
+    var cutoff = nowMs - LINK_WINDOW_MS;
+    var ev = state._events;
+    var i = 0;
+    while (i < ev.length && ev[i].t < cutoff) i++;
+    if (i > 0) ev.splice(0, i);
+  }
+
+  /* Record one link event. type ∈ recv|lost|conceal|reorder|underrun.
+     opts.tMs = event time (ms, monotonic e.g. performance.now); opts.n = count
+     for lost/conceal/reorder (default 1). */
+  function linkRecord(state, type, opts) {
+    opts = opts || {};
+    var nowMs = opts.tMs;
+    if (type === "recv") {
+      state.recv++;
+      if (state._lastArrivalMs !== null && nowMs !== undefined) {
+        var dev = Math.abs(nowMs - state._lastArrivalMs - LINK_FRAME_MS);
+        state.jitterMs =
+          state.jitterMs * (1 - LINK_JITTER_ALPHA) + dev * LINK_JITTER_ALPHA;
+      }
+      if (nowMs !== undefined) state._lastArrivalMs = nowMs;
+      return;
+    }
+    var n = opts.n !== undefined ? opts.n : 1;
+    if (type === "reorder") {
+      state.reorder += n;
+      return; // reorder is a total only, not a windowed "smoothness" event
+    }
+    if (type === "lost") state.lost += n;
+    else if (type === "conceal") state.conceal += n;
+    else if (type === "underrun") {
+      state.underruns += 1;
+      n = 1;
+    } else return;
+    if (nowMs !== undefined) {
+      for (var k = 0; k < n; k++) state._events.push({ t: nowMs, type: type });
+      _linkPrune(state, nowMs);
+    }
+  }
+
+  /* Snapshot for display: cumulative totals + rolling-window counts. */
+  function linkSnapshot(state, nowMs) {
+    if (nowMs !== undefined) _linkPrune(state, nowMs);
+    var win = { lost: 0, conceal: 0, underruns: 0 };
+    for (var i = 0; i < state._events.length; i++) {
+      var t = state._events[i].type;
+      if (t === "lost") win.lost++;
+      else if (t === "conceal") win.conceal++;
+      else if (t === "underrun") win.underruns++;
+    }
+    return {
+      recv: state.recv,
+      lost: state.lost,
+      reorder: state.reorder,
+      conceal: state.conceal,
+      underruns: state.underruns,
+      jitterMs: Math.round(state.jitterMs * 10) / 10,
+      win: win,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
 
@@ -530,6 +617,11 @@
     // Resampling
     makeResampler: makeResampler,
     resample: resample,
+
+    // Link-quality stats
+    makeLinkStats: makeLinkStats,
+    linkRecord: linkRecord,
+    linkSnapshot: linkSnapshot,
 
     // Seq math
     seqDelta: seqDelta,

@@ -68,6 +68,10 @@
       // encoded==0 ⇒ encoder not producing; sent==0 while encoded climbs ⇒
       // gated/dropped (see reason). "reason" is the last uplink decision.
       micTx: { chunks: 0, encoded: 0, sent: 0, reason: "idle" },
+      // RX link-quality snapshots {[stream_id]: {recv,lost,conceal,underruns,
+      // reorder,jitterMs,bufDepth,win}} + server relay counters, refreshed ~1 Hz.
+      linkStats: {},
+      serverStats: null,        // {downlink_frames, uplink_frames} from the server
       sidetone: false,
       sidetoneGainDb: -12,
 
@@ -131,6 +135,9 @@
       _notLockedTimer: null,
       _notLockedShown: false,
 
+      // Periodic RX link-stats refresh (setInterval handle).
+      _linkTimer: null,
+
       // ---------------------------------------------------------------------
       // init
       // ---------------------------------------------------------------------
@@ -176,6 +183,12 @@
 
         this._installListeners();
         this._connect();
+
+        // Refresh RX link-quality snapshots ~1 Hz for the display.
+        var self = this;
+        this._linkTimer = window.setInterval(function () {
+          self._refreshLinkStats();
+        }, 1000);
       },
 
       destroy: function () {
@@ -310,6 +323,10 @@
           case "error":
             this._onError(msg);
             break;
+          case "link_stats":
+            // Server relay counters for this connection (downlink/uplink frames).
+            this.serverStats = msg.server || null;
+            break;
           default:
             break; // forward-compat: ignore unknown types
         }
@@ -405,11 +422,29 @@
         var ctx = this._streamCtx[streamId];
         if (!ctx) return;
 
-        // Push into jitter buffer.
-        A.jitterPush(ctx.jitter, { seq: frame.seq, frame: frame });
+        var nowMs =
+          window.performance && window.performance.now
+            ? window.performance.now()
+            : 0;
+        // A media frame arrived for a subscribed stream (drives recv + jitter).
+        A.linkRecord(ctx.stats, "recv", { tMs: nowMs });
+
+        // Push into jitter buffer; a rejected push is a late/duplicate frame.
+        var push = A.jitterPush(ctx.jitter, { seq: frame.seq, frame: frame });
+        if (push && push.accepted === false) {
+          A.linkRecord(ctx.stats, "reorder", { n: 1, tMs: nowMs });
+        }
 
         // Drain and decode/PLC each ready item.
         var result = A.jitterDrain(ctx.jitter);
+        // Gaps = packets the jitter buffer gave up waiting for (network loss).
+        if (result.gaps && result.gaps.length) {
+          var lostN = 0;
+          for (var g = 0; g < result.gaps.length; g++) {
+            lostN += result.gaps[g].count || 0;
+          }
+          if (lostN) A.linkRecord(ctx.stats, "lost", { n: lostN, tMs: nowMs });
+        }
         for (var i = 0; i < result.out.length; i++) {
           var item = result.out[i];
           if (item.plc) {
@@ -419,6 +454,7 @@
             var plcCtx = this._streamCtx[streamId];
             if (plcCtx) {
               plcCtx.playhead += 0.020;
+              A.linkRecord(plcCtx.stats, "conceal", { n: 1, tMs: nowMs });
             }
             continue;
           }
@@ -477,6 +513,7 @@
           playhead: audioCtx.currentTime + 0.05, // 50 ms initial buffer
           sampleRate: sampleRate,
           channels: channels,
+          stats: A.makeLinkStats(),
         };
       },
 
@@ -533,8 +570,17 @@
         // Schedule for gapless playback.
         var now = audioCtx.currentTime;
         if (ctx.playhead < now) {
-          // We fell behind — reset to now + small buffer.
+          // We fell behind — reset to now + small buffer. This is an audible
+          // discontinuity, so record it as an underrun (the key stutter signal).
           ctx.playhead = now + 0.02;
+          if (ctx.stats) {
+            A.linkRecord(ctx.stats, "underrun", {
+              tMs:
+                window.performance && window.performance.now
+                  ? window.performance.now()
+                  : 0,
+            });
+          }
         }
         var source = audioCtx.createBufferSource();
         source.buffer = buffer;
@@ -561,6 +607,30 @@
         } catch (_) {}
         delete this._streamCtx[streamId];
         delete this.levels[streamId];
+        delete this.linkStats[streamId];
+      },
+
+      // ---------------------------------------------------------------------
+      // RX link-quality snapshot refresh (driven by _linkTimer ~1 Hz)
+      // ---------------------------------------------------------------------
+      _refreshLinkStats: function () {
+        var now =
+          window.performance && window.performance.now
+            ? window.performance.now()
+            : 0;
+        var out = {};
+        for (var sid in this._streamCtx) {
+          if (!Object.prototype.hasOwnProperty.call(this._streamCtx, sid)) continue;
+          var ctx = this._streamCtx[sid];
+          if (!ctx || !ctx.stats) continue;
+          var snap = A.linkSnapshot(ctx.stats, now);
+          snap.bufDepth =
+            ctx.jitter && ctx.jitter.frames
+              ? Object.keys(ctx.jitter.frames).length
+              : 0;
+          out[sid] = snap;
+        }
+        this.linkStats = out;
       },
 
       // ---------------------------------------------------------------------
@@ -732,6 +802,14 @@
       _teardown: function () {
         if (this._closed) return;
         this._closed = true;
+
+        // Stop the link-stats refresh timer.
+        if (this._linkTimer !== null) {
+          try {
+            window.clearInterval(this._linkTimer);
+          } catch (_) {}
+          this._linkTimer = null;
+        }
 
         // Mic cleanup.
         this._disableMicInternal(false /* don't send mic_close if WS already closing */);
