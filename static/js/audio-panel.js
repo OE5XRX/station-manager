@@ -853,6 +853,15 @@
             self._micWorkletNode.port.onmessage = function (ev) {
               self._onMicChunk(ev.data);
             };
+            // Surface an audio-thread processor crash (e.g. a throwing
+            // constructor) instead of silently producing zero frames — this
+            // fault is otherwise invisible: the node exists, micEnabled is
+            // true, but process() never runs and wkl stays 0.
+            self._micWorkletNode.onprocessorerror = function (ev) {
+              console.error("[audio] mic worklet processor error", ev);
+              self.micError = "Microphone worklet crashed (processor error)";
+              self._refreshTxDiag("worklet processor error");
+            };
 
             // Independent input-level meter: tap the raw mic source with an
             // AnalyserNode and pull it through its own muted gain → destination.
