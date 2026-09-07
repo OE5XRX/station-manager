@@ -184,6 +184,16 @@ ok("resample ratio 1 (16k→16k) passes samples through in order", () => {
   assert.deepEqual(all.slice(0, 5), [1, 2, 3, 4, 5]);
 });
 
+// --- jitter depth per stream ----------------------------------------------
+ok("jitterDepthFor gives op.mic a deeper buffer than RX sources", () => {
+  const opMic = { stream_id: "op.mic", module: "operator", direction: "rx" };
+  const rx = { stream_id: "slot1.rx", module: "fm", direction: "rx" };
+  const micDepth = A.jitterDepthFor(opMic);
+  const rxDepth = A.jitterDepthFor(rx);
+  assert.equal(rxDepth, 3);
+  assert.ok(micDepth > rxDepth, `mic ${micDepth} > rx ${rxDepth}`);
+});
+
 // --- link-quality stats ---------------------------------------------------
 ok("linkStats starts at zero", () => {
   const s = A.makeLinkStats();

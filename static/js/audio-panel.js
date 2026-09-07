@@ -502,12 +502,17 @@
           return;
         }
 
-        // Playhead: scheduled time for next chunk.
+        // Jitter-buffer depth + matching initial buffer: op.mic is browser-
+        // encoder-sourced (burstier) so it gets a deeper buffer than the
+        // steady-cadence RX streams (see jitterDepthFor).
+        var depth = A.jitterDepthFor(entry);
+        // Playhead: scheduled time for next chunk. Seed the initial buffer to
+        // the buffer depth so a deeper jitter buffer also starts further ahead.
         this._streamCtx[streamId] = {
           decoder: decoder,
-          jitter: A.createJitter({ depth: 3 }),
+          jitter: A.createJitter({ depth: depth }),
           gainNode: gainNode,
-          playhead: audioCtx.currentTime + 0.05, // 50 ms initial buffer
+          playhead: audioCtx.currentTime + depth * 0.02,
           sampleRate: sampleRate,
           channels: channels,
           stats: A.makeLinkStats(),
