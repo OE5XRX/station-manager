@@ -298,39 +298,42 @@
   function makeResampler(srcRate, dstRate) {
     return {
       ratio: srcRate / dstRate, // input samples consumed per output sample
-      pos: 0, // fractional read cursor within `queue`
-      queue: [], // pending input samples not yet fully consumed
+      pos: 0, // fractional read cursor in the current chunk's index space
+      prev: 0, // previous chunk's last sample (virtual index -1 of this chunk)
     };
   }
 
   /* Push one input chunk through the resampler; returns a Float32Array of
      output samples at dstRate. Mutates `state`. Phase-continuous: feeding
-     [a] then [b] yields the same stream as feeding [a concat b]. */
+     [a] then [b] yields the same stream as feeding [a concat b].
+
+     No growing queue / splice — only one carried sample (`prev`) plus a
+     fractional cursor, so there is no per-chunk buffer compaction. Index -1
+     of the current chunk refers to `prev`, so the cursor may start slightly
+     negative to interpolate across the chunk seam. */
   function resample(state, input) {
-    var queue = state.queue;
-    for (var k = 0; k < input.length; k++) {
-      queue.push(input[k]);
-    }
+    var len = input.length;
+    if (len === 0) return new Float32Array(0);
+
+    var ratio = state.ratio;
+    var pos = state.pos;
+    var prev = state.prev;
 
     var out = [];
-    var pos = state.pos;
-    var ratio = state.ratio;
-    // Need queue[i] and queue[i+1] to interpolate the sample at `pos`.
-    while (Math.floor(pos) + 1 < queue.length) {
+    // Emit while the right interpolation neighbour (index floor(pos)+1) is
+    // still inside this chunk; the left may be `prev` when floor(pos) === -1.
+    while (Math.floor(pos) + 1 <= len - 1) {
       var i = Math.floor(pos);
       var frac = pos - i;
-      out.push(queue[i] * (1 - frac) + queue[i + 1] * frac);
+      var left = i < 0 ? prev : input[i];
+      out.push(left * (1 - frac) + input[i + 1] * frac);
       pos += ratio;
     }
 
-    // Drop fully-consumed samples, keep the fractional remainder + the last
-    // sample still needed as the left interpolation point next time.
-    var consumed = Math.floor(pos);
-    if (consumed > 0) {
-      queue.splice(0, consumed);
-      pos -= consumed;
-    }
-    state.pos = pos;
+    // Carry across the seam: the next chunk's index 0 is this chunk's index
+    // `len`, so shift the cursor back by `len` and remember the last sample.
+    state.prev = input[len - 1];
+    state.pos = pos - len;
     return new Float32Array(out);
   }
 

@@ -137,11 +137,12 @@ ok("resample 48k→16k decimates a ramp by ~3 with linear interpolation", () => 
   const input = new Float32Array(96); // 2 ms @ 48k
   for (let i = 0; i < input.length; i++) input[i] = i; // ramp 0..95
   const out = A.resample(st, input);
-  // ~96/3 = 32 output samples, first is input[0], then step of 3.
-  assert.ok(Math.abs(out.length - 32) <= 1, `len ${out.length}`);
+  // 96 input / ratio 3 = exactly 32 output samples: positions 0,3,6,…,93.
+  assert.equal(out.length, 32);
   assert.equal(out[0], 0);
   assert.equal(out[1], 3);
   assert.equal(out[2], 6);
+  assert.equal(out[31], 93);
 });
 
 ok("resample holds a constant signal exactly", () => {

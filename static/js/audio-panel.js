@@ -32,8 +32,9 @@
   // resampled to this rate before encoding, so op.mic stays 16 kHz on the wire.
   var MIC_RATE = 16000;
 
-  // 20 ms at 16 kHz mono = 320 samples.
-  var MIC_SAMPLES_PER_FRAME = 320;
+  // Samples per 20 ms Opus frame at MIC_RATE (16 kHz → 320). Derived from
+  // MIC_RATE so the two can never silently diverge.
+  var MIC_SAMPLES_PER_FRAME = (MIC_RATE * 20) / 1000;
 
   // How long to suppress duplicate "not_locked" toasts (ms).
   var NOT_LOCKED_SUPPRESS_MS = 5000;
