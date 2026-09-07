@@ -27,8 +27,15 @@
   // Mic encoder target bitrate (bps).
   var MIC_BITRATE = 16000;
 
-  // 20 ms at 16 kHz mono = 320 samples.
-  var MIC_SAMPLES_PER_FRAME = 320;
+  // Mic encode + wire rate (Hz). The mic is CAPTURED at the context's native
+  // rate (Firefox won't cross sample rates in createMediaStreamSource) and
+  // resampled to this rate before encoding, so op.mic stays 16 kHz on the wire.
+  var MIC_RATE = 16000;
+
+  // Samples per 20 ms Opus frame at MIC_RATE (16 kHz → 320). Derived from
+  // MIC_RATE so the two can never silently diverge; rounded to stay an integer
+  // sample count even if MIC_RATE is ever set to a value not divisible by 50.
+  var MIC_SAMPLES_PER_FRAME = Math.round((MIC_RATE * 20) / 1000);
 
   // How long to suppress duplicate "not_locked" toasts (ms).
   var NOT_LOCKED_SUPPRESS_MS = 5000;
@@ -108,7 +115,9 @@
       _txSent: 0,               // raw frames actually put on the wire (→ micTx.sent)
       _txLastReason: "",        // last uplink decision, to detect reason changes
       _micEncoder: null,        // AudioEncoder
-      _micRate: 16000,          // actual mic context sample rate
+      _micRate: 16000,          // native mic context sample rate (capture rate)
+      _micResampler: null,      // A.makeResampler state: _micRate → MIC_RATE
+      _micInTs: 0,              // monotonic 16 kHz sample clock for AudioData ts
       _micSeq: 0,
       _micTs: 0,
       _micPrevKeyed: false,     // to detect unkeyed→keyed edge for mic_open/close
@@ -784,12 +793,15 @@
           return;
         }
 
-        // Dedicated 16 kHz capture context — WebCodecs AudioEncoder does NOT
-        // resample, so the mic must be captured at the encoder's rate.
+        // Capture at the context's NATIVE rate — do NOT force 16 kHz. Firefox
+        // refuses createMediaStreamSource across sample rates (Chrome auto-
+        // resamples), so a forced-16 kHz context throws there. Instead we take
+        // whatever the platform gives (usually 48 kHz) and resample the PCM to
+        // MIC_RATE in JS before the encoder (see _onMicChunk).
         var AudioContext = window.AudioContext || window.webkitAudioContext;
         var micCtx;
         try {
-          micCtx = new AudioContext({ sampleRate: 16000 });
+          micCtx = new AudioContext();
         } catch (_) {
           // Fall back to the main context only if the constructor throws.
           micCtx = this._audioCtx;
@@ -798,20 +810,11 @@
           this.micError = "Microphone unavailable: no audio context";
           return;
         }
-        if (micCtx.sampleRate !== 16000) {
-          this.micError =
-            "Microphone unavailable: 16 kHz capture unsupported (got " +
-            micCtx.sampleRate +
-            " Hz)";
-          if (micCtx !== this._audioCtx) {
-            try {
-              micCtx.close();
-            } catch (_) {}
-          }
-          return;
-        }
         this._micCtx = micCtx;
         this._micRate = micCtx.sampleRate;
+        // Streaming resampler from the native capture rate to the wire rate.
+        this._micResampler = A.makeResampler(this._micRate, MIC_RATE);
+        this._micInTs = 0;
 
         // Load the worklet on the mic context; on failure, bail cleanly.
         micCtx.audioWorklet
@@ -875,7 +878,7 @@
             // prefer VOIP + in-band FEC if supported, else baseline.
             var baseConfig = {
               codec: "opus",
-              sampleRate: self._micRate,
+              sampleRate: MIC_RATE,
               numberOfChannels: 1,
               bitrate: MIC_BITRATE,
             };
@@ -1028,16 +1031,27 @@
         this._refreshTxDiag();
         if (!this._micEncoder || !this.micEnabled) return;
 
-        // Build an AudioData for the encoder at the mic context's actual rate.
+        // Resample the native-rate capture chunk to MIC_RATE (the encoder/wire
+        // rate). At a 16 kHz-native context this is a passthrough. Skip empty
+        // outputs (a chunk may not yield a full output sample every time).
+        var pcm =
+          this._micRate === MIC_RATE
+            ? float32Chunk
+            : A.resample(this._micResampler, float32Chunk);
+        if (!pcm.length) return;
+
+        // Build an AudioData for the encoder at the wire rate. The timestamp is
+        // a monotonic 16 kHz input clock, independent of the encoder-output ts.
         try {
           var data = new window.AudioData({
             format: "f32",
-            sampleRate: this._micRate,
+            sampleRate: MIC_RATE,
             numberOfChannels: 1,
-            numberOfFrames: float32Chunk.length,
-            timestamp: Math.round((this._micTs / this._micRate) * 1e6),
-            data: float32Chunk,
+            numberOfFrames: pcm.length,
+            timestamp: Math.round((this._micInTs / MIC_RATE) * 1e6),
+            data: pcm,
           });
+          this._micInTs += pcm.length;
           this._micEncoder.encode(data);
           data.close();
         } catch (e) {
@@ -1227,6 +1241,8 @@
           } catch (_) {}
         }
         this._micCtx = null;
+        this._micResampler = null;
+        this._micInTs = 0;
 
         this.micEnabled = false;
         this._micPrevKeyed = false;
@@ -1259,9 +1275,9 @@
 
       _updateSidetone: function () {
         // Sidetone is a browser-local monitor path. The mic ENCODE path lives on
-        // _micCtx (16 kHz capture context). Web Audio nodes cannot connect across
-        // contexts, so the sidetone monitor is built on the MAIN _audioCtx using
-        // a separate MediaStreamAudioSourceNode fed by the same _micStream
+        // _micCtx (native-rate capture context). Web Audio nodes cannot connect
+        // across contexts, so the sidetone monitor is built on the MAIN _audioCtx
+        // using a separate MediaStreamAudioSourceNode fed by the same _micStream
         // (sharing a MediaStream across contexts is allowed; sharing nodes is not).
         if (!this._micStream || !this._audioCtx) return;
 

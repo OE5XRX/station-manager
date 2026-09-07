@@ -131,6 +131,59 @@ ok("micLevelFromRms rejects garbage / negative / non-finite input", () => {
   assert.equal(A.micLevelFromRms("0.2"), 0); // strings are not accepted
 });
 
+// --- streaming resampler --------------------------------------------------
+ok("resample 48k→16k decimates a ramp by ~3 with linear interpolation", () => {
+  const st = A.makeResampler(48000, 16000); // ratio 3
+  const input = new Float32Array(96); // 2 ms @ 48k
+  for (let i = 0; i < input.length; i++) input[i] = i; // ramp 0..95
+  const out = A.resample(st, input);
+  // 96 input / ratio 3 = exactly 32 output samples: positions 0,3,6,…,93.
+  assert.equal(out.length, 32);
+  assert.equal(out[0], 0);
+  assert.equal(out[1], 3);
+  assert.equal(out[2], 6);
+  assert.equal(out[31], 93);
+});
+
+ok("resample holds a constant signal exactly", () => {
+  const st = A.makeResampler(48000, 16000);
+  const input = new Float32Array(48).fill(0.5);
+  const out = A.resample(st, input);
+  for (let i = 0; i < out.length; i++) {
+    assert.ok(Math.abs(out[i] - 0.5) < 1e-6, `sample ${i}=${out[i]}`);
+  }
+});
+
+ok("resample is phase-continuous across chunk boundaries", () => {
+  // Resampling [a, b] as two streamed chunks must equal resampling a+b whole.
+  const whole = new Float32Array(240);
+  for (let i = 0; i < whole.length; i++) whole[i] = Math.sin(i / 5);
+
+  const one = A.resample(A.makeResampler(48000, 16000), whole);
+
+  const st = A.makeResampler(48000, 16000);
+  const partA = A.resample(st, whole.slice(0, 130));
+  const partB = A.resample(st, whole.slice(130));
+  const streamed = new Float32Array(partA.length + partB.length);
+  streamed.set(partA, 0);
+  streamed.set(partB, partA.length);
+
+  assert.equal(streamed.length, one.length);
+  for (let i = 0; i < one.length; i++) {
+    assert.ok(Math.abs(one[i] - streamed[i]) < 1e-6, `mismatch at ${i}`);
+  }
+});
+
+ok("resample ratio 1 (16k→16k) passes samples through in order", () => {
+  const st = A.makeResampler(16000, 16000);
+  const a = A.resample(st, new Float32Array([1, 2, 3, 4]));
+  const b = A.resample(st, new Float32Array([5, 6]));
+  const all = [...a, ...b];
+  // Continuous linear interp at ratio 1 reproduces the input sequence
+  // (it lags at most one sample at the tail waiting for the next chunk).
+  assert.deepEqual(all.slice(0, 5), [1, 2, 3, 4, 5]);
+});
+
 // --- seq math (u16 wrap) ---------------------------------------------------
 ok("seqDelta wrap-aware", () => {
   assert.equal(A.seqDelta(10, 11), 1);

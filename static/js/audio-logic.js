@@ -281,6 +281,67 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Streaming resampler (linear interpolation)
+  // ---------------------------------------------------------------------------
+
+  /* Create a streaming linear-interpolation resampler from srcRate → dstRate.
+     Firefox refuses to connect a MediaStreamSource into an AudioContext of a
+     different sample rate (it does not resample; Chrome does), so the mic must
+     be captured at the context's NATIVE rate and downsampled to the encoder's
+     16 kHz in JS. This state carries phase across successive resample() calls,
+     so there are no clicks at chunk boundaries.
+
+     Linear interpolation is adequate for narrow-band voice (FM ~300–3400 Hz);
+     it is NOT a brick-wall anti-alias filter. getUserMedia's own processing
+     already limits high-frequency content, so residual aliasing is negligible
+     for speech. */
+  function makeResampler(srcRate, dstRate) {
+    return {
+      ratio: srcRate / dstRate, // input samples consumed per output sample
+      pos: 0, // fractional read cursor in the current chunk's index space
+      prev: 0, // previous chunk's last sample (virtual index -1 of this chunk)
+    };
+  }
+
+  /* Push one input chunk through the resampler; returns a Float32Array of
+     output samples at dstRate. Mutates `state`. Phase-continuous: feeding
+     [a] then [b] yields the same stream as feeding [a concat b].
+
+     No growing queue / splice — only one carried sample (`prev`) plus a
+     fractional cursor, so there is no per-chunk buffer compaction. Index -1
+     of the current chunk refers to `prev`, so the cursor may start slightly
+     negative to interpolate across the chunk seam. */
+  function resample(state, input) {
+    var len = input.length;
+    if (len === 0) return new Float32Array(0);
+
+    var ratio = state.ratio;
+    var pos = state.pos;
+    var prev = state.prev;
+
+    // Write straight into a pre-sized Float32Array (no per-sample Array.push +
+    // re-box) — this runs every 20 ms on the mic path. Capacity is a safe upper
+    // bound on the output count; the filled prefix is returned as a subarray.
+    var out = new Float32Array(Math.ceil(len / ratio) + 2);
+    var n = 0;
+    // Emit while the right interpolation neighbour (index floor(pos)+1) is
+    // still inside this chunk; the left may be `prev` when floor(pos) === -1.
+    while (Math.floor(pos) + 1 <= len - 1) {
+      var i = Math.floor(pos);
+      var frac = pos - i;
+      var left = i < 0 ? prev : input[i];
+      out[n++] = left * (1 - frac) + input[i + 1] * frac;
+      pos += ratio;
+    }
+
+    // Carry across the seam: the next chunk's index 0 is this chunk's index
+    // `len`, so shift the cursor back by `len` and remember the last sample.
+    state.prev = input[len - 1];
+    state.pos = pos - len;
+    return out.subarray(0, n);
+  }
+
+  // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
 
@@ -465,6 +526,10 @@
     // Uplink coupling
     micWantsUplink: micWantsUplink,
     micLevelFromRms: micLevelFromRms,
+
+    // Resampling
+    makeResampler: makeResampler,
+    resample: resample,
 
     // Seq math
     seqDelta: seqDelta,
