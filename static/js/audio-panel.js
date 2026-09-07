@@ -33,8 +33,9 @@
   var MIC_RATE = 16000;
 
   // Samples per 20 ms Opus frame at MIC_RATE (16 kHz → 320). Derived from
-  // MIC_RATE so the two can never silently diverge.
-  var MIC_SAMPLES_PER_FRAME = (MIC_RATE * 20) / 1000;
+  // MIC_RATE so the two can never silently diverge; rounded to stay an integer
+  // sample count even if MIC_RATE is ever set to a value not divisible by 50.
+  var MIC_SAMPLES_PER_FRAME = Math.round((MIC_RATE * 20) / 1000);
 
   // How long to suppress duplicate "not_locked" toasts (ms).
   var NOT_LOCKED_SUPPRESS_MS = 5000;

@@ -319,14 +319,18 @@
     var pos = state.pos;
     var prev = state.prev;
 
-    var out = [];
+    // Write straight into a pre-sized Float32Array (no per-sample Array.push +
+    // re-box) — this runs every 20 ms on the mic path. Capacity is a safe upper
+    // bound on the output count; the filled prefix is returned as a subarray.
+    var out = new Float32Array(Math.ceil(len / ratio) + 2);
+    var n = 0;
     // Emit while the right interpolation neighbour (index floor(pos)+1) is
     // still inside this chunk; the left may be `prev` when floor(pos) === -1.
     while (Math.floor(pos) + 1 <= len - 1) {
       var i = Math.floor(pos);
       var frac = pos - i;
       var left = i < 0 ? prev : input[i];
-      out.push(left * (1 - frac) + input[i + 1] * frac);
+      out[n++] = left * (1 - frac) + input[i + 1] * frac;
       pos += ratio;
     }
 
@@ -334,7 +338,7 @@
     // `len`, so shift the cursor back by `len` and remember the last sample.
     state.prev = input[len - 1];
     state.pos = pos - len;
-    return new Float32Array(out);
+    return out.subarray(0, n);
   }
 
   // ---------------------------------------------------------------------------
