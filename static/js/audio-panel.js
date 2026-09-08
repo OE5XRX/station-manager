@@ -506,13 +506,17 @@
         // encoder-sourced (burstier) so it gets a deeper buffer than the
         // steady-cadence RX streams (see jitterDepthFor).
         var depth = A.jitterDepthFor(entry);
+        // Buffer ahead by the full jitter depth (20 ms/frame). Used both to seed
+        // the initial playhead AND to re-prime after an underrun (see below).
+        var bufferAhead = depth * 0.02;
         // Playhead: scheduled time for next chunk. Seed the initial buffer to
         // the buffer depth so a deeper jitter buffer also starts further ahead.
         this._streamCtx[streamId] = {
           decoder: decoder,
           jitter: A.createJitter({ depth: depth }),
           gainNode: gainNode,
-          playhead: audioCtx.currentTime + depth * 0.02,
+          playhead: audioCtx.currentTime + bufferAhead,
+          bufferAhead: bufferAhead,
           sampleRate: sampleRate,
           channels: channels,
           stats: A.makeLinkStats(),
@@ -572,9 +576,12 @@
         // Schedule for gapless playback.
         var now = audioCtx.currentTime;
         if (ctx.playhead < now) {
-          // We fell behind — reset to now + small buffer. This is an audible
-          // discontinuity, so record it as an underrun (the key stutter signal).
-          ctx.playhead = now + 0.02;
+          // We fell behind — re-prime with a FULL buffer-depth ahead (not just
+          // one frame). After a re-key the playhead is stale from the silent
+          // gap; a thin reset would still race for several frames (audible
+          // start-up flutter), whereas re-priming to the full depth re-settles
+          // in one step. Record the underrun (the key stutter signal).
+          ctx.playhead = now + (ctx.bufferAhead || 0.02);
           if (ctx.stats) {
             A.linkRecord(ctx.stats, "underrun", { tMs: this._nowMs() });
           }
