@@ -60,9 +60,13 @@ _WRITE_TIMEOUT = 2.0
 # the link has been silent for _BOOT_QUIET seconds — but never wait longer than _BOOT_MAX.
 _BOOT_QUIET = 0.3
 _BOOT_MAX = 2.5
+# Between `module list` retries: let the module's async log/status burst pass, then re-drain.
+_LIST_RETRY_SETTLE = 0.3
 
 
-def probe_slot(control_path: str, timeout: float = 3.0, trace: bool = False) -> list[dict] | None:
+def probe_slot(
+    control_path: str, timeout: float = 3.0, trace: bool = False, list_retries: int = 3
+) -> list[dict] | None:
     """Enumerate + describe every module reachable on a slot's control serial.
 
     Sends ``module list`` then ``module <id> describe`` for each reported id, over a
@@ -91,7 +95,25 @@ def probe_slot(control_path: str, timeout: float = 3.0, trace: bool = False) -> 
 
         deadline = time.monotonic() + timeout
 
-        listing = _command(ser, _LIST_CMD, _LIST_PREFIX, deadline, control_path, trace=trace)
+        # `module list` can arrive corrupted when an async Zephyr log/status line is spliced
+        # into its MODULE-LIST payload (the JSON on that line then fails to parse). Retry a
+        # few times, re-draining between attempts to absorb the periodic status burst — a
+        # single race must never leave a present module undiscovered.
+        # Give each attempt a fair slice of the total budget so a single failed attempt
+        # cannot exhaust the entire deadline before the retry fires.
+        n_attempts = max(1, list_retries)
+        attempt_budget = timeout / n_attempts
+        listing = None
+        for attempt in range(n_attempts):
+            if attempt > 0:
+                time.sleep(_LIST_RETRY_SETTLE)
+                _drain_until_quiet(ser, _BOOT_QUIET, _BOOT_MAX)
+            attempt_deadline = min(deadline, time.monotonic() + attempt_budget)
+            listing = _command(ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace)
+            if listing is not None:
+                break
+            if time.monotonic() >= deadline:
+                break
         if listing is None:
             logger.debug("slot probe: no MODULE-LIST from %s", control_path)
             return None

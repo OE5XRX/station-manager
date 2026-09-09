@@ -292,3 +292,105 @@ def test_command_short_write_fails_closed():
         _ShortWriteSerial(), b"module list\r\n", "MODULE-LIST ", deadline, "/dev/x"
     )
     assert result is None
+
+
+def _fake_firmware_flaky_list(master_fd, stop, describe, fail_first=1):
+    """Answers the first `fail_first` `module list` commands with a MODULE-LIST line
+    that has an async log line spliced INTO its JSON payload (so json.loads fails on
+    that line), then answers cleanly. `module <id> describe` always answers cleanly."""
+    os.set_blocking(master_fd, False)
+
+    def w(s: str):
+        try:
+            os.write(master_fd, s.encode())
+        except (BlockingIOError, OSError):
+            pass
+
+    seen = 0
+    buf = b""
+    while not stop.is_set():
+        try:
+            chunk = os.read(master_fd, 1024)
+        except BlockingIOError:
+            time.sleep(0.005)
+            continue
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            line = line.strip()
+            if _LIST_RE.search(line):
+                if seen < fail_first:
+                    seen += 1
+                    # A Zephyr log line spliced into the middle of the MODULE-LIST payload:
+                    w('MODULE-LIST {"mod')
+                    w("[00:00:01.234] <inf> fm: periodic status\r\n")
+                    w('ules":["fm"]}\r\n')
+                    w("fm> ")
+                else:
+                    w('MODULE-LIST {"modules":["fm"]}\r\n')
+                    w("fm> ")
+                continue
+            m = _DESCRIBE_RE.search(line)
+            if m:
+                w("MODULE-DESCRIBE " + json.dumps(describe) + "\r\n")
+                w("fm> ")
+
+
+def test_probe_slot_retries_after_corrupted_list(tmp_path):
+    master_fd, slave_fd = os.openpty()
+    stop = threading.Event()
+    t = threading.Thread(
+        target=_fake_firmware_flaky_list, args=(master_fd, stop, FM_DESCRIBE, 1), daemon=True
+    )
+    t.start()
+    try:
+        link = tmp_path / "control"
+        link.symlink_to(os.ttyname(slave_fd))
+        modules = slot_discovery.probe_slot(str(link), timeout=3.0, list_retries=3)
+    finally:
+        stop.set()
+        os.close(master_fd)
+        os.close(slave_fd)
+        t.join(timeout=1)
+    assert modules is not None
+    assert [m["id"] for m in modules] == ["fm"]
+
+
+def test_probe_slot_ignores_async_status_lines(tmp_path):
+    # Firmware emits a periodic status line, THEN the MODULE-LIST on the same read.
+    def fw(master_fd, stop):
+        os.set_blocking(master_fd, False)
+        buf = b""
+        while not stop.is_set():
+            try:
+                chunk = os.read(master_fd, 1024)
+            except BlockingIOError:
+                time.sleep(0.005); continue
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if _LIST_RE.search(line.strip()):
+                    os.write(master_fd, b"03 Status - Power: ON, PTT: OFF, SQL: CLOSED\r\n")
+                    os.write(master_fd, b'MODULE-LIST {"modules":["fm"]}\r\n')
+                elif _DESCRIBE_RE.search(line.strip()):
+                    os.write(master_fd, ("MODULE-DESCRIBE " + json.dumps(FM_DESCRIBE) + "\r\n").encode())
+
+    master_fd, slave_fd = os.openpty()
+    stop = threading.Event()
+    t = threading.Thread(target=fw, args=(master_fd, stop), daemon=True)
+    t.start()
+    try:
+        link = tmp_path / "control"
+        link.symlink_to(os.ttyname(slave_fd))
+        modules = slot_discovery.probe_slot(str(link), timeout=2.0)
+    finally:
+        stop.set(); os.close(master_fd); os.close(slave_fd); t.join(timeout=1)
+    assert [m["id"] for m in modules] == ["fm"]
