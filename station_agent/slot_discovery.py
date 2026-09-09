@@ -62,6 +62,12 @@ _BOOT_QUIET = 0.3
 _BOOT_MAX = 2.5
 # Between `module list` retries: let the module's async log/status burst pass, then re-drain.
 _LIST_RETRY_SETTLE = 0.3
+# The between-retry drain is capped tightly (unlike the boot drain) to bound worst-case probe
+# time: a chatty FM console is exactly what triggers retries, so a long drain per retry would
+# defeat the point. _command's reset_input_buffer already drops stale bytes, so this drain only
+# needs to absorb the brief settle burst, not wait out the full boot-banner budget.
+_LIST_RETRY_DRAIN_QUIET = 0.15
+_LIST_RETRY_DRAIN_MAX = 0.3
 
 
 def probe_slot(
@@ -107,7 +113,7 @@ def probe_slot(
         for attempt in range(n_attempts):
             if attempt > 0:
                 time.sleep(_LIST_RETRY_SETTLE)
-                _drain_until_quiet(ser, _BOOT_QUIET, _BOOT_MAX)
+                _drain_until_quiet(ser, _LIST_RETRY_DRAIN_QUIET, _LIST_RETRY_DRAIN_MAX)
             attempt_deadline = min(deadline, time.monotonic() + attempt_budget)
             listing = _command(ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace)
             if listing is not None:
