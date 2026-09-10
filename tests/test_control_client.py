@@ -42,6 +42,7 @@ class _FakeConfig:
         self.control_dead_man_timeout = 1.5
         self.telemetry_default_interval_ms = 1000
         self.telemetry_min_floor_ms = 200
+        self.control_rediscovery_interval = 30.0
 
 
 def _gen_key(tmp_path):
@@ -116,6 +117,54 @@ def test_control_client_connects_sends_inventory_and_handles_command(tmp_path):
     assert received["result"]["ok"] is True and received["result"]["request_id"] == "c1"
     assert "frequency" in received["state"]["values"]
     assert fw.state["fm"]["frequency"] == "145.5"
+
+
+def test_control_client_rediscovers_and_reemits_inventory(tmp_path):
+    import os as _os
+
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    base = str(tmp_path / "oe5xrx")
+    _os.makedirs(base, exist_ok=True)  # empty at connect time
+    key_path = _gen_key(tmp_path)
+
+    inventories = []
+    second = asyncio.Event()
+
+    async def server(ws):
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg["type"] == "inventory":
+                inventories.append(msg)
+                if len(inventories) == 1:
+                    # After the first (empty) inventory, plug the module in.
+                    slot_dir = _os.path.join(base, "slot1")
+                    _os.makedirs(slot_dir, exist_ok=True)
+                    _os.symlink(fw.control_path, _os.path.join(slot_dir, "control"))
+                elif len(inventories) >= 2 and msg["slots"]:
+                    second.set()
+
+    async def scenario():
+        async with websockets.serve(server, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            cfg = _FakeConfig(f"http://127.0.0.1:{port}", 1, key_path, base)
+            cfg.control_rediscovery_interval = 0.5
+            client = ControlClient(cfg)
+            loop = asyncio.get_running_loop()
+            t = loop.run_in_executor(None, client.run)
+            try:
+                await asyncio.wait_for(second.wait(), timeout=10.0)
+            finally:
+                client.stop()
+                await asyncio.wait_for(t, timeout=5.0)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        fw.stop()
+
+    assert inventories[0]["slots"] == []
+    assert any(s["slot"] == 1 for s in inventories[-1]["slots"])
 
 
 def test_ws_send_on_closed_connection_does_not_raise(tmp_path):

@@ -58,3 +58,16 @@ def test_control_enabled_from_yaml(tmp_path, monkeypatch):
     assert cfg.control_dead_man_timeout == 2.0
     assert cfg.telemetry_default_interval_ms == 500
     assert cfg.telemetry_min_floor_ms == 100
+
+
+def test_control_rediscovery_interval_default_and_override(tmp_path, monkeypatch):
+    from station_agent.config import CONFIG_PATH_ENV, load_config
+
+    p = tmp_path / "c.yml"
+    p.write_text(
+        "server_url: http://x\nstation_id: 1\ned25519_key_path: /k.pem\n"
+        "control_rediscovery_interval: 5.0\n"
+    )
+    monkeypatch.setenv(CONFIG_PATH_ENV, str(p))
+    cfg = load_config()
+    assert cfg.control_rediscovery_interval == 5.0

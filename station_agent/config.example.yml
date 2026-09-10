@@ -34,6 +34,9 @@ slot_command_timeout: 5.0
 # Telemetry subscription: default poll interval and the hard floor (ms).
 telemetry_default_interval_ms: 1000
 telemetry_min_floor_ms: 200
+# Control re-discovery: re-scan slots every N seconds and re-emit inventory if it changed.
+# Recovers a module that lost the startup discovery race (or was hot-plugged). 0 disables.
+control_rediscovery_interval: 30.0
 
 # Audio subsystem (Session B). Off by default; needs the audio-capable image
 # (PipeWire + WirePlumber + GStreamer). Streams FM RX to the browser and injects
