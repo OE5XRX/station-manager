@@ -30,5 +30,7 @@ def audio_path_present(config, backend=None) -> bool:
         logger.debug("audio detect: backend.list_audio_slots() failed", exc_info=True)
         return False
     present = bool(slots)
-    logger.info("audio detect: audio path %s (slots=%s)", "present" if present else "absent", slots)
+    logger.info(
+        "audio detect: audio path %s (slots=%s)", "present" if present else "absent", slots
+    )
     return present

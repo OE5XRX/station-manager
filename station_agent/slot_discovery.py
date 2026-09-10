@@ -122,7 +122,9 @@ def probe_slot(
                 if drain_max > 0:
                     _drain_until_quiet(ser, min(_LIST_RETRY_DRAIN_QUIET, drain_max), drain_max)
             attempt_deadline = min(deadline, time.monotonic() + attempt_budget)
-            listing = _command(ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace)
+            listing = _command(
+                ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace
+            )
             if listing is not None:
                 break
             if time.monotonic() >= deadline:

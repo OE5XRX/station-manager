@@ -369,7 +369,8 @@ def test_probe_slot_ignores_async_status_lines(tmp_path):
             try:
                 chunk = os.read(master_fd, 1024)
             except BlockingIOError:
-                time.sleep(0.005); continue
+                time.sleep(0.005)
+                continue
             except OSError:
                 break
             if not chunk:
@@ -381,7 +382,9 @@ def test_probe_slot_ignores_async_status_lines(tmp_path):
                     os.write(master_fd, b"03 Status - Power: ON, PTT: OFF, SQL: CLOSED\r\n")
                     os.write(master_fd, b'MODULE-LIST {"modules":["fm"]}\r\n')
                 elif _DESCRIBE_RE.search(line.strip()):
-                    os.write(master_fd, ("MODULE-DESCRIBE " + json.dumps(FM_DESCRIBE) + "\r\n").encode())
+                    os.write(
+                        master_fd, ("MODULE-DESCRIBE " + json.dumps(FM_DESCRIBE) + "\r\n").encode()
+                    )
 
     master_fd, slave_fd = os.openpty()
     stop = threading.Event()
@@ -392,5 +395,8 @@ def test_probe_slot_ignores_async_status_lines(tmp_path):
         link.symlink_to(os.ttyname(slave_fd))
         modules = slot_discovery.probe_slot(str(link), timeout=2.0)
     finally:
-        stop.set(); os.close(master_fd); os.close(slave_fd); t.join(timeout=1)
+        stop.set()
+        os.close(master_fd)
+        os.close(slave_fd)
+        t.join(timeout=1)
     assert [m["id"] for m in modules] == ["fm"]

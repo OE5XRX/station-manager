@@ -63,8 +63,7 @@ def test_legacy_control_enabled_key_is_ignored(tmp_path, monkeypatch):
 
     p = tmp_path / "c.yml"
     p.write_text(
-        "server_url: http://x\nstation_id: 1\ned25519_key_path: /k.pem\n"
-        "control_enabled: true\n"
+        "server_url: http://x\nstation_id: 1\ned25519_key_path: /k.pem\ncontrol_enabled: true\n"
     )
     monkeypatch.setenv(CONFIG_PATH_ENV, str(p))
     cfg = load_config()
