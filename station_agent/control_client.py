@@ -138,6 +138,8 @@ class ControlClient:
                     await rediscovery
                 except asyncio.CancelledError:
                     pass
+                except Exception:  # noqa: BLE001 — a re-discovery error must never skip cleanup
+                    logger.exception("Control: re-discovery task errored during shutdown")
                 await broker.on_disconnect()
                 self._ws = None
 

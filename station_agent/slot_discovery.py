@@ -112,8 +112,15 @@ def probe_slot(
         listing = None
         for attempt in range(n_attempts):
             if attempt > 0:
-                time.sleep(_LIST_RETRY_SETTLE)
-                _drain_until_quiet(ser, _LIST_RETRY_DRAIN_QUIET, _LIST_RETRY_DRAIN_MAX)
+                # Bound the inter-retry settle + re-drain by the remaining budget so
+                # probe_slot keeps honoring `timeout` even as list_retries grows.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(_LIST_RETRY_SETTLE, remaining))
+                drain_max = min(_LIST_RETRY_DRAIN_MAX, max(0.0, deadline - time.monotonic()))
+                if drain_max > 0:
+                    _drain_until_quiet(ser, min(_LIST_RETRY_DRAIN_QUIET, drain_max), drain_max)
             attempt_deadline = min(deadline, time.monotonic() + attempt_budget)
             listing = _command(ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace)
             if listing is not None:
