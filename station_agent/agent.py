@@ -450,10 +450,16 @@ class StationAgent:
         else:
             logger.info("Remote terminal disabled")
 
+        # Audio auto-on (interim): enable audio when a discovered slot exposes an audio path,
+        # not from a config flag. TODO(FW-describe): switch to the `audio` capability later.
+        from .audio.detect import audio_path_present
+
+        audio_present = audio_path_present(config)
+
         # Build the audio-router virtual control-plane module (Spec 0 §5.6) when audio is on,
         # so the control inventory advertises audio streams + the tx_route capability.
         audio_router_module = None
-        if config.audio_enabled:
+        if audio_present:
             from .audio.router_backend import PipeWireRouterBackend
             from .audio.router_module import AudioRouterModule
             from .audio.streams import StreamRegistry
@@ -469,33 +475,24 @@ class StationAgent:
                 slot=config.audio_router_slot, list_streams=_list_audio_streams
             )
 
-        # Start control client in a background thread if enabled
+        # Control channel always runs — server_url is a required config field, so a station
+        # that talks to the server always exposes its control plane. (No control_enabled flag.)
         control_client = None
         control_thread = None
-        if config.control_enabled:
-            # Local import inside the enabled branch: stations with the control
-            # channel off never import ControlClient (and its websockets dep).
-            from .control_client import ControlClient
+        from .control_client import ControlClient
 
-            logger.info("Control channel enabled")
-            virtual = [audio_router_module] if audio_router_module is not None else None
-            control_client = ControlClient(config, virtual_modules=virtual)
-            control_thread = threading.Thread(
-                target=control_client.run, name="control-client", daemon=True
-            )
-            control_thread.start()
-        else:
-            logger.info("Control channel disabled")
-            if config.audio_enabled:
-                logger.warning(
-                    "Audio enabled but control channel disabled — the audio-router will not "
-                    "appear on the control-plane (Spec 0 §5.6 needs the control channel)."
-                )
+        logger.info("Control channel enabled")
+        virtual = [audio_router_module] if audio_router_module is not None else None
+        control_client = ControlClient(config, virtual_modules=virtual)
+        control_thread = threading.Thread(
+            target=control_client.run, name="control-client", daemon=True
+        )
+        control_thread.start()
 
         # Start audio client in a background thread if enabled
         audio_client = None
         audio_thread = None
-        if config.audio_enabled:
+        if audio_present:
             from .audio.bridge_factory import BridgeFactory
             from .audio.ws_client import AudioClient
 

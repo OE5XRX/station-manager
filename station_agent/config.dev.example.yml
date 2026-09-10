@@ -8,4 +8,3 @@ log_level: DEBUG
 trace_serial: true
 heartbeat_interval: 15
 slot_discovery_enabled: true
-control_enabled: true

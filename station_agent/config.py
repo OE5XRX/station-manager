@@ -29,7 +29,6 @@ class AgentConfig:
     slot_discovery_enabled: bool = True
     slot_dev_base: str = "/dev/oe5xrx"
     trace_serial: bool = False
-    control_enabled: bool = False
     control_dead_man_timeout: float = 1.5
     # Whole-command slot round-trip budget. Must exceed the module's worst-case
     # firmware timeout (SA818 AT ~2 s) so a real device error surfaces as itself
@@ -37,9 +36,11 @@ class AgentConfig:
     slot_command_timeout: float = 5.0
     telemetry_default_interval_ms: int = 1000
     telemetry_min_floor_ms: int = 200
-    # Audio subsystem (Session B). Off by default; needs the audio-capable image (PipeWire +
-    # GStreamer) on the target. The runtime shells out to gst-launch/pw-*/wpctl — no new deps.
-    audio_enabled: bool = False
+    # Control channel re-discovery: re-scan slots this often (s) and re-emit inventory if it
+    # changed. A single startup race that yielded an empty inventory recovers on the next scan.
+    control_rediscovery_interval: float = 30.0
+    # Audio subsystem parameters. Audio hardware is auto-detected at runtime (no flag needed).
+    # These values parametrize the audio engine when audio hardware is present.
     audio_rx_rate: int = 8000  # FM module native (8 kHz NB); op.mic uplink is 16 kHz WB
     audio_mic_rate: int = 16000
     audio_udp_port_base: int = 47000
@@ -99,12 +100,11 @@ def load_config() -> AgentConfig:
         slot_discovery_enabled=bool(data.get("slot_discovery_enabled", True)),
         slot_dev_base=str(data.get("slot_dev_base", "/dev/oe5xrx")),
         trace_serial=bool(data.get("trace_serial", False)),
-        control_enabled=bool(data.get("control_enabled", False)),
         control_dead_man_timeout=float(data.get("control_dead_man_timeout", 1.5)),
         slot_command_timeout=float(data.get("slot_command_timeout", 5.0)),
         telemetry_default_interval_ms=int(data.get("telemetry_default_interval_ms", 1000)),
         telemetry_min_floor_ms=int(data.get("telemetry_min_floor_ms", 200)),
-        audio_enabled=bool(data.get("audio_enabled", False)),
+        control_rediscovery_interval=float(data.get("control_rediscovery_interval", 30.0)),
         audio_rx_rate=int(data.get("audio_rx_rate", 8000)),
         audio_mic_rate=int(data.get("audio_mic_rate", 16000)),
         audio_udp_port_base=int(data.get("audio_udp_port_base", 47000)),

@@ -119,6 +119,7 @@ class ControlClient:
             await broker.emit_inventory()
             logger.info("Control: connected, inventory sent")
 
+            rediscovery = loop.create_task(self._rediscovery_loop(broker, loop, discovered))
             try:
                 async for message in ws:
                     if self._shutdown.is_set():
@@ -132,8 +133,48 @@ class ControlClient:
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.info("Control: WebSocket closed (code=%s)", exc.code)
             finally:
+                rediscovery.cancel()
+                try:
+                    await rediscovery
+                except asyncio.CancelledError:
+                    pass
+                except Exception:  # noqa: BLE001 — a re-discovery error must never skip cleanup
+                    logger.exception("Control: re-discovery task errored during shutdown")
                 await broker.on_disconnect()
                 self._ws = None
+
+    async def _rediscovery_loop(self, broker, loop, last_discovered) -> None:
+        """Periodically re-scan slots; if the inventory changed, re-emit it.
+
+        A single startup race can yield an empty inventory (the FM console interleaves async
+        logs into the MODULE-LIST reply). Discovery must not be a one-shot: re-scan on an
+        interval and push a fresh inventory whenever it differs from what we last sent, so a
+        module that lost the race — or is hot-plugged — comes online without a reconnect.
+        """
+        interval = getattr(self._config, "control_rediscovery_interval", 30.0)
+        if interval <= 0:
+            return
+        enabled = getattr(self._config, "slot_discovery_enabled", True)
+        trace = getattr(self._config, "trace_serial", False)
+        while not self._shutdown.is_set():
+            await asyncio.sleep(interval)
+            if self._shutdown.is_set() or self._ws is None:
+                return
+            if not enabled:
+                continue
+            try:
+                discovered = await loop.run_in_executor(
+                    None, lambda: discover_slots(self._config.slot_dev_base, trace=trace)
+                )
+            except Exception:  # noqa: BLE001 — re-discovery must never break the control link
+                logger.exception("Control: re-discovery failed; keeping current inventory")
+                continue
+            if discovered == last_discovered:
+                continue
+            logger.info("Control: inventory changed on re-discovery; re-emitting")
+            last_discovered = discovered
+            broker.set_inventory(discovered)
+            await broker.emit_inventory()
 
     async def _run_async(self) -> None:
         backoff = BACKOFF_INITIAL

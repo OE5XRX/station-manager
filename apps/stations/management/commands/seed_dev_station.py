@@ -67,4 +67,3 @@ class Command(BaseCommand):
         self.stdout.write("log_level: DEBUG")
         self.stdout.write("trace_serial: true")
         self.stdout.write("slot_discovery_enabled: true")
-        self.stdout.write("control_enabled: true")
