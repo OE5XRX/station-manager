@@ -39,9 +39,8 @@ class AgentConfig:
     # Control channel re-discovery: re-scan slots this often (s) and re-emit inventory if it
     # changed. A single startup race that yielded an empty inventory recovers on the next scan.
     control_rediscovery_interval: float = 30.0
-    # Audio subsystem (Session B). Off by default; needs the audio-capable image (PipeWire +
-    # GStreamer) on the target. The runtime shells out to gst-launch/pw-*/wpctl — no new deps.
-    audio_enabled: bool = False
+    # Audio subsystem parameters. Audio hardware is auto-detected at runtime (no flag needed).
+    # These values parametrize the audio engine when audio hardware is present.
     audio_rx_rate: int = 8000  # FM module native (8 kHz NB); op.mic uplink is 16 kHz WB
     audio_mic_rate: int = 16000
     audio_udp_port_base: int = 47000
@@ -106,7 +105,6 @@ def load_config() -> AgentConfig:
         telemetry_default_interval_ms=int(data.get("telemetry_default_interval_ms", 1000)),
         telemetry_min_floor_ms=int(data.get("telemetry_min_floor_ms", 200)),
         control_rediscovery_interval=float(data.get("control_rediscovery_interval", 30.0)),
-        audio_enabled=bool(data.get("audio_enabled", False)),
         audio_rx_rate=int(data.get("audio_rx_rate", 8000)),
         audio_mic_rate=int(data.get("audio_mic_rate", 16000)),
         audio_udp_port_base=int(data.get("audio_udp_port_base", 47000)),

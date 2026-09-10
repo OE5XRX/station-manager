@@ -62,29 +62,10 @@ class TestConfigRender:
         # carry the removed key.
         assert "control_enabled" not in yaml_text
 
-    def test_render_audio_enabled_defaults_off(self, station):
-        from apps.provisioning.config_render import render_config
-
-        # audio_enabled defaults to False in the agent AND at provisioning time — the
-        # audio engine only starts on stations explicitly flagged audio-capable.
-        yaml_text = render_config(server_url="https://ham.oe5xrx.org", station_id=station.id)
-        assert "audio_enabled: false" in yaml_text
-
-    def test_render_audio_enabled_can_be_turned_on(self, station):
-        from apps.provisioning.config_render import render_config
-
-        yaml_text = render_config(
-            server_url="https://ham.oe5xrx.org",
-            station_id=station.id,
-            audio_enabled=True,
-        )
-        assert "audio_enabled: true" in yaml_text
-
-    @pytest.mark.parametrize("enabled", [True, False])
-    def test_render_config_round_trips_through_agent_loader(self, station, tmp_path, enabled):
-        """End-to-end: the YAML render_config produces must parse back to a real Python
-        bool via the agent's own load_config (not a truthy string like 'false'). This
-        guards the provisioning → config.yml → agent boundary, not just the rendered text.
+    def test_render_config_round_trips_through_agent_loader(self, station, tmp_path):
+        """End-to-end: the YAML render_config produces must parse back via the agent's
+        own load_config. This guards the provisioning → config.yml → agent boundary.
+        audio_enabled must not appear in the rendered config (audio is auto-detected).
         """
         import os
 
@@ -94,8 +75,8 @@ class TestConfigRender:
         yaml_text = render_config(
             server_url="https://ham.oe5xrx.org",
             station_id=station.id,
-            audio_enabled=enabled,
         )
+        assert "audio_enabled" not in yaml_text
         cfg_path = tmp_path / "config.yml"
         cfg_path.write_text(yaml_text)
         old = os.environ.get(CONFIG_PATH_ENV)
@@ -107,7 +88,7 @@ class TestConfigRender:
                 os.environ.pop(CONFIG_PATH_ENV, None)
             else:
                 os.environ[CONFIG_PATH_ENV] = old
-        assert cfg.audio_enabled is enabled
+        assert not hasattr(cfg, "audio_enabled")
 
 
 @pytest.mark.skipif(shutil.which("guestfish") is None, reason="guestfish not installed")
