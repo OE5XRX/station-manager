@@ -29,7 +29,6 @@ class AgentConfig:
     slot_discovery_enabled: bool = True
     slot_dev_base: str = "/dev/oe5xrx"
     trace_serial: bool = False
-    control_enabled: bool = False
     control_dead_man_timeout: float = 1.5
     # Whole-command slot round-trip budget. Must exceed the module's worst-case
     # firmware timeout (SA818 AT ~2 s) so a real device error surfaces as itself
@@ -102,7 +101,6 @@ def load_config() -> AgentConfig:
         slot_discovery_enabled=bool(data.get("slot_discovery_enabled", True)),
         slot_dev_base=str(data.get("slot_dev_base", "/dev/oe5xrx")),
         trace_serial=bool(data.get("trace_serial", False)),
-        control_enabled=bool(data.get("control_enabled", False)),
         control_dead_man_timeout=float(data.get("control_dead_man_timeout", 1.5)),
         slot_command_timeout=float(data.get("slot_command_timeout", 5.0)),
         telemetry_default_interval_ms=int(data.get("telemetry_default_interval_ms", 1000)),

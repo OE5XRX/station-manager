@@ -19,7 +19,6 @@ def render_config(*, server_url: str, station_id: int, audio_enabled: bool = Fal
         terminal_enabled: true
         terminal_shell: /bin/sh
         bootloader: auto
-        control_enabled: true
         audio_enabled: {audio_flag}
         """
     )

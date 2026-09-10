@@ -23,8 +23,6 @@ bootloader: auto
 slot_discovery_enabled: true
 slot_dev_base: /dev/oe5xrx
 
-# Persistent control channel (D3 agent broker). Off by default.
-control_enabled: false
 # PTT dead-man: auto-unkey if no keepalive within this many seconds.
 control_dead_man_timeout: 1.5
 # Whole-command slot round-trip budget (s). Must exceed the module's worst-case
@@ -40,8 +38,8 @@ control_rediscovery_interval: 30.0
 
 # Audio subsystem (Session B). Off by default; needs the audio-capable image
 # (PipeWire + WirePlumber + GStreamer). Streams FM RX to the browser and injects
-# the browser mic into the module TX over the audio-WebSocket. When enabled together
-# with control_enabled, the audio-router appears as a virtual control-plane module.
+# the browser mic into the module TX over the audio-WebSocket. When audio is enabled,
+# the audio-router appears as a virtual control-plane module.
 audio_enabled: false
 audio_rx_rate: 8000    # FM module native (8 kHz NB)
 audio_mic_rate: 16000  # operator mic uplink (16 kHz WB)

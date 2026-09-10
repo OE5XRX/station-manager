@@ -58,10 +58,9 @@ class TestConfigRender:
         assert "ed25519_key_path: /etc/stationagent/device_key.pem" in yaml_text
         assert "terminal_enabled: true" in yaml_text
         assert "terminal_shell: /bin/sh" in yaml_text
-        # Control channel must be enabled for provisioned stations so the
-        # browser control panel + TX-lock work (control_enabled defaults to
-        # False in the agent, so provisioning must set it explicitly).
-        assert "control_enabled: true" in yaml_text
+        # Control channel is always on now (no control_enabled flag); config.yml must NOT
+        # carry the removed key.
+        assert "control_enabled" not in yaml_text
 
     def test_render_audio_enabled_defaults_off(self, station):
         from apps.provisioning.config_render import render_config
@@ -109,7 +108,6 @@ class TestConfigRender:
             else:
                 os.environ[CONFIG_PATH_ENV] = old
         assert cfg.audio_enabled is enabled
-        assert cfg.control_enabled is True  # provisioned stations always get control on
 
 
 @pytest.mark.skipif(shutil.which("guestfish") is None, reason="guestfish not installed")
