@@ -450,10 +450,16 @@ class StationAgent:
         else:
             logger.info("Remote terminal disabled")
 
+        # Audio auto-on (interim): enable audio when a discovered slot exposes an audio path,
+        # not from a config flag. TODO(FW-describe): switch to the `audio` capability later.
+        from .audio.detect import audio_path_present
+
+        audio_present = audio_path_present(config)
+
         # Build the audio-router virtual control-plane module (Spec 0 §5.6) when audio is on,
         # so the control inventory advertises audio streams + the tx_route capability.
         audio_router_module = None
-        if config.audio_enabled:
+        if audio_present:
             from .audio.router_backend import PipeWireRouterBackend
             from .audio.router_module import AudioRouterModule
             from .audio.streams import StreamRegistry
@@ -486,7 +492,7 @@ class StationAgent:
         # Start audio client in a background thread if enabled
         audio_client = None
         audio_thread = None
-        if config.audio_enabled:
+        if audio_present:
             from .audio.bridge_factory import BridgeFactory
             from .audio.ws_client import AudioClient
 
