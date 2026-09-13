@@ -30,6 +30,11 @@ def apply_inventory(station, slots):
     now = timezone.now()
     reported = []
     tracked_slots = set()
+    # Maps slot (str) -> reported uid for any uid-bearing entry, tracked or
+    # rejected. Lets reconcile preserve an assignment when the SAME physical uid
+    # is still reported in its slot but the entry was rejected (type mismatch),
+    # while still releasing it when a different / no-uid module took the slot.
+    reported_uid_by_slot = {}
     for slot_entry in slots or []:
         slot = slot_entry.get("slot")
         for mod in slot_entry.get("modules", []) or []:
@@ -37,6 +42,10 @@ def apply_inventory(station, slots):
             if slot is None or module_id is None:
                 continue
             identity = mod.get("identity") or {}
+            uid = identity.get("uid")
+            slot_str = str(slot)
+            if uid:
+                reported_uid_by_slot[slot_str] = uid
             cap_descriptor = mod.get("capabilities", []) or []
             raw_state = mod.get("state", {}) or {}
             filtered_state = {
@@ -57,13 +66,18 @@ def apply_inventory(station, slots):
                 },
             )
             tracked = ingest_module(station, slot, module_id, identity, now=now)
-            tracked_pk = tracked.id if tracked else None
-            if sm.tracked_module_id != tracked_pk:
-                sm.tracked_module = tracked
-                sm.save(update_fields=["tracked_module"])
             if tracked is not None:
-                # slot is stored as CharField; normalize for the reconcile set.
-                tracked_slots.add(str(slot))
+                if sm.tracked_module_id != tracked.id:
+                    sm.tracked_module = tracked
+                    sm.save(update_fields=["tracked_module"])
+                tracked_slots.add(slot_str)
+            elif not uid:
+                # Legacy no-UID module genuinely occupies this slot — unlink.
+                if sm.tracked_module_id is not None:
+                    sm.tracked_module = None
+                    sm.save(update_fields=["tracked_module"])
+            # else: uid-bearing rejection (unknown type / type mismatch) — leave
+            # the existing link untouched so a spurious report can't clear it.
             reported.append((slot, module_id))
 
     qs = StationModule.objects.filter(station=station, online=True)
@@ -71,17 +85,16 @@ def apply_inventory(station, slots):
         qs = qs.exclude(slot=slot, module_id=module_id)
     qs.update(online=False)
 
-    # Reconcile tracked-module assignments against slots that currently hold a
-    # linked Module. Only on a non-empty snapshot: an empty inventory is
-    # indistinguishable from a transient discovery failure, and tearing down
-    # every assignment on a failed probe would be worse than a briefly-stale
-    # assignment. Full completeness-aware reconciliation is Teilbereich C's job;
-    # here we only close slots that dropped from a snapshot that DID report
-    # something. Legacy/unknown entries are excluded (tracked_slots only holds
-    # slots with a linked Module), so a legacy module replacing a tracked one
-    # still releases the old assignment.
-    if reported:
-        reconcile_station(station, tracked_slots, now=now)
+    # Reconcile tracked-module assignments against the snapshot. Guarded on
+    # ``slots`` being non-empty (NOT ``reported``): a responsive-but-empty slot
+    # list still reports a real snapshot and must close pulled modules, whereas
+    # ``slots == []`` is indistinguishable from a transient discovery failure and
+    # must NOT tear everything down. Full completeness-aware reconciliation is
+    # Teilbereich C's job.
+    if slots:
+        reconcile_station(
+            station, tracked_slots, now=now, reported_uid_by_slot=reported_uid_by_slot
+        )
 
 
 @transaction.atomic

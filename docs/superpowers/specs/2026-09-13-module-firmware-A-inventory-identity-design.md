@@ -164,8 +164,17 @@ und wird vom Broker auf `module` gemappt). Pro gemeldetem Modul-Eintrag
 1. **Keine `uid`** → Legacy-Pfad: `StationModule` wie heute anlegen/aktualisieren,
    **kein** `Module`, kein History-/Audit-Eintrag für die Identität. Fertig.
 2. **`uid` vorhanden, aber `module_type` unbekannt in der Registry** → Eintrag
-   **verwerfen** (kein `Module`), Warnung auditieren (`event_type` generisch, message
-   „unbekannter Modultyp <x>, Registry-Eintrag fehlt"). Verhindert Wildwuchs.
+   **verwerfen** (kein `Module`) und **nur loggen** (`logger.warning`), **kein**
+   Audit-Row. Bewusste Entscheidung: verworfene UIDs werden nie persistiert, also
+   würde eine Station mit unregistrierter Firmware pro Heartbeat eine Audit-Zeile
+   anhängen (unbounded growth). Der Logger reicht als Ops-Signal; verhindert
+   Wildwuchs **und** Audit-Flut.
+2b. **`uid` bekannt, aber gemeldeter `module_type` ≠ getrackter Typ** →
+   **verwerfen** (kein Re-Typing, keine Zuordnungsänderung) + **einmaliges** Audit
+   (`UPDATED`, Modul-Subjekt) — eine UID ist die stabile physische Identität; ein
+   abweichender Typ ist Kollision/Fehlmeldung. Die bestehende Zuordnung des Moduls
+   bleibt erhalten (Reconcile schließt sie nicht, solange dieselbe UID im Slot
+   gemeldet wird).
 3. **`uid` neu** → `Module` anlegen (`registration_status=unregistered`,
    `uid_source` aus dem Report, `first_seen`/`last_seen` = jetzt), Lifecycle über
    Assignment-Ableitung (Schritt 5/6). Audit `MODULE_DISCOVERED` (modul-zentrisch,

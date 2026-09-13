@@ -365,11 +365,11 @@ Sequenz: A (Fundament) ∥ B → C → D. E ist unabhängig fertig.
 
 ## Teilbereich A — Inputs & offene Fragen (für die nächste Session)
 
-**Offene Onboarding-Entscheidung (unbekannte UID im Feld):**
+**Onboarding-Entscheidung (unbekannte UID im Feld) — ENTSCHIEDEN in Teilbereich A: (ii).**
 - (i) **TOFU** — auto-anlegen als `deployed`, kein Bench-Pre-Registrieren.
-- (ii) **auto-anlegen + flaggen** (Empfehlung) — erkannt, aber `unregistered` bis ein Admin bestätigt.
+- (ii) **auto-anlegen + flaggen** ✅ **gewählt** — erkannt, aber `unregistered` bis ein Admin bestätigt. Lifecycle wird orthogonal aus der Zuordnung abgeleitet (`deployed`/`ready`), `registration_status` bleibt `unregistered` bis Staff bestätigt (`services.confirm_registration`).
 - (iii) **strikt** — nur bench-registrierte UIDs akzeptiert; unbekannte geflaggt + von Updates ausgeschlossen.
-→ **noch zu entscheiden.**
+→ **Umgesetzt in A** (Spec `2026-09-13-module-firmware-A-inventory-identity-design.md`). B/C bauen darauf auf.
 
 **native_sim / Sim-Station — Identität & „Update" (Input für A + D):**
 Sim hat kein MCUboot/DFU/keine STM32-UID. Konsequenzen:

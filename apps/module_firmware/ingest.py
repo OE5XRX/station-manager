@@ -121,42 +121,44 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     Closes any conflicting open rows and opens a new one on change.
     Returns True if the assignment changed."""
     # Serialize concurrent assignment mutations so the partial-unique
-    # open-assignment constraints can't be tripped by a read-then-write race.
-    # Two locks, always taken in the same order (station, then module) to avoid
-    # deadlocks:
-    #   - the Station row serializes two modules racing on the same (station,
-    #     slot), i.e. concurrent applies for the same station;
-    #   - the Module row serializes the same UID racing across stations.
+    # open-assignment constraints can't be tripped by a read-then-write race and
+    # so no lock cycle can form. Deterministic lock order:
+    #   1. the Station row (serializes concurrent applies for the same station);
+    #   2. every involved Module row, in ascending pk order, acquired BEFORE any
+    #      assignment row is mutated — so two transactions touching the same pair
+    #      of modules always take the locks in the same order (no deadlock).
     # No-op under SQLite in tests; real row locks under Postgres.
     station.__class__.objects.select_for_update().filter(pk=station.pk).exists()
-    Module.objects.select_for_update().filter(pk=module.pk).exists()
-    # Refresh under the lock: a concurrent set_lifecycle (which locks the same
-    # row) may have committed a sticky state after this ``module`` was fetched.
-    # Reading the fresh value keeps _derive_lifecycle from overwriting it.
-    module.refresh_from_db()
 
+    # Read (no mutation yet) to discover all modules this operation will touch.
     current = module.assignments.filter(to_ts__isnull=True).first()
     if current and current.station_id == station.id and current.slot == slot:
         return False  # unchanged — idempotent
+
+    occupant = (
+        ModuleAssignmentHistory.objects.filter(station=station, slot=slot, to_ts__isnull=True)
+        .exclude(module=module)
+        .first()
+    )
+
+    # Lock all involved module rows up front, in ascending pk order.
+    module_pks = {module.pk}
+    if occupant:
+        module_pks.add(occupant.module_id)
+    list(Module.objects.select_for_update().filter(pk__in=sorted(module_pks)))
+    # Refresh under the locks: a concurrent set_lifecycle (which locks the same
+    # rows) may have committed a sticky state after these objects were fetched.
+    module.refresh_from_db()
 
     # Close this module's open assignment elsewhere.
     if current:
         current.to_ts = now
         current.save(update_fields=["to_ts"])
 
-    # Close whatever other module currently occupies (station, slot).
-    occupant = (
-        ModuleAssignmentHistory.objects.filter(station=station, slot=slot, to_ts__isnull=True)
-        .exclude(module=module)
-        .first()
-    )
     displaced_module = None
     if occupant:
         occupant.to_ts = now
         occupant.save(update_fields=["to_ts"])
-        # Lock + refresh the displaced module too, so its sticky-state check in
-        # _derive_lifecycle sees any concurrently-committed operator status.
-        Module.objects.select_for_update().filter(pk=occupant.module_id).exists()
         displaced_module = occupant.module
         displaced_module.refresh_from_db()
 
@@ -189,23 +191,32 @@ def _apply_assignment(module, station, slot, *, now, user=None):
 
 
 @transaction.atomic
-def reconcile_station(station, reported_slots, *, now):
-    """Close open module assignments at ``station`` for slots absent from the
-    latest full inventory snapshot, and re-derive the affected modules'
-    lifecycle. A module physically pulled from a slot (its slot no longer
-    reported) must lose its open assignment and fall back to ``ready`` — the
-    per-module ingest path only runs for modules that ARE reported, so this
-    closes the gap for the ones that vanished."""
+def reconcile_station(station, tracked_slots, *, now, reported_uid_by_slot=None):
+    """Close open module assignments at ``station`` for slots that no longer
+    hold their tracked module, and re-derive the affected modules' lifecycle. A
+    module physically pulled from a slot (its slot no longer reporting that
+    module) must lose its open assignment and fall back to ``ready`` — the
+    per-module ingest path only runs for modules that ARE linked, so this closes
+    the gap for the ones that vanished.
+
+    ``tracked_slots`` = slots that reported a successfully linked Module.
+    ``reported_uid_by_slot`` preserves an assignment when the SAME uid is still
+    reported in its slot but the entry was rejected (e.g. type mismatch), so a
+    spurious report can't tear down a valid module's assignment."""
+    reported_uid_by_slot = reported_uid_by_slot or {}
     stale = (
         ModuleAssignmentHistory.objects.select_for_update()
         .filter(station=station, to_ts__isnull=True)
-        .exclude(slot__in=reported_slots)
+        .exclude(slot__in=tracked_slots)
         .select_related("module")
     )
     for assignment in list(stale):
+        module = assignment.module
+        # Same physical module still reported in this slot (rejected entry) — keep.
+        if reported_uid_by_slot.get(assignment.slot) == module.uid:
+            continue
         assignment.to_ts = now
         assignment.save(update_fields=["to_ts"])
-        module = assignment.module
         StationAuditLog.log(
             station=station,
             module=module,

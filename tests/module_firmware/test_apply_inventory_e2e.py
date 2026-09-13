@@ -186,6 +186,58 @@ def test_pulled_module_closes_assignment_and_reverts_to_ready(fm, station_factor
 
 
 @pytest.mark.django_db
+def test_responsive_empty_slot_reconciles(fm, station_factory):
+    """A responsive-but-empty slot list (slots=[{slot, modules: []}]) is a real
+    snapshot, so a module previously in that slot is released — unlike slots=[]
+    (discovery failure)."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="GONE")])
+    module = Module.objects.get(uid="GONE")
+    assert module.lifecycle_status == Module.Lifecycle.DEPLOYED
+
+    apply_inventory(station, [{"slot": 1, "control": "/dev/x", "modules": []}])
+    module.refresh_from_db()
+    assert module.assignments.filter(to_ts__isnull=True).count() == 0
+    assert module.lifecycle_status == Module.Lifecycle.READY
+
+
+@pytest.mark.django_db
+def test_type_mismatch_report_preserves_valid_assignment(fm, station_factory):
+    """A spurious type-mismatch report for an already-tracked UID must NOT clear
+    its link or close its assignment (the same uid is still reported in its
+    slot)."""
+    ModuleType.objects.create(key="power", display_name="Power")
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="DUP")])
+    module = Module.objects.get(uid="DUP")
+    sm_before = StationModule.objects.get(station=station, slot="1", module_id="fm")
+    assert sm_before.tracked_module_id == module.id
+
+    # slot 1 re-reports uid DUP but with a different registered type (mismatch).
+    mismatch = {"type": "power", "model": "x", "version": "1.0.0", "uid": "DUP"}
+    apply_inventory(
+        station,
+        [
+            {
+                "slot": 1,
+                "control": "/dev/x",
+                "modules": [
+                    {"module": "fm", "identity": mismatch, "capabilities": [], "state": {}}
+                ],
+            }
+        ],
+    )
+    module.refresh_from_db()
+
+    # Assignment preserved, still deployed, still typed fm, still linked.
+    assert module.module_type.key == "fm"
+    assert module.assignments.filter(to_ts__isnull=True).count() == 1
+    assert module.lifecycle_status == Module.Lifecycle.DEPLOYED
+    sm_after = StationModule.objects.get(station=station, slot="1", module_id="fm")
+    assert sm_after.tracked_module_id == module.id
+
+
+@pytest.mark.django_db
 def test_empty_snapshot_does_not_reconcile(fm, station_factory):
     """A fully empty inventory (indistinguishable from a discovery failure) must
     NOT tear down assignments — the deployed module keeps its open assignment."""
