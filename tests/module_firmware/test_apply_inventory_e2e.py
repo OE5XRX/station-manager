@@ -152,6 +152,42 @@ def test_module_moved_to_other_station_and_slot(fm, station_factory):
 
 
 @pytest.mark.django_db
+def test_pulled_module_closes_assignment_and_reverts_to_ready(fm, station_factory):
+    """Scenario: a module reported once, then the station's next full snapshot no
+    longer lists its slot => its open assignment is closed and lifecycle reverts
+    deployed -> ready (reconcile_station), even though ingest_module never runs
+    for the vanished module."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="PULLED")])
+    module = Module.objects.get(uid="PULLED")
+    assert module.lifecycle_status == Module.Lifecycle.DEPLOYED
+
+    # Next snapshot: slot empty.
+    apply_inventory(station, [])
+    module.refresh_from_db()
+
+    assert module.assignments.filter(to_ts__isnull=True).count() == 0
+    assert module.lifecycle_status == Module.Lifecycle.READY
+
+
+@pytest.mark.django_db
+def test_pulled_sticky_module_keeps_state_but_closes_assignment(fm, station_factory):
+    """A pulled module marked defect stays defect (sticky) but still loses its
+    open assignment."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="STICKY")])
+    module = Module.objects.get(uid="STICKY")
+    module.lifecycle_status = Module.Lifecycle.DEFECT
+    module.save(update_fields=["lifecycle_status"])
+
+    apply_inventory(station, [])
+    module.refresh_from_db()
+
+    assert module.assignments.filter(to_ts__isnull=True).count() == 0
+    assert module.lifecycle_status == Module.Lifecycle.DEFECT
+
+
+@pytest.mark.django_db
 def test_legacy_no_uid_leaves_tracked_module_null(fm, station_factory):
     """Scenario 4: legacy no-UID module => StationModule created, tracked_module
     stays None, no Module row, no module_firmware audit rows."""

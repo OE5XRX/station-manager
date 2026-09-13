@@ -7,7 +7,7 @@ No async / no I/O beyond the ORM — call from consumers via
 from django.db import transaction
 from django.utils import timezone
 
-from apps.module_firmware.ingest import ingest_module
+from apps.module_firmware.ingest import ingest_module, reconcile_station
 
 from .models import StationModule
 
@@ -66,6 +66,11 @@ def apply_inventory(station, slots):
     for slot, module_id in reported:
         qs = qs.exclude(slot=slot, module_id=module_id)
     qs.update(online=False)
+
+    # Close tracked-module assignments for slots that dropped out of the snapshot
+    # so a pulled module loses its slot and reverts from deployed to ready.
+    reported_slots = {slot for slot, _ in reported}
+    reconcile_station(station, reported_slots, now=now)
 
 
 @transaction.atomic

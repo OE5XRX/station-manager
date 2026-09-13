@@ -1,5 +1,5 @@
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -9,7 +9,16 @@ from django.views.generic import DetailView, ListView
 from apps.stations.models import Station
 
 from . import services
-from .models import Module, ModuleType
+from .models import Module, ModuleAssignmentHistory, ModuleType
+
+# Lifecycle states an operator may set by hand. ``deployed`` is excluded: it is
+# auto-derived from an open assignment, so a manual set would be overwritten by
+# the next ingest — offering it as a control is misleading.
+OPERATOR_LIFECYCLE_CHOICES = [
+    (value, label)
+    for value, label in Module.Lifecycle.choices
+    if value != Module.Lifecycle.DEPLOYED
+]
 
 
 class ModuleListView(LoginRequiredMixin, ListView):
@@ -19,8 +28,13 @@ class ModuleListView(LoginRequiredMixin, ListView):
     paginate_by = 50
 
     def get_queryset(self):
+        # Prefetch only the *open* assignment so the list shows each module's
+        # current location, not a stale historical station_modules row.
+        open_assignments = ModuleAssignmentHistory.objects.filter(
+            to_ts__isnull=True
+        ).select_related("station")
         qs = Module.objects.select_related("module_type").prefetch_related(
-            "station_modules__station"
+            Prefetch("assignments", queryset=open_assignments, to_attr="open_assignments")
         )
         g = self.request.GET
         if g.get("type"):
@@ -32,7 +46,10 @@ class ModuleListView(LoginRequiredMixin, ListView):
         if g.get("uid_source"):
             qs = qs.filter(uid_source=g["uid_source"])
         if g.get("station", "").isdigit():
-            qs = qs.filter(station_modules__station_id=g["station"]).distinct()
+            # Filter by *current* location (open assignment), not history.
+            qs = qs.filter(
+                assignments__station_id=g["station"], assignments__to_ts__isnull=True
+            ).distinct()
         if g.get("q"):
             qs = qs.filter(Q(uid__icontains=g["q"]))
         return qs
@@ -76,7 +93,7 @@ class ModuleDetailView(LoginRequiredMixin, DetailView):
         ctx["current_assignment"] = m.assignments.filter(to_ts__isnull=True).first()
         ctx["audit_logs"] = m.audit_logs.select_related("station", "user").all()[:200]
         ctx["can_edit"] = self.request.user.is_staff
-        ctx["lifecycles"] = Module.Lifecycle.choices
+        ctx["lifecycles"] = OPERATOR_LIFECYCLE_CHOICES
         return ctx
 
 
@@ -104,7 +121,9 @@ class ModuleLifecycleView(_StaffModuleMixin, View):
     def post(self, request, uid):
         m = self.get_module()
         status = request.POST.get("lifecycle_status")
-        if status in dict(Module.Lifecycle.choices):
+        # Only operator-settable states — ``deployed`` is auto-derived and must
+        # not be set by hand.
+        if status in dict(OPERATOR_LIFECYCLE_CHOICES):
             services.set_lifecycle(m, status, user=request.user)
         return self._redirect(uid)
 

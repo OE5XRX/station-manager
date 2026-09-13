@@ -1,0 +1,38 @@
+{% load i18n %}
+{% comment %}
+Pagination for the module inventory list. The shared includes/pagination.html
+only preserves q/tag/status/show/role, so it would drop this view's filters on
+page change — this partial carries all module filters across pages instead.
+{% endcomment %}
+{% if page_obj.has_other_pages %}
+  {% with f=filters %}
+  <div class="pager">
+    <div>
+      {% blocktrans with start=page_obj.start_index end=page_obj.end_index total=page_obj.paginator.count %}
+        Showing {{ start }}-{{ end }} of {{ total }}
+      {% endblocktrans %}
+    </div>
+    <div class="pager-links">
+      {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}">&larr;</a>
+      {% else %}
+        <span class="t-muted">&larr;</span>
+      {% endif %}
+
+      {% for n in page_obj.paginator.page_range %}
+        {% if n == page_obj.number %}
+          <span class="current">{{ n }}</span>
+        {% elif n > page_obj.number|add:"-3" and n < page_obj.number|add:"3" %}
+          <a href="?page={{ n }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}">{{ n }}</a>
+        {% endif %}
+      {% endfor %}
+
+      {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}">&rarr;</a>
+      {% else %}
+        <span class="t-muted">&rarr;</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endwith %}
+{% endif %}

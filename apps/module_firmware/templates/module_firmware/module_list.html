@@ -91,10 +91,10 @@
             {% include "module_firmware/_pills.html" with module=module %}
           </td>
           <td data-label="{% trans 'Location' %}">
-            {% with sm=module.station_modules.all|first %}
-              {% if sm and sm.station %}
-                <a href="{% url 'stations:station_detail' sm.station.pk %}" style="color:inherit;">{{ sm.station.callsign|default:sm.station.name }}</a>
-                <span class="t-mono-sm t-muted">{{ sm.slot }}</span>
+            {% with a=module.open_assignments|first %}
+              {% if a and a.station %}
+                <a href="{% url 'stations:station_detail' a.station.pk %}" style="color:inherit;">{{ a.station.callsign|default:a.station.name }}</a>
+                <span class="t-mono-sm t-muted">{{ a.slot }}</span>
               {% else %}
                 <span class="t-muted">—</span>
               {% endif %}
@@ -115,7 +115,7 @@
       </tbody>
     </table>
   </div>
-  {% include "includes/pagination.html" %}
+  {% include "module_firmware/_pagination.html" %}
   {% else %}
   <div class="panel">
     <div class="empty">

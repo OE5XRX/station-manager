@@ -76,9 +76,13 @@
       </div>
       <div class="stat-value {% if module_stats.attention > 0 %}stat-warn{% endif %}">{{ module_stats.total }}</div>
       <div class="stat-meta">
+        {% if module_stats.attention > 0 %}
+          <a href="{% url 'module_firmware:module_list' %}?lifecycle=defect" class="t-mono stat-warn">{% blocktrans count n=module_stats.attention %}{{ n }} needs attention{% plural %}{{ n }} need attention{% endblocktrans %} →</a>
+        {% endif %}
         {% if module_stats.unregistered > 0 %}
           <a href="{% url 'module_firmware:module_list' %}?registration=unregistered" class="t-mono">{% blocktrans count n=module_stats.unregistered %}{{ n }} unregistered{% plural %}{{ n }} unregistered{% endblocktrans %} →</a>
-        {% else %}
+        {% endif %}
+        {% if not module_stats.attention and not module_stats.unregistered %}
           <a href="{% url 'module_firmware:module_list' %}" class="t-mono">{% trans "inventory" %} →</a>
         {% endif %}
       </div>

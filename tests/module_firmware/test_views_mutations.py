@@ -44,6 +44,19 @@ def test_staff_sets_lifecycle(client, module):
 
 
 @pytest.mark.django_db
+def test_deployed_is_not_an_operator_settable_lifecycle(client, module):
+    """`deployed` is auto-derived from assignment; a manual set must be ignored."""
+    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    resp = client.post(
+        reverse("module_firmware:module_lifecycle", args=[module.uid]),
+        {"lifecycle_status": "deployed"},
+    )
+    assert resp.status_code == 302
+    module.refresh_from_db()
+    assert module.lifecycle_status == Module.Lifecycle.READY  # unchanged
+
+
+@pytest.mark.django_db
 def test_staff_sets_notes(client, module):
     client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
     resp = client.post(

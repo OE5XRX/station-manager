@@ -133,8 +133,12 @@ Schritt 2). Referenzielle Integrität fürs Typ-Kompatibilitäts-Gate (relevant 
 - „Wo war UID wann" = direkte Abfrage; aktuelle Zuordnung = offene Zeile.
 
 ### Erweiterung `StationModule` (`apps/control`)
-- Neu: `module = FK → module_firmware.Module` (`SET_NULL`, null, blank) = welches
-  physische Modul aktuell in diesem Slot steckt (denormalisierter Aktuell-Pointer).
+- Neu: `tracked_module = FK → module_firmware.Module` (`SET_NULL`, null, blank) =
+  welches physische Modul aktuell in diesem Slot steckt (denormalisierter
+  Aktuell-Pointer). **Feldname `tracked_module`, nicht `module`:** `StationModule`
+  hat bereits ein `module_id`-CharField (Firmware-Modul-ID); ein FK namens `module`
+  würde auf derselben `module_id`-Spalte/`attname` kollidieren. `related_name` =
+  `station_modules`.
 - Bestehende Felder (`type`/`model`/`version`/`capability_descriptor`/…) **bleiben**
   (Backward-Compat + Legacy-No-UID-Display).
 
@@ -171,7 +175,7 @@ uid_source?}, capabilities}`):
    - alte offene Assignment(s) schließen (`to_ts = jetzt`),
    - neue offene Assignment öffnen (`from_ts = jetzt`, `reason=auto-swap`,
      `created_by=null`),
-   - `StationModule.module` auf das neue `Module` umbiegen,
+   - `StationModule.tracked_module` auf das neue `Module` umbiegen,
    - Audit `MODULE_SWAPPED` + `MODULE_ASSIGNMENT_CHANGED`.
 6. **Lifecycle-Auto-Ableitung:** nach Assignment-Update — Modul mit aktiver
    (offener) Assignment ⇒ `deployed`; Modul ohne offene Assignment ⇒ `ready`.

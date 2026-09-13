@@ -71,7 +71,7 @@ class Module(models.Model):
         verbose_name_plural = _("modules")
         ordering = ["module_type", "uid"]
         indexes = [
-            models.Index(fields=["uid"]),
+            # uid already has a unique index from unique=True — no extra index here.
             models.Index(fields=["registration_status"]),
             models.Index(fields=["lifecycle_status"]),
         ]

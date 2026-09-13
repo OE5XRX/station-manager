@@ -7,6 +7,8 @@ _derive_lifecycle; ingest_module wires them in.
 
 import logging
 
+from django.db import transaction
+
 from apps.stations.models import StationAuditLog
 
 from .models import Module, ModuleAssignmentHistory, ModuleType
@@ -14,9 +16,15 @@ from .models import Module, ModuleAssignmentHistory, ModuleType
 logger = logging.getLogger(__name__)
 
 
+@transaction.atomic
 def ingest_module(station, slot, module_id, identity, *, now, user=None):
     """Upsert a Module from a self-reported identity dict. Returns the Module
-    or None (no UID => legacy path; unknown type => rejected)."""
+    or None (no UID => legacy path; unknown type => rejected).
+
+    Wrapped in ``transaction.atomic`` so the row locks taken during assignment
+    are always inside a transaction — safe both under ``apply_inventory``'s
+    outer atomic (nested savepoint) and when called directly (e.g. tests) on a
+    backend that enforces the ``select_for_update`` transaction contract."""
     identity = identity or {}
     uid = identity.get("uid")
     if not uid:
@@ -60,7 +68,7 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
         module.save(update_fields=["last_seen", "last_reported_version", "updated_at"])
 
     _apply_assignment(module, station, slot, now=now, user=user)
-    _derive_lifecycle(module, now=now)
+    _derive_lifecycle(module, now=now, station=station)
     return module
 
 
@@ -68,11 +76,15 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     """Ensure exactly one open assignment for (module) at (station, slot).
     Closes any conflicting open rows and opens a new one on change.
     Returns True if the assignment changed."""
-    # Serialize concurrent ingests of the same module: without a lock, two
-    # transactions could both read "no open row" and both INSERT, tripping the
-    # partial-unique open-assignment constraint. Locking the Module row makes
-    # same-module applies wait for each other. (No-op under SQLite in tests;
-    # a real row lock under Postgres.)
+    # Serialize concurrent assignment mutations so the partial-unique
+    # open-assignment constraints can't be tripped by a read-then-write race.
+    # Two locks, always taken in the same order (station, then module) to avoid
+    # deadlocks:
+    #   - the Station row serializes two modules racing on the same (station,
+    #     slot), i.e. concurrent applies for the same station;
+    #   - the Module row serializes the same UID racing across stations.
+    # No-op under SQLite in tests; real row locks under Postgres.
+    station.__class__.objects.select_for_update().filter(pk=station.pk).exists()
     Module.objects.select_for_update().filter(pk=module.pk).exists()
 
     current = module.assignments.filter(to_ts__isnull=True).first()
@@ -114,7 +126,7 @@ def _apply_assignment(module, station, slot, *, now, user=None):
         )
         # The displaced module lost its slot — recompute its lifecycle so it
         # falls back from deployed to ready (unless operator-sticky).
-        _derive_lifecycle(displaced_module, now=now)
+        _derive_lifecycle(displaced_module, now=now, station=station)
     StationAuditLog.log(
         station=station,
         module=module,
@@ -124,8 +136,39 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     return True
 
 
-def _derive_lifecycle(module, *, now):
-    """Derive lifecycle from assignment state. Never overrides sticky states."""
+@transaction.atomic
+def reconcile_station(station, reported_slots, *, now):
+    """Close open module assignments at ``station`` for slots absent from the
+    latest full inventory snapshot, and re-derive the affected modules'
+    lifecycle. A module physically pulled from a slot (its slot no longer
+    reported) must lose its open assignment and fall back to ``ready`` — the
+    per-module ingest path only runs for modules that ARE reported, so this
+    closes the gap for the ones that vanished."""
+    stale = (
+        ModuleAssignmentHistory.objects.select_for_update()
+        .filter(station=station, to_ts__isnull=True)
+        .exclude(slot__in=reported_slots)
+        .select_related("module")
+    )
+    for assignment in list(stale):
+        assignment.to_ts = now
+        assignment.save(update_fields=["to_ts"])
+        module = assignment.module
+        StationAuditLog.log(
+            station=station,
+            module=module,
+            event_type=StationAuditLog.EventType.MODULE_ASSIGNMENT_CHANGED,
+            message=f"Module {module.uid} no longer reported in {station}/{assignment.slot}.",
+        )
+        _derive_lifecycle(module, now=now, station=station)
+
+
+def _derive_lifecycle(module, *, now, station=None):
+    """Derive lifecycle from assignment state. Never overrides sticky states.
+
+    ``station`` is the station whose ingest triggered this derivation; passing
+    it makes the audit entry dual-subject so station-centric views also show the
+    lifecycle transition."""
     if module.lifecycle_status in Module.STICKY_LIFECYCLE:
         return
     has_open = module.assignments.filter(to_ts__isnull=True).exists()
@@ -135,6 +178,7 @@ def _derive_lifecycle(module, *, now):
         module.lifecycle_status = target
         module.save(update_fields=["lifecycle_status", "updated_at"])
         StationAuditLog.log(
+            station=station,
             module=module,
             event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED,
             message=f"Lifecycle {old} → {target} for module {module.uid}.",

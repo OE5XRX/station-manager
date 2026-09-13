@@ -31,7 +31,7 @@ class Migration(migrations.Migration):
                 'verbose_name': 'module',
                 'verbose_name_plural': 'modules',
                 'ordering': ['module_type', 'uid'],
-                'indexes': [models.Index(fields=['uid'], name='module_firm_uid_1e5e48_idx'), models.Index(fields=['registration_status'], name='module_firm_registr_0f95c5_idx'), models.Index(fields=['lifecycle_status'], name='module_firm_lifecyc_8dba16_idx')],
+                'indexes': [models.Index(fields=['registration_status'], name='module_firm_registr_0f95c5_idx'), models.Index(fields=['lifecycle_status'], name='module_firm_lifecyc_8dba16_idx')],
             },
         ),
     ]

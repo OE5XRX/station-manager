@@ -40,7 +40,7 @@
 **Modifiziert:**
 - `config/settings/base.py` — App registrieren.
 - `config/urls.py` — `apps.module_firmware.urls` includen.
-- `apps/control/models.py` — `StationModule.module` FK.
+- `apps/control/models.py` — `StationModule.tracked_module` FK.
 - `apps/control/registry.py` — Ingestion-Hook in `apply_inventory`.
 - `apps/control/views.py` + Control-Panel-Template — Stations-Integration (Link + Badges).
 - `apps/stations/models.py` — `StationAuditLog.module` FK, `station` nullable, neue `EventType`, `log()`-Signatur.
@@ -48,7 +48,7 @@
 - `tests/fake_fw.py` — synthetische UID im DESCRIBE.
 
 **Datenfluss der Ingestion (Referenz für alle Ingestion-Tasks):**
-`apply_inventory(station, slots)` erhält `slots = [{"slot": int, "control": str, "modules": [{"module": id, "identity": {type, model, version, uid?, uid_source?}, "capabilities": [...], "state": {...}}]}]`. Pro Modul-Eintrag wird nach dem bestehenden `StationModule`-Upsert `ingest_module(...)` aufgerufen; dessen Rückgabe (`Module | None`) wird als `StationModule.module` verlinkt.
+`apply_inventory(station, slots)` erhält `slots = [{"slot": int, "control": str, "modules": [{"module": id, "identity": {type, model, version, uid?, uid_source?}, "capabilities": [...], "state": {...}}]}]`. Pro Modul-Eintrag wird nach dem bestehenden `StationModule`-Upsert `ingest_module(...)` aufgerufen; dessen Rückgabe (`Module | None`) wird als `StationModule.tracked_module` verlinkt.
 
 ---
 
@@ -367,14 +367,14 @@ git commit -m "feat(module_firmware): ModuleAssignmentHistory with partial-uniqu
 
 ---
 
-## Task 4: `StationModule.module`-FK
+## Task 4: `StationModule.tracked_module`-FK
 
 **Files:**
 - Modify: `apps/control/models.py`
 - Test: `tests/module_firmware/test_stationmodule_link.py`
 
 **Interfaces:**
-- Produces: `StationModule.module` (nullable FK → `module_firmware.Module`, `SET_NULL`, `related_name="station_modules"`).
+- Produces: `StationModule.tracked_module` (nullable FK → `module_firmware.Module`, `SET_NULL`, `related_name="station_modules"`).
 
 - [ ] **Step 1: Failing test**
 
@@ -391,7 +391,7 @@ def test_stationmodule_links_to_module(station_factory):
     t = ModuleType.objects.create(key="fm", display_name="FM")
     mod = Module.objects.create(uid="U1", module_type=t)
     sm = StationModule.objects.create(station=station, slot="slot1", module_id="fm", module=mod)
-    assert sm.module == mod
+    assert sm.tracked_module == mod
     assert mod.station_modules.first() == sm
 ```
 
@@ -399,8 +399,13 @@ def test_stationmodule_links_to_module(station_factory):
 
 - [ ] **Step 3: FK ergänzen** — in `apps/control/models.py` bei `StationModule`, nach `version`:
 
+> **Feldname `tracked_module` (nicht `module`):** `StationModule` hat bereits ein
+> `module_id`-CharField; ein FK `module` würde auf derselben `module_id`-Spalte/
+> `attname` kollidieren. Attribut daher `tracked_module`, FK-`_id`-Spalte
+> `tracked_module_id`, `related_name` bleibt `station_modules`.
+
 ```python
-    module = models.ForeignKey(
+    tracked_module = models.ForeignKey(
         "module_firmware.Module",
         verbose_name=_("module"),
         on_delete=models.SET_NULL,
@@ -959,7 +964,7 @@ git commit -m "feat(module_firmware): lifecycle auto-derivation (deployed/ready,
 
 **Interfaces:**
 - Consumes: `ingest_module(station, slot, module_id, identity, *, now)`.
-- Produces: `apply_inventory` setzt `StationModule.module` auf das ingestete `Module` (oder lässt es `None` bei Legacy/unknown).
+- Produces: `apply_inventory` setzt `StationModule.tracked_module` auf das ingestete `Module` (oder lässt es `None` bei Legacy/unknown).
 
 - [ ] **Step 1: Failing test**
 
@@ -989,9 +994,9 @@ def test_apply_inventory_links_module(fm, station_factory):
     station = station_factory()
     apply_inventory(station, slots(uid="ABC"))
     sm = StationModule.objects.get(station=station, slot="slot1", module_id="fm")
-    assert sm.module is not None and sm.module.uid == "ABC"
+    assert sm.tracked_module is not None and sm.tracked_module.uid == "ABC"
     assert Module.objects.count() == 1
-    assert ModuleAssignmentHistory.objects.filter(module=sm.module, to_ts__isnull=True).count() == 1
+    assert ModuleAssignmentHistory.objects.filter(module=sm.tracked_module, to_ts__isnull=True).count() == 1
 
 
 @pytest.mark.django_db
@@ -999,7 +1004,7 @@ def test_apply_inventory_legacy_no_uid_leaves_module_null(fm, station_factory):
     station = station_factory()
     apply_inventory(station, slots(uid=None))
     sm = StationModule.objects.get(station=station, slot="slot1", module_id="fm")
-    assert sm.module is None
+    assert sm.tracked_module is None
     assert Module.objects.count() == 0
 ```
 
@@ -1027,13 +1032,13 @@ Innerhalb der Modul-Schleife, den `update_or_create`-Block so anpassen, dass die
                 },
             )
             tracked = ingest_module(station, slot, module_id, identity, now=now)
-            if sm.module_id != (tracked.id if tracked else None):
-                sm.module = tracked
+            if sm.tracked_module_id != (tracked.id if tracked else None):
+                sm.tracked_module = tracked
                 sm.save(update_fields=["module"])
             reported.append((slot, module_id))
 ```
 
-> Achtung Namenskollision: `module_id` ist hier die *StationModule*-Spalte (Firmware-Modul-ID), `sm.module_id` ist die FK-Spalte auf `Module`. Der Vergleich `sm.module_id != tracked.id` nutzt die FK-`_id`-Spalte — korrekt, da `sm.module_id` nach `update_or_create` die aktuelle FK hält.
+> Achtung Namenskollision: `module_id` ist die bestehende *StationModule*-CharField-Spalte (Firmware-Modul-ID). Der neue FK heißt daher `tracked_module`; seine FK-`_id`-Spalte ist `tracked_module_id`. Der Vergleich `sm.tracked_module_id != tracked.id` nutzt die FK-`_id`-Spalte — korrekt, da `sm.tracked_module_id` nach `update_or_create` die aktuelle FK hält.
 
 - [ ] **Step 4: Run** — `pytest tests/module_firmware/test_apply_inventory_integration.py -v` → PASS. Regression: `pytest tests/ -k "control or registry"` → PASS.
 
@@ -1041,7 +1046,7 @@ Innerhalb der Modul-Schleife, den `update_or_create`-Block so anpassen, dass die
 
 ```bash
 git add apps/control/registry.py tests/module_firmware/test_apply_inventory_integration.py
-git commit -m "feat(control): wire Module ingestion into apply_inventory + link StationModule.module"
+git commit -m "feat(control): wire Module ingestion into apply_inventory + link StationModule.tracked_module"
 ```
 
 ---
@@ -1590,7 +1595,7 @@ git commit -m "feat(module_firmware): staff-only confirm/lifecycle/notes mutatio
 - Test: `tests/module_firmware/test_station_integration.py`
 
 **Interfaces:**
-- Consumes: `StationModule.module` (Task 4/9). Produces: pro belegtem Slot mit verknüpftem `Module` ein Link auf `module_firmware:module_detail` + UID/Registration/Lifecycle-Badge.
+- Consumes: `StationModule.tracked_module` (Task 4/9). Produces: pro belegtem Slot mit verknüpftem `Module` ein Link auf `module_firmware:module_detail` + UID/Registration/Lifecycle-Badge.
 
 - [ ] **Step 1: Panel-Template lokalisieren** — `grep -rn "modules" apps/control/templates apps/stations/templates` und die Stelle finden, wo `station.modules` / `ctx["modules"]` gerendert werden (`apps/control/views.py:33` liefert `ctx["modules"]`).
 
