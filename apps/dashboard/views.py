@@ -7,6 +7,7 @@ from django.views.generic import TemplateView
 
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment
+from apps.module_firmware.models import Module
 from apps.monitoring.models import Alert
 from apps.stations.models import Station, StationLogEntry
 
@@ -37,5 +38,14 @@ class IndexView(LoginRequiredMixin, TemplateView):
         context["active_alerts_count"] = Alert.objects.filter(is_resolved=False).count()
         context["user_count"] = User.objects.count()
         context["device_key_count"] = DeviceKey.objects.filter(is_active=True).count()
+        context["module_stats"] = {
+            "total": Module.objects.count(),
+            "unregistered": Module.objects.filter(
+                registration_status=Module.Registration.UNREGISTERED
+            ).count(),
+            "attention": Module.objects.filter(
+                lifecycle_status__in=[Module.Lifecycle.DEFECT, Module.Lifecycle.IN_LAB]
+            ).count(),
+        }
 
         return context
