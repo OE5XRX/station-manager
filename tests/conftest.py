@@ -103,6 +103,23 @@ def station(db):
 
 
 @pytest.fixture
+def station_factory(db):
+    """Factory producing distinct Station rows (unique names) per call."""
+    counter = {"n": 0}
+
+    def _make(**kwargs):
+        counter["n"] += 1
+        defaults = {
+            "name": f"Station {counter['n']}",
+            "callsign": f"OE5X{counter['n']:02d}",
+        }
+        defaults.update(kwargs)
+        return Station.objects.create(**defaults)
+
+    return _make
+
+
+@pytest.fixture
 def station_with_key(station):
     """Station with a DeviceKey linked. Returns (station, private_key)."""
     private_key, _, public_b64 = _make_ed25519_keypair()
