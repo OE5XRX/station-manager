@@ -1,5 +1,4 @@
 from station_agent.slot_discovery import discover_slots
-
 from tests.fake_fw import FakeFirmware, make_slot_tree
 
 FM_SPEC = {
@@ -26,9 +25,16 @@ def test_fake_fw_injects_synthetic_uid(tmp_path):
 
 def test_fake_fw_preserves_explicit_uid(tmp_path):
     """An explicit uid in the spec flows through verbatim (contract check)."""
-    spec = {**FM_SPEC, "identity": {
-        "type": "fm", "model": "sim", "version": "0.0.1",
-        "uid": "REAL-UID-42", "uid_source": "stm32_uid"}}
+    spec = {
+        **FM_SPEC,
+        "identity": {
+            "type": "fm",
+            "model": "sim",
+            "version": "0.0.1",
+            "uid": "REAL-UID-42",
+            "uid_source": "stm32_uid",
+        },
+    }
     fw = FakeFirmware({"fm": spec})
     fw.start()
     try:

@@ -16,7 +16,8 @@ def confirm_registration(module, *, user):
     module.registration_status = Module.Registration.REGISTERED
     module.save(update_fields=["registration_status", "updated_at"])
     StationAuditLog.log(
-        module=module, user=user,
+        module=module,
+        user=user,
         event_type=StationAuditLog.EventType.MODULE_REGISTERED,
         message=f"Module {module.uid} registration confirmed.",
     )
@@ -30,7 +31,8 @@ def set_lifecycle(module, status, *, user):
     module.lifecycle_status = status
     module.save(update_fields=["lifecycle_status", "updated_at"])
     StationAuditLog.log(
-        module=module, user=user,
+        module=module,
+        user=user,
         event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED,
         message=f"Lifecycle {old} → {status} for module {module.uid}.",
         changes={"lifecycle_status": {"old": old, "new": status}},

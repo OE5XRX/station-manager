@@ -29,10 +29,14 @@ def test_idempotent_same_slot_no_new_rows(fm, station_factory):
     station = station_factory()
     now = timezone.now()
     m = ingest_module(station, "slot1", "fm", ident("A"), now=now)
-    ingest_module(station, "slot1", "fm", ident("A", v="1.1.0"), now=now + timezone.timedelta(minutes=1))
+    ingest_module(
+        station, "slot1", "fm", ident("A", v="1.1.0"), now=now + timezone.timedelta(minutes=1)
+    )
     assert ModuleAssignmentHistory.objects.filter(module=m).count() == 1
-    assert StationAuditLog.objects.filter(
-        event_type=StationAuditLog.EventType.MODULE_SWAPPED).count() == 0
+    assert (
+        StationAuditLog.objects.filter(event_type=StationAuditLog.EventType.MODULE_SWAPPED).count()
+        == 0
+    )
 
 
 @pytest.mark.django_db
@@ -45,8 +49,12 @@ def test_new_uid_in_slot_swaps(fm, station_factory):
     a_row = ModuleAssignmentHistory.objects.get(module=a)
     assert a_row.to_ts == t1
     assert ModuleAssignmentHistory.objects.filter(module=b, to_ts__isnull=True).count() == 1
-    assert StationAuditLog.objects.filter(
-        module=b, event_type=StationAuditLog.EventType.MODULE_SWAPPED).count() == 1
+    assert (
+        StationAuditLog.objects.filter(
+            module=b, event_type=StationAuditLog.EventType.MODULE_SWAPPED
+        ).count()
+        == 1
+    )
 
 
 @pytest.mark.django_db

@@ -13,7 +13,9 @@ def module(db, station_factory):
     t = ModuleType.objects.create(key="fm", display_name="FM")
     m = Module.objects.create(uid="LIFE1", module_type=t)
     ModuleAssignmentHistory.objects.create(module=m, station=station_factory(), slot="slot1")
-    StationAuditLog.log(module=m, event_type=StationAuditLog.EventType.MODULE_DISCOVERED, message="x")
+    StationAuditLog.log(
+        module=m, event_type=StationAuditLog.EventType.MODULE_DISCOVERED, message="x"
+    )
     return m
 
 

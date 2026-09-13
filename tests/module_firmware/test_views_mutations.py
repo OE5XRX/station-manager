@@ -34,8 +34,10 @@ def test_staff_confirms(client, module):
 @pytest.mark.django_db
 def test_staff_sets_lifecycle(client, module):
     client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
-    resp = client.post(reverse("module_firmware:module_lifecycle", args=[module.uid]),
-                       {"lifecycle_status": "defect"})
+    resp = client.post(
+        reverse("module_firmware:module_lifecycle", args=[module.uid]),
+        {"lifecycle_status": "defect"},
+    )
     assert resp.status_code == 302
     module.refresh_from_db()
     assert module.lifecycle_status == Module.Lifecycle.DEFECT
@@ -44,8 +46,9 @@ def test_staff_sets_lifecycle(client, module):
 @pytest.mark.django_db
 def test_staff_sets_notes(client, module):
     client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
-    resp = client.post(reverse("module_firmware:module_notes", args=[module.uid]),
-                       {"notes": "bench unit"})
+    resp = client.post(
+        reverse("module_firmware:module_notes", args=[module.uid]), {"notes": "bench unit"}
+    )
     assert resp.status_code == 302
     module.refresh_from_db()
     assert module.notes == "bench unit"

@@ -49,7 +49,8 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
     )
     if created:
         StationAuditLog.log(
-            station=station, module=module,
+            station=station,
+            module=module,
             event_type=StationAuditLog.EventType.MODULE_DISCOVERED,
             message=f"Module {uid} ({module_type.key}) discovered in {station}/{slot}.",
         )
@@ -79,27 +80,35 @@ def _apply_assignment(module, station, slot, *, now, user=None):
         current.save(update_fields=["to_ts"])
 
     # Close whatever other module currently occupies (station, slot).
-    occupant = ModuleAssignmentHistory.objects.filter(
-        station=station, slot=slot, to_ts__isnull=True
-    ).exclude(module=module).first()
+    occupant = (
+        ModuleAssignmentHistory.objects.filter(station=station, slot=slot, to_ts__isnull=True)
+        .exclude(module=module)
+        .first()
+    )
     if occupant:
         occupant.to_ts = now
         occupant.save(update_fields=["to_ts"])
         displaced = True
 
     ModuleAssignmentHistory.objects.create(
-        module=module, station=station, slot=slot,
-        from_ts=now, reason="auto-swap", created_by=user,
+        module=module,
+        station=station,
+        slot=slot,
+        from_ts=now,
+        reason="auto-swap",
+        created_by=user,
     )
 
     if displaced:
         StationAuditLog.log(
-            station=station, module=module,
+            station=station,
+            module=module,
             event_type=StationAuditLog.EventType.MODULE_SWAPPED,
             message=f"Module {module.uid} replaced a module in {station}/{slot}.",
         )
     StationAuditLog.log(
-        station=station, module=module,
+        station=station,
+        module=module,
         event_type=StationAuditLog.EventType.MODULE_ASSIGNMENT_CHANGED,
         message=f"Module {module.uid} assigned to {station}/{slot}.",
     )

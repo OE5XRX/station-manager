@@ -363,8 +363,8 @@ class StationAuditLog(models.Model):
         ]
 
     def __str__(self):
-        subject = self.station.name if self.station_id else (
-            self.module.uid if self.module_id else "—"
+        subject = (
+            self.station.name if self.station_id else (self.module.uid if self.module_id else "—")
         )
         return f"{subject} - {self.get_event_type_display()} - {self.created_at}"
 

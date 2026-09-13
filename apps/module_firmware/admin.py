@@ -12,12 +12,26 @@ class ModuleTypeAdmin(admin.ModelAdmin):
 
 @admin.register(Module)
 class ModuleAdmin(admin.ModelAdmin):
-    list_display = ("uid", "module_type", "lifecycle_status", "registration_status",
-                    "last_reported_version", "last_seen")
+    list_display = (
+        "uid",
+        "module_type",
+        "lifecycle_status",
+        "registration_status",
+        "last_reported_version",
+        "last_seen",
+    )
     list_filter = ("module_type", "lifecycle_status", "registration_status", "uid_source")
     search_fields = ("uid",)
-    readonly_fields = ("uid", "module_type", "uid_source", "first_seen", "last_seen",
-                       "last_reported_version", "created_at", "updated_at")
+    readonly_fields = (
+        "uid",
+        "module_type",
+        "uid_source",
+        "first_seen",
+        "last_seen",
+        "last_reported_version",
+        "created_at",
+        "updated_at",
+    )
     actions = ["confirm_registration"]
 
     @admin.action(description="Registrierung bestätigen")

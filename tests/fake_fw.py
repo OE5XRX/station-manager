@@ -132,7 +132,9 @@ class FakeFirmware:
                     mid = m.group(1).decode(errors="replace")
                     spec = self._modules.get(mid)
                     if spec is not None:
-                        self._w("MODULE-DESCRIBE " + json.dumps(self._describe(mid, spec)) + "\r\n")
+                        self._w(
+                            "MODULE-DESCRIBE " + json.dumps(self._describe(mid, spec)) + "\r\n"
+                        )
                     else:
                         self._result(mid, "", "describe", False, error="unknown_module")
                     continue

@@ -26,8 +26,10 @@ def test_audit_can_log_module_without_station(module):
 def test_audit_dual_subject(module, station_factory):
     station = station_factory()
     StationAuditLog.log(
-        station=station, module=module,
-        event_type=StationAuditLog.EventType.MODULE_SWAPPED, message="swap",
+        station=station,
+        module=module,
+        event_type=StationAuditLog.EventType.MODULE_SWAPPED,
+        message="swap",
     )
     assert station.audit_logs.filter(module=module).count() == 1
     assert module.audit_logs.filter(station=station).count() == 1

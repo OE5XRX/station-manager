@@ -54,8 +54,10 @@ class Module(models.Model):
         _("lifecycle"), max_length=16, choices=Lifecycle.choices, default=Lifecycle.READY
     )
     registration_status = models.CharField(
-        _("registration"), max_length=16,
-        choices=Registration.choices, default=Registration.UNREGISTERED,
+        _("registration"),
+        max_length=16,
+        choices=Registration.choices,
+        default=Registration.UNREGISTERED,
     )
     last_reported_version = models.CharField(_("last reported version"), max_length=64, blank=True)
     first_seen = models.DateTimeField(_("first seen"), null=True, blank=True)
@@ -85,16 +87,24 @@ class ModuleAssignmentHistory(models.Model):
         Module, verbose_name=_("module"), on_delete=models.CASCADE, related_name="assignments"
     )
     station = models.ForeignKey(
-        "stations.Station", verbose_name=_("station"),
-        on_delete=models.SET_NULL, null=True, blank=True, related_name="module_assignments",
+        "stations.Station",
+        verbose_name=_("station"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="module_assignments",
     )
     slot = models.CharField(_("slot"), max_length=64)
     from_ts = models.DateTimeField(_("from"), default=timezone.now)
     to_ts = models.DateTimeField(_("to"), null=True, blank=True)
     reason = models.CharField(_("reason"), max_length=64, blank=True)
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, verbose_name=_("created by"),
-        on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        settings.AUTH_USER_MODEL,
+        verbose_name=_("created by"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
     )
 
     class Meta:
@@ -103,11 +113,13 @@ class ModuleAssignmentHistory(models.Model):
         ordering = ["-from_ts"]
         constraints = [
             models.UniqueConstraint(
-                fields=["module"], condition=models.Q(to_ts__isnull=True),
+                fields=["module"],
+                condition=models.Q(to_ts__isnull=True),
                 name="uniq_open_assignment_per_module",
             ),
             models.UniqueConstraint(
-                fields=["station", "slot"], condition=models.Q(to_ts__isnull=True),
+                fields=["station", "slot"],
+                condition=models.Q(to_ts__isnull=True),
                 name="uniq_open_assignment_per_station_slot",
             ),
         ]

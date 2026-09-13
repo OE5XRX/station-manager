@@ -44,8 +44,12 @@ def test_new_uid_creates_unregistered_module_and_audits(fm, station_factory):
     assert m.registration_status == Module.Registration.UNREGISTERED
     assert m.first_seen == now and m.last_seen == now
     assert m.last_reported_version == "1.0.0"
-    assert StationAuditLog.objects.filter(
-        module=m, event_type=StationAuditLog.EventType.MODULE_DISCOVERED).count() == 1
+    assert (
+        StationAuditLog.objects.filter(
+            module=m, event_type=StationAuditLog.EventType.MODULE_DISCOVERED
+        ).count()
+        == 1
+    )
 
 
 @pytest.mark.django_db
@@ -58,6 +62,10 @@ def test_known_uid_updates_only_seen_and_version(fm, station_factory):
     assert m1.pk == m2.pk
     assert m2.first_seen == first and m2.last_seen == later
     assert m2.last_reported_version == "1.1.0"
-    assert StationAuditLog.objects.filter(
-        module=m2, event_type=StationAuditLog.EventType.MODULE_DISCOVERED).count() == 1
+    assert (
+        StationAuditLog.objects.filter(
+            module=m2, event_type=StationAuditLog.EventType.MODULE_DISCOVERED
+        ).count()
+        == 1
+    )
     assert Module.objects.count() == 1

@@ -20,12 +20,20 @@ def test_confirm_registration(module):
     services.confirm_registration(module, user=user)
     module.refresh_from_db()
     assert module.registration_status == Module.Registration.REGISTERED
-    assert StationAuditLog.objects.filter(
-        module=module, event_type=StationAuditLog.EventType.MODULE_REGISTERED, user=user).count() == 1
+    assert (
+        StationAuditLog.objects.filter(
+            module=module, event_type=StationAuditLog.EventType.MODULE_REGISTERED, user=user
+        ).count()
+        == 1
+    )
     # idempotent
     services.confirm_registration(module, user=user)
-    assert StationAuditLog.objects.filter(
-        module=module, event_type=StationAuditLog.EventType.MODULE_REGISTERED).count() == 1
+    assert (
+        StationAuditLog.objects.filter(
+            module=module, event_type=StationAuditLog.EventType.MODULE_REGISTERED
+        ).count()
+        == 1
+    )
 
 
 @pytest.mark.django_db

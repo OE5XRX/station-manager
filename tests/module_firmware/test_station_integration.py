@@ -14,8 +14,12 @@ def test_station_control_panel_links_to_module_detail(client, station_factory):
     t = ModuleType.objects.create(key="fm", display_name="FM")
     mod = Module.objects.create(uid="LINK1", module_type=t)
     StationModule.objects.create(
-        station=station, slot="slot1", module_id="fm", type="fm",
-        tracked_module=mod, online=True,
+        station=station,
+        slot="slot1",
+        module_id="fm",
+        type="fm",
+        tracked_module=mod,
+        online=True,
     )
     # can_use_station passes for any non-Applicant user.
     client.force_login(

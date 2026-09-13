@@ -20,8 +20,12 @@ def test_active_assignment_sets_deployed(fm, station_factory):
     m = ingest_module(station_factory(), "slot1", "fm", ident("A"), now=timezone.now())
     m.refresh_from_db()
     assert m.lifecycle_status == Module.Lifecycle.DEPLOYED
-    assert StationAuditLog.objects.filter(
-        module=m, event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED).count() == 1
+    assert (
+        StationAuditLog.objects.filter(
+            module=m, event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED
+        ).count()
+        == 1
+    )
 
 
 @pytest.mark.django_db
