@@ -67,6 +67,20 @@ class FakeFirmware:
             body["error"] = error
         self._w("MODULE-RESULT " + json.dumps(body) + "\r\n")
 
+    def _describe(self, mid, spec):
+        """Return the DESCRIBE spec, ensuring identity carries a persisted UID.
+
+        Real modules report a stable STM32 UID; the sim mirrors that by emitting
+        a stable synthetic UID (``uid_source="synthetic"``) derived from the
+        module id — unless the caller's spec already declares its own uid. This
+        lets sim inventory flow through Module ingestion like real hardware.
+        """
+        identity = dict(spec.get("identity", {}))
+        if "uid" not in identity:
+            identity["uid"] = f"SIM-{mid.upper()}-0001"
+            identity.setdefault("uid_source", "synthetic")
+        return {**spec, "identity": identity}
+
     def _cap(self, mid, cap):
         for c in self._modules.get(mid, {}).get("capabilities", []):
             if c.get("name") == cap:
@@ -118,7 +132,7 @@ class FakeFirmware:
                     mid = m.group(1).decode(errors="replace")
                     spec = self._modules.get(mid)
                     if spec is not None:
-                        self._w("MODULE-DESCRIBE " + json.dumps(spec) + "\r\n")
+                        self._w("MODULE-DESCRIBE " + json.dumps(self._describe(mid, spec)) + "\r\n")
                     else:
                         self._result(mid, "", "describe", False, error="unknown_module")
                     continue
