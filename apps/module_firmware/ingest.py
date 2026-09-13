@@ -40,11 +40,9 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
     try:
         module_type = ModuleType.objects.get(key=type_key)
     except ModuleType.DoesNotExist:
-        StationAuditLog.log(
-            station=station,
-            event_type=StationAuditLog.EventType.UPDATED,
-            message=f"Ignored module with unregistered type '{type_key}' (uid={uid}).",
-        )
+        # Log only — do NOT write an audit row: rejected UIDs are never
+        # persisted, so a station running unregistered-type firmware would
+        # append one audit row per heartbeat (unbounded growth).
         logger.warning("ingest: unknown module type %r (uid=%s)", type_key, uid)
         return None
 
@@ -77,9 +75,41 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
             message=f"Module {uid} ({module_type.key}) discovered in {station}/{slot}.",
         )
     else:
+        # A UID is a physical module's stable identity; its type must not change.
+        # A report claiming a different registered type is a UID collision or a
+        # firmware misreport — reject it rather than silently re-typing / linking
+        # the wrong module, and audit the anomaly.
+        if module.module_type_id != module_type.id:
+            StationAuditLog.log(
+                station=station,
+                module=module,
+                event_type=StationAuditLog.EventType.UPDATED,
+                message=(
+                    f"Type mismatch for uid {uid}: reported '{module_type.key}', "
+                    f"tracked as '{module.module_type.key}'. Ignored."
+                ),
+            )
+            logger.warning(
+                "ingest: type mismatch uid=%s reported=%s tracked=%s",
+                uid,
+                module_type.key,
+                module.module_type.key,
+            )
+            return None
+        old_version = module.last_reported_version
         module.last_seen = now
         module.last_reported_version = version
         module.save(update_fields=["last_seen", "last_reported_version", "updated_at"])
+        # Record firmware version transitions so the detail view has real history
+        # (skip the no-op and the very first observed version).
+        if version and old_version and version != old_version:
+            StationAuditLog.log(
+                station=station,
+                module=module,
+                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+                message=f"Module {uid} reported version {old_version} → {version}.",
+                changes={"last_reported_version": {"old": old_version, "new": version}},
+            )
 
     _apply_assignment(module, station, slot, now=now, user=user)
     _derive_lifecycle(module, now=now, station=station)
@@ -100,6 +130,10 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     # No-op under SQLite in tests; real row locks under Postgres.
     station.__class__.objects.select_for_update().filter(pk=station.pk).exists()
     Module.objects.select_for_update().filter(pk=module.pk).exists()
+    # Refresh under the lock: a concurrent set_lifecycle (which locks the same
+    # row) may have committed a sticky state after this ``module`` was fetched.
+    # Reading the fresh value keeps _derive_lifecycle from overwriting it.
+    module.refresh_from_db()
 
     current = module.assignments.filter(to_ts__isnull=True).first()
     if current and current.station_id == station.id and current.slot == slot:
@@ -120,7 +154,11 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     if occupant:
         occupant.to_ts = now
         occupant.save(update_fields=["to_ts"])
+        # Lock + refresh the displaced module too, so its sticky-state check in
+        # _derive_lifecycle sees any concurrently-committed operator status.
+        Module.objects.select_for_update().filter(pk=occupant.module_id).exists()
         displaced_module = occupant.module
+        displaced_module.refresh_from_db()
 
     ModuleAssignmentHistory.objects.create(
         module=module,

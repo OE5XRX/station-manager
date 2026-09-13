@@ -53,6 +53,63 @@ def test_new_uid_creates_unregistered_module_and_audits(fm, station_factory):
 
 
 @pytest.mark.django_db
+def test_unknown_type_writes_no_audit_row(station_factory):
+    """Rejected unknown-type entries must not append an audit row per heartbeat."""
+    station = station_factory()
+    for _ in range(3):
+        ingest_module(station, "slot1", "power", ident(type="power", uid="X1"), now=timezone.now())
+    assert StationAuditLog.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_type_mismatch_on_existing_uid_is_rejected(fm, station_factory):
+    """A report claiming a different registered type for an existing UID is
+    rejected (UID is a stable identity) and audited, without reassigning."""
+    ModuleType.objects.create(key="power", display_name="Power")
+    station = station_factory()
+    m = ingest_module(station, "slot1", "fm", ident(uid="DUP"), now=timezone.now())
+    assert m.module_type.key == "fm"
+
+    result = ingest_module(
+        station, "slot2", "power", ident(type="power", uid="DUP"), now=timezone.now()
+    )
+    assert result is None
+    m.refresh_from_db()
+    assert m.module_type.key == "fm"  # unchanged
+    assert (
+        StationAuditLog.objects.filter(
+            module=m, event_type=StationAuditLog.EventType.UPDATED
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.django_db
+def test_version_change_is_audited(fm, station_factory):
+    """A firmware version change on a known module records an audited transition;
+    a repeated same-version report does not."""
+    station = station_factory()
+    t0 = timezone.now()
+    ingest_module(station, "slot1", "fm", ident(uid="V"), now=t0)  # 1.0.0, first seen
+    ingest_module(station, "slot1", "fm", ident(uid="V", version="1.0.0"), now=t0)  # no change
+    m = Module.objects.get(uid="V")
+    assert (
+        StationAuditLog.objects.filter(
+            module=m, event_type=StationAuditLog.EventType.FIRMWARE_UPDATE
+        ).count()
+        == 0
+    )
+
+    ingest_module(station, "slot1", "fm", ident(uid="V", version="2.0.0"), now=t0)
+    assert (
+        StationAuditLog.objects.filter(
+            module=m, event_type=StationAuditLog.EventType.FIRMWARE_UPDATE
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.django_db
 def test_known_uid_updates_only_seen_and_version(fm, station_factory):
     station = station_factory()
     first = timezone.now()

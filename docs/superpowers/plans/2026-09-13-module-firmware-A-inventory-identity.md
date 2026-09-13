@@ -1034,7 +1034,7 @@ Innerhalb der Modul-Schleife, den `update_or_create`-Block so anpassen, dass die
             tracked = ingest_module(station, slot, module_id, identity, now=now)
             if sm.tracked_module_id != (tracked.id if tracked else None):
                 sm.tracked_module = tracked
-                sm.save(update_fields=["module"])
+                sm.save(update_fields=["tracked_module"])
             reported.append((slot, module_id))
 ```
 

@@ -78,7 +78,14 @@
           <div class="summary-key mb-8">{% trans "Lifecycle" %}</div>
           <form method="post" action="{% url 'module_firmware:module_lifecycle' module.uid %}" class="row-gap-8">
             {% csrf_token %}
-            <select name="lifecycle_status" class="form-select" style="width:auto;min-width:150px;" aria-label="{% trans 'Lifecycle status' %}">
+            <select name="lifecycle_status" class="form-select" style="width:auto;min-width:170px;" aria-label="{% trans 'Lifecycle status' %}">
+              {% comment %}
+              Placeholder with empty value, preselected when the current status is
+              not operator-settable (e.g. auto-derived "deployed"). Without it the
+              browser would preselect the first real option and an accidental
+              "Update" would clear the derived state; an empty submit is a no-op.
+              {% endcomment %}
+              <option value="" {% if module.lifecycle_status == "deployed" %}selected{% endif %}>{{ module.get_lifecycle_status_display }} — {% trans "change to…" %}</option>
               {% for value, label in lifecycles %}
                 <option value="{{ value }}" {% if module.lifecycle_status == value %}selected{% endif %}>{{ label }}</option>
               {% endfor %}

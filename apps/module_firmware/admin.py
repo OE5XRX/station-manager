@@ -44,6 +44,11 @@ class ModuleAdmin(admin.ModelAdmin):
         # read-only, so the admin add form can't build a valid row anyway.
         return False
 
+    def has_delete_permission(self, request, obj=None):
+        # Deleting a Module CASCADE-drops its whole assignment timeline and nulls
+        # its audit attribution. Use the `retired` lifecycle instead.
+        return False
+
     @admin.action(description="Registrierung bestätigen")
     def confirm_registration(self, request, queryset):
         for module in queryset:
