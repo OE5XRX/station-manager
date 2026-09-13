@@ -68,11 +68,16 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     """Ensure exactly one open assignment for (module) at (station, slot).
     Closes any conflicting open rows and opens a new one on change.
     Returns True if the assignment changed."""
+    # Serialize concurrent ingests of the same module: without a lock, two
+    # transactions could both read "no open row" and both INSERT, tripping the
+    # partial-unique open-assignment constraint. Locking the Module row makes
+    # same-module applies wait for each other. (No-op under SQLite in tests;
+    # a real row lock under Postgres.)
+    Module.objects.select_for_update().filter(pk=module.pk).exists()
+
     current = module.assignments.filter(to_ts__isnull=True).first()
     if current and current.station_id == station.id and current.slot == slot:
         return False  # unchanged — idempotent
-
-    displaced = False
 
     # Close this module's open assignment elsewhere.
     if current:
@@ -85,10 +90,11 @@ def _apply_assignment(module, station, slot, *, now, user=None):
         .exclude(module=module)
         .first()
     )
+    displaced_module = None
     if occupant:
         occupant.to_ts = now
         occupant.save(update_fields=["to_ts"])
-        displaced = True
+        displaced_module = occupant.module
 
     ModuleAssignmentHistory.objects.create(
         module=module,
@@ -99,13 +105,16 @@ def _apply_assignment(module, station, slot, *, now, user=None):
         created_by=user,
     )
 
-    if displaced:
+    if displaced_module is not None:
         StationAuditLog.log(
             station=station,
             module=module,
             event_type=StationAuditLog.EventType.MODULE_SWAPPED,
             message=f"Module {module.uid} replaced a module in {station}/{slot}.",
         )
+        # The displaced module lost its slot — recompute its lifecycle so it
+        # falls back from deployed to ready (unless operator-sticky).
+        _derive_lifecycle(displaced_module, now=now)
     StationAuditLog.log(
         station=station,
         module=module,

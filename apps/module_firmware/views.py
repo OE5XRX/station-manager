@@ -6,8 +6,10 @@ from django.urls import reverse
 from django.views import View
 from django.views.generic import DetailView, ListView
 
+from apps.stations.models import Station
+
 from . import services
-from .models import Module
+from .models import Module, ModuleType
 
 
 class ModuleListView(LoginRequiredMixin, ListView):
@@ -29,7 +31,7 @@ class ModuleListView(LoginRequiredMixin, ListView):
             qs = qs.filter(registration_status=g["registration"])
         if g.get("uid_source"):
             qs = qs.filter(uid_source=g["uid_source"])
-        if g.get("station"):
+        if g.get("station", "").isdigit():
             qs = qs.filter(station_modules__station_id=g["station"]).distinct()
         if g.get("q"):
             qs = qs.filter(Q(uid__icontains=g["q"]))
@@ -40,6 +42,10 @@ class ModuleListView(LoginRequiredMixin, ListView):
         ctx["lifecycles"] = Module.Lifecycle.choices
         ctx["registrations"] = Module.Registration.choices
         ctx["uid_sources"] = Module.UidSource.choices
+        ctx["types"] = ModuleType.objects.all()
+        ctx["stations"] = (
+            Station.objects.filter(module_assignments__isnull=False).distinct().order_by("name")
+        )
         ctx["total_count"] = Module.objects.count()
         ctx["unregistered_count"] = Module.objects.filter(
             registration_status=Module.Registration.UNREGISTERED
@@ -50,6 +56,7 @@ class ModuleListView(LoginRequiredMixin, ListView):
             "lifecycle": g.get("lifecycle", ""),
             "registration": g.get("registration", ""),
             "uid_source": g.get("uid_source", ""),
+            "station": g.get("station", ""),
             "q": g.get("q", ""),
         }
         return ctx
