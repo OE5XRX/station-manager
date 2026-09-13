@@ -390,7 +390,7 @@ def test_stationmodule_links_to_module(station_factory):
     station = station_factory()
     t = ModuleType.objects.create(key="fm", display_name="FM")
     mod = Module.objects.create(uid="U1", module_type=t)
-    sm = StationModule.objects.create(station=station, slot="slot1", module_id="fm", module=mod)
+    sm = StationModule.objects.create(station=station, slot="slot1", module_id="fm", tracked_module=mod)
     assert sm.tracked_module == mod
     assert mod.station_modules.first() == sm
 ```
@@ -1618,7 +1618,7 @@ def test_station_page_links_to_module_detail(client, station_factory):
     t = ModuleType.objects.create(key="fm", display_name="FM")
     mod = Module.objects.create(uid="LINK1", module_type=t)
     StationModule.objects.create(station=station, slot="slot1", module_id="fm",
-                                 type="fm", module=mod, online=True)
+                                 type="fm", tracked_module=mod, online=True)
     # login (station detail requires auth); use staff to avoid topology scoping in test
     client.force_login(User.objects.create_user(username="s", password="x", is_staff=True, is_superuser=True))
     # Station-Detail-URL aus apps/stations bzw. apps/control ermitteln:
@@ -1632,7 +1632,7 @@ def test_station_page_links_to_module_detail(client, station_factory):
 
 - [ ] **Step 3: Run** → FAIL.
 
-- [ ] **Step 4: Template anpassen** — im Modul-Panel pro Slot: wenn `module.module` (der FK) gesetzt ist, UID als Link `{% url 'module_firmware:module_detail' module.module.uid %}` + Badges für `module.module.get_registration_status_display` / `get_lifecycle_status_display`. `{% comment %}`-Syntax für Kommentare.
+- [ ] **Step 4: Template anpassen** — im Modul-Panel pro Slot: wenn `module.tracked_module` (der FK) gesetzt ist, UID als Link `{% url 'module_firmware:module_detail' module.tracked_module.uid %}` + Badges für `module.tracked_module.get_registration_status_display` / `get_lifecycle_status_display`. `{% comment %}`-Syntax für Kommentare.
 
 - [ ] **Step 5: Run** → PASS.
 

@@ -22,10 +22,15 @@ class ModuleAdmin(admin.ModelAdmin):
     )
     list_filter = ("module_type", "lifecycle_status", "registration_status", "uid_source")
     search_fields = ("uid",)
+    # lifecycle_status / registration_status are read-only here: editing them via
+    # the plain admin form would bypass services.set_lifecycle / confirm_registration
+    # and leave no audit trail. Use the bulk action / staff UI instead.
     readonly_fields = (
         "uid",
         "module_type",
         "uid_source",
+        "lifecycle_status",
+        "registration_status",
         "first_seen",
         "last_seen",
         "last_reported_version",
@@ -33,6 +38,11 @@ class ModuleAdmin(admin.ModelAdmin):
         "updated_at",
     )
     actions = ["confirm_registration"]
+
+    def has_add_permission(self, request):
+        # Modules are created by inventory ingestion; module_type is required and
+        # read-only, so the admin add form can't build a valid row anyway.
+        return False
 
     @admin.action(description="Registrierung bestätigen")
     def confirm_registration(self, request, queryset):

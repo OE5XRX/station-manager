@@ -152,18 +152,33 @@ def test_module_moved_to_other_station_and_slot(fm, station_factory):
 
 
 @pytest.mark.django_db
-def test_pulled_module_closes_assignment_and_reverts_to_ready(fm, station_factory):
-    """Scenario: a module reported once, then the station's next full snapshot no
-    longer lists its slot => its open assignment is closed and lifecycle reverts
-    deployed -> ready (reconcile_station), even though ingest_module never runs
-    for the vanished module."""
+def test_reingest_same_int_slot_is_idempotent(fm, station_factory):
+    """Slots arrive as ints on the wire but are stored as CharField. A repeated
+    heartbeat for the same int slot must NOT churn the assignment history — the
+    idempotency comparison has to survive the int/str round-trip."""
     station = station_factory()
-    apply_inventory(station, [slot_frame(1, uid="PULLED")])
+    apply_inventory(station, [slot_frame(1, uid="A")])
+    apply_inventory(station, [slot_frame(1, uid="A", version="1.1.0")])
+    module = Module.objects.get(uid="A")
+    assert ModuleAssignmentHistory.objects.filter(module=module).count() == 1
+    assert audit_count(EV.MODULE_SWAPPED) == 0
+    assert audit_count(EV.MODULE_ASSIGNMENT_CHANGED, module) == 1
+
+
+@pytest.mark.django_db
+def test_pulled_module_closes_assignment_and_reverts_to_ready(fm, station_factory):
+    """A module whose slot drops out of a still-populated snapshot loses its open
+    assignment and reverts deployed -> ready (reconcile_station), even though
+    ingest_module never runs for the vanished module. Reconciliation only fires
+    on a NON-empty snapshot (an empty one may be a transient discovery failure),
+    so the surviving module keeps slot 2 populated."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="PULLED"), slot_frame(2, uid="KEEP")])
     module = Module.objects.get(uid="PULLED")
     assert module.lifecycle_status == Module.Lifecycle.DEPLOYED
 
-    # Next snapshot: slot empty.
-    apply_inventory(station, [])
+    # Next snapshot: slot 1 gone, slot 2 still there (non-empty).
+    apply_inventory(station, [slot_frame(2, uid="KEEP")])
     module.refresh_from_db()
 
     assert module.assignments.filter(to_ts__isnull=True).count() == 0
@@ -171,20 +186,52 @@ def test_pulled_module_closes_assignment_and_reverts_to_ready(fm, station_factor
 
 
 @pytest.mark.django_db
+def test_empty_snapshot_does_not_reconcile(fm, station_factory):
+    """A fully empty inventory (indistinguishable from a discovery failure) must
+    NOT tear down assignments — the deployed module keeps its open assignment."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="SAFE")])
+    module = Module.objects.get(uid="SAFE")
+
+    apply_inventory(station, [])  # empty — treated as "no fresh data", not "empty rack"
+    module.refresh_from_db()
+
+    assert module.assignments.filter(to_ts__isnull=True).count() == 1
+    assert module.lifecycle_status == Module.Lifecycle.DEPLOYED
+
+
+@pytest.mark.django_db
 def test_pulled_sticky_module_keeps_state_but_closes_assignment(fm, station_factory):
     """A pulled module marked defect stays defect (sticky) but still loses its
     open assignment."""
     station = station_factory()
-    apply_inventory(station, [slot_frame(1, uid="STICKY")])
+    apply_inventory(station, [slot_frame(1, uid="STICKY"), slot_frame(2, uid="KEEP")])
     module = Module.objects.get(uid="STICKY")
     module.lifecycle_status = Module.Lifecycle.DEFECT
     module.save(update_fields=["lifecycle_status"])
 
-    apply_inventory(station, [])
+    apply_inventory(station, [slot_frame(2, uid="KEEP")])
     module.refresh_from_db()
 
     assert module.assignments.filter(to_ts__isnull=True).count() == 0
     assert module.lifecycle_status == Module.Lifecycle.DEFECT
+
+
+@pytest.mark.django_db
+def test_legacy_replacing_tracked_module_releases_assignment(fm, station_factory):
+    """A legacy no-UID module reported into a slot that previously held a tracked
+    module must release the old module's assignment (the slot no longer holds a
+    linked Module, so it's excluded from tracked_slots)."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="WASTRACKED"), slot_frame(2, uid="KEEP")])
+    module = Module.objects.get(uid="WASTRACKED")
+
+    # slot 1 now reports a legacy module with no uid; slot 2 keeps the snapshot non-empty.
+    apply_inventory(station, [slot_frame(1, uid=None), slot_frame(2, uid="KEEP")])
+    module.refresh_from_db()
+
+    assert module.assignments.filter(to_ts__isnull=True).count() == 0
+    assert module.lifecycle_status == Module.Lifecycle.READY
 
 
 @pytest.mark.django_db

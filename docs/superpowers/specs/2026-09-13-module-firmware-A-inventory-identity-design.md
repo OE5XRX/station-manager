@@ -155,9 +155,11 @@ Schritt 2). Referenzielle Integrität fürs Typ-Kompatibilitäts-Gate (relevant 
 
 ## Ingestion & Lifecycle-Flow
 
-Der Heartbeat trägt die Modul-Inventory als Liste pro Slot. Server-seitig pro
-gemeldetem Modul-Eintrag (`{slot, id, identity:{type, model, version, uid?,
-uid_source?}, capabilities}`):
+Der Heartbeat trägt die Modul-Inventory als Liste pro Slot. Der Server konsumiert
+die **Broker-Wire-Shape** pro Slot `{slot, control, modules: [{module, identity,
+capabilities, state}]}` (das `id`-Feld existiert nur in der Discovery-Zwischenform
+und wird vom Broker auf `module` gemappt). Pro gemeldetem Modul-Eintrag
+(`{module, identity:{type, model, version, uid?, uid_source?}, capabilities, state}`):
 
 1. **Keine `uid`** → Legacy-Pfad: `StationModule` wie heute anlegen/aktualisieren,
    **kein** `Module`, kein History-/Audit-Eintrag für die Identität. Fertig.

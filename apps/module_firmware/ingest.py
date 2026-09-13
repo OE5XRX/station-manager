@@ -30,6 +30,12 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
     if not uid:
         return None  # legacy firmware without UID: StationModule-only display
 
+    # Slot arrives as an int from the broker wire shape, but slot is stored as a
+    # CharField. Normalize to str so the idempotency comparison in
+    # _apply_assignment (current.slot == slot) doesn't fail "1" != 1 on every
+    # heartbeat and churn the assignment history.
+    slot = "" if slot is None else str(slot)
+
     type_key = identity.get("type") or module_id
     try:
         module_type = ModuleType.objects.get(key=type_key)
@@ -42,7 +48,15 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
         logger.warning("ingest: unknown module type %r (uid=%s)", type_key, uid)
         return None
 
-    uid_source = identity.get("uid_source") or Module.UidSource.STM32_UID
+    # uid_source is a TextChoices field but Django does not enforce choices on
+    # save(); guard against a malformed self-reported value creating an invalid
+    # third source. Fall back to stm32_uid.
+    reported_source = identity.get("uid_source") or Module.UidSource.STM32_UID
+    uid_source = (
+        reported_source
+        if reported_source in Module.UidSource.values
+        else Module.UidSource.STM32_UID
+    )
     version = identity.get("version", "")
 
     module, created = Module.objects.get_or_create(

@@ -60,8 +60,12 @@ class ModuleListView(LoginRequiredMixin, ListView):
         ctx["registrations"] = Module.Registration.choices
         ctx["uid_sources"] = Module.UidSource.choices
         ctx["types"] = ModuleType.objects.all()
+        # Only stations that currently host a module (open assignment), matching
+        # what the station filter actually selects on.
         ctx["stations"] = (
-            Station.objects.filter(module_assignments__isnull=False).distinct().order_by("name")
+            Station.objects.filter(module_assignments__to_ts__isnull=True)
+            .distinct()
+            .order_by("name")
         )
         ctx["total_count"] = Module.objects.count()
         ctx["unregistered_count"] = Module.objects.filter(

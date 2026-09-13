@@ -4,36 +4,49 @@ Kept separate from ingest.py: these are user-driven, audited with the acting
 user, and always allowed (including sticky lifecycle states).
 """
 
+from django.db import transaction
+
 from apps.stations.models import StationAuditLog
 
 from .models import Module
 
 
+@transaction.atomic
 def confirm_registration(module, *, user):
-    """Mark a module as registered. Idempotent — no-op if already registered."""
-    if module.registration_status == Module.Registration.REGISTERED:
+    """Mark a module as registered. Idempotent — no-op if already registered.
+
+    Reloads the module under ``select_for_update`` so two concurrent
+    confirmations can't both pass the no-op check and emit duplicate audits."""
+    locked = Module.objects.select_for_update().get(pk=module.pk)
+    if locked.registration_status == Module.Registration.REGISTERED:
         return
-    module.registration_status = Module.Registration.REGISTERED
-    module.save(update_fields=["registration_status", "updated_at"])
+    locked.registration_status = Module.Registration.REGISTERED
+    locked.save(update_fields=["registration_status", "updated_at"])
+    module.registration_status = locked.registration_status
     StationAuditLog.log(
-        module=module,
+        module=locked,
         user=user,
         event_type=StationAuditLog.EventType.MODULE_REGISTERED,
-        message=f"Module {module.uid} registration confirmed.",
+        message=f"Module {locked.uid} registration confirmed.",
     )
 
 
+@transaction.atomic
 def set_lifecycle(module, status, *, user):
-    """Set the lifecycle status (operator override, sticky states allowed)."""
-    if module.lifecycle_status == status:
+    """Set the lifecycle status (operator override, sticky states allowed).
+
+    Reloads under ``select_for_update`` so concurrent sets can't both log."""
+    locked = Module.objects.select_for_update().get(pk=module.pk)
+    if locked.lifecycle_status == status:
         return
-    old = module.lifecycle_status
+    old = locked.lifecycle_status
+    locked.lifecycle_status = status
+    locked.save(update_fields=["lifecycle_status", "updated_at"])
     module.lifecycle_status = status
-    module.save(update_fields=["lifecycle_status", "updated_at"])
     StationAuditLog.log(
-        module=module,
+        module=locked,
         user=user,
         event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED,
-        message=f"Lifecycle {old} → {status} for module {module.uid}.",
+        message=f"Lifecycle {old} → {status} for module {locked.uid}.",
         changes={"lifecycle_status": {"old": old, "new": status}},
     )
