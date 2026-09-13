@@ -344,3 +344,45 @@ Sub-Systeme greifen ineinander.
   Unveränderlichkeit, Konsistenz mit Image-OTA.
 - **Modul als UID-getracktes Objekt** — macht Diagnose/Modultausch/Historie real,
   ohne in Voll-Asset-Management auszuufern.
+
+---
+
+## Decomposition & Status (Programm-Ebene)
+
+Zerlegt in Teilbereiche, jeder mit eigenem Spec → Plan → PR-Zyklus (Kind-Session-Muster
+aus der globalen CLAUDE.md).
+
+| # | Teilbereich | Repo | Status |
+|---|---|---|---|
+| Overview | Strategie/Architektur (dieses Dokument) | station-manager | dieses Doc |
+| **E** | FW-Produktions-Signing-Key & Provisioning | FW-RemoteStation | ✅ **gemerged** (PR #64, `main`); Bench/Task 7 (HIL) offen |
+| **A** | Modul-Inventar & Identität | station-manager | **NEXT** — Fundament |
+| **B** | Firmware-Release-Management (Import + Pin + Serve) | station-manager | backlog (parallel zu A) |
+| **C** | Desired-State & Reconciler (Target/Quarantäne/API) | station-manager | backlog (nach A+B) |
+| **D** | Agent-Flash-Ausführung (DFU + sim-Backend) | station_agent + linux-image | backlog (nach C; braucht E-Artefakte) |
+
+Sequenz: A (Fundament) ∥ B → C → D. E ist unabhängig fertig.
+
+## Teilbereich A — Inputs & offene Fragen (für die nächste Session)
+
+**Offene Onboarding-Entscheidung (unbekannte UID im Feld):**
+- (i) **TOFU** — auto-anlegen als `deployed`, kein Bench-Pre-Registrieren.
+- (ii) **auto-anlegen + flaggen** (Empfehlung) — erkannt, aber `unregistered` bis ein Admin bestätigt.
+- (iii) **strikt** — nur bench-registrierte UIDs akzeptiert; unbekannte geflaggt + von Updates ausgeschlossen.
+→ **noch zu entscheiden.**
+
+**native_sim / Sim-Station — Identität & „Update" (Input für A + D):**
+Sim hat kein MCUboot/DFU/keine STM32-UID. Konsequenzen:
+- **Identität:** `Module.uid` ist ein opaker String. Sim erzeugt beim ersten Start eine
+  **synthetische, persistierte UID** (im schreibbaren Bereich) und meldet sie wie eine HW-UID.
+  Neues Feld **`uid_source`** (`stm32_uid` | `synthetic`) unterscheidet fürs Audit.
+- **„Flashen" am Sim:** kein DFU → **Datei-Swap** des `native_sim`-Binaries in einem
+  **schreibbaren Bereich** des qemu-Images + Service-Restart (idealerweise Mini-A/B für lokalen
+  Rollback). Erfordert linux-image-Anpassung (schreibbare Modul-Partition + Sim-Modul-Service).
+- **Testbarkeit:** A–C (Inventar/Desired-State/Reconciler) am Sim voll testbar; D (physisches
+  Flashen) real-HW-only, am Sim via **Flash-Executor-Backend `sim`** (no-op/Datei-Swap).
+- **Trust-Ehrlichkeit:** Sim hat KEINE Hardware-Trust-Wurzel — Verify ist best-effort (Test-/Dev-Station).
+
+**E→A-Übergabe:** E's `provision.sh` erzeugt `provision-<uid>.json`
+(`{uid, module_type, pyocd_target, firmware_version, signed_app, mcuboot_hex, provisioned_at}`) —
+das ist der Registrierungs-Input, den A konsumiert.
