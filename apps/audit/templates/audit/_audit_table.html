@@ -23,7 +23,11 @@
           <td data-label="{% trans 'Subject' %}">
             {% if entry.station %}
               <a href="{% url 'stations:station_detail' entry.station.pk %}" class="callsign">{{ entry.station.callsign|default:entry.station.name }}</a>
-            {% else %}<span class="t-muted">—</span>{% endif %}
+            {% endif %}
+            {% if entry.module_id %}
+              <a href="{% url 'module_firmware:module_detail' entry.module.uid %}" class="t-mono-sm">{{ entry.module.uid }}</a>
+            {% endif %}
+            {% if not entry.station and not entry.module_id %}<span class="t-muted">—</span>{% endif %}
           </td>
           {% endif %}
           <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>

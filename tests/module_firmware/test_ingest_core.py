@@ -70,10 +70,12 @@ def test_type_mismatch_on_existing_uid_is_rejected(fm, station_factory):
     m = ingest_module(station, "slot1", "fm", ident(uid="DUP"), now=timezone.now())
     assert m.module_type.key == "fm"
 
-    result = ingest_module(
-        station, "slot2", "power", ident(type="power", uid="DUP"), now=timezone.now()
-    )
-    assert result is None
+    # Repeat the mismatch several times: audit must be written only once.
+    for _ in range(3):
+        result = ingest_module(
+            station, "slot2", "power", ident(type="power", uid="DUP"), now=timezone.now()
+        )
+        assert result is None
     m.refresh_from_db()
     assert m.module_type.key == "fm"  # unchanged
     assert (

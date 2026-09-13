@@ -238,6 +238,38 @@ def test_type_mismatch_report_preserves_valid_assignment(fm, station_factory):
 
 
 @pytest.mark.django_db
+def test_rejected_report_with_different_uid_clears_link(fm, station_factory):
+    """A uid-bearing rejection whose uid differs from the linked module clears
+    the link (the slot no longer holds that module), keeping the persisted link
+    consistent with the assignment history."""
+    station = station_factory()
+    apply_inventory(station, [slot_frame(1, uid="A"), slot_frame(2, uid="KEEP")])
+    a = Module.objects.get(uid="A")
+
+    # slot 1 now reports an UNKNOWN type with a different uid B (rejected, no link).
+    unknown = {"type": "mystery", "model": "x", "version": "1.0.0", "uid": "B"}
+    apply_inventory(
+        station,
+        [
+            {
+                "slot": 1,
+                "control": "/dev/x",
+                "modules": [
+                    {"module": "fm", "identity": unknown, "capabilities": [], "state": {}}
+                ],
+            },
+            slot_frame(2, uid="KEEP"),
+        ],
+    )
+    a.refresh_from_db()
+
+    sm = StationModule.objects.get(station=station, slot="1", module_id="fm")
+    assert sm.tracked_module_id is None  # link cleared
+    assert a.assignments.filter(to_ts__isnull=True).count() == 0  # A released
+    assert a.lifecycle_status == Module.Lifecycle.READY
+
+
+@pytest.mark.django_db
 def test_empty_snapshot_does_not_reconcile(fm, station_factory):
     """A fully empty inventory (indistinguishable from a discovery failure) must
     NOT tear down assignments — the deployed module keeps its open assignment."""

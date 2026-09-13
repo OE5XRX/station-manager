@@ -31,11 +31,21 @@ def confirm_registration(module, *, user):
     )
 
 
+# Operator-settable lifecycle states: every choice except the auto-derived
+# ``deployed`` (which is owned by assignment ingestion).
+OPERATOR_LIFECYCLE_VALUES = frozenset(Module.Lifecycle.values) - {Module.Lifecycle.DEPLOYED}
+
+
 @transaction.atomic
 def set_lifecycle(module, status, *, user):
     """Set the lifecycle status (operator override, sticky states allowed).
 
-    Reloads under ``select_for_update`` so concurrent sets can't both log."""
+    Validates ``status`` against the operator-settable choices — ``deployed`` is
+    assignment-derived and arbitrary strings are rejected, so no caller can
+    bypass the invariant. Reloads under ``select_for_update`` so concurrent sets
+    can't both log."""
+    if status not in OPERATOR_LIFECYCLE_VALUES:
+        raise ValueError(f"{status!r} is not an operator-settable lifecycle status")
     locked = Module.objects.select_for_update().get(pk=module.pk)
     if locked.lifecycle_status == status:
         return

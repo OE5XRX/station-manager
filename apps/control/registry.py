@@ -8,6 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.module_firmware.ingest import ingest_module, reconcile_station
+from apps.module_firmware.models import Module
 
 from .models import StationModule
 
@@ -71,13 +72,24 @@ def apply_inventory(station, slots):
                     sm.tracked_module = tracked
                     sm.save(update_fields=["tracked_module"])
                 tracked_slots.add(slot_str)
-            elif not uid:
-                # Legacy no-UID module genuinely occupies this slot — unlink.
-                if sm.tracked_module_id is not None:
+            else:
+                # Rejected entry (legacy no-UID / unknown type / type mismatch).
+                # Keep the existing link ONLY if the SAME uid as the currently
+                # linked module is reported — i.e. a type-mismatch of the tracked
+                # module itself, where the module is still physically present.
+                # Otherwise the slot no longer holds that module: clear the link
+                # so it agrees with the assignment history reconcile will update.
+                linked_uid = None
+                if sm.tracked_module_id:
+                    linked_uid = (
+                        Module.objects.filter(pk=sm.tracked_module_id)
+                        .values_list("uid", flat=True)
+                        .first()
+                    )
+                keep = bool(uid) and uid == linked_uid
+                if not keep and sm.tracked_module_id is not None:
                     sm.tracked_module = None
                     sm.save(update_fields=["tracked_module"])
-            # else: uid-bearing rejection (unknown type / type mismatch) — leave
-            # the existing link untouched so a spurious report can't clear it.
             reported.append((slot, module_id))
 
     qs = StationModule.objects.filter(station=station, online=True)

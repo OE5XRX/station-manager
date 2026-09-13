@@ -80,15 +80,24 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
         # firmware misreport — reject it rather than silently re-typing / linking
         # the wrong module, and audit the anomaly.
         if module.module_type_id != module_type.id:
-            StationAuditLog.log(
-                station=station,
+            # Audit once per anomaly, not per heartbeat: a persistent misreport
+            # would otherwise grow the audit table without bound.
+            mismatch_msg = (
+                f"Type mismatch for uid {uid}: reported '{module_type.key}', "
+                f"tracked as '{module.module_type.key}'. Ignored."
+            )
+            already_audited = StationAuditLog.objects.filter(
                 module=module,
                 event_type=StationAuditLog.EventType.UPDATED,
-                message=(
-                    f"Type mismatch for uid {uid}: reported '{module_type.key}', "
-                    f"tracked as '{module.module_type.key}'. Ignored."
-                ),
-            )
+                message=mismatch_msg,
+            ).exists()
+            if not already_audited:
+                StationAuditLog.log(
+                    station=station,
+                    module=module,
+                    event_type=StationAuditLog.EventType.UPDATED,
+                    message=mismatch_msg,
+                )
             logger.warning(
                 "ingest: type mismatch uid=%s reported=%s tracked=%s",
                 uid,
@@ -231,7 +240,14 @@ def _derive_lifecycle(module, *, now, station=None):
 
     ``station`` is the station whose ingest triggered this derivation; passing
     it makes the audit entry dual-subject so station-centric views also show the
-    lifecycle transition."""
+    lifecycle transition.
+
+    Locks + refreshes the module row first (all callers run inside an atomic):
+    a concurrent set_lifecycle may have committed a sticky state after this
+    ``module`` object was read, and without the reload the sticky check below
+    could see stale state and overwrite the operator's status."""
+    Module.objects.select_for_update().filter(pk=module.pk).exists()
+    module.refresh_from_db()
     if module.lifecycle_status in Module.STICKY_LIFECYCLE:
         return
     has_open = module.assignments.filter(to_ts__isnull=True).exists()

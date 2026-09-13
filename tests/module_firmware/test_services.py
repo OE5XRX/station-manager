@@ -41,3 +41,12 @@ def test_set_lifecycle_defect(module):
     services.set_lifecycle(module, Module.Lifecycle.DEFECT, user=None)
     module.refresh_from_db()
     assert module.lifecycle_status == Module.Lifecycle.DEFECT
+
+
+@pytest.mark.django_db
+def test_set_lifecycle_rejects_deployed_and_garbage(module):
+    for bad in (Module.Lifecycle.DEPLOYED, "bogus", ""):
+        with pytest.raises(ValueError):
+            services.set_lifecycle(module, bad, user=None)
+    module.refresh_from_db()
+    assert module.lifecycle_status == Module.Lifecycle.READY
