@@ -7,6 +7,8 @@ No async / no I/O beyond the ORM — call from consumers via
 from django.db import transaction
 from django.utils import timezone
 
+from apps.module_firmware.ingest import ingest_module
+
 from .models import StationModule
 
 
@@ -39,7 +41,7 @@ def apply_inventory(station, slots):
             filtered_state = {
                 k: v for k, v in raw_state.items() if is_setting_cap(cap_descriptor, k)
             }
-            StationModule.objects.update_or_create(
+            sm, _ = StationModule.objects.update_or_create(
                 station=station,
                 slot=slot,
                 module_id=module_id,
@@ -53,6 +55,11 @@ def apply_inventory(station, slots):
                     "last_seen": now,
                 },
             )
+            tracked = ingest_module(station, slot, module_id, identity, now=now)
+            tracked_pk = tracked.id if tracked else None
+            if sm.tracked_module_id != tracked_pk:
+                sm.tracked_module = tracked
+                sm.save(update_fields=["tracked_module"])
             reported.append((slot, module_id))
 
     qs = StationModule.objects.filter(station=station, online=True)
