@@ -60,6 +60,28 @@ def test_download_streams_with_assignment(client, station_with_key, fw_release, 
 
 
 @pytest.mark.django_db
+def test_download_archived_release_returns_404(client, station_with_key, fw_release, module_type):
+    """An archived ModuleFirmwareRelease must return 404 even with a valid
+    matching open ModuleAssignment — storage.open_stream must NOT be called."""
+    station, priv = station_with_key
+    mod = Module.objects.create(uid="U3", module_type=module_type)
+    ModuleAssignmentHistory.objects.create(module=mod, station=station, slot="slot1")
+    # Soft-delete the release so ModuleFirmwareRelease.objects won't see it.
+    fw_release.archive()
+    assert ModuleFirmwareRelease.objects.filter(pk=fw_release.pk).count() == 0
+
+    with mock.patch(
+        "apps.module_firmware.api_views.storage.open_stream",
+    ) as mock_open:
+        resp = client.get(
+            reverse("module_firmware_api:download", args=[fw_release.pk]),
+            **device_auth_headers(priv, station.pk, b""),
+        )
+    assert resp.status_code == 404
+    mock_open.assert_not_called()
+
+
+@pytest.mark.django_db
 def test_download_range_206(client, station_with_key, fw_release, module_type):
     station, priv = station_with_key
     mod = Module.objects.create(uid="U2", module_type=module_type)

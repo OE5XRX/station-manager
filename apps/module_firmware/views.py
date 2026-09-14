@@ -18,6 +18,7 @@ from .models import (
     ModuleFirmwareRelease,
     ModuleType,
 )
+from .releases import parse_variant_assets
 
 # ---------------------------------------------------------------------------
 # Module-type helpers
@@ -229,7 +230,7 @@ class FirmwareReleaseListView(LoginRequiredMixin, ListView):
         return ctx
 
 
-class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
+class GitHubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
     def get(self, request):
         module_type_id = request.GET.get("module_type")
         if not module_type_id:
@@ -269,11 +270,6 @@ class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
                 {"error": str(exc), "module_type": module_type},
             )
 
-        imported_tags = set(
-            ModuleFirmwareRelease.all_objects.filter(module_type=module_type).values_list(
-                "source_tag", flat=True
-            )
-        )
         in_flight_tags = set(
             ModuleFirmwareImportJob.objects.filter(
                 module_type=module_type,
@@ -286,7 +282,22 @@ class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
 
         rows = []
         for rel in releases:
-            if rel.tag in imported_tags:
+            # Determine per-release state by checking whether ALL parsed
+            # variants have an active (non-archived) row.  A tag is only
+            # "imported" if every variant the release offers has a live row;
+            # a partial import (e.g. vhf active, uhf missing/archived) must
+            # remain importable so the operator can fill the gap.
+            parsed_variants = parse_variant_assets(
+                set(rel.asset_names), module_type.release_asset_prefix
+            )
+            if parsed_variants and all(
+                ModuleFirmwareRelease.objects.filter(
+                    module_type=module_type,
+                    source_tag=rel.tag,
+                    variant=va.variant,
+                ).exists()
+                for va in parsed_variants
+            ):
                 state = "imported"
             elif rel.tag in in_flight_tags:
                 state = "queued"

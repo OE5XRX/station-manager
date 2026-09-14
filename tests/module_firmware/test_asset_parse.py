@@ -34,3 +34,36 @@ def test_parse_sha256sums():
     text = "aaaa  fm-sa818-vhf.signed.bin\nbbbb  fm-sa818-uhf.signed.bin\n"
     d = parse_sha256sums(text)
     assert d["fm-sa818-vhf.signed.bin"] == "aaaa"
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: unsafe variant token rejection
+# ---------------------------------------------------------------------------
+
+
+def test_parse_underscore_variant_skipped():
+    """'_' collides with the bandless storage segment — must be rejected."""
+    names = {"fm-sa818-_.signed.bin", "fm-sa818-_.signed.bin.bundle"}
+    assert parse_variant_assets(names, "fm-sa818") == []
+
+
+def test_parse_dotdot_variant_skipped():
+    """Path-traversal token '../evil' must be rejected."""
+    names = {"fm-sa818-../evil.signed.bin", "fm-sa818-../evil.signed.bin.bundle"}
+    assert parse_variant_assets(names, "fm-sa818") == []
+
+
+def test_parse_safe_variant_vhf_accepted():
+    """'vhf' is a valid lowercase-alnum variant and must be accepted."""
+    names = {"fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle"}
+    got = parse_variant_assets(names, "fm-sa818")
+    assert len(got) == 1
+    assert got[0].variant == "vhf"
+
+
+def test_parse_bandless_still_valid():
+    """Bandless variant '' (no '-' suffix) must remain accepted after the safety check."""
+    names = {"fm-sa818.signed.bin", "fm-sa818.signed.bin.bundle"}
+    got = parse_variant_assets(names, "fm-sa818")
+    assert len(got) == 1
+    assert got[0].variant == ""

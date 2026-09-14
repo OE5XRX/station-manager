@@ -1,7 +1,10 @@
+from unittest import mock
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
+from apps.images.github_releases import GitHubRelease
 from apps.module_firmware.models import ModuleFirmwareImportJob, ModuleFirmwareRelease, ModuleType
 
 User = get_user_model()
@@ -206,3 +209,59 @@ def test_release_list_excludes_type_without_prefix(client, rel):
     assert incomplete.pk not in module_type_pks
     # The fully-configured type from the rel fixture IS present
     assert rel.module_type_id in module_type_pks
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: GH browser partial marks tag imported only when ALL variants active
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_gh_partial_partial_import_not_marked_imported(client, staff):
+    """A release whose assets include vhf+uhf, with only an ACTIVE vhf row
+    (uhf missing), must NOT be marked imported — the Import button must be
+    present so the operator can fill the gap."""
+    module_type = ModuleType.objects.create(
+        key="fm",
+        display_name="FM",
+        firmware_repo="OE5XRX/FW-RemoteStation",
+        release_asset_prefix="fm-sa818",
+    )
+    # Create only the vhf active row; uhf is absent.
+    ModuleFirmwareRelease.objects.create(
+        module_type=module_type,
+        variant="vhf",
+        version="26.07.04-01",
+        storage_key="k-vhf",
+        sha256="a" * 64,
+        size_bytes=5,
+        source_repo="OE5XRX/FW-RemoteStation",
+        source_tag="26.07.04-01",
+    )
+
+    fake_release = GitHubRelease(
+        tag="26.07.04-01",
+        html_url="",
+        is_latest=False,
+        asset_names=frozenset(
+            {
+                "fm-sa818-vhf.signed.bin",
+                "fm-sa818-vhf.signed.bin.bundle",
+                "fm-sa818-uhf.signed.bin",
+                "fm-sa818-uhf.signed.bin.bundle",
+            }
+        ),
+    )
+
+    client.force_login(staff)
+    with mock.patch(
+        "apps.module_firmware.views.github_releases.fetch_releases",
+        return_value=[fake_release],
+    ):
+        resp = client.get(reverse("module_firmware:gh_partial") + f"?module_type={module_type.pk}")
+
+    assert resp.status_code == 200
+    body = resp.content.decode()
+    # Tag must NOT be shown as "imported" — Import button must be present.
+    assert "IMPORTED" not in body
+    assert "Import" in body

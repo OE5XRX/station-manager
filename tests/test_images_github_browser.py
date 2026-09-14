@@ -180,6 +180,30 @@ class TestFetchReleaseByTag:
             with pytest.raises(GitHubAPIError):
                 fetch_release_by_tag(self._REPO, self._TAG)
 
+    def test_malformed_payload_missing_tag_name_raises_github_api_error(self):
+        """A 200 response without 'tag_name' must raise GitHubAPIError, not KeyError."""
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=lambda req, timeout: _gh_response({}),
+        ):
+            with pytest.raises(GitHubAPIError, match="malformed"):
+                fetch_release_by_tag(self._REPO, self._TAG)
+
+    def test_malformed_payload_asset_without_name_raises_github_api_error(self):
+        """An asset dict without 'name' key must raise GitHubAPIError, not TypeError."""
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=lambda req, timeout: _gh_response(
+                {
+                    "tag_name": self._TAG,
+                    "html_url": "",
+                    "assets": [{"no_name_key": True}],
+                }
+            ),
+        ):
+            with pytest.raises(GitHubAPIError, match="malformed"):
+                fetch_release_by_tag(self._REPO, self._TAG)
+
 
 class TestFetchReleasesHappy:
     def test_returns_releases_newest_first_with_is_latest(self):

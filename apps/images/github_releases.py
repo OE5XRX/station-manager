@@ -101,12 +101,15 @@ def fetch_release_by_tag(repo: str, tag: str) -> GitHubRelease | None:
         http.client.HTTPException,
     ) as exc:
         raise GitHubAPIError(str(exc)) from exc
-    return GitHubRelease(
-        tag=r["tag_name"],
-        html_url=r.get("html_url", ""),
-        is_latest=False,
-        asset_names=frozenset(a["name"] for a in r.get("assets", [])),
-    )
+    try:
+        return GitHubRelease(
+            tag=r["tag_name"],
+            html_url=r.get("html_url", ""),
+            is_latest=False,
+            asset_names=frozenset(a["name"] for a in r.get("assets", [])),
+        )
+    except (KeyError, TypeError) as exc:
+        raise GitHubAPIError(f"malformed release payload: {exc}") from exc
 
 
 def fetch_releases(repo: str, limit: int = 30) -> list[GitHubRelease]:

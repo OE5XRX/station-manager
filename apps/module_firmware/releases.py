@@ -44,6 +44,12 @@ def parse_variant_assets(asset_names: set[str], prefix: str) -> list[VariantAsse
             variant = middle[1:]
             if not variant:
                 continue
+            # Reject unsafe variant tokens: only lowercase alnum + internal
+            # hyphens are accepted.  This blocks "_" (collides with the
+            # bandless storage segment), path chars ("/", ".."), and anything
+            # that could shape a storage key outside the intended segment.
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", variant):
+                continue
         else:
             continue  # prefix is a proper substring of a longer token
         bundle_name = name + ".bundle"
