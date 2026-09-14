@@ -155,11 +155,19 @@ Schritt 2). Referenzielle Integrität fürs Typ-Kompatibilitäts-Gate (relevant 
 
 ## Ingestion & Lifecycle-Flow
 
-Der Heartbeat trägt die Modul-Inventory als Liste pro Slot. Der Server konsumiert
-die **Broker-Wire-Shape** pro Slot `{slot, control, modules: [{module, identity,
-capabilities, state}]}` (das `id`-Feld existiert nur in der Discovery-Zwischenform
-und wird vom Broker auf `module` gemappt). Pro gemeldetem Modul-Eintrag
-(`{module, identity:{type, model, version, uid?, uid_source?}, capabilities, state}`):
+> **Ingestion-Chokepoint:** Die Modul-Slot-Inventory läuft ausschließlich über den
+> persistenten **Control-WebSocket** (`apps/control/consumers` → `apply_inventory`),
+> nicht über den periodischen HTTP-Heartbeat — dieser trägt *Hardware*-Inventory
+> (CPU/RAM/Disk → `StationInventory`), keine Modul-Slots. `Module.last_seen`/Swaps
+> werden also bei jedem Control-WS-Inventory-Frame aktualisiert. `ModuleType.key`
+> ist der **Wire-Modul-Identifier** (`module list`-id, z. B. `fm`/`gps`) — die
+> Auflösung erfolgt über diese id, nicht über den längeren `identity.type`.
+
+Der Server konsumiert die **Broker-Wire-Shape** pro Slot `{slot, control, modules:
+[{module, identity, capabilities, state}]}` (das `id`-Feld existiert nur in der
+Discovery-Zwischenform und wird vom Broker auf `module` gemappt). Pro gemeldetem
+Modul-Eintrag (`{module, identity:{type, model, version, uid?, uid_source?},
+capabilities, state}`):
 
 1. **Keine `uid`** → Legacy-Pfad: `StationModule` wie heute anlegen/aktualisieren,
    **kein** `Module`, kein History-/Audit-Eintrag für die Identität. Fertig.

@@ -89,6 +89,49 @@ def test_full_inventory_discovery_creates_everything(fm, station_factory):
 
 
 @pytest.mark.django_db
+def test_real_wire_shape_resolves_type_by_module_id(station_factory):
+    """Real frames carry module="fm" with identity.type="fm_transceiver". The
+    registry is keyed by the wire module id ("fm"), so ingestion must resolve by
+    module_id, not identity.type — otherwise every real FM frame is rejected."""
+    ModuleType.objects.create(key="fm", display_name="FM Transceiver")
+    station = station_factory()
+    frame = {
+        "slot": 1,
+        "control": "/dev/x",
+        "modules": [
+            {
+                "module": "fm",
+                "identity": {
+                    "type": "fm_transceiver",
+                    "model": "SA818-V",
+                    "version": "vhf",
+                    "uid": "RW1",
+                },
+                "capabilities": [],
+                "state": {},
+            }
+        ],
+    }
+    apply_inventory(station, [frame])
+    module = Module.objects.get(uid="RW1")
+    assert module.module_type.key == "fm"
+    assert module.lifecycle_status == Module.Lifecycle.DEPLOYED
+
+
+@pytest.mark.django_db
+def test_relocation_to_empty_slot_emits_swapped(fm, station_factory):
+    """A UID moving to a different (empty) slot is a slot-content change → it
+    emits MODULE_SWAPPED (relocation) plus MODULE_ASSIGNMENT_CHANGED."""
+    station_a = station_factory()
+    station_b = station_factory()
+    apply_inventory(station_a, [slot_frame(1, uid="MOVER")])
+    apply_inventory(station_b, [slot_frame(2, uid="MOVER")])  # relocate to empty slot on B
+    module = Module.objects.get(uid="MOVER")
+    assert audit_count(EV.MODULE_SWAPPED, module) == 1
+    assert module.assignments.filter(to_ts__isnull=True).count() == 1
+
+
+@pytest.mark.django_db
 def test_swap_same_slot_new_uid(fm, station_factory):
     """Scenario 2: same slot, different UID => old assignment closed, new opened,
     MODULE_SWAPPED audit, StationModule re-linked to the new physical module,
@@ -239,15 +282,37 @@ def test_type_mismatch_report_preserves_valid_assignment(fm, station_factory):
 
 @pytest.mark.django_db
 def test_rejected_report_with_different_uid_clears_link(fm, station_factory):
-    """A uid-bearing rejection whose uid differs from the linked module clears
-    the link (the slot no longer holds that module), keeping the persisted link
-    consistent with the assignment history."""
+    """A uid-bearing rejection (type mismatch) whose uid differs from the linked
+    module clears the link, keeping the persisted link consistent with the
+    assignment history (which reconcile closes)."""
+    ModuleType.objects.create(key="gps", display_name="GPS")
     station = station_factory()
     apply_inventory(station, [slot_frame(1, uid="A"), slot_frame(2, uid="KEEP")])
     a = Module.objects.get(uid="A")
 
-    # slot 1 now reports an UNKNOWN type with a different uid B (rejected, no link).
-    unknown = {"type": "mystery", "model": "x", "version": "1.0.0", "uid": "B"}
+    # Pre-existing module B tracked as a *gps* on another station.
+    other = station_factory()
+    apply_inventory(
+        other,
+        [
+            {
+                "slot": 9,
+                "control": "/dev/x",
+                "modules": [
+                    {
+                        "module": "gps",
+                        "identity": {"type": "gnss", "version": "1", "uid": "B"},
+                        "capabilities": [],
+                        "state": {},
+                    }
+                ],
+            }
+        ],
+    )
+
+    # slot 1 (module_id fm) reports uid B — B is tracked as gps => type mismatch,
+    # rejected; uid B differs from the linked module A, so the link must clear.
+    mismatch = {"type": "fm_transceiver", "model": "x", "version": "1.0.0", "uid": "B"}
     apply_inventory(
         station,
         [
@@ -255,7 +320,7 @@ def test_rejected_report_with_different_uid_clears_link(fm, station_factory):
                 "slot": 1,
                 "control": "/dev/x",
                 "modules": [
-                    {"module": "fm", "identity": unknown, "capabilities": [], "state": {}}
+                    {"module": "fm", "identity": mismatch, "capabilities": [], "state": {}}
                 ],
             },
             slot_frame(2, uid="KEEP"),

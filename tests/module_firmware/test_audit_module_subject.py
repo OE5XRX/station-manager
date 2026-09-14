@@ -39,3 +39,20 @@ def test_audit_dual_subject(module, station_factory):
 def test_audit_requires_a_subject():
     with pytest.raises(ValueError):
         StationAuditLog.log(event_type=StationAuditLog.EventType.MODULE_DISCOVERED)
+
+
+@pytest.mark.django_db
+def test_station_deletion_preserves_module_audit_history(module, station_factory):
+    """Deleting a station must NOT erase dual-subject module audit rows — station
+    FK is SET_NULL, so a module's life history survives with station=None."""
+    station = station_factory()
+    StationAuditLog.log(
+        station=station,
+        module=module,
+        event_type=StationAuditLog.EventType.MODULE_SWAPPED,
+        message="swap",
+    )
+    station.delete()
+    entry = module.audit_logs.get(event_type=StationAuditLog.EventType.MODULE_SWAPPED)
+    assert entry.station is None
+    assert entry.module == module

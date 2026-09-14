@@ -36,7 +36,12 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
     # heartbeat and churn the assignment history.
     slot = "" if slot is None else str(slot)
 
-    type_key = identity.get("type") or module_id
+    # Resolve the registry type by the WIRE module id (the ``module list`` id,
+    # e.g. "fm"/"gps"), which is what ModuleType.key is keyed on — NOT the
+    # descriptor's identity.type ("fm_transceiver"/"gnss"), which is a longer
+    # model-level string that would never match the registry and would reject
+    # every real frame. Fall back to identity.type only if module_id is absent.
+    type_key = module_id or identity.get("type")
     try:
         module_type = ModuleType.objects.get(key=type_key)
     except ModuleType.DoesNotExist:
@@ -139,10 +144,25 @@ def _apply_assignment(module, station, slot, *, now, user=None):
     # No-op under SQLite in tests; real row locks under Postgres.
     station.__class__.objects.select_for_update().filter(pk=station.pk).exists()
 
-    # Read (no mutation yet) to discover all modules this operation will touch.
+    # Pre-lock read, only to discover which extra module row to lock (the
+    # current occupant of this slot). ``module`` itself is always locked.
+    pre_occupant = (
+        ModuleAssignmentHistory.objects.filter(station=station, slot=slot, to_ts__isnull=True)
+        .exclude(module=module)
+        .first()
+    )
+    module_pks = {module.pk}
+    if pre_occupant:
+        module_pks.add(pre_occupant.module_id)
+    # Lock all involved module rows up front, ascending pk order (no lock cycle).
+    list(Module.objects.select_for_update().filter(pk__in=sorted(module_pks)))
+    # Refresh under the locks: a concurrent set_lifecycle may have committed a
+    # sticky state, and a concurrent apply for the same UID may have opened an
+    # assignment, after the pre-lock reads. Re-read authoritative state now.
+    module.refresh_from_db()
     current = module.assignments.filter(to_ts__isnull=True).first()
     if current and current.station_id == station.id and current.slot == slot:
-        return False  # unchanged — idempotent
+        return False  # unchanged — idempotent (re-checked under the lock)
 
     occupant = (
         ModuleAssignmentHistory.objects.filter(station=station, slot=slot, to_ts__isnull=True)
@@ -150,19 +170,12 @@ def _apply_assignment(module, station, slot, *, now, user=None):
         .first()
     )
 
-    # Lock all involved module rows up front, in ascending pk order.
-    module_pks = {module.pk}
-    if occupant:
-        module_pks.add(occupant.module_id)
-    list(Module.objects.select_for_update().filter(pk__in=sorted(module_pks)))
-    # Refresh under the locks: a concurrent set_lifecycle (which locks the same
-    # rows) may have committed a sticky state after these objects were fetched.
-    module.refresh_from_db()
-
-    # Close this module's open assignment elsewhere.
+    # Close this module's open assignment elsewhere (a relocation).
+    relocated = False
     if current:
         current.to_ts = now
         current.save(update_fields=["to_ts"])
+        relocated = True
 
     displaced_module = None
     if occupant:
@@ -180,13 +193,20 @@ def _apply_assignment(module, station, slot, *, now, user=None):
         created_by=user,
     )
 
-    if displaced_module is not None:
+    # A slot-content change — the module displaced an occupant OR relocated from
+    # a previous slot — is a swap per the spec: emit MODULE_SWAPPED.
+    if displaced_module is not None or relocated:
+        if displaced_module is not None:
+            swap_msg = f"Module {module.uid} replaced a module in {station}/{slot}."
+        else:
+            swap_msg = f"Module {module.uid} relocated to {station}/{slot}."
         StationAuditLog.log(
             station=station,
             module=module,
             event_type=StationAuditLog.EventType.MODULE_SWAPPED,
-            message=f"Module {module.uid} replaced a module in {station}/{slot}.",
+            message=swap_msg,
         )
+    if displaced_module is not None:
         # The displaced module lost its slot — recompute its lifecycle so it
         # falls back from deployed to ready (unless operator-sticky).
         _derive_lifecycle(displaced_module, now=now, station=station)

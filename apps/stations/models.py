@@ -316,7 +316,11 @@ class StationAuditLog(models.Model):
     station = models.ForeignKey(
         Station,
         verbose_name=_("station"),
-        on_delete=models.CASCADE,
+        # SET_NULL (not CASCADE): an audit log is a durable trail. Deleting a
+        # station must not erase dual-subject module events (discovery/swap/
+        # lifecycle), which would otherwise wipe a surviving module's life
+        # history. The row lives on with station=None.
+        on_delete=models.SET_NULL,
         related_name="audit_logs",
         null=True,
         blank=True,
