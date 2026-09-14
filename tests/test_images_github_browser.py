@@ -11,6 +11,7 @@ from apps.images import github_releases
 from apps.images.github_releases import (
     GitHubAPIError,
     GitHubRelease,
+    fetch_release_by_tag,
     fetch_releases,
 )
 from apps.images.models import ImageImportJob, ImageRelease
@@ -112,6 +113,96 @@ def _make_fake_urlopen(responses_by_url):
         return _gh_response(responses_by_url[url])
 
     return fake
+
+
+class TestFetchReleaseByTag:
+    """Unit tests for the new fetch_release_by_tag() function."""
+
+    _REPO = "OE5XRX/FW-RemoteStation"
+    _TAG = "26.07.04-01"
+    _URL = f"https://api.github.com/repos/{_REPO}/releases/tags/{_TAG}"
+
+    def _fake_urlopen_ok(self, req, timeout):
+        payload = {
+            "tag_name": self._TAG,
+            "html_url": f"https://github.com/{self._REPO}/releases/tag/{self._TAG}",
+            "assets": [
+                {"name": "fm-sa818-vhf.signed.bin"},
+                {"name": "fm-sa818-vhf.signed.bin.bundle"},
+            ],
+        }
+        return _gh_response(payload)
+
+    def test_happy_path_returns_github_release(self):
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=self._fake_urlopen_ok,
+        ):
+            result = fetch_release_by_tag(self._REPO, self._TAG)
+
+        assert isinstance(result, GitHubRelease)
+        assert result.tag == self._TAG
+        assert result.html_url == f"https://github.com/{self._REPO}/releases/tag/{self._TAG}"
+        assert result.is_latest is False
+        assert "fm-sa818-vhf.signed.bin" in result.asset_names
+        assert "fm-sa818-vhf.signed.bin.bundle" in result.asset_names
+
+    def test_404_returns_none(self):
+        def fake(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", hdrs=None, fp=None)
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            result = fetch_release_by_tag(self._REPO, self._TAG)
+
+        assert result is None
+
+    def test_non_404_http_error_raises_github_api_error(self):
+        def fake(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, 500, "Server Error", hdrs=None, fp=None)
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            with pytest.raises(GitHubAPIError):
+                fetch_release_by_tag(self._REPO, self._TAG)
+
+    def test_network_error_raises_github_api_error(self):
+        def fake(req, timeout):
+            raise urllib.error.URLError("connection refused")
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            with pytest.raises(GitHubAPIError):
+                fetch_release_by_tag(self._REPO, self._TAG)
+
+    def test_timeout_raises_github_api_error(self):
+        def fake(req, timeout):
+            raise TimeoutError("timed out")
+
+        with patch("apps.images.github_releases.urllib.request.urlopen", side_effect=fake):
+            with pytest.raises(GitHubAPIError):
+                fetch_release_by_tag(self._REPO, self._TAG)
+
+    def test_malformed_payload_missing_tag_name_raises_github_api_error(self):
+        """A 200 response without 'tag_name' must raise GitHubAPIError, not KeyError."""
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=lambda req, timeout: _gh_response({}),
+        ):
+            with pytest.raises(GitHubAPIError, match="malformed"):
+                fetch_release_by_tag(self._REPO, self._TAG)
+
+    def test_malformed_payload_asset_without_name_raises_github_api_error(self):
+        """An asset dict without 'name' key must raise GitHubAPIError, not TypeError."""
+        with patch(
+            "apps.images.github_releases.urllib.request.urlopen",
+            side_effect=lambda req, timeout: _gh_response(
+                {
+                    "tag_name": self._TAG,
+                    "html_url": "",
+                    "assets": [{"no_name_key": True}],
+                }
+            ),
+        ):
+            with pytest.raises(GitHubAPIError, match="malformed"):
+                fetch_release_by_tag(self._REPO, self._TAG)
 
 
 class TestFetchReleasesHappy:

@@ -14,7 +14,7 @@ page change — this partial carries all module filters across pages instead.
     </div>
     <div class="pager-links">
       {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}">&larr;</a>
+        <a href="?page={{ page_obj.previous_page_number }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}{% if f.variant %}&variant={{ f.variant|urlencode }}{% endif %}{% if show_archived %}&show_archived=1{% endif %}">&larr;</a>
       {% else %}
         <span class="t-muted">&larr;</span>
       {% endif %}
@@ -23,12 +23,12 @@ page change — this partial carries all module filters across pages instead.
         {% if n == page_obj.number %}
           <span class="current">{{ n }}</span>
         {% elif n > page_obj.number|add:"-3" and n < page_obj.number|add:"3" %}
-          <a href="?page={{ n }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}">{{ n }}</a>
+          <a href="?page={{ n }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}{% if f.variant %}&variant={{ f.variant|urlencode }}{% endif %}{% if show_archived %}&show_archived=1{% endif %}">{{ n }}</a>
         {% endif %}
       {% endfor %}
 
       {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}">&rarr;</a>
+        <a href="?page={{ page_obj.next_page_number }}{% if f.q %}&q={{ f.q|urlencode }}{% endif %}{% if f.type %}&type={{ f.type|urlencode }}{% endif %}{% if f.lifecycle %}&lifecycle={{ f.lifecycle|urlencode }}{% endif %}{% if f.registration %}&registration={{ f.registration|urlencode }}{% endif %}{% if f.uid_source %}&uid_source={{ f.uid_source|urlencode }}{% endif %}{% if f.station %}&station={{ f.station|urlencode }}{% endif %}{% if f.variant %}&variant={{ f.variant|urlencode }}{% endif %}{% if show_archived %}&show_archived=1{% endif %}">&rarr;</a>
       {% else %}
         <span class="t-muted">&rarr;</span>
       {% endif %}

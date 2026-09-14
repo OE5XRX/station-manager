@@ -18,26 +18,8 @@ COSIGN_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 _COSIGN_TIMEOUT = 60  # seconds
 
 
-def verify_blob(
-    blob_bytes: bytes,
-    bundle_bytes: bytes,
-    repo: str,
-    tag: str,
-) -> None:
-    """Verify a cosign-signed blob against its GitHub Actions OIDC identity.
-
-    Raises:
-        CosignVerificationError: if verification fails for any reason.
-    """
-    # Escape repo and tag so tag metacharacters (e.g. '.', '+') are treated
-    # as literals and cannot widen the trusted identity to unrelated workflows.
-    # Anchor with ^...$ and also escape the literal slashes/dots in the fixed
-    # workflow URL — without anchors, a tag like "v1" would match an identity
-    # for ".../refs/tags/v1-alpha".
-    identity_regexp = (
-        rf"^https://github\.com/{re.escape(repo)}"
-        rf"/\.github/workflows/release\.yml@refs/tags/{re.escape(tag)}$"
-    )
+def verify_blob_identity(blob_bytes: bytes, bundle_bytes: bytes, identity_regexp: str) -> None:
+    """Verify a cosign-signed blob against an explicit certificate-identity regexp."""
     with tempfile.TemporaryDirectory() as tmp:
         blob_path = Path(tmp) / "blob"
         bundle_path = Path(tmp) / "bundle"
@@ -64,3 +46,26 @@ def verify_blob(
             raise CosignVerificationError(
                 f"cosign verify-blob failed: {result.stderr.decode('utf-8', 'replace')}"
             )
+
+
+def verify_blob(
+    blob_bytes: bytes,
+    bundle_bytes: bytes,
+    repo: str,
+    tag: str,
+) -> None:
+    """Verify a cosign-signed blob against its GitHub Actions OIDC identity.
+
+    Raises:
+        CosignVerificationError: if verification fails for any reason.
+    """
+    # Escape repo and tag so tag metacharacters (e.g. '.', '+') are treated
+    # as literals and cannot widen the trusted identity to unrelated workflows.
+    # Anchor with ^...$ and also escape the literal slashes/dots in the fixed
+    # workflow URL — without anchors, a tag like "v1" would match an identity
+    # for ".../refs/tags/v1-alpha".
+    identity_regexp = (
+        rf"^https://github\.com/{re.escape(repo)}"
+        rf"/\.github/workflows/release\.yml@refs/tags/{re.escape(tag)}$"
+    )
+    verify_blob_identity(blob_bytes, bundle_bytes, identity_regexp)

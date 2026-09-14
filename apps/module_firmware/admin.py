@@ -1,13 +1,85 @@
 from django.contrib import admin
 
 from . import services
-from .models import Module, ModuleAssignmentHistory, ModuleType
+from .models import (
+    Module,
+    ModuleAssignmentHistory,
+    ModuleFirmwareImportJob,
+    ModuleFirmwareRelease,
+    ModuleType,
+)
 
 
 @admin.register(ModuleType)
 class ModuleTypeAdmin(admin.ModelAdmin):
-    list_display = ("key", "display_name", "hw_repo")
+    list_display = ("key", "display_name", "hw_repo", "firmware_repo", "release_asset_prefix")
     search_fields = ("key", "display_name")
+
+
+@admin.register(ModuleFirmwareRelease)
+class ModuleFirmwareReleaseAdmin(admin.ModelAdmin):
+    list_display = (
+        "module_type",
+        "variant",
+        "version",
+        "size_bytes",
+        "imported_at",
+        "archived_at",
+    )
+    list_filter = ("module_type", "variant", "archived_at")
+    search_fields = ("version", "source_tag")
+    readonly_fields = (
+        "storage_key",
+        "sha256",
+        "cosign_bundle_key",
+        "size_bytes",
+        "source_repo",
+        "source_tag",
+        "source_github_url",
+        "imported_at",
+        "imported_by",
+    )
+    actions = ["archive_selected", "restore_selected"]
+
+    def get_queryset(self, request):
+        return self.model.all_objects.all()
+
+    @admin.action(description="Archivieren")
+    def archive_selected(self, request, queryset):
+        for r in queryset:
+            r.archive()
+
+    @admin.action(description="Wiederherstellen")
+    def restore_selected(self, request, queryset):
+        for r in queryset:
+            r.restore()
+
+
+@admin.register(ModuleFirmwareImportJob)
+class ModuleFirmwareImportJobAdmin(admin.ModelAdmin):
+    list_display = ("module_type", "tag", "status", "created_at", "completed_at")
+    list_filter = ("status", "module_type")
+    readonly_fields = (
+        "module_type",
+        "source_repo",
+        "tag",
+        "status",
+        "error_message",
+        "release",
+        "requested_by",
+        "created_at",
+        "completed_at",
+    )
+
+    def has_add_permission(self, request):
+        # Import jobs are created via the UI/worker, not hand-edited.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Module)

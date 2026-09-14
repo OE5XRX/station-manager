@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Firmware Releases" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Firmware Releases" %}</span>
+{% endblock %}
+
+{% block content %}
+<div>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">{% trans "Fleet" %} · {% trans "Firmware library" %}</div>
+      <h1 class="page-title">{% trans "Firmware Releases" %}</h1>
+      <p class="page-sub">{% trans "Imported, cosign-verified firmware builds per module type and variant. Staff can import new releases from GitHub or archive old ones." %}</p>
+    </div>
+    <div class="page-head-actions">
+      {% if request.user.is_staff and module_types %}
+      <a href="#import-panel" class="btn">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
+        </svg>
+        {% trans "Import from GitHub" %}
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <form class="filter-bar" method="get">
+    <select name="type" class="form-select" style="width:auto;min-width:150px;" aria-label="{% trans 'Module type' %}">
+      <option value="">{% trans "All types" %}</option>
+      {% for t in module_types %}
+        <option value="{{ t.key }}" {% if filters.type == t.key %}selected{% endif %}>{{ t.display_name }}</option>
+      {% endfor %}
+    </select>
+    <div class="search">
+      <input type="search" name="variant" value="{{ filters.variant }}" placeholder="{% trans 'Variant…' %}" aria-label="{% trans 'Filter by variant' %}">
+    </div>
+    <label class="row-gap-8" style="cursor:pointer;font-size:13px;color:var(--ink-1);">
+      <input type="checkbox"
+             name="show_archived"
+             value="1"
+             data-submit-on-change
+             {% if show_archived %}checked{% endif %}>
+      <span>{% trans "Show archived" %}</span>
+    </label>
+    <button type="submit" class="btn">{% trans "Filter" %}</button>
+  </form>
+
+  <section class="panel mb-24">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot"></span>
+        {% trans "Imported releases" %}
+      </div>
+      <span class="t-label">
+        {% blocktrans count n=releases|length %}{{ n }} release{% plural %}{{ n }} releases{% endblocktrans %}
+      </span>
+    </div>
+    <div class="panel-body flush">
+    {% if releases %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "Type" %}</th>
+            <th>{% trans "Variant" %}</th>
+            <th>{% trans "Version" %}</th>
+            <th class="num">{% trans "Size" %}</th>
+            <th>{% trans "SHA-256" %}</th>
+            <th>{% trans "Imported" %}</th>
+            <th style="width:1%;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rel in releases %}
+          <tr {% if rel.archived_at %}class="is-archived"{% endif %}>
+            <td data-label="{% trans 'Type' %}">{{ rel.module_type.display_name }}</td>
+            <td class="t-mono" data-label="{% trans 'Variant' %}">{{ rel.variant|default:"—" }}</td>
+            <td data-primary data-label="{% trans 'Version' %}">
+              <span style="font-weight:600;color:var(--ink-0);font-family:var(--font-mono);letter-spacing:0.02em;">{{ rel.version }}</span>
+              {% if rel.source_github_url %}
+                <a href="{{ rel.source_github_url }}" target="_blank" rel="noopener"
+                   class="t-mono-sm t-muted" style="margin-left:6px;color:inherit;"
+                   aria-label="{% trans 'Source release on GitHub' %}">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                  </svg>
+                </a>
+              {% endif %}
+            </td>
+            <td class="t-mono num" data-label="{% trans 'Size' %}">{{ rel.size_bytes|filesizeformat }}</td>
+            <td class="t-mono" data-label="{% trans 'SHA-256' %}" title="{{ rel.sha256 }}">
+              <span style="color:var(--ink-2);">{{ rel.sha256|slice:":10" }}…</span>
+            </td>
+            <td class="t-mono-sm t-muted" data-label="{% trans 'Imported' %}">
+              {{ rel.imported_at|date:"Y-m-d H:i" }}
+              {% if rel.archived_at %}
+                <div style="color:var(--ink-3);font-size:10.5px;letter-spacing:0.08em;">
+                  {% trans "archived" %} {{ rel.archived_at|date:"Y-m-d" }}
+                </div>
+              {% endif %}
+            </td>
+            <td class="actions">
+              {% if request.user.is_staff %}
+                {% if rel.archived_at %}
+                  <form method="post"
+                        action="{% url 'module_firmware:restore' rel.pk %}"
+                        style="display:inline;margin:0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-ghost" title="{% trans 'Restore release' %}">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>
+                      </svg>
+                      <span class="visually-hidden">{% trans "Restore" %}</span>
+                    </button>
+                  </form>
+                {% else %}
+                  <form method="post"
+                        action="{% url 'module_firmware:archive' rel.pk %}"
+                        style="display:inline;margin:0;"
+                        data-confirm="{% trans 'Archive this firmware release?' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-ghost" title="{% trans 'Archive release' %}">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>
+                      </svg>
+                      <span class="visually-hidden">{% trans "Archive" %}</span>
+                    </button>
+                  </form>
+                {% endif %}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="10" r="1.4"/><path d="M21 16l-5-5L5 21"/>
+        </svg>
+      </div>
+      <div class="empty-title">{% trans "No firmware releases imported yet" %}</div>
+      <div>{% trans "Import a firmware release from a GitHub repository to deploy it to modules." %}</div>
+    </div>
+    {% endif %}
+    </div>
+  </section>
+
+  {% include "module_firmware/_pagination.html" %}
+
+  <div class="grid grid-main">
+
+    {% if request.user.is_staff and module_types %}
+    <section class="panel mb-24" id="import-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <span class="dot" style="background:var(--accent);"></span>
+          {% trans "Import from GitHub" %}
+        </div>
+        <span class="t-label">{% trans "Live list of release tags" %}</span>
+      </div>
+      <div class="panel-body" style="padding:12px 16px;">
+        <form class="row-gap-8" style="margin-bottom:12px;">
+          <label style="font-size:13px;color:var(--ink-1);">{% trans "Module type" %}</label>
+          <select name="module_type"
+                  class="form-select"
+                  style="width:auto;min-width:160px;"
+                  aria-label="{% trans 'Select module type' %}"
+                  hx-get="{% url 'module_firmware:gh_partial' %}"
+                  hx-target="#fw-gh-releases"
+                  hx-swap="innerHTML"
+                  hx-trigger="change">
+            <option value="">{% trans "— select —" %}</option>
+            {% for t in module_types %}
+              <option value="{{ t.pk }}">{{ t.display_name }} ({{ t.firmware_repo }})</option>
+            {% endfor %}
+          </select>
+        </form>
+        <div id="fw-gh-releases">
+          <div class="empty" style="padding:28px 12px;">
+            <div class="empty-title">{% trans "Select a module type to load releases from GitHub." %}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <span class="dot" style="background:var(--cyan);"></span>
+          {% trans "Recent import jobs" %}
+        </div>
+        <span class="t-label">{% trans "Last 10" %}</span>
+      </div>
+      <div class="panel-body flush">
+        {% if recent_jobs %}
+        <ul class="timeline" style="padding:4px 16px;">
+          {% for job in recent_jobs %}
+          <li data-type="{% if job.status == 'failed' %}incident{% elif job.status == 'ready' %}update{% elif job.status == 'running' %}deployment{% else %}note{% endif %}">
+            <div class="tl-head">
+              <span class="tl-title" style="font-family:var(--font-mono);letter-spacing:0.02em;">{{ job.tag }}</span>
+              <span class="t-mono-sm t-muted">·</span>
+              <span class="t-mono-sm t-muted">{{ job.module_type.display_name }}</span>
+              <span style="margin-left:auto;">
+                {% if job.status == "ready" %}
+                  <span class="pill pill-online"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+                {% elif job.status == "failed" %}
+                  <span class="pill pill-failed"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+                {% elif job.status == "running" %}
+                  <span class="pill pill-in-progress"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+                {% else %}
+                  <span class="pill pill-pending">{{ job.get_status_display|upper }}</span>
+                {% endif %}
+              </span>
+            </div>
+            <div class="tl-meta">
+              {{ job.created_at|date:"Y-m-d H:i" }}
+              {% if job.requested_by %} · {{ job.requested_by.username }}{% endif %}
+              {% if job.completed_at %} · {% trans "done" %} {{ job.completed_at|timesince }} {% trans "ago" %}{% endif %}
+            </div>
+            {% if job.error_message %}
+            <div class="tl-message t-danger" style="margin-top:6px;font-family:var(--font-mono);font-size:11.5px;">{{ job.error_message }}</div>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty" style="padding:28px 12px;">
+          <div class="empty-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+            </svg>
+          </div>
+          <div class="empty-title">{% trans "No import jobs yet" %}</div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+  </div>
+
+</div>
+{% endblock %}
