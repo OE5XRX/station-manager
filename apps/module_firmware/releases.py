@@ -83,6 +83,16 @@ def _download(url: str) -> bytes:
         return resp.read()
 
 
+@dataclass
+class _StagedVariant:
+    va: VariantAsset
+    skey: str
+    bkey: str
+    size: int
+    sha256: str
+    url: str
+
+
 def import_release_tag(job: ModuleFirmwareImportJob) -> None:
     repo = job.source_repo
     prefix = job.module_type.release_asset_prefix
@@ -97,39 +107,76 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
         variants = parse_variant_assets(set(gh.asset_names), prefix)
         if not variants:
             raise ValueError(f"no {prefix}-*.signed.bin (+bundle) assets in {job.tag}")
-        sums = parse_sha256sums(_download(_asset_url(repo, job.tag, "SHA256SUMS")).decode("utf-8"))
-        identity = _fw_identity_regexp(repo)
-        last_release = None
+
+        # --- Partition variants: active-existing vs to_import ---
+        active_existing: list[ModuleFirmwareRelease] = []
+        to_import: list[VariantAsset] = []
         for va in variants:
-            blob = _download(_asset_url(repo, job.tag, va.signed_name))
-            expected = sums.get(va.signed_name)
-            if not expected or hashlib.sha256(blob).hexdigest() != expected:
-                raise ValueError(f"sha256 mismatch for {va.signed_name}")
-            bundle = _download(_asset_url(repo, job.tag, va.bundle_name))
-            verify_blob_identity(blob, bundle, identity)
-            skey = storage.release_key(job.module_type.key, job.tag, va.variant)
-            bkey = storage.bundle_key(job.module_type.key, job.tag, va.variant)
-            storage.upload_bytes(skey, blob)
-            uploaded.append(skey)
-            storage.upload_bytes(bkey, bundle)
-            uploaded.append(bkey)
-            with transaction.atomic():
+            row = ModuleFirmwareRelease.all_objects.filter(
+                module_type=job.module_type, variant=va.variant, version=job.tag
+            ).first()
+            if row is not None and row.archived_at is None:
+                # Already active — skip entirely (idempotent)
+                active_existing.append(row)
+            else:
+                # No row or archived row — needs import/restore
+                to_import.append(va)
+
+        # --- Stage phase: download + verify all to_import variants ---
+        staged: list[_StagedVariant] = []
+        if to_import:
+            sums = parse_sha256sums(
+                _download(_asset_url(repo, job.tag, "SHA256SUMS")).decode("utf-8")
+            )
+            identity = _fw_identity_regexp(repo)
+            for va in to_import:
+                blob = _download(_asset_url(repo, job.tag, va.signed_name))
+                expected = sums.get(va.signed_name)
+                if not expected or hashlib.sha256(blob).hexdigest() != expected:
+                    raise ValueError(f"sha256 mismatch for {va.signed_name}")
+                bundle = _download(_asset_url(repo, job.tag, va.bundle_name))
+                verify_blob_identity(blob, bundle, identity)
+                skey = storage.release_key(job.module_type.key, job.tag, va.variant)
+                bkey = storage.bundle_key(job.module_type.key, job.tag, va.variant)
+                storage.upload_bytes(skey, blob)
+                uploaded.append(skey)
+                storage.upload_bytes(bkey, bundle)
+                uploaded.append(bkey)
+                staged.append(
+                    _StagedVariant(
+                        va=va,
+                        skey=skey,
+                        bkey=bkey,
+                        size=len(blob),
+                        sha256=expected,
+                        url=_asset_url(repo, job.tag, va.signed_name),
+                    )
+                )
+
+        # --- Publish phase: single atomic transaction for all staged variants ---
+        last_release = None
+        with transaction.atomic():
+            for sv in staged:
                 last_release, _ = ModuleFirmwareRelease.all_objects.update_or_create(
                     module_type=job.module_type,
-                    variant=va.variant,
+                    variant=sv.va.variant,
                     version=job.tag,
                     defaults={
-                        "storage_key": skey,
-                        "sha256": expected,
-                        "size_bytes": len(blob),
-                        "cosign_bundle_key": bkey,
+                        "storage_key": sv.skey,
+                        "sha256": sv.sha256,
+                        "size_bytes": sv.size,
+                        "cosign_bundle_key": sv.bkey,
                         "source_repo": repo,
                         "source_tag": job.tag,
-                        "source_github_url": _asset_url(repo, job.tag, va.signed_name),
+                        "source_github_url": sv.url,
                         "imported_by": job.requested_by,
                         "archived_at": None,
                     },
                 )
+
+        if last_release is None and active_existing:
+            last_release = active_existing[-1]
+
         job.release = last_release
         job.status = ModuleFirmwareImportJob.Status.READY
         job.completed_at = timezone.now()

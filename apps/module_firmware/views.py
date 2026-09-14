@@ -1,4 +1,5 @@
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
@@ -293,13 +294,32 @@ class FirmwareImportView(_StaffFirmwareMixin, View):
         module_type = ModuleType.objects.filter(pk=module_type_id).first()
         if module_type is None:
             return HttpResponseRedirect(reverse("module_firmware:release_list"))
-        ModuleFirmwareImportJob.objects.create(
-            module_type=module_type,
-            source_repo=module_type.firmware_repo,
-            tag=tag,
-            status=ModuleFirmwareImportJob.Status.PENDING,
-            requested_by=request.user,
-        )
+        # Finding 3: reject partially-configured module types — a doomed job
+        # can never succeed and just adds noise to the queue.
+        if not module_type.firmware_repo or not module_type.release_asset_prefix:
+            return HttpResponseRedirect(reverse("module_firmware:release_list"))
+        # Finding 4: transactional dedup — mirror apps/images/views.py QuickQueueView.
+        # Do NOT create a job if an active release or an in-flight job already exists.
+        with transaction.atomic():
+            active_exists = ModuleFirmwareRelease.objects.filter(
+                module_type=module_type, source_tag=tag
+            ).exists()
+            in_flight_exists = ModuleFirmwareImportJob.objects.filter(
+                module_type=module_type,
+                tag=tag,
+                status__in=[
+                    ModuleFirmwareImportJob.Status.PENDING,
+                    ModuleFirmwareImportJob.Status.RUNNING,
+                ],
+            ).exists()
+            if not active_exists and not in_flight_exists:
+                ModuleFirmwareImportJob.objects.create(
+                    module_type=module_type,
+                    source_repo=module_type.firmware_repo,
+                    tag=tag,
+                    status=ModuleFirmwareImportJob.Status.PENDING,
+                    requested_by=request.user,
+                )
         return HttpResponseRedirect(reverse("module_firmware:release_list"))
 
 

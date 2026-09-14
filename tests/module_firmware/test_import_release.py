@@ -2,6 +2,7 @@ import hashlib
 from unittest import mock
 
 import pytest
+from django.utils import timezone
 
 from apps.images.github_releases import GitHubRelease
 from apps.module_firmware import releases
@@ -105,3 +106,163 @@ def test_import_sha_mismatch_fails(fm):
     job.refresh_from_db()
     assert job.status == ModuleFirmwareImportJob.Status.FAILED
     assert ModuleFirmwareRelease.objects.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: all-or-nothing — uhf SHA mismatch → vhf row NOT published
+# ---------------------------------------------------------------------------
+
+
+def _two_variant_release(tag="26.07.04-01"):
+    return GitHubRelease(
+        tag=tag,
+        html_url="",
+        is_latest=True,
+        asset_names=frozenset(
+            {
+                "fm-sa818-vhf.signed.bin",
+                "fm-sa818-vhf.signed.bin.bundle",
+                "fm-sa818-uhf.signed.bin",
+                "fm-sa818-uhf.signed.bin.bundle",
+                "SHA256SUMS",
+            }
+        ),
+    )
+
+
+@pytest.mark.django_db
+def test_all_or_nothing_second_variant_mismatch(fm):
+    """If one variant SHA mismatches, NO row must be published (no partial release).
+
+    Variants are processed in sorted order: uhf < vhf alphabetically.
+    We make uhf correct and vhf bad so that at least uhf's keys are staged
+    before the failure, giving the cleanup path something to delete.
+    """
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
+    )
+
+    def dl_vhf_bad(url):
+        name = url.rsplit("/", 1)[-1]
+        if name == "SHA256SUMS":
+            # uhf is correct, vhf has a bad hash → vhf fails after uhf is staged
+            uhf_hex = hashlib.sha256(_blob("uhf")).hexdigest()
+            return (
+                f"{uhf_hex}  fm-sa818-uhf.signed.bin\ndeadbeef  fm-sa818-vhf.signed.bin\n"
+            ).encode()
+        return _fake_download(url)
+
+    with (
+        mock.patch(
+            "apps.module_firmware.releases.fetch_releases", return_value=[_two_variant_release()]
+        ),
+        mock.patch("apps.module_firmware.releases._download", side_effect=dl_vhf_bad),
+        mock.patch("apps.module_firmware.releases.verify_blob_identity"),
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes"),
+        mock.patch("apps.module_firmware.releases.storage.delete") as mock_delete,
+    ):
+        releases.import_release_tag(job)
+
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.FAILED
+    # No release rows at all — neither variant published
+    assert ModuleFirmwareRelease.objects.count() == 0
+    # Cleanup was attempted for the uhf keys that were uploaded before the failure
+    assert mock_delete.called
+
+
+# ---------------------------------------------------------------------------
+# Finding 2a: idempotent skip — active variant not re-downloaded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_idempotent_skip_active_variant(fm):
+    """Re-importing a tag with an already-ACTIVE row must skip download+upload."""
+    existing = ModuleFirmwareRelease.objects.create(
+        module_type=fm,
+        variant="vhf",
+        version="26.07.04-01",
+        storage_key="module_firmware/fm/26.07.04-01/vhf.signed.bin",
+        sha256="aa" * 32,
+        size_bytes=10,
+        source_repo=fm.firmware_repo,
+        source_tag="26.07.04-01",
+    )
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
+    )
+    rel = GitHubRelease(
+        tag="26.07.04-01",
+        html_url="",
+        is_latest=True,
+        asset_names=frozenset(
+            {"fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle", "SHA256SUMS"}
+        ),
+    )
+
+    with (
+        mock.patch("apps.module_firmware.releases.fetch_releases", return_value=[rel]),
+        mock.patch("apps.module_firmware.releases._download") as mock_dl,
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
+    ):
+        releases.import_release_tag(job)
+
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.READY
+    # No download or upload for the already-active variant
+    mock_dl.assert_not_called()
+    mock_upload.assert_not_called()
+    # Storage key and sha256 unchanged
+    existing.refresh_from_db()
+    assert existing.storage_key == "module_firmware/fm/26.07.04-01/vhf.signed.bin"
+    assert existing.sha256 == "aa" * 32
+
+
+# ---------------------------------------------------------------------------
+# Finding 2b: archived restore+re-pin — row is restored and re-uploaded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_archived_variant_is_restored_and_repinned(fm):
+    """An archived row must be restored (archived_at=None) and re-uploaded."""
+    archived = ModuleFirmwareRelease.all_objects.create(
+        module_type=fm,
+        variant="vhf",
+        version="26.07.04-01",
+        storage_key="old-key",
+        sha256="bb" * 32,
+        size_bytes=7,
+        source_repo=fm.firmware_repo,
+        source_tag="26.07.04-01",
+        archived_at=timezone.now(),
+    )
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
+    )
+    rel = GitHubRelease(
+        tag="26.07.04-01",
+        html_url="",
+        is_latest=True,
+        asset_names=frozenset(
+            {"fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle", "SHA256SUMS"}
+        ),
+    )
+    with (
+        mock.patch("apps.module_firmware.releases.fetch_releases", return_value=[rel]),
+        mock.patch("apps.module_firmware.releases._download", side_effect=_fake_download),
+        mock.patch("apps.module_firmware.releases.verify_blob_identity"),
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
+    ):
+        releases.import_release_tag(job)
+
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.READY
+    # Row must be restored
+    archived.refresh_from_db()
+    assert archived.archived_at is None
+    # New storage key pinned
+    assert archived.storage_key != "old-key"
+    # Upload was called
+    assert mock_upload.called
