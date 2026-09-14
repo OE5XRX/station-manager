@@ -208,7 +208,9 @@ class FirmwareReleaseListView(LoginRequiredMixin, ListView):
             "type": g.get("type", ""),
             "variant": g.get("variant", ""),
         }
-        ctx["recent_jobs"] = ModuleFirmwareImportJob.objects.select_related("module_type")[:10]
+        ctx["recent_jobs"] = ModuleFirmwareImportJob.objects.select_related(
+            "module_type", "requested_by"
+        )[:10]
         return ctx
 
 
@@ -283,7 +285,14 @@ class FirmwareImportView(_StaffFirmwareMixin, View):
     def post(self, request):
         module_type_id = request.POST.get("module_type")
         tag = request.POST.get("tag", "").strip()
-        module_type = get_object_or_404(ModuleType, pk=module_type_id)
+        # Guard: never queue an import without both a resolvable module type
+        # and a non-empty tag — a blank tag would create a job the worker
+        # can never satisfy.
+        if not tag or not module_type_id:
+            return HttpResponseRedirect(reverse("module_firmware:release_list"))
+        module_type = ModuleType.objects.filter(pk=module_type_id).first()
+        if module_type is None:
+            return HttpResponseRedirect(reverse("module_firmware:release_list"))
         ModuleFirmwareImportJob.objects.create(
             module_type=module_type,
             source_repo=module_type.firmware_repo,
