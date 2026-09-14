@@ -1,0 +1,12 @@
+{% load i18n %}
+{% comment %}
+Status pills for a Module. Expects `module` in context.
+Lifecycle/registration map onto the shared design-system pill palette.
+{% endcomment %}
+{% if module.lifecycle_status == "deployed" %}<span class="pill pill-online"><span class="dot"></span>{{ module.get_lifecycle_status_display|upper }}</span>
+{% elif module.lifecycle_status == "defect" %}<span class="pill pill-error"><span class="dot"></span>{{ module.get_lifecycle_status_display|upper }}</span>
+{% elif module.lifecycle_status == "in_lab" %}<span class="pill pill-warn"><span class="dot"></span>{{ module.get_lifecycle_status_display|upper }}</span>
+{% else %}<span class="pill pill-muted"><span class="dot"></span>{{ module.get_lifecycle_status_display|upper }}</span>{% endif %}
+{% if module.registration_status == "registered" %}<span class="pill pill-success">{{ module.get_registration_status_display|upper }}</span>
+{% else %}<span class="pill pill-warn">{{ module.get_registration_status_display|upper }}</span>{% endif %}
+{% if module.uid_source == "synthetic" %}<span class="pill pill-violet">{% trans "SIM" %}</span>{% endif %}

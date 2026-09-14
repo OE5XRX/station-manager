@@ -23,6 +23,18 @@ class StationModule(models.Model):
     model = models.CharField(_("model"), max_length=128, blank=True)
     version = models.CharField(_("version"), max_length=64, blank=True)
 
+    # NOTE: named ``tracked_module`` (not ``module``) because ``module_id`` above
+    # is an existing CharField; a FK named ``module`` would collide on the
+    # implicit ``module_id`` attname/column.
+    tracked_module = models.ForeignKey(
+        "module_firmware.Module",
+        verbose_name=_("module"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="station_modules",
+    )
+
     capability_descriptor = models.JSONField(_("capability descriptor"), default=list, blank=True)
     last_state = models.JSONField(_("last state"), default=dict, blank=True)
 

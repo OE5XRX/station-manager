@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "apps.monitoring",
     "apps.webpush",
     "apps.images",
+    "apps.module_firmware",
     "apps.provisioning",
     "apps.rollouts",
     "apps.sso",

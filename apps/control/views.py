@@ -30,7 +30,11 @@ class StationControlView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
         # Rendering its `streams` (a list) in the generic widget shows
         # "[object Object],[object Object]". tx_route still flows over the control-WS
         # command path, so hiding the card changes nothing functional.
-        ctx["modules"] = [m for m in station.modules.all() if m.type != "audio_router"]
+        ctx["modules"] = [
+            m
+            for m in station.modules.select_related("tracked_module__module_type").all()
+            if m.type != "audio_router"
+        ]
         ctx["initial_inventory"] = serializers.snapshot(station)
         u = self.request.user
         ctx["can_admin"] = (

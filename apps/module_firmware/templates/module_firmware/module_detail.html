@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ module.uid }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <span class="cur t-mono">{{ module.uid }}</span>
+{% endblock %}
+
+{% block content %}
+<div>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">
+        <span>{% trans "Module" %} · {{ module.module_type.display_name }}</span>
+      </div>
+      <h1 class="page-title t-mono" style="letter-spacing:-0.01em;">{{ module.uid }}</h1>
+      <div class="row-gap-8 mt-10">
+        {% include "module_firmware/_pills.html" with module=module %}
+        {% if current_assignment and current_assignment.station %}
+          <span class="t-mono-sm t-muted">
+            {% trans "at" %}
+            <a href="{% url 'stations:station_detail' current_assignment.station.pk %}" style="color:inherit;">{{ current_assignment.station.callsign|default:current_assignment.station.name }}</a>
+            / {{ current_assignment.slot }}
+          </span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="summary-bar mb-24">
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Type" %}</div>
+      <div class="summary-val">{{ module.module_type.display_name }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Reported version" %}</div>
+      <div class="summary-val mono">{{ module.last_reported_version|default:"—" }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "UID source" %}</div>
+      <div class="summary-val">{{ module.get_uid_source_display }}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "First seen" %}</div>
+      <div class="summary-val">{% if module.first_seen %}{{ module.first_seen|date:"Y-m-d H:i" }}{% else %}—{% endif %}</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-key">{% trans "Last seen" %}</div>
+      <div class="summary-val">{% if module.last_seen %}{{ module.last_seen|timesince }} {% trans "ago" %}{% else %}—{% endif %}</div>
+    </div>
+  </div>
+
+  {% if can_edit %}
+  <section class="panel mb-24">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Manage module" %}</div>
+    </div>
+    <div class="panel-body">
+      <div class="grid grid-cols-3">
+        <div>
+          <div class="summary-key mb-8">{% trans "Registration" %}</div>
+          {% if module.registration_status == "registered" %}
+            <p class="t-muted">{% trans "This module is registered." %}</p>
+          {% else %}
+            <form method="post" action="{% url 'module_firmware:module_confirm' module.uid %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-primary">{% trans "Confirm registration" %}</button>
+            </form>
+          {% endif %}
+        </div>
+        <div>
+          <div class="summary-key mb-8">{% trans "Lifecycle" %}</div>
+          <form method="post" action="{% url 'module_firmware:module_lifecycle' module.uid %}" class="row-gap-8">
+            {% csrf_token %}
+            <select name="lifecycle_status" class="form-select" style="width:auto;min-width:170px;" aria-label="{% trans 'Lifecycle status' %}">
+              {% comment %}
+              Placeholder with empty value, preselected when the current status is
+              not operator-settable (e.g. auto-derived "deployed"). Without it the
+              browser would preselect the first real option and an accidental
+              "Update" would clear the derived state; an empty submit is a no-op.
+              {% endcomment %}
+              <option value="" {% if module.lifecycle_status == "deployed" %}selected{% endif %}>{{ module.get_lifecycle_status_display }} — {% trans "change to…" %}</option>
+              {% for value, label in lifecycles %}
+                <option value="{{ value }}" {% if module.lifecycle_status == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn">{% trans "Update" %}</button>
+          </form>
+        </div>
+        <div>
+          <div class="summary-key mb-8">{% trans "Notes" %}</div>
+          <form method="post" action="{% url 'module_firmware:module_notes' module.uid %}">
+            {% csrf_token %}
+            <textarea name="notes" rows="3" class="form-control" style="width:100%;" placeholder="{% trans 'Internal notes…' %}">{{ module.notes }}</textarea>
+            <button type="submit" class="btn mt-10">{% trans "Save notes" %}</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+  {% elif module.notes %}
+  <section class="panel mb-24">
+    <div class="panel-head"><div class="panel-title">{% trans "Notes" %}</div></div>
+    <div class="panel-body"><div class="tl-message">{{ module.notes|linebreaksbr }}</div></div>
+  </section>
+  {% endif %}
+
+  <div class="grid grid-main">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot" style="background:var(--violet)"></span>{% trans "Assignment history" %}</div>
+      </div>
+      <div class="panel-body">
+        {% if assignments %}
+        <ul class="timeline">
+          {% for a in assignments %}
+          <li>
+            <div class="tl-head">
+              <span class="tl-title">
+                {% if a.station %}
+                  <a href="{% url 'stations:station_detail' a.station.pk %}" style="color:inherit;">{{ a.station.callsign|default:a.station.name }}</a> / {{ a.slot }}
+                {% else %}
+                  <span class="t-muted">{% trans "Unknown station" %}</span> / {{ a.slot }}
+                {% endif %}
+              </span>
+              {% if a.to_ts %}
+                <span class="pill pill-muted" style="font-size:9px;">{% trans "CLOSED" %}</span>
+              {% else %}
+                <span class="pill pill-online" style="font-size:9px;"><span class="dot"></span>{% trans "CURRENT" %}</span>
+              {% endif %}
+            </div>
+            <div class="tl-meta">
+              {{ a.from_ts|date:"Y-m-d H:i" }}
+              {% if a.to_ts %} → {{ a.to_ts|date:"Y-m-d H:i" }}{% else %} → {% trans "now" %}{% endif %}
+              {% if a.reason %} · {{ a.reason }}{% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty"><div class="empty-title">{% trans "Never assigned to a station" %}</div></div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Module audit trail" %}</div>
+      </div>
+      <div class="panel-body">
+        {% if audit_logs %}
+        <ul class="timeline">
+          {% for entry in audit_logs %}
+          <li>
+            <div class="tl-head">
+              <span class="tl-title">{{ entry.get_event_type_display }}</span>
+              {% if entry.station %}<span class="pill pill-muted" style="font-size:9px;">{{ entry.station.callsign|default:entry.station.name }}</span>{% endif %}
+            </div>
+            <div class="tl-meta">
+              {{ entry.created_at|date:"Y-m-d H:i" }}
+              {% if entry.user %} · {{ entry.user.username }}{% endif %}
+            </div>
+            {% if entry.message %}<div class="tl-message mt-10">{{ entry.message }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty"><div class="empty-title">{% trans "No audit events yet" %}</div></div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+</div>
+{% endblock %}

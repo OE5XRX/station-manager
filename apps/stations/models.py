@@ -307,12 +307,31 @@ class StationAuditLog(models.Model):
         CONTROL_LOCK_PREEMPTED = "control_lock_preempted", _("Control Lock Preempted")
         CONTROL_COMMAND = "control_command", _("Control Command")
         CONTROL_PTT = "control_ptt", _("Control PTT")
+        MODULE_DISCOVERED = "module_discovered", _("Module Discovered")
+        MODULE_REGISTERED = "module_registered", _("Module Registered")
+        MODULE_SWAPPED = "module_swapped", _("Module Swapped")
+        MODULE_LIFECYCLE_CHANGED = "module_lifecycle_changed", _("Module Lifecycle Changed")
+        MODULE_ASSIGNMENT_CHANGED = "module_assignment_changed", _("Module Assignment Changed")
 
     station = models.ForeignKey(
         Station,
         verbose_name=_("station"),
-        on_delete=models.CASCADE,
+        # SET_NULL (not CASCADE): an audit log is a durable trail. Deleting a
+        # station must not erase dual-subject module events (discovery/swap/
+        # lifecycle), which would otherwise wipe a surviving module's life
+        # history. The row lives on with station=None.
+        on_delete=models.SET_NULL,
         related_name="audit_logs",
+        null=True,
+        blank=True,
+    )
+    module = models.ForeignKey(
+        "module_firmware.Module",
+        verbose_name=_("module"),
+        on_delete=models.SET_NULL,
+        related_name="audit_logs",
+        null=True,
+        blank=True,
     )
     event_type = models.CharField(
         _("event type"),
@@ -344,10 +363,14 @@ class StationAuditLog(models.Model):
         indexes = [
             models.Index(fields=["-created_at"]),
             models.Index(fields=["station", "-created_at"]),
+            models.Index(fields=["module", "-created_at"]),
         ]
 
     def __str__(self):
-        return f"{self.station.name} - {self.get_event_type_display()} - {self.created_at}"
+        subject = (
+            self.station.name if self.station_id else (self.module.uid if self.module_id else "—")
+        )
+        return f"{subject} - {self.get_event_type_display()} - {self.created_at}"
 
     @classmethod
     def log(
@@ -359,6 +382,8 @@ class StationAuditLog(models.Model):
         user=None,
         ip_address=None,
         station_id=None,
+        module=None,
+        module_id=None,
     ):
         """Convenience method to create an audit log entry.
 
@@ -366,11 +391,17 @@ class StationAuditLog(models.Model):
         station_id form skips the instance fetch for callers that already
         have the pk (e.g. streaming views that captured it before the
         DB session closed).
+
+        A module subject (`module` instance or `module_id` pk) may be given
+        in addition to, or instead of, a station — so a module can be an
+        audit subject on its own.
         """
-        if station is None and station_id is None:
-            raise ValueError("station or station_id is required")
+        if station is None and station_id is None and module is None and module_id is None:
+            raise ValueError("a station or module subject is required")
         if station is not None and station_id is not None:
             raise ValueError("pass either station or station_id, not both")
+        if module is not None and module_id is not None:
+            raise ValueError("pass either module or module_id, not both")
         if not event_type:
             raise ValueError("event_type is required")
         kwargs = {
@@ -382,8 +413,12 @@ class StationAuditLog(models.Model):
         }
         if station is not None:
             kwargs["station"] = station
-        else:
+        elif station_id is not None:
             kwargs["station_id"] = station_id
+        if module is not None:
+            kwargs["module"] = module
+        elif module_id is not None:
+            kwargs["module_id"] = module_id
         return cls.objects.create(**kwargs)
 
 

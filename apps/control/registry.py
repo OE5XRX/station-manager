@@ -7,6 +7,9 @@ No async / no I/O beyond the ORM — call from consumers via
 from django.db import transaction
 from django.utils import timezone
 
+from apps.module_firmware.ingest import ingest_module, reconcile_station
+from apps.module_firmware.models import Module
+
 from .models import StationModule
 
 
@@ -27,6 +30,12 @@ def apply_inventory(station, slots):
     """Upsert all reported modules; soft-offline every module not reported."""
     now = timezone.now()
     reported = []
+    tracked_slots = set()
+    # Maps slot (str) -> reported uid for any uid-bearing entry, tracked or
+    # rejected. Lets reconcile preserve an assignment when the SAME physical uid
+    # is still reported in its slot but the entry was rejected (type mismatch),
+    # while still releasing it when a different / no-uid module took the slot.
+    reported_uid_by_slot = {}
     for slot_entry in slots or []:
         slot = slot_entry.get("slot")
         for mod in slot_entry.get("modules", []) or []:
@@ -34,12 +43,16 @@ def apply_inventory(station, slots):
             if slot is None or module_id is None:
                 continue
             identity = mod.get("identity") or {}
+            uid = identity.get("uid")
+            slot_str = str(slot)
+            if uid:
+                reported_uid_by_slot[slot_str] = uid
             cap_descriptor = mod.get("capabilities", []) or []
             raw_state = mod.get("state", {}) or {}
             filtered_state = {
                 k: v for k, v in raw_state.items() if is_setting_cap(cap_descriptor, k)
             }
-            StationModule.objects.update_or_create(
+            sm, _ = StationModule.objects.update_or_create(
                 station=station,
                 slot=slot,
                 module_id=module_id,
@@ -53,12 +66,47 @@ def apply_inventory(station, slots):
                     "last_seen": now,
                 },
             )
+            tracked = ingest_module(station, slot, module_id, identity, now=now)
+            if tracked is not None:
+                if sm.tracked_module_id != tracked.id:
+                    sm.tracked_module = tracked
+                    sm.save(update_fields=["tracked_module"])
+                tracked_slots.add(slot_str)
+            else:
+                # Rejected entry (legacy no-UID / unknown type / type mismatch).
+                # Keep the existing link ONLY if the SAME uid as the currently
+                # linked module is reported — i.e. a type-mismatch of the tracked
+                # module itself, where the module is still physically present.
+                # Otherwise the slot no longer holds that module: clear the link
+                # so it agrees with the assignment history reconcile will update.
+                linked_uid = None
+                if sm.tracked_module_id:
+                    linked_uid = (
+                        Module.objects.filter(pk=sm.tracked_module_id)
+                        .values_list("uid", flat=True)
+                        .first()
+                    )
+                keep = bool(uid) and uid == linked_uid
+                if not keep and sm.tracked_module_id is not None:
+                    sm.tracked_module = None
+                    sm.save(update_fields=["tracked_module"])
             reported.append((slot, module_id))
 
     qs = StationModule.objects.filter(station=station, online=True)
     for slot, module_id in reported:
         qs = qs.exclude(slot=slot, module_id=module_id)
     qs.update(online=False)
+
+    # Reconcile tracked-module assignments against the snapshot. Guarded on
+    # ``slots`` being non-empty (NOT ``reported``): a responsive-but-empty slot
+    # list still reports a real snapshot and must close pulled modules, whereas
+    # ``slots == []`` is indistinguishable from a transient discovery failure and
+    # must NOT tear everything down. Full completeness-aware reconciliation is
+    # Teilbereich C's job.
+    if slots:
+        reconcile_station(
+            station, tracked_slots, now=now, reported_uid_by_slot=reported_uid_by_slot
+        )
 
 
 @transaction.atomic

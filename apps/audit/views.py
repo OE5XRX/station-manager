@@ -142,7 +142,7 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         merging = active_count > 1
 
         if not merging and include_station:
-            station_qs = StationAuditLog.objects.select_related("station", "user")
+            station_qs = StationAuditLog.objects.select_related("station", "module", "user")
             station_qs = self.apply_filters(station_qs, params)
             self._single_source = "station"
             return station_qs.order_by("-created_at")
@@ -161,7 +161,7 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
 
         # Merge mode.
         self._single_source = None
-        station_qs = StationAuditLog.objects.select_related("station", "user")
+        station_qs = StationAuditLog.objects.select_related("station", "module", "user")
         station_qs = self.apply_filters(station_qs, params)
         station_entries = list(station_qs.order_by("-created_at")[:MERGE_FEED_CAP])
 
@@ -221,7 +221,7 @@ class AuditLogExportView(AdminRequiredMixin, AuditLogFilterMixin, View):
     def get(self, request):
         export_format = request.GET.get("format", "csv")
 
-        qs = StationAuditLog.objects.select_related("station", "user")
+        qs = StationAuditLog.objects.select_related("station", "module", "user")
         qs = self.apply_filters(qs, request.GET)
         qs = qs[: self.EXPORT_LIMIT]
 
@@ -233,6 +233,7 @@ class AuditLogExportView(AdminRequiredMixin, AuditLogFilterMixin, View):
         return {
             "id": entry.pk,
             "station": entry.station.name if entry.station else "",
+            "module": entry.module.uid if entry.module_id else "",
             "event_type": entry.event_type,
             "message": entry.message,
             "changes": entry.changes,
@@ -250,6 +251,7 @@ class AuditLogExportView(AdminRequiredMixin, AuditLogFilterMixin, View):
             [
                 "ID",
                 "Station",
+                "Module",
                 "Event Type",
                 "Message",
                 "Changes",
@@ -265,6 +267,7 @@ class AuditLogExportView(AdminRequiredMixin, AuditLogFilterMixin, View):
                 [
                     d["id"],
                     d["station"],
+                    d["module"],
                     d["event_type"],
                     d["message"],
                     str(d["changes"]),

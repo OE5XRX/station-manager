@@ -22,6 +22,10 @@ PTT is rendered last within the card so it can span full width.
       <span class="cp-module-sep" aria-hidden="true">&#8202;&#8226;&#8202;</span>
       <span class="cp-module-type">{{ m.type }}</span>
       {% if m.model %}<span class="cp-module-model t-muted">{{ m.model }}</span>{% endif %}
+      {% if m.tracked_module %}
+        <a class="cp-module-uid t-mono-sm" href="{% url 'module_firmware:module_detail' m.tracked_module.uid %}" title="{% trans 'Open module inventory record' %}">{{ m.tracked_module.uid }}</a>
+        {% include "module_firmware/_pills.html" with module=m.tracked_module %}
+      {% endif %}
     </div>
     <div class="cp-module-status">
       <span class="cp-online-dot"

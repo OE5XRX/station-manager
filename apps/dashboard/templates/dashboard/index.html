@@ -71,6 +71,25 @@
 
     <div class="stat">
       <div class="stat-label">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+        {% trans "Modules" %}
+      </div>
+      <div class="stat-value {% if module_stats.attention > 0 %}stat-warn{% endif %}">{{ module_stats.total }}</div>
+      <div class="stat-meta">
+        {% if module_stats.attention > 0 %}
+          <a href="{% url 'module_firmware:module_list' %}" class="t-mono stat-warn">{% blocktrans count n=module_stats.attention %}{{ n }} needs attention{% plural %}{{ n }} need attention{% endblocktrans %} →</a>
+        {% endif %}
+        {% if module_stats.unregistered > 0 %}
+          <a href="{% url 'module_firmware:module_list' %}?registration=unregistered" class="t-mono">{% blocktrans count n=module_stats.unregistered %}{{ n }} unregistered{% plural %}{{ n }} unregistered{% endblocktrans %} →</a>
+        {% endif %}
+        {% if not module_stats.attention and not module_stats.unregistered %}
+          <a href="{% url 'module_firmware:module_list' %}" class="t-mono">{% trans "inventory" %} →</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="stat">
+      <div class="stat-label">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg>
         {% trans "Operators" %}
       </div>
