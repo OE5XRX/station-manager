@@ -17,6 +17,8 @@ from apps.api.models import DeviceKey
 from apps.images import cosign, extraction, github
 from apps.images import storage as image_storage
 from apps.images.models import ImageImportJob, ImageRelease
+from apps.module_firmware import releases as mfw_releases
+from apps.module_firmware.models import ModuleFirmwareImportJob
 from apps.provisioning import guestfish
 from apps.provisioning.config_render import render_config
 from apps.provisioning.models import ProvisioningJob
@@ -53,6 +55,7 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         while True:
             process_pending_image_imports()
+            process_pending_module_firmware_imports()
             process_pending_provisioning_jobs()
             cleanup_expired_provisioning_outputs()
             if not opts["loop"]:
@@ -90,6 +93,11 @@ def _claim_one_pending(model, status_field: str = "status"):
 def process_pending_image_imports() -> None:
     while (job := _claim_one_pending(ImageImportJob)) is not None:
         _run_import_job(job)
+
+
+def process_pending_module_firmware_imports() -> None:
+    while (job := _claim_one_pending(ModuleFirmwareImportJob)) is not None:
+        mfw_releases.import_release_tag(job)
 
 
 def _run_import_job(job: ImageImportJob) -> None:
