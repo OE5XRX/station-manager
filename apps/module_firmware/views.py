@@ -1,15 +1,22 @@
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views import View
 from django.views.generic import DetailView, ListView
 
+from apps.images import github_releases
 from apps.stations.models import Station
 
 from . import services
-from .models import Module, ModuleAssignmentHistory, ModuleType
+from .models import (
+    Module,
+    ModuleAssignmentHistory,
+    ModuleFirmwareImportJob,
+    ModuleFirmwareRelease,
+    ModuleType,
+)
 
 # Lifecycle states an operator may set by hand. ``deployed`` is excluded: it is
 # auto-derived from an open assignment, so a manual set would be overwritten by
@@ -156,3 +163,146 @@ class ModuleNotesView(_StaffModuleMixin, View):
         m.notes = request.POST.get("notes", "")
         m.save(update_fields=["notes", "updated_at"])
         return self._redirect(uid)
+
+
+# ---------------------------------------------------------------------------
+# Firmware release views
+# ---------------------------------------------------------------------------
+
+
+class _StaffFirmwareMixin(LoginRequiredMixin, UserPassesTestMixin):
+    raise_exception = True
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+
+class FirmwareReleaseListView(LoginRequiredMixin, ListView):
+    template_name = "module_firmware/release_list.html"
+    context_object_name = "releases"
+    paginate_by = 50
+
+    def _show_archived(self) -> bool:
+        return self.request.GET.get("show_archived") == "1"
+
+    def get_queryset(self):
+        manager = (
+            ModuleFirmwareRelease.all_objects
+            if self._show_archived()
+            else ModuleFirmwareRelease.objects
+        )
+        qs = manager.select_related("module_type")
+        g = self.request.GET
+        if g.get("type"):
+            qs = qs.filter(module_type__key=g["type"])
+        if g.get("variant"):
+            qs = qs.filter(variant=g["variant"])
+        return qs
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["module_types"] = ModuleType.objects.exclude(firmware_repo="")
+        ctx["show_archived"] = self._show_archived()
+        g = self.request.GET
+        ctx["filters"] = {
+            "type": g.get("type", ""),
+            "variant": g.get("variant", ""),
+        }
+        ctx["recent_jobs"] = ModuleFirmwareImportJob.objects.select_related("module_type")[:10]
+        return ctx
+
+
+class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
+    def get(self, request):
+        module_type_id = request.GET.get("module_type")
+        if not module_type_id:
+            return render(
+                request,
+                "module_firmware/_github_releases.html",
+                {
+                    "error": "No module type selected.",
+                    "module_types": ModuleType.objects.exclude(firmware_repo=""),
+                },
+            )
+        module_type = get_object_or_404(ModuleType, pk=module_type_id)
+        if not module_type.firmware_repo:
+            return render(
+                request,
+                "module_firmware/_github_releases.html",
+                {
+                    "error": "This module type has no firmware repo configured.",
+                    "module_type": module_type,
+                },
+            )
+        try:
+            releases = github_releases.fetch_releases(module_type.firmware_repo)
+        except github_releases.GitHubAPIError as exc:
+            return render(
+                request,
+                "module_firmware/_github_releases.html",
+                {"error": str(exc), "module_type": module_type},
+            )
+
+        imported_tags = set(
+            ModuleFirmwareRelease.all_objects.filter(module_type=module_type).values_list(
+                "source_tag", flat=True
+            )
+        )
+        in_flight_tags = set(
+            ModuleFirmwareImportJob.objects.filter(
+                module_type=module_type,
+                status__in=[
+                    ModuleFirmwareImportJob.Status.PENDING,
+                    ModuleFirmwareImportJob.Status.RUNNING,
+                ],
+            ).values_list("tag", flat=True)
+        )
+
+        rows = []
+        for rel in releases:
+            if rel.tag in imported_tags:
+                state = "imported"
+            elif rel.tag in in_flight_tags:
+                state = "queued"
+            else:
+                state = "ready"
+            rows.append({"release": rel, "state": state})
+
+        return render(
+            request,
+            "module_firmware/_github_releases.html",
+            {
+                "rows": rows,
+                "module_type": module_type,
+                "module_types": ModuleType.objects.exclude(firmware_repo=""),
+            },
+        )
+
+
+class FirmwareImportView(_StaffFirmwareMixin, View):
+    def post(self, request):
+        module_type_id = request.POST.get("module_type")
+        tag = request.POST.get("tag", "").strip()
+        module_type = get_object_or_404(ModuleType, pk=module_type_id)
+        ModuleFirmwareImportJob.objects.create(
+            module_type=module_type,
+            source_repo=module_type.firmware_repo,
+            tag=tag,
+            status=ModuleFirmwareImportJob.Status.PENDING,
+            requested_by=request.user,
+        )
+        return HttpResponseRedirect(reverse("module_firmware:release_list"))
+
+
+class FirmwareArchiveView(_StaffFirmwareMixin, View):
+    def post(self, request, pk):
+        release = get_object_or_404(ModuleFirmwareRelease.all_objects, pk=pk)
+        release.archive()
+        return HttpResponseRedirect(reverse("module_firmware:release_list"))
+
+
+class FirmwareRestoreView(_StaffFirmwareMixin, View):
+    def post(self, request, pk):
+        release = get_object_or_404(ModuleFirmwareRelease.all_objects, pk=pk)
+        release.restore()
+        return HttpResponseRedirect(reverse("module_firmware:release_list"))

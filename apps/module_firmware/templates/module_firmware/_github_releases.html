@@ -1,0 +1,88 @@
+{% load i18n %}
+{% comment %}
+  HTMX partial: firmware release rows from GitHub for a given module type.
+  Loaded by the GithubFirmwareReleasesPartialView into #fw-gh-releases.
+{% endcomment %}
+{% if error %}
+<div class="empty" style="padding:28px 12px;">
+  <div class="empty-title">{% trans "GitHub temporarily unreachable" %}</div>
+  <div class="t-mono-sm t-muted" style="margin:6px 0 12px;">{{ error }}</div>
+  {% if module_type %}
+  <button type="button" class="btn btn-sm"
+          hx-get="{% url 'module_firmware:gh_partial' %}?module_type={{ module_type.pk }}"
+          hx-target="#fw-gh-releases"
+          hx-swap="innerHTML">
+    {% trans "Try again" %}
+  </button>
+  {% endif %}
+</div>
+{% elif rows %}
+<div class="row-gap-8" style="padding:8px 0 12px;border-bottom:1px solid var(--line);">
+  <button type="button" class="btn btn-sm"
+          hx-get="{% url 'module_firmware:gh_partial' %}?module_type={{ module_type.pk }}"
+          hx-target="#fw-gh-releases"
+          hx-swap="innerHTML">
+    {% trans "Refresh" %}
+  </button>
+</div>
+<div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Tag" %}</th>
+        <th>{% trans "Assets" %}</th>
+        <th style="width:1%;">{% trans "Action" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr id="fw-gh-row-{{ row.release.tag|slugify }}" data-fw-gh-row="{{ row.release.tag }}">
+        <td data-label="{% trans 'Tag' %}">
+          {% if row.release.html_url %}
+            <a href="{{ row.release.html_url }}" target="_blank" rel="noopener"
+               style="font-family:var(--font-mono);font-weight:600;color:var(--ink-0);">{{ row.release.tag }}</a>
+          {% else %}
+            <span style="font-family:var(--font-mono);font-weight:600;color:var(--ink-0);">{{ row.release.tag }}</span>
+          {% endif %}
+          {% if row.release.is_latest %}
+            <span class="pill pill-accent" style="margin-left:6px;">{% trans "LATEST" %}</span>
+          {% endif %}
+        </td>
+        <td data-label="{% trans 'Assets' %}">
+          <span class="t-mono-sm t-muted">{{ row.release.asset_names|length }} {% trans "assets" %}</span>
+        </td>
+        <td class="actions" data-label="{% trans 'Action' %}">
+          {% if row.state == "ready" %}
+            <form method="post" action="{% url 'module_firmware:import' %}" style="display:inline;margin:0;">
+              {% csrf_token %}
+              <input type="hidden" name="module_type" value="{{ module_type.pk }}">
+              <input type="hidden" name="tag" value="{{ row.release.tag }}">
+              <button type="submit" class="btn btn-sm btn-primary">
+                {% trans "Import" %}
+              </button>
+            </form>
+          {% elif row.state == "queued" %}
+            <span class="pill pill-pending"><span class="dot"></span>{% trans "QUEUED" %}</span>
+          {% elif row.state == "imported" %}
+            <span class="pill pill-online"><span class="dot"></span>{% trans "IMPORTED" %}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="row-gap-8" style="padding:8px 0 12px;border-bottom:1px solid var(--line);">
+  <button type="button" class="btn btn-sm"
+          hx-get="{% url 'module_firmware:gh_partial' %}?module_type={{ module_type.pk }}"
+          hx-target="#fw-gh-releases"
+          hx-swap="innerHTML">
+    {% trans "Refresh" %}
+  </button>
+</div>
+<div class="empty" style="padding:28px 12px;">
+  <div class="empty-title">{% trans "No new releases to import" %}</div>
+  <div>{% trans "All current GitHub releases are already imported or queued." %}</div>
+</div>
+{% endif %}
