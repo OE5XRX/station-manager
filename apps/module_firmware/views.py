@@ -21,6 +21,16 @@ OPERATOR_LIFECYCLE_CHOICES = [
 ]
 
 
+def operator_lifecycle_choices(*, has_open_assignment):
+    """Operator-settable lifecycle choices. ``ready`` is also assignment-derived,
+    so it's dropped while the module has an open assignment (set_lifecycle rejects
+    it in that state)."""
+    choices = OPERATOR_LIFECYCLE_CHOICES
+    if has_open_assignment:
+        choices = [(v, label) for v, label in choices if v != Module.Lifecycle.READY]
+    return choices
+
+
 class ModuleListView(LoginRequiredMixin, ListView):
     model = Module
     template_name = "module_firmware/module_list.html"
@@ -97,7 +107,11 @@ class ModuleDetailView(LoginRequiredMixin, DetailView):
         ctx["current_assignment"] = m.assignments.filter(to_ts__isnull=True).first()
         ctx["audit_logs"] = m.audit_logs.select_related("station", "user").all()[:200]
         ctx["can_edit"] = self.request.user.is_staff
-        ctx["lifecycles"] = OPERATOR_LIFECYCLE_CHOICES
+        # Don't offer `ready` while an assignment is open — it's assignment-derived
+        # and set_lifecycle rejects it in that state.
+        ctx["lifecycles"] = operator_lifecycle_choices(
+            has_open_assignment=bool(ctx["current_assignment"])
+        )
         return ctx
 
 
@@ -125,9 +139,13 @@ class ModuleLifecycleView(_StaffModuleMixin, View):
     def post(self, request, uid):
         m = self.get_module()
         status = request.POST.get("lifecycle_status")
-        # Only operator-settable states — ``deployed`` is auto-derived and must
-        # not be set by hand.
-        if status in dict(OPERATOR_LIFECYCLE_CHOICES):
+        # Only operator-settable states, and only what's valid for the module's
+        # current assignment state (``deployed`` is auto-derived; ``ready`` is
+        # rejected while an assignment is open). Anything else is a no-op — the
+        # service is the authority and would raise on an invalid transition.
+        has_open = m.assignments.filter(to_ts__isnull=True).exists()
+        allowed = dict(operator_lifecycle_choices(has_open_assignment=has_open))
+        if status in allowed:
             services.set_lifecycle(m, status, user=request.user)
         return self._redirect(uid)
 

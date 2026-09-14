@@ -335,6 +335,28 @@ def test_rejected_report_with_different_uid_clears_link(fm, station_factory):
 
 
 @pytest.mark.django_db
+def test_reconcile_closes_multiple_pulled_modules(fm, station_factory):
+    """reconcile_station closes every stale assignment (regression for the
+    module-then-assignment lock ordering) — two modules pulled at once both
+    revert to ready, one slot kept to keep the snapshot non-empty."""
+    station = station_factory()
+    apply_inventory(
+        station,
+        [slot_frame(1, uid="P1"), slot_frame(2, uid="P2"), slot_frame(3, uid="KEEP")],
+    )
+    p1, p2 = Module.objects.get(uid="P1"), Module.objects.get(uid="P2")
+    assert p1.lifecycle_status == p2.lifecycle_status == Module.Lifecycle.DEPLOYED
+
+    apply_inventory(station, [slot_frame(3, uid="KEEP")])  # slots 1 & 2 gone
+    p1.refresh_from_db()
+    p2.refresh_from_db()
+    assert p1.assignments.filter(to_ts__isnull=True).count() == 0
+    assert p2.assignments.filter(to_ts__isnull=True).count() == 0
+    assert p1.lifecycle_status == Module.Lifecycle.READY
+    assert p2.lifecycle_status == Module.Lifecycle.READY
+
+
+@pytest.mark.django_db
 def test_empty_snapshot_does_not_reconcile(fm, station_factory):
     """A fully empty inventory (indistinguishable from a discovery failure) must
     NOT tear down assignments — the deployed module keeps its open assignment."""

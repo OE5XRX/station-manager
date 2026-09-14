@@ -50,3 +50,20 @@ def test_set_lifecycle_rejects_deployed_and_garbage(module):
             services.set_lifecycle(module, bad, user=None)
     module.refresh_from_db()
     assert module.lifecycle_status == Module.Lifecycle.READY
+
+
+@pytest.mark.django_db
+def test_set_lifecycle_rejects_ready_while_assigned(module, station_factory):
+    from apps.module_firmware.models import ModuleAssignmentHistory
+
+    module.lifecycle_status = Module.Lifecycle.DEPLOYED
+    module.save(update_fields=["lifecycle_status"])
+    ModuleAssignmentHistory.objects.create(module=module, station=station_factory(), slot="slot1")
+    with pytest.raises(ValueError):
+        services.set_lifecycle(module, Module.Lifecycle.READY, user=None)
+    module.refresh_from_db()
+    assert module.lifecycle_status == Module.Lifecycle.DEPLOYED  # unchanged
+    # Sticky states remain settable while assigned.
+    services.set_lifecycle(module, Module.Lifecycle.DEFECT, user=None)
+    module.refresh_from_db()
+    assert module.lifecycle_status == Module.Lifecycle.DEFECT

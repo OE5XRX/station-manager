@@ -233,6 +233,22 @@ def reconcile_station(station, tracked_slots, *, now, reported_uid_by_slot=None)
     reported in its slot but the entry was rejected (e.g. type mismatch), so a
     spurious report can't tear down a valid module's assignment."""
     reported_uid_by_slot = reported_uid_by_slot or {}
+    # Lock the affected Module rows FIRST, in ascending pk order — the SAME
+    # order _apply_assignment uses (module -> assignment). A pre-read (no lock)
+    # discovers which modules are involved; locking them before the assignment
+    # rows keeps the global lock order module→assignment everywhere, so a
+    # reconcile can't deadlock against a concurrent cross-station move.
+    stale_module_ids = sorted(
+        set(
+            ModuleAssignmentHistory.objects.filter(station=station, to_ts__isnull=True)
+            .exclude(slot__in=tracked_slots)
+            .values_list("module_id", flat=True)
+        )
+    )
+    if not stale_module_ids:
+        return
+    list(Module.objects.select_for_update().filter(pk__in=stale_module_ids))
+
     stale = (
         ModuleAssignmentHistory.objects.select_for_update()
         .filter(station=station, to_ts__isnull=True)

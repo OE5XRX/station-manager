@@ -47,6 +47,13 @@ def set_lifecycle(module, status, *, user):
     if status not in OPERATOR_LIFECYCLE_VALUES:
         raise ValueError(f"{status!r} is not an operator-settable lifecycle status")
     locked = Module.objects.select_for_update().get(pk=module.pk)
+    # `ready` is assignment-derived (a module with an open assignment is
+    # `deployed`). Setting `ready` by hand while an assignment is open would put
+    # the module in a state that contradicts its location until the next ingest
+    # flips it back — reject it. Operators pull the module (which closes the
+    # assignment and reconciles to `ready`) or set a sticky state instead.
+    if status == Module.Lifecycle.READY and locked.assignments.filter(to_ts__isnull=True).exists():
+        raise ValueError("cannot set 'ready' while the module has an open assignment")
     if locked.lifecycle_status == status:
         return
     old = locked.lifecycle_status
