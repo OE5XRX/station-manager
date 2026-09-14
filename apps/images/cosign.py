@@ -18,6 +18,31 @@ COSIGN_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 _COSIGN_TIMEOUT = 60  # seconds
 
 
+def verify_blob_identity(blob_bytes: bytes, bundle_bytes: bytes, identity_regexp: str) -> None:
+    """Verify a cosign-signed blob against an explicit certificate-identity regexp."""
+    with tempfile.TemporaryDirectory() as tmp:
+        blob_path = Path(tmp) / "blob"
+        bundle_path = Path(tmp) / "bundle"
+        blob_path.write_bytes(blob_bytes)
+        bundle_path.write_bytes(bundle_bytes)
+        cmd = [
+            "cosign", "verify-blob",
+            "--bundle", str(bundle_path),
+            "--certificate-identity-regexp", identity_regexp,
+            "--certificate-oidc-issuer", COSIGN_OIDC_ISSUER,
+            str(blob_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=_COSIGN_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            raise CosignVerificationError(
+                f"cosign verify-blob timed out after {_COSIGN_TIMEOUT}s"
+            ) from exc
+        if result.returncode != 0:
+            raise CosignVerificationError(
+                f"cosign verify-blob failed: {result.stderr.decode('utf-8', 'replace')}")
+
+
 def verify_blob(
     blob_bytes: bytes,
     bundle_bytes: bytes,
@@ -38,29 +63,4 @@ def verify_blob(
         rf"^https://github\.com/{re.escape(repo)}"
         rf"/\.github/workflows/release\.yml@refs/tags/{re.escape(tag)}$"
     )
-    with tempfile.TemporaryDirectory() as tmp:
-        blob_path = Path(tmp) / "blob"
-        bundle_path = Path(tmp) / "bundle"
-        blob_path.write_bytes(blob_bytes)
-        bundle_path.write_bytes(bundle_bytes)
-        cmd = [
-            "cosign",
-            "verify-blob",
-            "--bundle",
-            str(bundle_path),
-            "--certificate-identity-regexp",
-            identity_regexp,
-            "--certificate-oidc-issuer",
-            COSIGN_OIDC_ISSUER,
-            str(blob_path),
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, timeout=_COSIGN_TIMEOUT)
-        except subprocess.TimeoutExpired as exc:
-            raise CosignVerificationError(
-                f"cosign verify-blob timed out after {_COSIGN_TIMEOUT}s"
-            ) from exc
-        if result.returncode != 0:
-            raise CosignVerificationError(
-                f"cosign verify-blob failed: {result.stderr.decode('utf-8', 'replace')}"
-            )
+    verify_blob_identity(blob_bytes, bundle_bytes, identity_regexp)
