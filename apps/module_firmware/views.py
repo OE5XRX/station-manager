@@ -19,6 +19,20 @@ from .models import (
     ModuleType,
 )
 
+# ---------------------------------------------------------------------------
+# Module-type helpers
+# ---------------------------------------------------------------------------
+
+
+def _importable_module_types():
+    """Module types that have BOTH firmware_repo and release_asset_prefix set.
+
+    Only fully-configured types can ever produce a successful import job, so
+    restricting the UI to this set avoids offering doomed imports.
+    """
+    return ModuleType.objects.exclude(firmware_repo="").exclude(release_asset_prefix="")
+
+
 # Lifecycle states an operator may set by hand. ``deployed`` is excluded: it is
 # auto-derived from an open assignment, so a manual set would be overwritten by
 # the next ingest — offering it as a control is misleading.
@@ -202,7 +216,7 @@ class FirmwareReleaseListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["module_types"] = ModuleType.objects.exclude(firmware_repo="")
+        ctx["module_types"] = _importable_module_types()
         ctx["show_archived"] = self._show_archived()
         g = self.request.GET
         ctx["filters"] = {
@@ -224,7 +238,7 @@ class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
                 "module_firmware/_github_releases.html",
                 {
                     "error": "No module type selected.",
-                    "module_types": ModuleType.objects.exclude(firmware_repo=""),
+                    "module_types": _importable_module_types(),
                 },
             )
         module_type = get_object_or_404(ModuleType, pk=module_type_id)
@@ -234,6 +248,15 @@ class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
                 "module_firmware/_github_releases.html",
                 {
                     "error": "This module type has no firmware repo configured.",
+                    "module_type": module_type,
+                },
+            )
+        if not module_type.release_asset_prefix:
+            return render(
+                request,
+                "module_firmware/_github_releases.html",
+                {
+                    "error": "This module type has no release asset prefix configured.",
                     "module_type": module_type,
                 },
             )
@@ -277,7 +300,7 @@ class GithubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
             {
                 "rows": rows,
                 "module_type": module_type,
-                "module_types": ModuleType.objects.exclude(firmware_repo=""),
+                "module_types": _importable_module_types(),
             },
         )
 
@@ -286,21 +309,23 @@ class FirmwareImportView(_StaffFirmwareMixin, View):
     def post(self, request):
         module_type_id = request.POST.get("module_type")
         tag = request.POST.get("tag", "").strip()
-        # Guard: never queue an import without both a resolvable module type
-        # and a non-empty tag — a blank tag would create a job the worker
-        # can never satisfy.
+        # Blank tag / id guard stays outside the atomic block — these never
+        # touch the DB and need no lock.
         if not tag or not module_type_id:
             return HttpResponseRedirect(reverse("module_firmware:release_list"))
-        module_type = ModuleType.objects.filter(pk=module_type_id).first()
-        if module_type is None:
-            return HttpResponseRedirect(reverse("module_firmware:release_list"))
-        # Finding 3: reject partially-configured module types — a doomed job
-        # can never succeed and just adds noise to the queue.
-        if not module_type.firmware_repo or not module_type.release_asset_prefix:
-            return HttpResponseRedirect(reverse("module_firmware:release_list"))
-        # Finding 4: transactional dedup — mirror apps/images/views.py QuickQueueView.
-        # Do NOT create a job if an active release or an in-flight job already exists.
+        # Finding 7: resolve + lock the module type row INSIDE the atomic block
+        # to serialise concurrent POSTs for the same type on Postgres.  SQLite
+        # silently ignores select_for_update but stays green.
         with transaction.atomic():
+            module_type = ModuleType.objects.select_for_update().filter(pk=module_type_id).first()
+            if module_type is None:
+                return HttpResponseRedirect(reverse("module_firmware:release_list"))
+            # Finding 3: reject partially-configured module types — a doomed job
+            # can never succeed and just adds noise to the queue.
+            if not module_type.firmware_repo or not module_type.release_asset_prefix:
+                return HttpResponseRedirect(reverse("module_firmware:release_list"))
+            # Finding 4: transactional dedup — mirror apps/images/views.py QuickQueueView.
+            # Do NOT create a job if an active release or an in-flight job already exists.
             active_exists = ModuleFirmwareRelease.objects.filter(
                 module_type=module_type, source_tag=tag
             ).exists()

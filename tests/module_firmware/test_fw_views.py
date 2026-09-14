@@ -175,3 +175,27 @@ def test_import_happy_path_creates_one_job(client, staff, rel):
     )
     assert resp.status_code == 302
     assert ModuleFirmwareImportJob.objects.filter(tag="26.07.04-99").count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Finding 8: only fully-configured types offered in release-list context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_release_list_excludes_type_without_prefix(client, rel):
+    """A ModuleType with firmware_repo but no release_asset_prefix must NOT
+    appear in the module_types context of the release list page."""
+    incomplete = ModuleType.objects.create(
+        key="incomplete",
+        display_name="Incomplete",
+        firmware_repo="OE5XRX/FW-RemoteStation",
+        release_asset_prefix="",  # missing prefix
+    )
+    client.force_login(User.objects.create_user(username="viewer", password="x"))
+    resp = client.get(reverse("module_firmware:release_list"))
+    assert resp.status_code == 200
+    module_type_pks = {mt.pk for mt in resp.context["module_types"]}
+    assert incomplete.pk not in module_type_pks
+    # The fully-configured type from the rel fixture IS present
+    assert rel.module_type_id in module_type_pks

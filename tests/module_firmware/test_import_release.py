@@ -5,7 +5,7 @@ import pytest
 from django.utils import timezone
 
 from apps.images.github_releases import GitHubRelease
-from apps.module_firmware import releases
+from apps.module_firmware import releases, storage
 from apps.module_firmware.models import ModuleFirmwareImportJob, ModuleFirmwareRelease, ModuleType
 
 
@@ -134,9 +134,9 @@ def _two_variant_release(tag="26.07.04-01"):
 def test_all_or_nothing_second_variant_mismatch(fm):
     """If one variant SHA mismatches, NO row must be published (no partial release).
 
-    Variants are processed in sorted order: uhf < vhf alphabetically.
-    We make uhf correct and vhf bad so that at least uhf's keys are staged
-    before the failure, giving the cleanup path something to delete.
+    Finding 5: uploads are deferred until AFTER all variants are verified, so
+    storage.upload_bytes must NOT be called at all when any variant fails.
+    No cleanup (delete) is needed either because nothing was written.
     """
     job = ModuleFirmwareImportJob.objects.create(
         module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
@@ -145,7 +145,7 @@ def test_all_or_nothing_second_variant_mismatch(fm):
     def dl_vhf_bad(url):
         name = url.rsplit("/", 1)[-1]
         if name == "SHA256SUMS":
-            # uhf is correct, vhf has a bad hash → vhf fails after uhf is staged
+            # uhf is correct, vhf has a bad hash → vhf fails in the stage loop
             uhf_hex = hashlib.sha256(_blob("uhf")).hexdigest()
             return (
                 f"{uhf_hex}  fm-sa818-uhf.signed.bin\ndeadbeef  fm-sa818-vhf.signed.bin\n"
@@ -158,7 +158,7 @@ def test_all_or_nothing_second_variant_mismatch(fm):
         ),
         mock.patch("apps.module_firmware.releases._download", side_effect=dl_vhf_bad),
         mock.patch("apps.module_firmware.releases.verify_blob_identity"),
-        mock.patch("apps.module_firmware.releases.storage.upload_bytes"),
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
         mock.patch("apps.module_firmware.releases.storage.delete") as mock_delete,
     ):
         releases.import_release_tag(job)
@@ -167,8 +167,65 @@ def test_all_or_nothing_second_variant_mismatch(fm):
     assert job.status == ModuleFirmwareImportJob.Status.FAILED
     # No release rows at all — neither variant published
     assert ModuleFirmwareRelease.objects.count() == 0
-    # Cleanup was attempted for the uhf keys that were uploaded before the failure
-    assert mock_delete.called
+    # Finding 5: stage loop aborts before any upload — zero canonical objects written
+    mock_upload.assert_not_called()
+    # No cleanup needed because nothing was written
+    mock_delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: archived variant canonical key NOT overwritten when sibling fails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_archived_variant_not_overwritten_when_sibling_fails(fm):
+    """Archived vhf row exists.  uhf fails cosign.  vhf canonical must NOT be
+    overwritten — upload_bytes must not be called at all, and vhf stays archived
+    with its original sha unchanged.
+    """
+    archived_vhf = ModuleFirmwareRelease.all_objects.create(
+        module_type=fm,
+        variant="vhf",
+        version="26.07.04-01",
+        storage_key=storage.release_key(fm.key, "26.07.04-01", "vhf"),
+        sha256="a" * 64,
+        size_bytes=10,
+        source_repo=fm.firmware_repo,
+        source_tag="26.07.04-01",
+        archived_at=timezone.now(),
+    )
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
+    )
+
+    def verify_uhf_fails(blob, bundle, identity):
+        # uhf blob starts with "signed-uhf"; raise on it
+        if blob == _blob("uhf"):
+            raise ValueError("cosign verification failed for uhf")
+
+    with (
+        mock.patch(
+            "apps.module_firmware.releases.fetch_releases",
+            return_value=[_two_variant_release()],
+        ),
+        mock.patch("apps.module_firmware.releases._download", side_effect=_fake_download),
+        mock.patch(
+            "apps.module_firmware.releases.verify_blob_identity",
+            side_effect=verify_uhf_fails,
+        ),
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
+    ):
+        releases.import_release_tag(job)
+
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.FAILED
+    # Finding 5: no upload at all — vhf canonical key is intact
+    mock_upload.assert_not_called()
+    # vhf row still archived with unchanged sha
+    archived_vhf.refresh_from_db()
+    assert archived_vhf.archived_at is not None
+    assert archived_vhf.sha256 == "a" * 64
 
 
 # ---------------------------------------------------------------------------

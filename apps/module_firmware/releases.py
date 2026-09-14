@@ -91,6 +91,8 @@ class _StagedVariant:
     size: int
     sha256: str
     url: str
+    blob: bytes
+    bundle: bytes
 
 
 def import_release_tag(job: ModuleFirmwareImportJob) -> None:
@@ -138,10 +140,8 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                 verify_blob_identity(blob, bundle, identity)
                 skey = storage.release_key(job.module_type.key, job.tag, va.variant)
                 bkey = storage.bundle_key(job.module_type.key, job.tag, va.variant)
-                storage.upload_bytes(skey, blob)
-                uploaded.append(skey)
-                storage.upload_bytes(bkey, bundle)
-                uploaded.append(bkey)
+                # Finding 5: do NOT upload here — keep bytes in memory until all
+                # variants are verified.  Uploads happen in the publish phase only.
                 staged.append(
                     _StagedVariant(
                         va=va,
@@ -150,6 +150,8 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                         size=len(blob),
                         sha256=expected,
                         url=_asset_url(repo, job.tag, va.signed_name),
+                        blob=blob,
+                        bundle=bundle,
                     )
                 )
 
@@ -157,6 +159,29 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
         last_release = None
         with transaction.atomic():
             for sv in staged:
+                # Finding 6: lock the row (or absence) before writing to serialise
+                # concurrent imports.  If a concurrent import already published an
+                # active pin for this variant, skip — no upload, no overwrite.
+                existing = (
+                    ModuleFirmwareRelease.all_objects.select_for_update()
+                    .filter(
+                        module_type=job.module_type,
+                        variant=sv.va.variant,
+                        version=job.tag,
+                    )
+                    .first()
+                )
+                if existing is not None and existing.archived_at is None:
+                    # Concurrent import already published an active pin — skip.
+                    last_release = existing
+                    continue
+                # Upload canonical objects inside the transaction so that any
+                # subsequent failure (e.g. DB constraint) rolls back the DB row
+                # while the cleanup path handles the uploaded key.
+                storage.upload_bytes(sv.skey, sv.blob)
+                uploaded.append(sv.skey)
+                storage.upload_bytes(sv.bkey, sv.bundle)
+                uploaded.append(sv.bkey)
                 last_release, _ = ModuleFirmwareRelease.all_objects.update_or_create(
                     module_type=job.module_type,
                     variant=sv.va.variant,
