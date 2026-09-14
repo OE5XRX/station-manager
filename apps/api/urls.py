@@ -13,4 +13,5 @@ urlpatterns = [
         name="station_inventory",
     ),
     path("v1/deployments/", include("apps.deployments.api_urls")),
+    path("v1/module-firmware/", include("apps.module_firmware.api_urls")),
 ]
