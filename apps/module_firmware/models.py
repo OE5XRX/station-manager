@@ -201,3 +201,39 @@ class ModuleFirmwareRelease(models.Model):
             return
         self.archived_at = None
         self.save(update_fields=["archived_at"])
+
+
+class ModuleFirmwareImportJob(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        RUNNING = "running", _("Running")
+        READY = "ready", _("Ready")
+        FAILED = "failed", _("Failed")
+
+    module_type = models.ForeignKey(
+        ModuleType, on_delete=models.CASCADE, related_name="firmware_import_jobs",
+        verbose_name=_("module type"),
+    )
+    source_repo = models.CharField(_("source repo"), max_length=200)
+    tag = models.CharField(_("release tag"), max_length=64)
+    status = models.CharField(
+        _("status"), max_length=16, choices=Status.choices, default=Status.PENDING)
+    error_message = models.TextField(_("error message"), blank=True)
+    release = models.ForeignKey(
+        "ModuleFirmwareRelease", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="import_jobs", verbose_name=_("release"),
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name=_("requested by"),
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    completed_at = models.DateTimeField(_("completed at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("module firmware import job")
+        verbose_name_plural = _("module firmware import jobs")
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.module_type.key} {self.tag} [{self.status}]"
