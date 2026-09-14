@@ -8,7 +8,10 @@ from apps.sso.views import AppGrantAuthorizationView
 urlpatterns = [
     path("", include("apps.webpush.urls")),
     path("api/", include("apps.api.urls")),
-    path("api/v1/module-firmware/", include("apps.module_firmware.api_urls")),
+    path(
+        "api/v1/module-firmware/",
+        include(("apps.module_firmware.api_urls", "module_firmware_api")),
+    ),
     path("i18n/", include("django.conf.urls.i18n")),
     # Override DOT's authorize endpoint with our AppGrant-gated version
     # BEFORE the DOT include — Django picks the first match.
