@@ -10,6 +10,14 @@ class ModuleType(models.Model):
     key = models.SlugField(_("key"), unique=True, help_text=_("z. B. fm, power, device-tester"))
     display_name = models.CharField(_("display name"), max_length=128)
     hw_repo = models.CharField(_("hardware repo"), max_length=200, blank=True)
+    firmware_repo = models.CharField(
+        _("firmware repo"), max_length=200, blank=True,
+        help_text=_("GitHub owner/repo der signierten FW-Releases, z. B. OE5XRX/FW-RemoteStation"),
+    )
+    release_asset_prefix = models.CharField(
+        _("release asset prefix"), max_length=64, blank=True,
+        help_text=_("Asset-Basisname vor -<variant>.signed.bin, z. B. fm-sa818"),
+    )
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)
 
