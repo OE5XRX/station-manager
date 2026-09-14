@@ -113,9 +113,12 @@ atomaren `_claim_one_pending`-Muster wie der Image-Import. Pro geclaimtem Job:
 3. `.signed.bin` + `.bundle` herunterladen; **SHA-256 gegen `SHA256SUMS` prüfen**
    (Mismatch → Job `failed`, nichts pinnen).
 4. **cosign `verify_blob`** (reuse/parametrisiere `apps/images/cosign`): Identity-Regexp
-   `^https://github\.com/{repo}/\.github/workflows/release\.yml@refs/heads/{default_branch}$`
-   (FW-Release ist `workflow_dispatch` auf dem Default-Branch — abweichend von
-   `apps/images`, das `@refs/tags/{tag}` nutzt). Fehlschlag → Job `failed`.
+   `^https://github\.com/OE5XRX/FW-RemoteStation/\.github/workflows/release\.yml@refs/heads/main$`
+   (FW-Release ist `workflow_dispatch` **nur auf dem Default-Branch `main`** —
+   bestätigt via `release.yml`-Guard; abweichend von `apps/images`, das
+   `@refs/tags/{tag}` nutzt, weil dessen Release tag-getriggert ist). Der Repo-Teil ist
+   aus `source_repo` abgeleitet, der Ref-Teil (`refs/heads/main`) aus dem Default-Branch
+   des `firmware_repo`. Fehlschlag → Job `failed`.
 5. Roh auf Storage pinnen: `module_firmware/{module_type.key}/{version}/{variant}.signed.bin`
    (+ `.bundle`), `ModuleFirmwareRelease` anlegen.
 6. **Idempotent:** existiert (module_type, variant, version) bereits aktiv → überspringen;
@@ -192,14 +195,12 @@ Echter End-to-End-Import braucht einen realen `FW-RemoteStation`-Release mit den
 `fm-sa818-vhf/uhf.signed.bin` + `.bundle` + `SHA256SUMS`-Assets (per `workflow_dispatch`
 schneidbar; die Pipeline existiert seit PR #49/#60/#64, Assets seit PR #66 auf vhf/uhf
 benannt). B wird gegen Fixtures + gemocktes GH/cosign gebaut/getestet; erste echte
-Verifikation beim ersten geschnittenen Release. Default-Branch-Name für die
-cosign-Identity beim Planen verifizieren.
+Verifikation beim ersten geschnittenen Release. Default-Branch = `main` (bestätigt).
 
 ## Offene Implementierungspunkte (kein Architektur-Risiko)
 
-1. Genaue cosign-Identity: Default-Branch von FW-RemoteStation (vermutlich `main`)
-   verifizieren; `verify_blob` um einen Identity-Regexp-Parameter erweitern vs.
-   Wrapper.
+1. `verify_blob` um einen Identity-Regexp-Parameter erweitern vs. eigener
+   module_firmware-Wrapper (Default-Branch `main` bereits bestätigt).
 2. Ob der GH-Browser mehrere `firmware_repo`s (mehrere Modultypen) parallel listet oder
    pro Typ — UI-Detail.
 3. Exakte URL-Namespaces (`module_firmware:release_list`, api-URL) analog images.
