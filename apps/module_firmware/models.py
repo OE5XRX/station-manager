@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -134,3 +134,70 @@ class ModuleAssignmentHistory(models.Model):
 
     def __str__(self):
         return f"{self.module.uid} @ {self.station_id}/{self.slot}"
+
+
+class ModuleFirmwareReleaseManager(models.Manager):
+    """Default manager hides archived (soft-deleted) rows."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(archived_at__isnull=True)
+
+
+class ModuleFirmwareRelease(models.Model):
+    module_type = models.ForeignKey(
+        ModuleType, on_delete=models.PROTECT, related_name="firmware_releases",
+        verbose_name=_("module type"),
+    )
+    variant = models.CharField(_("variant"), max_length=32, blank=True)
+    version = models.CharField(_("version"), max_length=64)
+    storage_key = models.CharField(_("storage key"), max_length=512)
+    sha256 = models.CharField(_("SHA-256"), max_length=64)
+    size_bytes = models.BigIntegerField(_("size in bytes"))
+    cosign_bundle_key = models.CharField(_("cosign bundle key"), max_length=512, blank=True)
+    source_repo = models.CharField(_("source repo"), max_length=200)
+    source_tag = models.CharField(_("source tag"), max_length=64)
+    source_github_url = models.CharField(_("source URL"), max_length=512, blank=True)
+    imported_at = models.DateTimeField(_("imported at"), auto_now_add=True)
+    imported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name=_("imported by"),
+    )
+    archived_at = models.DateTimeField(_("archived at"), null=True, blank=True)
+
+    objects = ModuleFirmwareReleaseManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        verbose_name = _("module firmware release")
+        verbose_name_plural = _("module firmware releases")
+        base_manager_name = "all_objects"
+        ordering = ["module_type", "variant", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["module_type", "variant", "version"],
+                name="uniq_release_per_type_variant_version",
+            ),
+        ]
+        indexes = [models.Index(fields=["module_type", "variant"])]
+
+    def __str__(self):
+        return f"{self.module_type.key}/{self.variant or '-'} {self.version}"
+
+    def archive(self):
+        if self.archived_at is not None:
+            return
+        now = timezone.now()
+        with transaction.atomic():
+            rows = type(self).all_objects.filter(
+                pk=self.pk, archived_at__isnull=True
+            ).update(archived_at=now)
+            if rows == 0:
+                self.refresh_from_db(fields=["archived_at"])
+                return
+            self.archived_at = now
+
+    def restore(self):
+        if self.archived_at is None:
+            return
+        self.archived_at = None
+        self.save(update_fields=["archived_at"])
