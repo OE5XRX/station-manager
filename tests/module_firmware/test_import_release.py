@@ -4,6 +4,7 @@ from unittest import mock
 import pytest
 from django.utils import timezone
 
+from apps.images.cosign import CosignVerificationError
 from apps.images.github_releases import GitHubRelease
 from apps.module_firmware import releases, storage
 from apps.module_firmware.models import ModuleFirmwareImportJob, ModuleFirmwareRelease, ModuleType
@@ -58,7 +59,7 @@ def test_import_creates_release_per_variant(fm):
         ),
     )
     with (
-        mock.patch("apps.module_firmware.releases.fetch_releases", return_value=[rel]),
+        mock.patch("apps.module_firmware.releases.fetch_release_by_tag", return_value=rel),
         mock.patch("apps.module_firmware.releases._download", side_effect=_fake_download),
         mock.patch("apps.module_firmware.releases.verify_blob_identity") as vbi,
         mock.patch("apps.module_firmware.releases.storage.upload_bytes"),
@@ -98,7 +99,7 @@ def test_import_sha_mismatch_fails(fm):
         return b"whatever"
 
     with (
-        mock.patch("apps.module_firmware.releases.fetch_releases", return_value=[rel]),
+        mock.patch("apps.module_firmware.releases.fetch_release_by_tag", return_value=rel),
         mock.patch("apps.module_firmware.releases._download", side_effect=bad_dl),
         mock.patch("apps.module_firmware.releases.storage.upload_bytes"),
     ):
@@ -154,7 +155,8 @@ def test_all_or_nothing_second_variant_mismatch(fm):
 
     with (
         mock.patch(
-            "apps.module_firmware.releases.fetch_releases", return_value=[_two_variant_release()]
+            "apps.module_firmware.releases.fetch_release_by_tag",
+            return_value=_two_variant_release(),
         ),
         mock.patch("apps.module_firmware.releases._download", side_effect=dl_vhf_bad),
         mock.patch("apps.module_firmware.releases.verify_blob_identity"),
@@ -206,8 +208,8 @@ def test_archived_variant_not_overwritten_when_sibling_fails(fm):
 
     with (
         mock.patch(
-            "apps.module_firmware.releases.fetch_releases",
-            return_value=[_two_variant_release()],
+            "apps.module_firmware.releases.fetch_release_by_tag",
+            return_value=_two_variant_release(),
         ),
         mock.patch("apps.module_firmware.releases._download", side_effect=_fake_download),
         mock.patch(
@@ -259,7 +261,7 @@ def test_idempotent_skip_active_variant(fm):
     )
 
     with (
-        mock.patch("apps.module_firmware.releases.fetch_releases", return_value=[rel]),
+        mock.patch("apps.module_firmware.releases.fetch_release_by_tag", return_value=rel),
         mock.patch("apps.module_firmware.releases._download") as mock_dl,
         mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
     ):
@@ -307,7 +309,7 @@ def test_archived_variant_is_restored_and_repinned(fm):
         ),
     )
     with (
-        mock.patch("apps.module_firmware.releases.fetch_releases", return_value=[rel]),
+        mock.patch("apps.module_firmware.releases.fetch_release_by_tag", return_value=rel),
         mock.patch("apps.module_firmware.releases._download", side_effect=_fake_download),
         mock.patch("apps.module_firmware.releases.verify_blob_identity"),
         mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
@@ -323,3 +325,45 @@ def test_archived_variant_is_restored_and_repinned(fm):
     assert archived.storage_key != "old-key"
     # Upload was called
     assert mock_upload.called
+
+
+# ---------------------------------------------------------------------------
+# Finding 5 (regression): cosign failure → job FAILED, no DB rows, no uploads
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_cosign_failure_marks_job_failed_no_rows_no_uploads(fm):
+    """verify_blob_identity raises CosignVerificationError → job FAILED,
+    no ModuleFirmwareRelease rows, and storage.upload_bytes never called.
+    """
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
+    )
+    rel = GitHubRelease(
+        tag="26.07.04-01",
+        html_url="",
+        is_latest=True,
+        asset_names=frozenset(
+            {"fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle", "SHA256SUMS"}
+        ),
+    )
+
+    with (
+        mock.patch("apps.module_firmware.releases.fetch_release_by_tag", return_value=rel),
+        mock.patch("apps.module_firmware.releases._download", side_effect=_fake_download),
+        mock.patch(
+            "apps.module_firmware.releases.verify_blob_identity",
+            side_effect=CosignVerificationError("bad sig"),
+        ),
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes") as mock_upload,
+    ):
+        releases.import_release_tag(job)
+
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.FAILED
+    assert "bad sig" in job.error_message
+    # No release rows published
+    assert ModuleFirmwareRelease.objects.count() == 0
+    # Stage loop aborts at verify step — no upload ever reached
+    mock_upload.assert_not_called()

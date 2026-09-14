@@ -60,6 +60,9 @@ class ModuleFirmwareImportJobAdmin(admin.ModelAdmin):
     list_display = ("module_type", "tag", "status", "created_at", "completed_at")
     list_filter = ("status", "module_type")
     readonly_fields = (
+        "module_type",
+        "source_repo",
+        "tag",
         "status",
         "error_message",
         "release",
@@ -67,6 +70,16 @@ class ModuleFirmwareImportJobAdmin(admin.ModelAdmin):
         "created_at",
         "completed_at",
     )
+
+    def has_add_permission(self, request):
+        # Import jobs are created via the UI/worker, not hand-edited.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Module)

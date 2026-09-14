@@ -98,21 +98,28 @@ def test_import_rejects_missing_firmware_repo(client, staff):
 
 
 # ---------------------------------------------------------------------------
-# Finding 4: dedup — active release exists
+# Finding 2: active-release presence no longer blocks enqueue
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-def test_import_dedup_active_release_exists(client, staff, rel):
-    """Staff POST for a tag that already has an active release must not create a job."""
-    # rel fixture already has an active release for (fm, 26.07.04-01)
+def test_import_allowed_when_some_variants_active(client, staff, rel):
+    """Staff POST for a tag with only some variants active MUST create a job.
+
+    The importer is per-variant idempotent — it skips active variants and
+    restores archived/missing ones — so blocking on any active release would
+    prevent restoring an incomplete variant set.
+    """
+    # rel fixture has one active variant (vhf) for (fm, 26.07.04-01).
+    # A second variant (uhf) is absent. The view must allow queueing.
     client.force_login(staff)
     resp = client.post(
         reverse("module_firmware:import"),
         {"module_type": rel.module_type_id, "tag": rel.source_tag},
     )
     assert resp.status_code == 302
-    assert not ModuleFirmwareImportJob.objects.exists()
+    # Job MUST be created — active-release presence no longer blocks enqueue.
+    assert ModuleFirmwareImportJob.objects.filter(tag=rel.source_tag).count() == 1
 
 
 # ---------------------------------------------------------------------------

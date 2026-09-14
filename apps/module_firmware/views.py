@@ -324,11 +324,10 @@ class FirmwareImportView(_StaffFirmwareMixin, View):
             # can never succeed and just adds noise to the queue.
             if not module_type.firmware_repo or not module_type.release_asset_prefix:
                 return HttpResponseRedirect(reverse("module_firmware:release_list"))
-            # Finding 4: transactional dedup — mirror apps/images/views.py QuickQueueView.
-            # Do NOT create a job if an active release or an in-flight job already exists.
-            active_exists = ModuleFirmwareRelease.objects.filter(
-                module_type=module_type, source_tag=tag
-            ).exists()
+            # Dedup: only prevent duplicate in-flight work.  The importer is
+            # per-variant idempotent (skips active variants, restores archived),
+            # so we do NOT block on active-release existence — a tag with some
+            # variants active and others archived/missing must be re-importable.
             in_flight_exists = ModuleFirmwareImportJob.objects.filter(
                 module_type=module_type,
                 tag=tag,
@@ -337,7 +336,7 @@ class FirmwareImportView(_StaffFirmwareMixin, View):
                     ModuleFirmwareImportJob.Status.RUNNING,
                 ],
             ).exists()
-            if not active_exists and not in_flight_exists:
+            if not in_flight_exists:
                 ModuleFirmwareImportJob.objects.create(
                     module_type=module_type,
                     source_repo=module_type.firmware_repo,

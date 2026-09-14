@@ -79,6 +79,36 @@ def _get_json(url: str):
         raise GitHubAPIError(str(exc)) from exc
 
 
+def fetch_release_by_tag(repo: str, tag: str) -> GitHubRelease | None:
+    """Fetch a single release by tag from the GitHub API.
+
+    Returns a ``GitHubRelease`` on success, ``None`` if the tag does not
+    exist (HTTP 404), and raises ``GitHubAPIError`` on any other failure.
+    """
+    url = f"{GITHUB_API}/repos/{repo}/releases/tags/{tag}"
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, "Accept": _ACCEPT})
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            r = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise GitHubAPIError(str(exc)) from exc
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        ValueError,
+        http.client.HTTPException,
+    ) as exc:
+        raise GitHubAPIError(str(exc)) from exc
+    return GitHubRelease(
+        tag=r["tag_name"],
+        html_url=r.get("html_url", ""),
+        is_latest=False,
+        asset_names=frozenset(a["name"] for a in r.get("assets", [])),
+    )
+
+
 def fetch_releases(repo: str, limit: int = 30) -> list[GitHubRelease]:
     """Return releases newest-first, with is_latest annotated.
 

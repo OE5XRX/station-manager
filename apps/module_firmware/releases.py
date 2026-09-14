@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.images.cosign import verify_blob_identity
-from apps.images.github_releases import fetch_releases
+from apps.images.github_releases import fetch_release_by_tag
 
 from . import storage
 from .models import ModuleFirmwareImportJob, ModuleFirmwareRelease
@@ -102,13 +102,14 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
     try:
         if not prefix:
             raise ValueError(f"ModuleType {job.module_type.key} has no release_asset_prefix")
-        releases_list = fetch_releases(repo)
-        gh = next((r for r in releases_list if r.tag == job.tag), None)
+        gh = fetch_release_by_tag(repo, job.tag)
         if gh is None:
             raise ValueError(f"release tag {job.tag} not found in {repo}")
         variants = parse_variant_assets(set(gh.asset_names), prefix)
         if not variants:
-            raise ValueError(f"no {prefix}-*.signed.bin (+bundle) assets in {job.tag}")
+            raise ValueError(
+                f"no {prefix}-*.signed.bin or {prefix}.signed.bin (+bundle) assets in {job.tag}"
+            )
 
         # --- Partition variants: active-existing vs to_import ---
         active_existing: list[ModuleFirmwareRelease] = []
@@ -199,13 +200,13 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                     },
                 )
 
-        if last_release is None and active_existing:
-            last_release = active_existing[-1]
+            if last_release is None and active_existing:
+                last_release = active_existing[-1]
 
-        job.release = last_release
-        job.status = ModuleFirmwareImportJob.Status.READY
-        job.completed_at = timezone.now()
-        job.save(update_fields=["release", "status", "completed_at"])
+            job.release = last_release
+            job.status = ModuleFirmwareImportJob.Status.READY
+            job.completed_at = timezone.now()
+            job.save(update_fields=["release", "status", "completed_at"])
     except Exception as exc:
         # Best-effort cleanup of keys we uploaded that no active release row references.
         in_use = set(
