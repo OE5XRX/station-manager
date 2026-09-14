@@ -11,11 +11,15 @@ class ModuleType(models.Model):
     display_name = models.CharField(_("display name"), max_length=128)
     hw_repo = models.CharField(_("hardware repo"), max_length=200, blank=True)
     firmware_repo = models.CharField(
-        _("firmware repo"), max_length=200, blank=True,
+        _("firmware repo"),
+        max_length=200,
+        blank=True,
         help_text=_("GitHub owner/repo der signierten FW-Releases, z. B. OE5XRX/FW-RemoteStation"),
     )
     release_asset_prefix = models.CharField(
-        _("release asset prefix"), max_length=64, blank=True,
+        _("release asset prefix"),
+        max_length=64,
+        blank=True,
         help_text=_("Asset-Basisname vor -<variant>.signed.bin, z. B. fm-sa818"),
     )
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
@@ -145,7 +149,9 @@ class ModuleFirmwareReleaseManager(models.Manager):
 
 class ModuleFirmwareRelease(models.Model):
     module_type = models.ForeignKey(
-        ModuleType, on_delete=models.PROTECT, related_name="firmware_releases",
+        ModuleType,
+        on_delete=models.PROTECT,
+        related_name="firmware_releases",
         verbose_name=_("module type"),
     )
     variant = models.CharField(_("variant"), max_length=32, blank=True)
@@ -159,8 +165,12 @@ class ModuleFirmwareRelease(models.Model):
     source_github_url = models.CharField(_("source URL"), max_length=512, blank=True)
     imported_at = models.DateTimeField(_("imported at"), auto_now_add=True)
     imported_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="+", verbose_name=_("imported by"),
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("imported by"),
     )
     archived_at = models.DateTimeField(_("archived at"), null=True, blank=True)
 
@@ -188,9 +198,11 @@ class ModuleFirmwareRelease(models.Model):
             return
         now = timezone.now()
         with transaction.atomic():
-            rows = type(self).all_objects.filter(
-                pk=self.pk, archived_at__isnull=True
-            ).update(archived_at=now)
+            rows = (
+                type(self)
+                .all_objects.filter(pk=self.pk, archived_at__isnull=True)
+                .update(archived_at=now)
+            )
             if rows == 0:
                 self.refresh_from_db(fields=["archived_at"])
                 return
@@ -211,21 +223,32 @@ class ModuleFirmwareImportJob(models.Model):
         FAILED = "failed", _("Failed")
 
     module_type = models.ForeignKey(
-        ModuleType, on_delete=models.CASCADE, related_name="firmware_import_jobs",
+        ModuleType,
+        on_delete=models.CASCADE,
+        related_name="firmware_import_jobs",
         verbose_name=_("module type"),
     )
     source_repo = models.CharField(_("source repo"), max_length=200)
     tag = models.CharField(_("release tag"), max_length=64)
     status = models.CharField(
-        _("status"), max_length=16, choices=Status.choices, default=Status.PENDING)
+        _("status"), max_length=16, choices=Status.choices, default=Status.PENDING
+    )
     error_message = models.TextField(_("error message"), blank=True)
     release = models.ForeignKey(
-        "ModuleFirmwareRelease", on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="import_jobs", verbose_name=_("release"),
+        "ModuleFirmwareRelease",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="import_jobs",
+        verbose_name=_("release"),
     )
     requested_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="+", verbose_name=_("requested by"),
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("requested by"),
     )
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
     completed_at = models.DateTimeField(_("completed at"), null=True, blank=True)

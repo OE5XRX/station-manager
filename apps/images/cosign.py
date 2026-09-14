@@ -26,10 +26,14 @@ def verify_blob_identity(blob_bytes: bytes, bundle_bytes: bytes, identity_regexp
         blob_path.write_bytes(blob_bytes)
         bundle_path.write_bytes(bundle_bytes)
         cmd = [
-            "cosign", "verify-blob",
-            "--bundle", str(bundle_path),
-            "--certificate-identity-regexp", identity_regexp,
-            "--certificate-oidc-issuer", COSIGN_OIDC_ISSUER,
+            "cosign",
+            "verify-blob",
+            "--bundle",
+            str(bundle_path),
+            "--certificate-identity-regexp",
+            identity_regexp,
+            "--certificate-oidc-issuer",
+            COSIGN_OIDC_ISSUER,
             str(blob_path),
         ]
         try:
@@ -40,7 +44,8 @@ def verify_blob_identity(blob_bytes: bytes, bundle_bytes: bytes, identity_regexp
             ) from exc
         if result.returncode != 0:
             raise CosignVerificationError(
-                f"cosign verify-blob failed: {result.stderr.decode('utf-8', 'replace')}")
+                f"cosign verify-blob failed: {result.stderr.decode('utf-8', 'replace')}"
+            )
 
 
 def verify_blob(

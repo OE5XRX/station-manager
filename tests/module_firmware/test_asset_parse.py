@@ -1,13 +1,19 @@
-from apps.module_firmware.releases import parse_variant_assets, parse_sha256sums
+from apps.module_firmware.releases import parse_sha256sums, parse_variant_assets
 
 
 def test_parse_two_variants():
     names = {
-        "fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle",
-        "fm-sa818-uhf.signed.bin", "fm-sa818-uhf.signed.bin.bundle",
-        "fm-sa818-vhf.mcuboot.hex", "SHA256SUMS", "SHA256SUMS.bundle",
+        "fm-sa818-vhf.signed.bin",
+        "fm-sa818-vhf.signed.bin.bundle",
+        "fm-sa818-uhf.signed.bin",
+        "fm-sa818-uhf.signed.bin.bundle",
+        "fm-sa818-vhf.mcuboot.hex",
+        "SHA256SUMS",
+        "SHA256SUMS.bundle",
     }
-    got = {v.variant: (v.signed_name, v.bundle_name) for v in parse_variant_assets(names, "fm-sa818")}
+    got = {
+        v.variant: (v.signed_name, v.bundle_name) for v in parse_variant_assets(names, "fm-sa818")
+    }
     assert got == {
         "vhf": ("fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle"),
         "uhf": ("fm-sa818-uhf.signed.bin", "fm-sa818-uhf.signed.bin.bundle"),

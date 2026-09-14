@@ -1,6 +1,7 @@
 import pytest
 from django.db import IntegrityError
-from apps.module_firmware.models import ModuleType, ModuleFirmwareRelease
+
+from apps.module_firmware.models import ModuleFirmwareRelease, ModuleType
 
 
 @pytest.fixture
@@ -10,11 +11,15 @@ def fm(db):
 
 def _mk(fm, variant="vhf", version="26.07.04-01"):
     return ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant=variant, version=version,
+        module_type=fm,
+        variant=variant,
+        version=version,
         storage_key=f"module_firmware/fm/{version}/{variant}.signed.bin",
-        sha256="a"*64, size_bytes=1234,
+        sha256="a" * 64,
+        size_bytes=1234,
         cosign_bundle_key=f"module_firmware/fm/{version}/{variant}.signed.bin.bundle",
-        source_repo="OE5XRX/FW-RemoteStation", source_tag=version,
+        source_repo="OE5XRX/FW-RemoteStation",
+        source_tag=version,
     )
 
 

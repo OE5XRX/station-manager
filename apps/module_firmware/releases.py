@@ -37,7 +37,7 @@ def parse_variant_assets(asset_names: set[str], prefix: str) -> list[VariantAsse
     for name in sorted(asset_names):
         if not (name.startswith(prefix) and name.endswith(_SIGNED_SUFFIX)):
             continue
-        middle = name[len(prefix):-len(_SIGNED_SUFFIX)]
+        middle = name[len(prefix) : -len(_SIGNED_SUFFIX)]
         if middle == "":
             variant = ""
         elif middle.startswith("-"):
@@ -59,7 +59,7 @@ def parse_sha256sums(text: str) -> dict[str, str]:
     for line in text.splitlines():
         parts = line.split()
         if len(parts) >= 2:
-            result[parts[-1]] = parts[0]
+            result[parts[-1]] = parts[0].lower()
     return result
 
 
@@ -115,12 +115,19 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
             uploaded.append(bkey)
             with transaction.atomic():
                 last_release, _ = ModuleFirmwareRelease.all_objects.update_or_create(
-                    module_type=job.module_type, variant=va.variant, version=job.tag,
+                    module_type=job.module_type,
+                    variant=va.variant,
+                    version=job.tag,
                     defaults={
-                        "storage_key": skey, "sha256": expected, "size_bytes": len(blob),
-                        "cosign_bundle_key": bkey, "source_repo": repo, "source_tag": job.tag,
+                        "storage_key": skey,
+                        "sha256": expected,
+                        "size_bytes": len(blob),
+                        "cosign_bundle_key": bkey,
+                        "source_repo": repo,
+                        "source_tag": job.tag,
                         "source_github_url": _asset_url(repo, job.tag, va.signed_name),
-                        "imported_by": job.requested_by, "archived_at": None,
+                        "imported_by": job.requested_by,
+                        "archived_at": None,
                     },
                 )
         job.release = last_release
