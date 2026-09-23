@@ -1,0 +1,63 @@
+name: Dependabot lock sync
+
+# Dependabot edits the compiled requirements/*.txt pins directly but never
+# re-runs `uv pip compile`, so its pip PRs always fail the "Deps lock in sync"
+# check in ci.yml. This workflow recompiles the lockfiles on Dependabot pip PRs
+# and pushes the result back onto the PR branch, so the drift check passes
+# without manual intervention.
+#
+# If Dependabot bumps a pin beyond the range declared in requirements/*.in
+# (e.g. a new major), the recompile normalizes it back to the capped version —
+# widening the cap stays a deliberate human decision in the *.in file.
+
+on:
+  pull_request:
+    paths:
+      - "requirements/*.in"
+      - "requirements/*.txt"
+
+# Elevated permissions are honoured on Dependabot-triggered runs only when set
+# explicitly (the default GITHUB_TOKEN is read-only for Dependabot events).
+permissions:
+  contents: write
+
+concurrency:
+  group: dependabot-lock-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recompile:
+    # Same-repo Dependabot branches only; skip everything else.
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          # Explicit token so the follow-up push is authenticated. A push made
+          # with GITHUB_TOKEN does not re-trigger workflows, so this cannot loop.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # Keep in lockstep with the pin in ci.yml's "Deps lock in sync" job —
+          # a uv upgrade can change resolver/formatting output.
+          version: "0.10.10"
+
+      - name: Recompile lockfiles from *.in
+        run: |
+          uv pip compile requirements/base.in -o requirements/base.txt --python-version 3.14 --no-strip-extras
+          uv pip compile requirements/prod.in -c requirements/base.txt -o requirements/prod.txt --python-version 3.14 --no-strip-extras
+          uv pip compile requirements/dev.in -c requirements/base.txt -o requirements/dev.txt --python-version 3.14 --no-strip-extras
+
+      - name: Commit and push if lockfiles changed
+        run: |
+          if git diff --quiet -- requirements/*.txt; then
+            echo "Lockfiles already in sync — nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements/*.txt
+          git commit -m "chore(deps): recompile requirements lockfiles"
+          git push

@@ -1,7 +1,10 @@
 [tool.ruff]
 target-version = "py313"
 line-length = 99
-extend-exclude = ["*/migrations/*.py"]
+# ruff 0.16 began formatting Python code blocks embedded in Markdown by default,
+# which would churn dozens of unrelated docs/ spec/plan files on the ruff bump.
+# We only ever ran ruff over Python sources, so keep Markdown out of scope.
+extend-exclude = ["*/migrations/*.py", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
