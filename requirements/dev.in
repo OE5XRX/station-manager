@@ -16,4 +16,8 @@ requests>=2.32,<3.0
 # dev so the slot-discovery / inventory tests actually run in CI instead of
 # failing collection. Agent-only runtime dep (not used by the Django server).
 pyserial>=3.5,<4.0
-django-test-migrations>=1.4,<2.0
+# Cap below 1.7.0 for now: it was published so recently that PyPI CDN
+# propagation is inconsistent across CI runners (some resolve it, some 404),
+# making the install flaky. 1.6.0 is what Dependabot proposed and installs
+# reliably. Drop the cap once 1.7.0 has fully propagated.
+django-test-migrations>=1.4,<1.7

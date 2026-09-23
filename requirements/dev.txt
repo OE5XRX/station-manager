@@ -125,7 +125,7 @@ django-storages[s3]==1.14.6
     # via
     #   -c requirements/base.txt
     #   -r requirements/base.in
-django-test-migrations==1.7.0
+django-test-migrations==1.6.0
     # via -r requirements/dev.in
 djangorestframework==3.18.1
     # via
@@ -320,6 +320,7 @@ typing-extensions==4.16.0
     # via
     #   -c requirements/base.txt
     #   anyio
+    #   django-test-migrations
     #   jwcrypto
     #   twisted
 ujson==6.0.0
