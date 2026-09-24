@@ -32,7 +32,6 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-      day: "monday"
       time: "04:00"
       timezone: "Europe/Vienna"
     open-pull-requests-limit: 5
@@ -43,11 +42,11 @@ updates:
       prefix: "ci"
       include: "scope"
 
-  # Docker base image (Dockerfile)
+  # Docker base image (Dockerfile) — security-relevant, weekly.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
       day: "monday"
       time: "04:00"
       timezone: "Europe/Vienna"
