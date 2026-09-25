@@ -273,3 +273,84 @@ class ModuleFirmwareImportJob(models.Model):
 
     def __str__(self):
         return f"{self.module_type.key} {self.tag} [{self.status}]"
+
+
+class ModuleFirmwareTarget(models.Model):
+    """Declarative desired firmware version per module_type, with scope
+    precedence station > tag > fleet and an optional canary gate."""
+
+    class Scope(models.TextChoices):
+        FLEET = "fleet", _("Fleet default")
+        TAG = "tag", _("Tag override")
+        STATION = "station", _("Station override")
+
+    module_type = models.ForeignKey(
+        ModuleType,
+        on_delete=models.PROTECT,
+        related_name="firmware_targets",
+        verbose_name=_("module type"),
+    )
+    version = models.CharField(_("version"), max_length=64)
+    scope = models.CharField(
+        _("scope"), max_length=16, choices=Scope.choices, default=Scope.FLEET
+    )
+    tag = models.ForeignKey(
+        "stations.StationTag",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="firmware_targets",
+        verbose_name=_("tag"),
+    )
+    station = models.ForeignKey(
+        "stations.Station",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="firmware_targets",
+        verbose_name=_("station"),
+    )
+    canary_tag = models.ForeignKey(
+        "stations.StationTag",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("canary tag"),
+        help_text=_("While set, a fleet target applies only to stations in this tag."),
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("created by"),
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("module firmware target")
+        verbose_name_plural = _("module firmware targets")
+        ordering = ["module_type", "scope"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["module_type"],
+                condition=models.Q(scope="fleet"),
+                name="uniq_fleet_target_per_type",
+            ),
+            models.UniqueConstraint(
+                fields=["module_type", "tag"],
+                condition=models.Q(scope="tag"),
+                name="uniq_tag_target_per_type_tag",
+            ),
+            models.UniqueConstraint(
+                fields=["module_type", "station"],
+                condition=models.Q(scope="station"),
+                name="uniq_station_target_per_type_station",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.module_type.key} {self.scope}={self.version}"
