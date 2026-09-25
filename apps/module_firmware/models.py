@@ -52,6 +52,12 @@ class Module(models.Model):
         UNREGISTERED = "unregistered", _("Unregistered")
         REGISTERED = "registered", _("Registered")
 
+    class Convergence(models.TextChoices):
+        OK = "ok", _("OK")
+        UPDATING = "updating", _("Updating")
+        QUARANTINED = "quarantined", _("Quarantined")
+        UNKNOWN = "unknown", _("Unknown")
+
     # Lifecycle states that are operator-set and never auto-overridden by ingestion.
     STICKY_LIFECYCLE = {Lifecycle.DEFECT, Lifecycle.IN_LAB, Lifecycle.RETIRED}
 
@@ -72,6 +78,13 @@ class Module(models.Model):
         default=Registration.UNREGISTERED,
     )
     last_reported_version = models.CharField(_("last reported version"), max_length=64, blank=True)
+    variant = models.CharField(_("variant"), max_length=32, blank=True, default="")
+    firmware_convergence = models.CharField(
+        _("firmware convergence"),
+        max_length=16,
+        choices=Convergence.choices,
+        default=Convergence.UNKNOWN,
+    )
     first_seen = models.DateTimeField(_("first seen"), null=True, blank=True)
     last_seen = models.DateTimeField(_("last seen"), null=True, blank=True)
     notes = models.TextField(_("notes"), blank=True)
