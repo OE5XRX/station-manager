@@ -89,10 +89,16 @@ def test_e2e_heartbeat_reconcile_check_status_commit_ok(client, station_with_key
         r = _post(client, priv, station.pk, "reconcile_status", {"status": st}, args=[cid])
         assert r.status_code == 200
 
-    # 4. agent's post-flash heartbeat reports the new version.
+    # 4. agent's post-flash heartbeat reports the new version (crash-safe: the
+    # commit derives the final state from the real reported version, so the
+    # heartbeat must land before the commit for reconcile_module to see OK).
     apply_inventory(station, _inventory("UIDE2E", "26.09.15-01"))
 
-    # 5. commit -> ok.
+    # 5. commit. The post-flash heartbeat above already converged the row to OK
+    # via reconcile_module, so the row is now terminal. The commit endpoint's
+    # terminal guard (R2-4, symmetric with the status endpoint) rejects a commit
+    # against a terminal row with 409 — the flash outcome is already recorded and
+    # must not be re-audited. The convergence state remains OK.
     r = _post(
         client,
         priv,
@@ -100,7 +106,7 @@ def test_e2e_heartbeat_reconcile_check_status_commit_ok(client, station_with_key
         "reconcile_commit",
         {"convergence_id": cid, "version": "26.09.15-01"},
     )
-    assert r.status_code == 200
+    assert r.status_code == 409
 
     m.refresh_from_db()
     assert m.firmware_convergence == Module.Convergence.OK

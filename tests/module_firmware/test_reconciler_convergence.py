@@ -68,6 +68,46 @@ def test_no_desired_no_drift(fm, station_factory):
     assert m.firmware_convergence == Module.Convergence.UNKNOWN
 
 
+def _module_with_target_no_release(
+    fm, station, *, variant="vhf", version="", target="26.09.15-01"
+):
+    """Effective target exists, but NO release matches the module's variant."""
+    m = Module.objects.create(
+        uid="MNR", module_type=fm, variant=variant, last_reported_version=version
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=station, slot="slot0")
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version=target
+    )
+    # Intentionally NO ModuleFirmwareRelease for (fm, variant, target).
+    return m
+
+
+@pytest.mark.django_db
+def test_variant_no_release_drift_stays_visible(fm, station_factory):
+    # R2-2: target exists, module on an OLD version, but no release for the
+    # variant => no flash possible, yet drift must stay VISIBLE (UPDATING).
+    st = station_factory()
+    m = _module_with_target_no_release(fm, st, version="26.09.10-01", target="26.09.15-01")
+    assert reconcile_module(m) is None
+    m.refresh_from_db()
+    assert m.firmware_convergence == Module.Convergence.UPDATING
+    # No ConvergenceState row can exist (target_release FK is non-nullable).
+    assert ModuleFirmwareConvergenceState.objects.filter(module=m).count() == 0
+
+
+@pytest.mark.django_db
+def test_variant_no_release_on_target_version_is_ok(fm, station_factory):
+    # R2-2: target exists, module already reports the target VERSION, but no
+    # release for the variant => already on desired => OK, still no row.
+    st = station_factory()
+    m = _module_with_target_no_release(fm, st, version="26.09.15-01", target="26.09.15-01")
+    assert reconcile_module(m) is None
+    m.refresh_from_db()
+    assert m.firmware_convergence == Module.Convergence.OK
+    assert ModuleFirmwareConvergenceState.objects.filter(module=m).count() == 0
+
+
 @pytest.mark.django_db
 def test_reconcile_is_idempotent(fm, station_factory):
     st = station_factory()

@@ -13,7 +13,7 @@ from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.stations.models import StationAuditLog
 
-from .models import ModuleAssignmentHistory, ModuleFirmwareConvergenceState
+from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
 from .reconcile_serializers import (
     ReconcileCheckRequestSerializer,
     ReconcileCheckResponseSerializer,
@@ -126,25 +126,30 @@ class ReconcileStatusUpdateView(APIView):
         error_message = serializer.validated_data.get("error_message", "")
 
         with transaction.atomic():
-            try:
-                cs = (
-                    ModuleFirmwareConvergenceState.objects.select_for_update()
-                    .select_related("module")
-                    .get(pk=convergence_id)
-                )
-            except ModuleFirmwareConvergenceState.DoesNotExist:
+            # Global lock order module → assignment → convergence (see R2-1). Fetch
+            # the convergence row UNLOCKED first, only to learn its module_id, then
+            # acquire the row locks in the global order.
+            cs0 = (
+                ModuleFirmwareConvergenceState.objects.select_related("module")
+                .filter(pk=convergence_id)
+                .first()
+            )
+            if cs0 is None:
                 return Response(
                     {"detail": "Convergence not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # Authz: the module must be currently assigned to THIS station. Lock
-            # the open assignment row (convergence row is already locked above —
-            # consistent lock order convergence→assignment avoids deadlocks) so a
-            # concurrent reassignment can't close it between check and mutation.
+            # 1) Lock the module row FIRST.
+            Module.objects.select_for_update().filter(pk=cs0.module_id).first()
+
+            # 2) Authz: the module must be currently assigned to THIS station. Lock
+            # + re-read the open assignment (after the module lock, per the global
+            # order) so a concurrent reassignment can't close it between check and
+            # mutation.
             open_assignment = (
                 ModuleAssignmentHistory.objects.select_for_update()
-                .filter(module=cs.module, station=station, to_ts__isnull=True)
+                .filter(module_id=cs0.module_id, station=station, to_ts__isnull=True)
                 .first()
             )
             if open_assignment is None:
@@ -152,6 +157,13 @@ class ReconcileStatusUpdateView(APIView):
                     {"detail": "Convergence not bound to this station."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+
+            # 3) Lock + re-read the convergence row LAST.
+            cs = (
+                ModuleFirmwareConvergenceState.objects.select_for_update()
+                .select_related("module")
+                .get(pk=convergence_id)
+            )
 
             # Terminal rows accept no further callbacks: a quarantined row must
             # never be reactivated, and after a successful commit sets OK a
@@ -213,30 +225,54 @@ class ReconcileCommitView(APIView):
         version = serializer.validated_data["version"]
 
         with transaction.atomic():
-            try:
-                cs = (
-                    ModuleFirmwareConvergenceState.objects.select_for_update()
-                    .select_related("module", "target_release")
-                    .get(pk=convergence_id)
-                )
-            except ModuleFirmwareConvergenceState.DoesNotExist:
+            # Global lock order module → assignment → convergence (see R2-1). Fetch
+            # the convergence row UNLOCKED first, only to learn its module_id, then
+            # acquire the row locks in the global order.
+            cs0 = (
+                ModuleFirmwareConvergenceState.objects.select_related("module")
+                .filter(pk=convergence_id)
+                .first()
+            )
+            if cs0 is None:
                 return Response(
                     {"detail": "Convergence not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # Lock the open assignment (convergence row already locked above —
-            # consistent lock order convergence→assignment) so a concurrent
-            # reassignment can't close it between check and mutation.
+            # 1) Lock the module row FIRST.
+            Module.objects.select_for_update().filter(pk=cs0.module_id).first()
+
+            # 2) Lock + re-read the open assignment (after the module lock, per the
+            # global order) so a concurrent reassignment can't close it between
+            # check and mutation.
             open_assignment = (
                 ModuleAssignmentHistory.objects.select_for_update()
-                .filter(module=cs.module, station=station, to_ts__isnull=True)
+                .filter(module_id=cs0.module_id, station=station, to_ts__isnull=True)
                 .first()
             )
             if open_assignment is None:
                 return Response(
                     {"detail": "Convergence not bound to this station."},
                     status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # 3) Lock + re-read the convergence row LAST.
+            cs = (
+                ModuleFirmwareConvergenceState.objects.select_for_update()
+                .select_related("module", "target_release")
+                .get(pk=convergence_id)
+            )
+
+            # Terminal rows accept no further callbacks (symmetric with the status
+            # endpoint's F9 guard): a delayed commit for a QUARANTINED row must not
+            # be reported as success, and an already-OK row is immutable.
+            if cs.state in (
+                ModuleFirmwareConvergenceState.State.QUARANTINED,
+                ModuleFirmwareConvergenceState.State.OK,
+            ):
+                return Response(
+                    {"detail": "Convergence is terminal; no updates accepted."},
+                    status=status.HTTP_409_CONFLICT,
                 )
 
             expected = cs.target_release.version

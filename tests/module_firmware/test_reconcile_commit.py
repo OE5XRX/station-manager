@@ -99,6 +99,39 @@ def test_commit_404_unknown(client, station_with_key, fm):
 
 
 @pytest.mark.django_db
+def test_commit_409_when_quarantined(client, station_with_key, fm):
+    # R2-4: a delayed commit for a QUARANTINED row must be rejected (409),
+    # never reported as success — symmetric with the status endpoint's guard.
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.state = ModuleFirmwareConvergenceState.State.QUARANTINED
+    cs.save(update_fields=["state"])
+    resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": "26.09.15-01"})
+    assert resp.status_code == 409
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED
+    assert not StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_SUCCESS
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_commit_409_when_ok(client, station_with_key, fm):
+    # R2-4: an already-OK row is terminal/immutable — a repeated commit is 409.
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.state = ModuleFirmwareConvergenceState.State.OK
+    cs.save(update_fields=["state"])
+    resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": "26.09.15-01"})
+    assert resp.status_code == 409
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.OK
+    assert not StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_SUCCESS
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_commit_404_when_not_bound_to_station(client, station_with_key, fm, station_factory):
     # Review Focus #5 (commit side).
     station, priv = station_with_key

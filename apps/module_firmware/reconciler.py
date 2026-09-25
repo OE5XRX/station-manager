@@ -107,21 +107,58 @@ def reconcile_module(module):
     Idempotent. Returns the active ConvergenceState, or None when there is no
     desired release (no drift; rollup falls back to ``ok`` if the module is
     running something, else ``unknown``)."""
+    # Global lock order module → (assignment) → convergence (see R2-1). Lock the
+    # MODULE row FIRST so every path that locks more than one of these rows
+    # acquires the module lock before the convergence lock. ``check`` does not
+    # pre-lock the module; ingestion already holds it (a same-transaction no-op).
+    Module.objects.select_for_update().filter(pk=module.pk).first()
+
     # The rollup decisions below compare against Module.firmware_convergence; a
     # concurrent record_error/status transaction may have advanced it since this
     # ``module`` object was read, so refresh the denormalized field from the DB
     # to avoid a stale-value no-op that would leave the rollup out of sync.
     module.refresh_from_db(fields=["firmware_convergence"])
 
-    desired = desired_release_for_module(module)
-    if desired is None:
-        # No target/variant match => no drift. Keep unknown unless we already
-        # know it is running a version (then it is trivially ok w.r.t. intent).
+    # Resolve the effective target explicitly so we can distinguish "no intent"
+    # (no assignment / no target) from "intent exists but no variant-matching
+    # release" (variant-gate drift, which must stay VISIBLE — see R2-2).
+    assignment = (
+        ModuleAssignmentHistory.objects.filter(module=module, to_ts__isnull=True)
+        .select_related("station")
+        .first()
+    )
+    target = None
+    if assignment is not None and assignment.station is not None:
+        target = effective_target(assignment.station, module.module_type)
+
+    if target is None:
+        # Truly no intent => no drift. Keep unknown unless we already know it is
+        # running a version (then it is trivially ok w.r.t. intent).
         _set_convergence_rollup(
             module,
             Module.Convergence.UNKNOWN
             if module.firmware_convergence == Module.Convergence.UNKNOWN
             else Module.Convergence.OK,
+        )
+        return None
+
+    desired = ModuleFirmwareRelease.objects.filter(
+        module_type=module.module_type,
+        variant=module.variant,
+        version=target.version,
+    ).first()
+    if desired is None:
+        # Intent EXISTS but there is no variant-matching release: no flash is
+        # possible, yet the drift must remain VISIBLE ("Drift bleibt sichtbar").
+        # There can be no ConvergenceState row (its target_release FK is
+        # non-nullable), so drive the rollup directly off the real reported
+        # version vs. the target VERSION: equal => OK (already on desired),
+        # otherwise UPDATING (visible drift). Return None — no instruction, since
+        # ``check`` has no release to hand out.
+        reported = module.last_reported_version or ""
+        _set_convergence_rollup(
+            module,
+            Module.Convergence.OK if reported == target.version else Module.Convergence.UPDATING,
         )
         return None
 

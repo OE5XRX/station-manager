@@ -373,6 +373,12 @@ class ModuleFirmwareTarget(models.Model):
                 ),
                 name="target_station_has_station_only",
             ),
+            # canary_tag is a fleet-only gate; effective_target ignores it on
+            # tag/station scopes, so allowing it there is silent dead intent.
+            models.CheckConstraint(
+                condition=(models.Q(scope="fleet") | models.Q(canary_tag__isnull=True)),
+                name="canary_tag_only_on_fleet",
+            ),
         ]
 
     def clean(self):
@@ -389,6 +395,8 @@ class ModuleFirmwareTarget(models.Model):
         elif self.scope == self.Scope.STATION:
             if self.station_id is None or self.tag_id is not None:
                 raise ValidationError(_("A station target must set a station and no tag."))
+        if self.scope != self.Scope.FLEET and self.canary_tag_id is not None:
+            raise ValidationError(_("A canary tag is only allowed on a fleet target."))
 
     def __str__(self):
         return f"{self.module_type.key} {self.scope}={self.version}"

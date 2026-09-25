@@ -121,6 +121,36 @@ def test_fleet_target_with_canary_tag_satisfies_constraint(fm):
 
 
 @pytest.mark.django_db
+def test_tag_target_with_canary_tag_violates_constraint(fm):
+    # R2-3: canary_tag is a fleet-only gate — a tag target must not carry one.
+    tag = StationTag.objects.create(name="t", slug="t")
+    canary = StationTag.objects.create(name="canary", slug="canary")
+    with pytest.raises(IntegrityError), transaction.atomic():
+        ModuleFirmwareTarget.objects.create(
+            module_type=fm,
+            version="1",
+            scope=ModuleFirmwareTarget.Scope.TAG,
+            tag=tag,
+            canary_tag=canary,
+        )
+
+
+@pytest.mark.django_db
+def test_station_target_with_canary_tag_violates_constraint(fm, station_factory):
+    # R2-3: a station target must not carry a canary_tag either.
+    st = station_factory()
+    canary = StationTag.objects.create(name="canary", slug="canary")
+    with pytest.raises(IntegrityError), transaction.atomic():
+        ModuleFirmwareTarget.objects.create(
+            module_type=fm,
+            version="1",
+            scope=ModuleFirmwareTarget.Scope.STATION,
+            station=st,
+            canary_tag=canary,
+        )
+
+
+@pytest.mark.django_db
 def test_quarantine_limit_is_three():
     assert QUARANTINE_ATTEMPT_LIMIT == 3
 
