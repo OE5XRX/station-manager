@@ -9,4 +9,9 @@ urlpatterns = [
         reconcile_api_views.ReconcileCheckView.as_view(),
         name="reconcile_check",
     ),
+    path(
+        "reconcile/<int:convergence_id>/status/",
+        reconcile_api_views.ReconcileStatusUpdateView.as_view(),
+        name="reconcile_status",
+    ),
 ]
