@@ -4,6 +4,9 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
+QUARANTINE_ATTEMPT_LIMIT = 3
+
+
 class ModuleType(models.Model):
     """Registry of flashable module types (only firmware-bearing types)."""
 
@@ -354,3 +357,53 @@ class ModuleFirmwareTarget(models.Model):
 
     def __str__(self):
         return f"{self.module_type.key} {self.scope}={self.version}"
+
+
+class ModuleFirmwareConvergenceState(models.Model):
+    """Reconciler bookkeeping per (module, target release): attempts,
+    quarantine, last error mode. Quarantine binds to the tuple, so a new
+    target version is a new row and is retried automatically."""
+
+    class State(models.TextChoices):
+        OK = "ok", _("OK")
+        UPDATING = "updating", _("Updating")
+        QUARANTINED = "quarantined", _("Quarantined")
+
+    class ErrorMode(models.TextChoices):
+        REJECTED = "rejected", _("Rejected")
+        ROLLED_BACK = "rolled_back", _("Rolled back")
+        TRANSIENT = "transient", _("Transient")
+
+    module = models.ForeignKey(
+        Module, on_delete=models.CASCADE, related_name="convergence_states",
+        verbose_name=_("module"),
+    )
+    target_release = models.ForeignKey(
+        ModuleFirmwareRelease, on_delete=models.PROTECT,
+        related_name="convergence_states", verbose_name=_("target release"),
+    )
+    state = models.CharField(
+        _("state"), max_length=16, choices=State.choices, default=State.UPDATING
+    )
+    attempts = models.PositiveIntegerField(_("attempts"), default=0)
+    last_error_mode = models.CharField(
+        _("last error mode"), max_length=16, choices=ErrorMode.choices, blank=True, default=""
+    )
+    last_error_message = models.TextField(_("last error message"), blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+    last_attempt_at = models.DateTimeField(_("last attempt at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("module firmware convergence state")
+        verbose_name_plural = _("module firmware convergence states")
+        ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["module", "target_release"],
+                name="uniq_convergence_per_module_release",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.module.uid} -> {self.target_release.version} [{self.state}]"
