@@ -22,6 +22,16 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+def _audit(module, event_type, message, *, station=None):
+    """Best-effort dual-subject audit write — never break the state change."""
+    try:
+        StationAuditLog.log(
+            station=station, module=module, event_type=event_type, message=message
+        )
+    except Exception:
+        logger.warning("reconciler: audit write failed (%s)", event_type, exc_info=True)
+
+
 def effective_target(station, module_type):
     """Resolve the effective ModuleFirmwareTarget for (station, module_type)
     with precedence station > tag > fleet, honouring the canary gate.
@@ -161,7 +171,17 @@ def record_error(convergence, error_mode, error_message=""):
     convergence.save(update_fields=fields)
 
     if convergence.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
+        was_quarantined = (
+            convergence.module.firmware_convergence == Module.Convergence.QUARANTINED
+        )
         _set_convergence_rollup(convergence.module, Module.Convergence.QUARANTINED)
+        if not was_quarantined:
+            _audit(
+                convergence.module,
+                StationAuditLog.EventType.MODULE_QUARANTINED,
+                f"Module {convergence.module.uid} quarantined for target "
+                f"{convergence.target_release.version} ({error_mode}).",
+            )
     else:
         _set_convergence_rollup(convergence.module, Module.Convergence.UPDATING)
     return convergence
