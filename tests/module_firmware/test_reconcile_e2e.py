@@ -94,11 +94,11 @@ def test_e2e_heartbeat_reconcile_check_status_commit_ok(client, station_with_key
     # heartbeat must land before the commit for reconcile_module to see OK).
     apply_inventory(station, _inventory("UIDE2E", "26.09.15-01"))
 
-    # 5. commit. The post-flash heartbeat above already converged the row to OK
-    # via reconcile_module, so the row is now terminal. The commit endpoint's
-    # terminal guard (R2-4, symmetric with the status endpoint) rejects a commit
-    # against a terminal row with 409 — the flash outcome is already recorded and
-    # must not be re-audited. The convergence state remains OK.
+    # 5. commit -> ok. The step-4 heartbeat already converged the row to OK; the
+    # commit's terminal guard (R2-4) rejects only QUARANTINED (a given-up
+    # instruction), so this OK row is a legitimate idempotent confirmation:
+    # payload matches the target -> MODULE_FLASH_SUCCESS audit -> reconcile_module
+    # (reported==target) -> stays OK -> 200.
     r = _post(
         client,
         priv,
@@ -106,7 +106,7 @@ def test_e2e_heartbeat_reconcile_check_status_commit_ok(client, station_with_key
         "reconcile_commit",
         {"convergence_id": cid, "version": "26.09.15-01"},
     )
-    assert r.status_code == 409
+    assert r.status_code == 200
 
     m.refresh_from_db()
     assert m.firmware_convergence == Module.Convergence.OK

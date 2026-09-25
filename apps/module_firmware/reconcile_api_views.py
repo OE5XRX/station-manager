@@ -263,15 +263,19 @@ class ReconcileCommitView(APIView):
                 .get(pk=convergence_id)
             )
 
-            # Terminal rows accept no further callbacks (symmetric with the status
-            # endpoint's F9 guard): a delayed commit for a QUARANTINED row must not
-            # be reported as success, and an already-OK row is immutable.
-            if cs.state in (
-                ModuleFirmwareConvergenceState.State.QUARANTINED,
-                ModuleFirmwareConvergenceState.State.OK,
-            ):
+            # A QUARANTINED row has been GIVEN UP — a delayed commit against it must
+            # not be reported as success (the real bug: the API would otherwise emit
+            # MODULE_FLASH_SUCCESS for a rejected instruction). Only quarantine is
+            # guarded here. Unlike the STATUS endpoint (which also rejects OK, since
+            # a late rejected/rolled_back callback must not mutate a converged row),
+            # an OK row at commit time means the module already converged (e.g. a
+            # heartbeat reported the target version before the agent's commit
+            # landed). The commit is then a legitimate idempotent confirmation and
+            # must proceed to 200 — conflating "already succeeded" with "given up"
+            # would make a successful flash look rejected to the agent / Teilbereich D.
+            if cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
                 return Response(
-                    {"detail": "Convergence is terminal; no updates accepted."},
+                    {"detail": "Convergence is quarantined; no updates accepted."},
                     status=status.HTTP_409_CONFLICT,
                 )
 

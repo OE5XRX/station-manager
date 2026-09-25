@@ -116,19 +116,26 @@ def test_commit_409_when_quarantined(client, station_with_key, fm):
 
 
 @pytest.mark.django_db
-def test_commit_409_when_ok(client, station_with_key, fm):
-    # R2-4: an already-OK row is terminal/immutable — a repeated commit is 409.
+def test_commit_200_idempotent_when_already_ok(client, station_with_key, fm):
+    # R2-4 correction: an already-OK row is NOT quarantine — it means the module
+    # already converged (e.g. a heartbeat reported the target before the agent's
+    # commit landed). The commit is a legitimate idempotent confirmation: it must
+    # return 200 and leave the row OK, not conflate success with a given-up
+    # instruction (which would make a good flash look rejected to Teilbereich D).
     station, priv = station_with_key
     m, cs = _setup(fm, station)
+    # Module already reports the target version, so reconcile_module keeps it OK.
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
     cs.state = ModuleFirmwareConvergenceState.State.OK
     cs.save(update_fields=["state"])
     resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": "26.09.15-01"})
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
     cs.refresh_from_db()
     assert cs.state == ModuleFirmwareConvergenceState.State.OK
-    assert not StationAuditLog.objects.filter(
-        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_SUCCESS
-    ).exists()
+    m.refresh_from_db()
+    assert m.firmware_convergence == Module.Convergence.OK
 
 
 @pytest.mark.django_db
