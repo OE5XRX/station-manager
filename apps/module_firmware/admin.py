@@ -1,11 +1,15 @@
 from django.contrib import admin
 
+from apps.stations.models import StationAuditLog
+
 from . import services
 from .models import (
     Module,
     ModuleAssignmentHistory,
+    ModuleFirmwareConvergenceState,
     ModuleFirmwareImportJob,
     ModuleFirmwareRelease,
+    ModuleFirmwareTarget,
     ModuleType,
 )
 
@@ -140,4 +144,42 @@ class ModuleAssignmentHistoryAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ModuleFirmwareTarget)
+class ModuleFirmwareTargetAdmin(admin.ModelAdmin):
+    list_display = ("module_type", "scope", "version", "tag", "station", "canary_tag", "updated_at")
+    list_filter = ("module_type", "scope")
+
+    def save_model(self, request, obj, form, change):
+        if not change and obj.created_by_id is None:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+        if obj.station is not None:
+            try:
+                StationAuditLog.log(
+                    station=obj.station,
+                    event_type=StationAuditLog.EventType.FIRMWARE_TARGET_SET,
+                    message=(
+                        f"Firmware target {obj.module_type.key} "
+                        f"{obj.scope}={obj.version} set by {request.user}."
+                    ),
+                )
+            except Exception:
+                pass
+
+
+@admin.register(ModuleFirmwareConvergenceState)
+class ModuleFirmwareConvergenceStateAdmin(admin.ModelAdmin):
+    list_display = ("module", "target_release", "state", "attempts", "last_error_mode", "updated_at")
+    list_filter = ("state", "last_error_mode")
+    readonly_fields = tuple(
+        f.name for f in ModuleFirmwareConvergenceState._meta.fields
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False

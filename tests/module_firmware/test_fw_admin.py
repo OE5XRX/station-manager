@@ -25,3 +25,24 @@ def test_import_job_admin_no_add_change_delete():
     assert job_admin.has_add_permission(request) is False
     assert job_admin.has_change_permission(request) is False
     assert job_admin.has_delete_permission(request) is False
+
+
+import pytest
+from django.contrib.admin.sites import site
+
+from apps.module_firmware.models import (
+    ModuleFirmwareConvergenceState,
+    ModuleFirmwareTarget,
+)
+
+
+@pytest.mark.django_db
+def test_target_and_convergence_registered_in_admin():
+    assert ModuleFirmwareTarget in site._registry
+    assert ModuleFirmwareConvergenceState in site._registry
+
+
+@pytest.mark.django_db
+def test_convergence_admin_is_readonly():
+    admin_obj = site._registry[ModuleFirmwareConvergenceState]
+    assert admin_obj.has_add_permission(request=None) is False
