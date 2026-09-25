@@ -25,8 +25,14 @@ def _setup(fm, station, *, uid="U1"):
     )
     ModuleAssignmentHistory.objects.create(module=m, station=station, slot="slot0")
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     cs = ModuleFirmwareConvergenceState.objects.create(
         module=m, target_release=rel, state=ModuleFirmwareConvergenceState.State.UPDATING
@@ -38,7 +44,8 @@ def _post(client, priv, station_pk, payload):
     body = json.dumps(payload).encode()
     return client.post(
         reverse("module_firmware_api:reconcile_commit"),
-        data=body, content_type="application/json",
+        data=body,
+        content_type="application/json",
         **device_auth_headers(priv, station_pk, body),
     )
 

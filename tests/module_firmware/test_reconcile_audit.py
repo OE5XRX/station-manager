@@ -41,8 +41,14 @@ def test_quarantine_emits_audit_once(fm, station_factory):
         module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
     )
     ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     cs = reconcile_module(m)
     record_error(cs, ModuleFirmwareConvergenceState.ErrorMode.REJECTED)

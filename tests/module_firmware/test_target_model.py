@@ -2,12 +2,12 @@ import pytest
 from django.db import IntegrityError
 
 from apps.module_firmware.models import (
+    QUARANTINE_ATTEMPT_LIMIT,
     Module,
     ModuleFirmwareConvergenceState,
     ModuleFirmwareRelease,
     ModuleFirmwareTarget,
     ModuleType,
-    QUARANTINE_ATTEMPT_LIMIT,
 )
 from apps.stations.models import StationTag
 
@@ -54,8 +54,14 @@ def test_quarantine_limit_is_three():
 def test_convergence_state_unique_per_module_release(fm):
     m = Module.objects.create(uid="C1", module_type=fm, variant="vhf")
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="1",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="1",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     ModuleFirmwareConvergenceState.objects.create(module=m, target_release=rel)
     with pytest.raises(IntegrityError):
@@ -66,8 +72,14 @@ def test_convergence_state_unique_per_module_release(fm):
 def test_convergence_state_defaults(fm):
     m = Module.objects.create(uid="C2", module_type=fm, variant="vhf")
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="1",
-        storage_key="k", sha256="b" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="1",
+        storage_key="k",
+        sha256="b" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     cs = ModuleFirmwareConvergenceState.objects.create(module=m, target_release=rel)
     assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING

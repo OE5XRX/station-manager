@@ -20,7 +20,12 @@ class ReconcileCheckResponseSerializer(serializers.Serializer):
 class ReconcileStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(
         choices=[
-            "downloading", "flashing", "verifying", "failed", "rolled_back", "rejected",
+            "downloading",
+            "flashing",
+            "verifying",
+            "failed",
+            "rolled_back",
+            "rejected",
         ]
     )
     error_message = serializers.CharField(required=False, default="", allow_blank=True)

@@ -30,8 +30,11 @@ def _inventory(uid, version, variant="vhf", slot="slot0"):
                 {
                     "module": "fm",
                     "identity": {
-                        "type": "fm", "model": "SA818", "uid": uid,
-                        "version": version, "variant": variant,
+                        "type": "fm",
+                        "model": "SA818",
+                        "uid": uid,
+                        "version": version,
+                        "variant": variant,
                     },
                     "capabilities": [],
                     "state": {},
@@ -45,7 +48,8 @@ def _post(client, priv, station_pk, name, payload, args=None):
     body = json.dumps(payload).encode()
     return client.post(
         reverse(f"module_firmware_api:{name}", args=args or []),
-        data=body, content_type="application/json",
+        data=body,
+        content_type="application/json",
         **device_auth_headers(priv, station_pk, body),
     )
 
@@ -57,8 +61,14 @@ def test_e2e_heartbeat_reconcile_check_status_commit_ok(client, station_with_key
         module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
     )
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=42, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=42,
+        source_repo="r",
+        source_tag="t",
     )
 
     # 1. Agent heartbeat reports the ist (old version) -> reconciler sees drift.
@@ -84,7 +94,10 @@ def test_e2e_heartbeat_reconcile_check_status_commit_ok(client, station_with_key
 
     # 5. commit -> ok.
     r = _post(
-        client, priv, station.pk, "reconcile_commit",
+        client,
+        priv,
+        station.pk,
+        "reconcile_commit",
         {"convergence_id": cid, "version": "26.09.15-01"},
     )
     assert r.status_code == 200
@@ -106,8 +119,14 @@ def test_e2e_quarantine_path_to_dashboard(client, station_with_key, fm):
         module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
     )
     ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=42, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=42,
+        source_repo="r",
+        source_tag="t",
     )
     apply_inventory(station, _inventory("QUID", "26.09.10-01"))
     resp = _post(client, priv, station.pk, "reconcile_check", {})

@@ -149,7 +149,15 @@ class ModuleAssignmentHistoryAdmin(admin.ModelAdmin):
 
 @admin.register(ModuleFirmwareTarget)
 class ModuleFirmwareTargetAdmin(admin.ModelAdmin):
-    list_display = ("module_type", "scope", "version", "tag", "station", "canary_tag", "updated_at")
+    list_display = (
+        "module_type",
+        "scope",
+        "version",
+        "tag",
+        "station",
+        "canary_tag",
+        "updated_at",
+    )
     list_filter = ("module_type", "scope")
 
     def save_model(self, request, obj, form, change):
@@ -172,11 +180,16 @@ class ModuleFirmwareTargetAdmin(admin.ModelAdmin):
 
 @admin.register(ModuleFirmwareConvergenceState)
 class ModuleFirmwareConvergenceStateAdmin(admin.ModelAdmin):
-    list_display = ("module", "target_release", "state", "attempts", "last_error_mode", "updated_at")
-    list_filter = ("state", "last_error_mode")
-    readonly_fields = tuple(
-        f.name for f in ModuleFirmwareConvergenceState._meta.fields
+    list_display = (
+        "module",
+        "target_release",
+        "state",
+        "attempts",
+        "last_error_mode",
+        "updated_at",
     )
+    list_filter = ("state", "last_error_mode")
+    readonly_fields = tuple(f.name for f in ModuleFirmwareConvergenceState._meta.fields)
 
     def has_add_permission(self, request):
         return False

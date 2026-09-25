@@ -14,13 +14,13 @@ from apps.api.permissions import IsDevice
 from apps.stations.models import StationAuditLog
 
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
-from .reconciler import _audit, record_error, reconcile_module
 from .reconcile_serializers import (
     ReconcileCheckRequestSerializer,
     ReconcileCheckResponseSerializer,
     ReconcileCommitSerializer,
     ReconcileStatusSerializer,
 )
+from .reconciler import _audit, reconcile_module, record_error
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +138,7 @@ class ReconcileStatusUpdateView(APIView):
                 )
 
             # Authz: the module must be currently assigned to THIS station.
-            bound = cs.module.assignments.filter(
-                station=station, to_ts__isnull=True
-            ).exists()
+            bound = cs.module.assignments.filter(station=station, to_ts__isnull=True).exists()
             if not bound:
                 return Response(
                     {"detail": "Convergence not bound to this station."},
@@ -213,9 +211,7 @@ class ReconcileCommitView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            bound = cs.module.assignments.filter(
-                station=station, to_ts__isnull=True
-            ).exists()
+            bound = cs.module.assignments.filter(station=station, to_ts__isnull=True).exists()
             if not bound:
                 return Response(
                     {"detail": "Convergence not bound to this station."},
@@ -229,9 +225,7 @@ class ReconcileCommitView(APIView):
                 record_error(
                     cs,
                     ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
-                    error_message=(
-                        f"Commit version {version!r} != target {expected!r}."
-                    ),
+                    error_message=(f"Commit version {version!r} != target {expected!r}."),
                 )
                 _audit(
                     cs.module,

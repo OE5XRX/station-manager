@@ -18,9 +18,7 @@ def fm(db):
 
 
 def _target(fm, scope, version, **kw):
-    return ModuleFirmwareTarget.objects.create(
-        module_type=fm, scope=scope, version=version, **kw
-    )
+    return ModuleFirmwareTarget.objects.create(module_type=fm, scope=scope, version=version, **kw)
 
 
 @pytest.mark.django_db
@@ -50,7 +48,7 @@ def test_multiple_tag_targets_newest_updated_at_wins(fm, station_factory):
     a = StationTag.objects.create(name="a", slug="a")
     b = StationTag.objects.create(name="b", slug="b")
     st.tags.add(a, b)
-    ta = _target(fm, ModuleFirmwareTarget.Scope.TAG, "a-v", tag=a)
+    _target(fm, ModuleFirmwareTarget.Scope.TAG, "a-v", tag=a)
     tb = _target(fm, ModuleFirmwareTarget.Scope.TAG, "b-v", tag=b)
     # Force tb to be the newer updated_at.
     tb.version = "b-v2"
@@ -83,8 +81,14 @@ def test_desired_release_resolves_type_and_variant(fm, station_factory):
     ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
     _target(fm, ModuleFirmwareTarget.Scope.FLEET, "26.09.15-01")
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     assert desired_release_for_module(m).pk == rel.pk
 
@@ -97,8 +101,14 @@ def test_no_release_for_variant_returns_none(fm, station_factory):
     ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
     _target(fm, ModuleFirmwareTarget.Scope.FLEET, "26.09.15-01")
     ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     assert desired_release_for_module(m) is None
 
@@ -116,8 +126,14 @@ def test_archived_release_is_not_desired(fm, station_factory):
     ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
     _target(fm, ModuleFirmwareTarget.Scope.FLEET, "26.09.15-01")
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     rel.archive()
     assert desired_release_for_module(m) is None

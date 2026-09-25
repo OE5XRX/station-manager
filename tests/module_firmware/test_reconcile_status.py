@@ -2,12 +2,12 @@ import pytest
 from django.urls import reverse
 
 from apps.module_firmware.models import (
+    QUARANTINE_ATTEMPT_LIMIT,
     Module,
     ModuleAssignmentHistory,
     ModuleFirmwareConvergenceState,
     ModuleFirmwareRelease,
     ModuleType,
-    QUARANTINE_ATTEMPT_LIMIT,
 )
 from apps.stations.models import StationAuditLog
 from tests.conftest import device_auth_headers
@@ -24,8 +24,14 @@ def _setup(fm, station, *, uid="U1", slot="slot0"):
     )
     ModuleAssignmentHistory.objects.create(module=m, station=station, slot=slot)
     rel = ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.15-01",
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     cs = ModuleFirmwareConvergenceState.objects.create(
         module=m, target_release=rel, state=ModuleFirmwareConvergenceState.State.UPDATING
@@ -35,10 +41,12 @@ def _setup(fm, station, *, uid="U1", slot="slot0"):
 
 def _post(client, priv, station_pk, cid, payload):
     import json
+
     body = json.dumps(payload).encode()
     return client.post(
         reverse("module_firmware_api:reconcile_status", args=[cid]),
-        data=body, content_type="application/json",
+        data=body,
+        content_type="application/json",
         **device_auth_headers(priv, station_pk, body),
     )
 
@@ -102,7 +110,9 @@ def test_status_404_unknown_convergence(client, station_with_key, fm):
 
 
 @pytest.mark.django_db
-def test_status_404_when_module_not_assigned_to_station(client, station_with_key, fm, station_factory):
+def test_status_404_when_module_not_assigned_to_station(
+    client, station_with_key, fm, station_factory
+):
     # Review Focus #5: convergence belongs to a module assigned elsewhere.
     station, priv = station_with_key
     other = station_factory()

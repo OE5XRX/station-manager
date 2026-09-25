@@ -50,8 +50,10 @@ class IndexView(LoginRequiredMixin, TemplateView):
                 firmware_convergence=Module.Convergence.QUARANTINED
             ).count(),
         }
-        context["quarantined_modules"] = Module.objects.filter(
-            firmware_convergence=Module.Convergence.QUARANTINED
-        ).select_related("module_type").order_by("uid")
+        context["quarantined_modules"] = (
+            Module.objects.filter(firmware_convergence=Module.Convergence.QUARANTINED)
+            .select_related("module_type")
+            .order_by("uid")
+        )
 
         return context

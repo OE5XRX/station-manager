@@ -3,7 +3,6 @@ from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-
 QUARANTINE_ATTEMPT_LIMIT = 3
 
 
@@ -294,9 +293,7 @@ class ModuleFirmwareTarget(models.Model):
         verbose_name=_("module type"),
     )
     version = models.CharField(_("version"), max_length=64)
-    scope = models.CharField(
-        _("scope"), max_length=16, choices=Scope.choices, default=Scope.FLEET
-    )
+    scope = models.CharField(_("scope"), max_length=16, choices=Scope.choices, default=Scope.FLEET)
     tag = models.ForeignKey(
         "stations.StationTag",
         on_delete=models.CASCADE,
@@ -375,12 +372,16 @@ class ModuleFirmwareConvergenceState(models.Model):
         TRANSIENT = "transient", _("Transient")
 
     module = models.ForeignKey(
-        Module, on_delete=models.CASCADE, related_name="convergence_states",
+        Module,
+        on_delete=models.CASCADE,
+        related_name="convergence_states",
         verbose_name=_("module"),
     )
     target_release = models.ForeignKey(
-        ModuleFirmwareRelease, on_delete=models.PROTECT,
-        related_name="convergence_states", verbose_name=_("target release"),
+        ModuleFirmwareRelease,
+        on_delete=models.PROTECT,
+        related_name="convergence_states",
+        verbose_name=_("target release"),
     )
     state = models.CharField(
         _("state"), max_length=16, choices=State.choices, default=State.UPDATING

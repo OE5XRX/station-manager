@@ -19,8 +19,14 @@ def fm(db):
 
 def _release(fm, version="26.09.15-01", variant="vhf"):
     return ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant=variant, version=version,
-        storage_key="k", sha256="a" * 64, size_bytes=123, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant=variant,
+        version=version,
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=123,
+        source_repo="r",
+        source_tag="t",
     )
 
 
@@ -37,7 +43,8 @@ def test_check_204_when_nothing_to_do(client, station_with_key, fm):
     station, priv = station_with_key
     resp = client.post(
         reverse("module_firmware_api:reconcile_check"),
-        data="{}", content_type="application/json",
+        data="{}",
+        content_type="application/json",
         **device_auth_headers(priv, station.pk, b"{}"),
     )
     assert resp.status_code == 204
@@ -53,7 +60,8 @@ def test_check_returns_one_instruction(client, station_with_key, fm):
     m = _drifted_module(fm, station)
     resp = client.post(
         reverse("module_firmware_api:reconcile_check"),
-        data="{}", content_type="application/json",
+        data="{}",
+        content_type="application/json",
         **device_auth_headers(priv, station.pk, b"{}"),
     )
     assert resp.status_code == 200
@@ -65,9 +73,7 @@ def test_check_returns_one_instruction(client, station_with_key, fm):
     assert body["target_version"] == "26.09.15-01"
     assert body["checksum_sha256"] == "a" * 64
     assert body["size_bytes"] == 123
-    assert body["download_url"] == reverse(
-        "module_firmware_api:download", args=[rel.pk]
-    )
+    assert body["download_url"] == reverse("module_firmware_api:download", args=[rel.pk])
     assert body["convergence_id"] == ModuleFirmwareConvergenceState.objects.get(module=m).pk
 
 
@@ -80,12 +86,14 @@ def test_check_skips_quarantined(client, station_with_key, fm):
     rel = _release(fm)
     m = _drifted_module(fm, station)
     ModuleFirmwareConvergenceState.objects.create(
-        module=m, target_release=rel,
+        module=m,
+        target_release=rel,
         state=ModuleFirmwareConvergenceState.State.QUARANTINED,
     )
     resp = client.post(
         reverse("module_firmware_api:reconcile_check"),
-        data="{}", content_type="application/json",
+        data="{}",
+        content_type="application/json",
         **device_auth_headers(priv, station.pk, b"{}"),
     )
     assert resp.status_code == 204
@@ -99,7 +107,7 @@ def test_check_prefers_midflight_updating(client, station_with_key, fm):
         module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
     )
     rel = _release(fm)
-    m0 = _drifted_module(fm, station, uid="U0", slot="slot0")
+    _drifted_module(fm, station, uid="U0", slot="slot0")
     m1 = _drifted_module(fm, station, uid="U1", slot="slot1")
     # m1 (higher slot, normally after m0) already has an updating row.
     ModuleFirmwareConvergenceState.objects.create(
@@ -107,7 +115,8 @@ def test_check_prefers_midflight_updating(client, station_with_key, fm):
     )
     resp = client.post(
         reverse("module_firmware_api:reconcile_check"),
-        data="{}", content_type="application/json",
+        data="{}",
+        content_type="application/json",
         **device_auth_headers(priv, station.pk, b"{}"),
     )
     assert resp.status_code == 200
@@ -118,6 +127,7 @@ def test_check_prefers_midflight_updating(client, station_with_key, fm):
 def test_check_requires_device_auth(client, fm):
     resp = client.post(
         reverse("module_firmware_api:reconcile_check"),
-        data="{}", content_type="application/json",
+        data="{}",
+        content_type="application/json",
     )
     assert resp.status_code in (401, 403)

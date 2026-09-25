@@ -25,9 +25,7 @@ logger = logging.getLogger(__name__)
 def _audit(module, event_type, message, *, station=None):
     """Best-effort dual-subject audit write — never break the state change."""
     try:
-        StationAuditLog.log(
-            station=station, module=module, event_type=event_type, message=message
-        )
+        StationAuditLog.log(station=station, module=module, event_type=event_type, message=message)
     except Exception:
         logger.warning("reconciler: audit write failed (%s)", event_type, exc_info=True)
 
@@ -171,9 +169,7 @@ def record_error(convergence, error_mode, error_message=""):
     convergence.save(update_fields=fields)
 
     if convergence.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
-        was_quarantined = (
-            convergence.module.firmware_convergence == Module.Convergence.QUARANTINED
-        )
+        was_quarantined = convergence.module.firmware_convergence == Module.Convergence.QUARANTINED
         _set_convergence_rollup(convergence.module, Module.Convergence.QUARANTINED)
         if not was_quarantined:
             _audit(

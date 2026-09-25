@@ -1,13 +1,13 @@
 import pytest
 
 from apps.module_firmware.models import (
+    QUARANTINE_ATTEMPT_LIMIT,
     Module,
     ModuleAssignmentHistory,
     ModuleFirmwareConvergenceState,
     ModuleFirmwareRelease,
     ModuleFirmwareTarget,
     ModuleType,
-    QUARANTINE_ATTEMPT_LIMIT,
 )
 from apps.module_firmware.reconciler import reconcile_module, record_error
 
@@ -26,8 +26,14 @@ def _module_with_target(fm, station, *, variant="vhf", version="", target="26.09
         module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version=target
     )
     ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant=variant, version=target,
-        storage_key="k", sha256="a" * 64, size_bytes=1, source_repo="r", source_tag="t",
+        module_type=fm,
+        variant=variant,
+        version=target,
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
     )
     return m
 
@@ -116,8 +122,14 @@ def test_new_target_version_new_row_retried(fm, station_factory):
     # Operator ships a fix: new target version + release -> new row, retried.
     ModuleFirmwareTarget.objects.filter(module_type=fm).update(version="26.09.20-01")
     ModuleFirmwareRelease.objects.create(
-        module_type=fm, variant="vhf", version="26.09.20-01",
-        storage_key="k2", sha256="c" * 64, size_bytes=1, source_repo="r", source_tag="t2",
+        module_type=fm,
+        variant="vhf",
+        version="26.09.20-01",
+        storage_key="k2",
+        sha256="c" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t2",
     )
     cs2 = reconcile_module(m)
     assert cs2.pk != cs.pk

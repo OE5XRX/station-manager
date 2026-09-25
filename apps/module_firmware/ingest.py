@@ -139,7 +139,9 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
                     )
                 logger.warning(
                     "ingest: variant mismatch uid=%s reported=%s tracked=%s",
-                    uid, reported_variant, module.variant,
+                    uid,
+                    reported_variant,
+                    module.variant,
                 )
         old_version = module.last_reported_version
         module.last_seen = now

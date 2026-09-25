@@ -1,7 +1,14 @@
+import pytest
 from django.contrib import admin
+from django.contrib.admin.sites import site
 from django.test import RequestFactory
 
-from apps.module_firmware.models import ModuleFirmwareImportJob, ModuleFirmwareRelease
+from apps.module_firmware.models import (
+    ModuleFirmwareConvergenceState,
+    ModuleFirmwareImportJob,
+    ModuleFirmwareRelease,
+    ModuleFirmwareTarget,
+)
 
 
 def test_models_registered():
@@ -25,15 +32,6 @@ def test_import_job_admin_no_add_change_delete():
     assert job_admin.has_add_permission(request) is False
     assert job_admin.has_change_permission(request) is False
     assert job_admin.has_delete_permission(request) is False
-
-
-import pytest
-from django.contrib.admin.sites import site
-
-from apps.module_firmware.models import (
-    ModuleFirmwareConvergenceState,
-    ModuleFirmwareTarget,
-)
 
 
 @pytest.mark.django_db
