@@ -13,11 +13,12 @@ from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.stations.models import StationAuditLog
 
-from .models import ModuleAssignmentHistory, ModuleFirmwareConvergenceState
+from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
 from .reconciler import _audit, record_error, reconcile_module
 from .reconcile_serializers import (
     ReconcileCheckRequestSerializer,
     ReconcileCheckResponseSerializer,
+    ReconcileCommitSerializer,
     ReconcileStatusSerializer,
 )
 
@@ -175,4 +176,86 @@ class ReconcileStatusUpdateView(APIView):
                     cs.last_attempt_at = timezone.now()
                     cs.save(update_fields=["last_attempt_at", "updated_at"])
 
+        return Response({"status": "ok"})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ReconcileCommitView(APIView):
+    """Agent confirms the module's post-flash version. Match -> ok; mismatch ->
+    rolled_back (deterministic, 409), mirroring the deployment commit path."""
+
+    authentication_classes = [DeviceKeyAuthentication]
+    permission_classes = [IsDevice]
+
+    def post(self, request):
+        station = getattr(request.auth, "station", None)
+        if station is None:
+            return Response(
+                {"detail": "No station linked to this device key."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = ReconcileCommitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        convergence_id = serializer.validated_data["convergence_id"]
+        version = serializer.validated_data["version"]
+
+        with transaction.atomic():
+            try:
+                cs = (
+                    ModuleFirmwareConvergenceState.objects.select_for_update()
+                    .select_related("module", "target_release")
+                    .get(pk=convergence_id)
+                )
+            except ModuleFirmwareConvergenceState.DoesNotExist:
+                return Response(
+                    {"detail": "Convergence not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            bound = cs.module.assignments.filter(
+                station=station, to_ts__isnull=True
+            ).exists()
+            if not bound:
+                return Response(
+                    {"detail": "Convergence not bound to this station."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            expected = cs.target_release.version
+            if version != expected:
+                # Bootloader rollback / version mismatch: treat as rolled_back,
+                # deterministic, no retry (same policy as record_error).
+                record_error(
+                    cs,
+                    ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
+                    error_message=(
+                        f"Commit version {version!r} != target {expected!r}."
+                    ),
+                )
+                _audit(
+                    cs.module,
+                    StationAuditLog.EventType.MODULE_FLASH_ROLLED_BACK,
+                    f"Module {cs.module.uid} commit rejected: reports {version!r}, "
+                    f"target {expected!r}.",
+                    station=station,
+                )
+                return Response(
+                    {"detail": "Version mismatch — recorded as rolled_back."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            cs.state = ModuleFirmwareConvergenceState.State.OK
+            cs.save(update_fields=["state", "updated_at"])
+            module = cs.module
+            if module.firmware_convergence != Module.Convergence.OK:
+                module.firmware_convergence = Module.Convergence.OK
+                module.save(update_fields=["firmware_convergence", "updated_at"])
+
+        _audit(
+            cs.module,
+            StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
+            f"Module {cs.module.uid} committed version {version}.",
+            station=station,
+        )
         return Response({"status": "ok"})

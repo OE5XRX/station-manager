@@ -14,4 +14,9 @@ urlpatterns = [
         reconcile_api_views.ReconcileStatusUpdateView.as_view(),
         name="reconcile_status",
     ),
+    path(
+        "reconcile/commit/",
+        reconcile_api_views.ReconcileCommitView.as_view(),
+        name="reconcile_commit",
+    ),
 ]
