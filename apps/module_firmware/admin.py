@@ -1,11 +1,17 @@
+from django import forms
 from django.contrib import admin
+from django.utils.translation import gettext_lazy as _
+
+from apps.stations.models import StationAuditLog
 
 from . import services
 from .models import (
     Module,
     ModuleAssignmentHistory,
+    ModuleFirmwareConvergenceState,
     ModuleFirmwareImportJob,
     ModuleFirmwareRelease,
+    ModuleFirmwareTarget,
     ModuleType,
 )
 
@@ -140,4 +146,86 @@ class ModuleAssignmentHistoryAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class ModuleFirmwareTargetForm(forms.ModelForm):
+    """Enforce the spec's "no free-text version" contract: the version must
+    match a non-archived release for the chosen module_type (any variant),
+    analogous to B's release-browser pattern — a typo/unavailable version would
+    otherwise make desired_release_for_module() silently resolve to None."""
+
+    class Meta:
+        model = ModuleFirmwareTarget
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        module_type = cleaned.get("module_type")
+        version = cleaned.get("version")
+        if module_type and version:
+            exists = ModuleFirmwareRelease.objects.filter(
+                module_type=module_type, version=version
+            ).exists()
+            if not exists:
+                raise forms.ValidationError(
+                    {
+                        "version": _(
+                            "No release %(version)s exists for module type %(module_type)s."
+                        )
+                        % {"version": version, "module_type": module_type}
+                    }
+                )
+        return cleaned
+
+
+@admin.register(ModuleFirmwareTarget)
+class ModuleFirmwareTargetAdmin(admin.ModelAdmin):
+    form = ModuleFirmwareTargetForm
+    list_display = (
+        "module_type",
+        "scope",
+        "version",
+        "tag",
+        "station",
+        "canary_tag",
+        "updated_at",
+    )
+    list_filter = ("module_type", "scope")
+
+    def save_model(self, request, obj, form, change):
+        if not change and obj.created_by_id is None:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+        if obj.station is not None:
+            try:
+                StationAuditLog.log(
+                    station=obj.station,
+                    event_type=StationAuditLog.EventType.FIRMWARE_TARGET_SET,
+                    message=(
+                        f"Firmware target {obj.module_type.key} "
+                        f"{obj.scope}={obj.version} set by {request.user}."
+                    ),
+                )
+            except Exception:
+                pass
+
+
+@admin.register(ModuleFirmwareConvergenceState)
+class ModuleFirmwareConvergenceStateAdmin(admin.ModelAdmin):
+    list_display = (
+        "module",
+        "target_release",
+        "state",
+        "attempts",
+        "last_error_mode",
+        "updated_at",
+    )
+    list_filter = ("state", "last_error_mode")
+    readonly_fields = tuple(f.name for f in ModuleFirmwareConvergenceState._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False

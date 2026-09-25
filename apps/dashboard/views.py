@@ -46,6 +46,14 @@ class IndexView(LoginRequiredMixin, TemplateView):
             "attention": Module.objects.filter(
                 lifecycle_status__in=[Module.Lifecycle.DEFECT, Module.Lifecycle.IN_LAB]
             ).count(),
+            "quarantined": Module.objects.filter(
+                firmware_convergence=Module.Convergence.QUARANTINED
+            ).count(),
         }
+        context["quarantined_modules"] = (
+            Module.objects.filter(firmware_convergence=Module.Convergence.QUARANTINED)
+            .select_related("module_type")
+            .order_by("uid")
+        )
 
         return context

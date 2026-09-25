@@ -12,6 +12,7 @@ from django.db import transaction
 from apps.stations.models import StationAuditLog
 
 from .models import Module, ModuleAssignmentHistory, ModuleType
+from .reconciler import reconcile_module
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
         else Module.UidSource.STM32_UID
     )
     version = identity.get("version", "")
+    variant = identity.get("variant", "") or ""
 
     module, created = Module.objects.get_or_create(
         uid=uid,
@@ -68,6 +70,7 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
             "module_type": module_type,
             "uid_source": uid_source,
             "last_reported_version": version,
+            "variant": variant,
             "first_seen": now,
             "last_seen": now,
         },
@@ -110,6 +113,45 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
                 module.module_type.key,
             )
             return None
+        # variant is a fixed HW property: fill a blank once, but a change
+        # between two non-blank variants is an anomaly (audit once, ignore).
+        reported_variant = identity.get("variant", "") or ""
+        if reported_variant:
+            if not module.variant:
+                module.variant = reported_variant
+                module.save(update_fields=["variant", "updated_at"])
+            elif module.variant != reported_variant:
+                variant_msg = (
+                    f"Variant mismatch for uid {uid}: reported "
+                    f"'{reported_variant}', tracked as '{module.variant}'. Ignored."
+                )
+                already = StationAuditLog.objects.filter(
+                    module=module,
+                    event_type=StationAuditLog.EventType.UPDATED,
+                    message=variant_msg,
+                ).exists()
+                if not already:
+                    # Best-effort audit write (Plan Global Constraint): a
+                    # transient audit hiccup must never break heartbeat ingestion.
+                    try:
+                        StationAuditLog.log(
+                            station=station,
+                            module=module,
+                            event_type=StationAuditLog.EventType.UPDATED,
+                            message=variant_msg,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "ingest: variant-anomaly audit write failed uid=%s",
+                            uid,
+                            exc_info=True,
+                        )
+                logger.warning(
+                    "ingest: variant mismatch uid=%s reported=%s tracked=%s",
+                    uid,
+                    reported_variant,
+                    module.variant,
+                )
         old_version = module.last_reported_version
         module.last_seen = now
         module.last_reported_version = version
@@ -127,6 +169,10 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
 
     _apply_assignment(module, station, slot, now=now, user=user)
     _derive_lifecycle(module, now=now, station=station)
+    try:
+        reconcile_module(module)
+    except Exception:
+        logger.warning("ingest: reconcile_module failed for uid=%s", uid, exc_info=True)
     return module
 
 

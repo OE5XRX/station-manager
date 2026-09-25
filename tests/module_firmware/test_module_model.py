@@ -25,3 +25,16 @@ def test_module_uid_unique(fm_type):
     Module.objects.create(uid="DUP", module_type=fm_type)
     with pytest.raises(Exception):
         Module.objects.create(uid="DUP", module_type=fm_type)
+
+
+@pytest.mark.django_db
+def test_module_has_variant_and_convergence_defaults():
+    t = ModuleType.objects.create(key="fm", display_name="FM")
+    m = Module.objects.create(uid="V1", module_type=t)
+    assert m.variant == ""
+    assert m.firmware_convergence == Module.Convergence.UNKNOWN
+
+
+@pytest.mark.django_db
+def test_module_convergence_choices_are_exhaustive():
+    assert set(Module.Convergence.values) == {"ok", "updating", "quarantined", "unknown"}

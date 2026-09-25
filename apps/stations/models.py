@@ -312,6 +312,13 @@ class StationAuditLog(models.Model):
         MODULE_SWAPPED = "module_swapped", _("Module Swapped")
         MODULE_LIFECYCLE_CHANGED = "module_lifecycle_changed", _("Module Lifecycle Changed")
         MODULE_ASSIGNMENT_CHANGED = "module_assignment_changed", _("Module Assignment Changed")
+        FIRMWARE_TARGET_SET = "firmware_target_set", _("Firmware Target Set")
+        MODULE_FLASH_STARTED = "module_flash_started", _("Module Flash Started")
+        MODULE_FLASH_SUCCESS = "module_flash_success", _("Module Flash Success")
+        MODULE_FLASH_ROLLED_BACK = "module_flash_rolled_back", _("Module Flash Rolled Back")
+        MODULE_FLASH_REJECTED = "module_flash_rejected", _("Module Flash Rejected")
+        MODULE_FLASH_FAILED = "module_flash_failed", _("Module Flash Failed")
+        MODULE_QUARANTINED = "module_quarantined", _("Module Quarantined")
 
     station = models.ForeignKey(
         Station,
