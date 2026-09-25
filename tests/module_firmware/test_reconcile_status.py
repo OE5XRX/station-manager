@@ -129,3 +129,18 @@ def test_status_409_when_quarantined(client, station_with_key, fm):
     cs.save(update_fields=["state"])
     resp = _post(client, priv, station.pk, cs.pk, {"status": "rolled_back"})
     assert resp.status_code == 409
+
+
+@pytest.mark.django_db
+def test_status_409_after_commit_ok(client, station_with_key, fm):
+    # F9: OK is terminal. A delayed rejected/rolled_back callback arriving after a
+    # successful commit must be rejected (409) and must not quarantine or alter
+    # the terminal row.
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.state = ModuleFirmwareConvergenceState.State.OK
+    cs.save(update_fields=["state"])
+    resp = _post(client, priv, station.pk, cs.pk, {"status": "rejected"})
+    assert resp.status_code == 409
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.OK

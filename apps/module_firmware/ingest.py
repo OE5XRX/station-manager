@@ -131,12 +131,21 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
                     message=variant_msg,
                 ).exists()
                 if not already:
-                    StationAuditLog.log(
-                        station=station,
-                        module=module,
-                        event_type=StationAuditLog.EventType.UPDATED,
-                        message=variant_msg,
-                    )
+                    # Best-effort audit write (Plan Global Constraint): a
+                    # transient audit hiccup must never break heartbeat ingestion.
+                    try:
+                        StationAuditLog.log(
+                            station=station,
+                            module=module,
+                            event_type=StationAuditLog.EventType.UPDATED,
+                            message=variant_msg,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "ingest: variant-anomaly audit write failed uid=%s",
+                            uid,
+                            exc_info=True,
+                        )
                 logger.warning(
                     "ingest: variant mismatch uid=%s reported=%s tracked=%s",
                     uid,

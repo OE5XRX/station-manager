@@ -13,7 +13,7 @@ from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.stations.models import StationAuditLog
 
-from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
+from .models import ModuleAssignmentHistory, ModuleFirmwareConvergenceState
 from .reconcile_serializers import (
     ReconcileCheckRequestSerializer,
     ReconcileCheckResponseSerializer,
@@ -59,15 +59,16 @@ class ReconcileCheckView(APIView):
 
         for a in assignments:
             module = a.module
-            pre_existing = ModuleFirmwareConvergenceState.objects.filter(
-                module=module,
-                state=ModuleFirmwareConvergenceState.State.UPDATING,
-            ).exists()
             cs = reconcile_module(module)
             if cs is None or cs.state != ModuleFirmwareConvergenceState.State.UPDATING:
                 continue
             instruction = self._instruction(module, a.slot, cs)
-            if pre_existing:
+            # A row is a genuine "resume" only once the agent has actually
+            # started flashing it — the status endpoint stamps last_attempt_at on
+            # the first progress POST. Heartbeat ingestion creates an updating row
+            # for EVERY drifted module, so an existence check would mark all of
+            # them "pre-existing" and degenerate the preference to slot order.
+            if cs.last_attempt_at is not None:
                 resume = resume or instruction
             else:
                 first_drift = first_drift or instruction
@@ -137,17 +138,30 @@ class ReconcileStatusUpdateView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # Authz: the module must be currently assigned to THIS station.
-            bound = cs.module.assignments.filter(station=station, to_ts__isnull=True).exists()
-            if not bound:
+            # Authz: the module must be currently assigned to THIS station. Lock
+            # the open assignment row (convergence row is already locked above —
+            # consistent lock order convergence→assignment avoids deadlocks) so a
+            # concurrent reassignment can't close it between check and mutation.
+            open_assignment = (
+                ModuleAssignmentHistory.objects.select_for_update()
+                .filter(module=cs.module, station=station, to_ts__isnull=True)
+                .first()
+            )
+            if open_assignment is None:
                 return Response(
                     {"detail": "Convergence not bound to this station."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            if cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
+            # Terminal rows accept no further callbacks: a quarantined row must
+            # never be reactivated, and after a successful commit sets OK a
+            # delayed rejected/rolled_back/progress callback must not alter it.
+            if cs.state in (
+                ModuleFirmwareConvergenceState.State.QUARANTINED,
+                ModuleFirmwareConvergenceState.State.OK,
+            ):
                 return Response(
-                    {"detail": "Convergence is quarantined; no updates accepted."},
+                    {"detail": "Convergence is terminal; no updates accepted."},
                     status=status.HTTP_409_CONFLICT,
                 )
 
@@ -211,8 +225,15 @@ class ReconcileCommitView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            bound = cs.module.assignments.filter(station=station, to_ts__isnull=True).exists()
-            if not bound:
+            # Lock the open assignment (convergence row already locked above —
+            # consistent lock order convergence→assignment) so a concurrent
+            # reassignment can't close it between check and mutation.
+            open_assignment = (
+                ModuleAssignmentHistory.objects.select_for_update()
+                .filter(module=cs.module, station=station, to_ts__isnull=True)
+                .first()
+            )
+            if open_assignment is None:
                 return Response(
                     {"detail": "Convergence not bound to this station."},
                     status=status.HTTP_404_NOT_FOUND,
@@ -239,17 +260,18 @@ class ReconcileCommitView(APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            cs.state = ModuleFirmwareConvergenceState.State.OK
-            cs.save(update_fields=["state", "updated_at"])
-            module = cs.module
-            if module.firmware_convergence != Module.Convergence.OK:
-                module.firmware_convergence = Module.Convergence.OK
-                module.save(update_fields=["firmware_convergence", "updated_at"])
+            # Payload matches the target — but never trust the body for the final
+            # state. Audit the accepted commit, then DERIVE convergence from the
+            # module's real last_reported_version (crash-safe principle). If the
+            # heartbeat has caught up, reconcile_module lands OK; otherwise it
+            # stays updating and the next check re-offers it. reconcile_module
+            # maintains both the row state and the Module rollup itself.
+            _audit(
+                cs.module,
+                StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
+                f"Module {cs.module.uid} committed version {version}.",
+                station=station,
+            )
+            reconcile_module(cs.module)
 
-        _audit(
-            cs.module,
-            StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
-            f"Module {cs.module.uid} committed version {version}.",
-            station=station,
-        )
         return Response({"status": "ok"})

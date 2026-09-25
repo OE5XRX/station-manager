@@ -8,6 +8,7 @@ from apps.module_firmware.models import (
     ModuleAssignmentHistory,
     ModuleFirmwareConvergenceState,
     ModuleFirmwareRelease,
+    ModuleFirmwareTarget,
     ModuleType,
 )
 from apps.stations.models import StationAuditLog
@@ -24,6 +25,11 @@ def _setup(fm, station, *, uid="U1"):
         uid=uid, module_type=fm, variant="vhf", last_reported_version="26.09.10-01"
     )
     ModuleAssignmentHistory.objects.create(module=m, station=station, slot="slot0")
+    # A fleet target so reconcile_module can derive the final state from the
+    # module's real reported version at commit time (F4).
+    ModuleFirmwareTarget.objects.get_or_create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, defaults={"version": "26.09.15-01"}
+    )
     rel = ModuleFirmwareRelease.objects.create(
         module_type=fm,
         variant="vhf",
@@ -54,6 +60,11 @@ def _post(client, priv, station_pk, payload):
 def test_commit_success_on_match(client, station_with_key, fm):
     station, priv = station_with_key
     m, cs = _setup(fm, station)
+    # Realistic post-flash state: the heartbeat has already reported the target
+    # version, so the derived convergence (F4) lands OK. The commit no longer
+    # trusts the payload blindly — it reconciles against the real reported version.
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
     resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": "26.09.15-01"})
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}

@@ -350,7 +350,45 @@ class ModuleFirmwareTarget(models.Model):
                 condition=models.Q(scope="station"),
                 name="uniq_station_target_per_type_station",
             ),
+            # Scope/ref coherence: nullable tag/station must match the scope, so
+            # effective_target can never misbehave on an inconsistent row.
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(scope="fleet")
+                    | (models.Q(tag__isnull=True) & models.Q(station__isnull=True))
+                ),
+                name="target_fleet_has_no_ref",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(scope="tag")
+                    | (models.Q(tag__isnull=False) & models.Q(station__isnull=True))
+                ),
+                name="target_tag_has_tag_only",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(scope="station")
+                    | (models.Q(station__isnull=False) & models.Q(tag__isnull=True))
+                ),
+                name="target_station_has_station_only",
+            ),
         ]
+
+    def clean(self):
+        """Form-level mirror of the scope/ref CheckConstraints."""
+        super().clean()
+        from django.core.exceptions import ValidationError
+
+        if self.scope == self.Scope.FLEET:
+            if self.tag_id is not None or self.station_id is not None:
+                raise ValidationError(_("A fleet target must not set a tag or station."))
+        elif self.scope == self.Scope.TAG:
+            if self.tag_id is None or self.station_id is not None:
+                raise ValidationError(_("A tag target must set a tag and no station."))
+        elif self.scope == self.Scope.STATION:
+            if self.station_id is None or self.tag_id is not None:
+                raise ValidationError(_("A station target must set a station and no tag."))
 
     def __str__(self):
         return f"{self.module_type.key} {self.scope}={self.version}"

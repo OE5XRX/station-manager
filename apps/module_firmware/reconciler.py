@@ -107,6 +107,12 @@ def reconcile_module(module):
     Idempotent. Returns the active ConvergenceState, or None when there is no
     desired release (no drift; rollup falls back to ``ok`` if the module is
     running something, else ``unknown``)."""
+    # The rollup decisions below compare against Module.firmware_convergence; a
+    # concurrent record_error/status transaction may have advanced it since this
+    # ``module`` object was read, so refresh the denormalized field from the DB
+    # to avoid a stale-value no-op that would leave the rollup out of sync.
+    module.refresh_from_db(fields=["firmware_convergence"])
+
     desired = desired_release_for_module(module)
     if desired is None:
         # No target/variant match => no drift. Keep unknown unless we already
@@ -122,6 +128,11 @@ def reconcile_module(module):
     cs, _created = ModuleFirmwareConvergenceState.objects.get_or_create(
         module=module, target_release=desired
     )
+    # Re-read the row under a row lock before deciding/saving state. Without this
+    # a heartbeat-driven reconcile can read a stale ``updating`` while a
+    # concurrent status endpoint locks + quarantines, then this transaction would
+    # resurrect the quarantined instruction by saving its stale state.
+    cs = ModuleFirmwareConvergenceState.objects.select_for_update().get(pk=cs.pk)
 
     # A quarantined row for the still-current target stays quarantined — never
     # auto-reactivated. A fix is a NEW target release => a different row.

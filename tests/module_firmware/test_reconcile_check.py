@@ -1,5 +1,6 @@
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.module_firmware.models import (
     Module,
@@ -101,7 +102,9 @@ def test_check_skips_quarantined(client, station_with_key, fm):
 
 @pytest.mark.django_db
 def test_check_prefers_midflight_updating(client, station_with_key, fm):
-    # Review Focus #4: two drifted modules; the one already updating wins (resume).
+    # Review Focus #4 / F1: two drifted modules; the one the agent has actually
+    # started flashing (last_attempt_at set) wins as a resume, even though it is
+    # in a higher slot and would otherwise come second.
     station, priv = station_with_key
     ModuleFirmwareTarget.objects.create(
         module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
@@ -109,9 +112,13 @@ def test_check_prefers_midflight_updating(client, station_with_key, fm):
     rel = _release(fm)
     _drifted_module(fm, station, uid="U0", slot="slot0")
     m1 = _drifted_module(fm, station, uid="U1", slot="slot1")
-    # m1 (higher slot, normally after m0) already has an updating row.
+    # m1 (higher slot, normally after m0) already has a mid-flight row: a
+    # mid-flight row has had >=1 status POST, so last_attempt_at is stamped.
     ModuleFirmwareConvergenceState.objects.create(
-        module=m1, target_release=rel, state=ModuleFirmwareConvergenceState.State.UPDATING
+        module=m1,
+        target_release=rel,
+        state=ModuleFirmwareConvergenceState.State.UPDATING,
+        last_attempt_at=timezone.now(),
     )
     resp = client.post(
         reverse("module_firmware_api:reconcile_check"),
@@ -121,6 +128,35 @@ def test_check_prefers_midflight_updating(client, station_with_key, fm):
     )
     assert resp.status_code == 200
     assert resp.json()["module_uid"] == "U1"
+
+
+@pytest.mark.django_db
+def test_check_fresh_drift_not_preferred_over_slot_order(client, station_with_key, fm):
+    # F1: a drifted row that the agent has NOT started (last_attempt_at is None,
+    # as heartbeat ingestion creates for EVERY drifted module) must not be
+    # treated as a resume — selection falls back to slot order (U0 first).
+    station, priv = station_with_key
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
+    )
+    rel = _release(fm)
+    _drifted_module(fm, station, uid="U0", slot="slot0")
+    m1 = _drifted_module(fm, station, uid="U1", slot="slot1")
+    # m1 has a pre-existing updating row but no attempt yet (fresh drift).
+    ModuleFirmwareConvergenceState.objects.create(
+        module=m1,
+        target_release=rel,
+        state=ModuleFirmwareConvergenceState.State.UPDATING,
+        last_attempt_at=None,
+    )
+    resp = client.post(
+        reverse("module_firmware_api:reconcile_check"),
+        data="{}",
+        content_type="application/json",
+        **device_auth_headers(priv, station.pk, b"{}"),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["module_uid"] == "U0"
 
 
 @pytest.mark.django_db
