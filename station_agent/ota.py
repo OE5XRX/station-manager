@@ -20,6 +20,12 @@ from .inventory import get_current_version
 logger = logging.getLogger(__name__)
 
 _STREAM_CHUNK = 1 << 20  # 1 MiB
+# Flush the page cache to the device every _SYNC_INTERVAL bytes during a
+# slot write. Bounds dirty pages so a multi-GB write can't build a huge
+# writeback backlog (which spikes I/O and stalls other tasks), and lets us
+# drop the now-clean pages (POSIX_FADV_DONTNEED) so a 2 GB image doesn't
+# thrash the page cache. See install_to_slot for why we do NOT use O_SYNC.
+_SYNC_INTERVAL = 64 << 20  # 64 MiB
 
 
 def _stream_read(fh, n: int) -> bytes:
@@ -537,8 +543,17 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
     writing a partial image to a boot slot would silently brick the
     next boot, so fail loud.
     """
-    fd = os.open(partition_device, os.O_WRONLY | os.O_SYNC)
+    # Deliberately NOT O_SYNC. On the real CM4 the SD does ~5 MB/s and O_SYNC
+    # (a device sync on every 1 MiB write) dragged the ~2 GB rootfs write to
+    # 11-14 min while saturating the I/O bus, until systemd could no longer
+    # pet the 14s BCM2835 hardware watchdog (/dev/watchdog0) and the board
+    # reset mid-write — the A/B trial was never armed and it rebooted onto the
+    # old slot. Buffered writes let the kernel schedule the I/O fairly (PID1
+    # stays responsive); durability is guaranteed by the periodic fdatasync
+    # below plus the final fsync. QEMU never hit this (fast virtual disk).
+    fd = os.open(partition_device, os.O_WRONLY)
     try:
+        written_since_sync = 0
         with bz2.open(str(wic_bz2_path), "rb") as src:
             while True:
                 # Narrow the translation to the decompression read only.
@@ -562,6 +577,19 @@ def install_to_slot(wic_bz2_path, partition_device: str) -> None:
                 if not chunk:
                     break
                 _write_all(fd, chunk)
+                written_since_sync += len(chunk)
+                if written_since_sync >= _SYNC_INTERVAL:
+                    # Flush this batch to the device and drop the now-clean
+                    # pages, so dirty-page writeback stays bounded and the
+                    # page cache doesn't thrash across a multi-GB write.
+                    os.fdatasync(fd)
+                    try:
+                        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                    except (AttributeError, OSError):
+                        # fadvise is best-effort (missing on some platforms /
+                        # unsupported on the fd); durability is unaffected.
+                        pass
+                    written_since_sync = 0
         os.fsync(fd)
     finally:
         os.close(fd)
