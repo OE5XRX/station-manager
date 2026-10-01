@@ -2,10 +2,20 @@ import json
 from unittest.mock import patch
 
 import pytest
+from django.core.cache import cache
 from django.test import Client
 
 from apps.stations.models import StationTelemetry
 from tests.conftest import device_auth_headers
+
+
+@pytest.fixture(autouse=True)
+def _clear_throttle_cache():
+    # HeartbeatView has a ScopedRateThrottle (10/min) whose counter lives in the
+    # default cache; clear it per-test so throttle state doesn't bleed across the suite.
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.mark.django_db
