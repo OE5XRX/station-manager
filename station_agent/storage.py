@@ -56,8 +56,8 @@ def _root_block_device() -> str | None:
             # parent disk (strip pN partition suffix)
             disk = re.sub(r"p\d+$", "", name)
             # match either the partition or its disk device number
-            with open(dev_path) as f:
-                blk_major, blk_minor = (int(x) for x in f.read().strip().split(":"))
+            with open(dev_path, encoding="ascii") as f:
+                blk_major, _ = (int(x) for x in f.read().strip().split(":"))
             if blk_major == major:
                 return disk
     except OSError as exc:
@@ -68,7 +68,7 @@ def _root_block_device() -> str | None:
 def _device_kind(disk: str) -> str:
     """Classify an mmc disk as emmc/sd/unknown via /sys type."""
     try:
-        with open(f"/sys/class/block/{disk}/device/type") as f:
+        with open(f"/sys/class/block/{disk}/device/type", encoding="ascii") as f:
             t = f.read().strip().upper()
         if t == "MMC":
             return "emmc"
