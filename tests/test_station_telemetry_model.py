@@ -1,6 +1,6 @@
 import pytest
 
-from apps.stations.models import Station, StationTelemetry, StationAuditLog
+from apps.stations.models import Station, StationAuditLog, StationTelemetry
 
 
 @pytest.mark.django_db

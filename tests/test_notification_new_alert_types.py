@@ -16,7 +16,9 @@ def test_unexpected_reboot_alert_emails_station_admin(settings):
     mail.outbox = []
 
     admin = User.objects.create_user(
-        username="sa", email="sa@x", password="pw",
+        username="sa",
+        email="sa@x",
+        password="pw",
     )
     admin.membership_level = User.MembershipLevel.MEMBER
     admin.notify_channel = User.NotifyChannel.EMAIL

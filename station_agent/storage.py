@@ -45,7 +45,7 @@ def _root_block_device() -> str | None:
     """Resolve the mmc block device backing '/', e.g. 'mmcblk0'. None if not mmc."""
     try:
         st = os.stat("/")
-        major, minor = os.major(st.st_dev), os.minor(st.st_dev)
+        major, _ = os.major(st.st_dev), os.minor(st.st_dev)
         # Walk /sys/class/block to find the parent disk of the root partition.
         for name in os.listdir("/sys/class/block"):
             if not name.startswith("mmcblk"):
@@ -85,7 +85,9 @@ def _read_extcsd(disk: str) -> dict:
     try:
         proc = subprocess.run(
             ["mmc", "extcsd", "read", f"/dev/{disk}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if proc.returncode != 0:
             return {"life_time_a_pct": None, "life_time_b_pct": None, "pre_eol": "n/a"}
@@ -97,9 +99,7 @@ def _read_extcsd(disk: str) -> dict:
 
 def _read_dmesg() -> str:
     try:
-        proc = subprocess.run(
-            ["dmesg"], capture_output=True, text=True, timeout=10
-        )
+        proc = subprocess.run(["dmesg"], capture_output=True, text=True, timeout=10)
         return proc.stdout if proc.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""

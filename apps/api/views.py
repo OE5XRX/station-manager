@@ -121,6 +121,7 @@ class HeartbeatView(APIView):
         telemetry = serializer.validated_data.get("telemetry")
         if telemetry:
             from apps.stations.ingest import ingest_telemetry
+
             try:
                 ingest_telemetry(station, telemetry)
             except Exception:  # noqa: BLE001 - telemetry must not break heartbeat

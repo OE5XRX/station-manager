@@ -6,8 +6,10 @@ from station_agent import bootinfo
 
 
 def test_detect_boot_first_time_records_without_reboot_event(tmp_path):
-    with mock.patch.object(bootinfo, "read_boot_id", return_value="boot-A"), \
-         mock.patch.object(bootinfo, "_gather_evidence", return_value={}):
+    with (
+        mock.patch.object(bootinfo, "read_boot_id", return_value="boot-A"),
+        mock.patch.object(bootinfo, "_gather_evidence", return_value={}),
+    ):
         result = bootinfo.detect_boot(str(tmp_path))
     assert result["boot_id"] == "boot-A"
     assert result["boot_count"] == 1
@@ -30,9 +32,10 @@ def test_detect_boot_new_boot_id_increments_and_classifies(tmp_path):
     (tmp_path / "boot_state.json").write_text(
         json.dumps({"boot_id": "boot-A", "boot_count": 3, "reboot_reason": "clean"})
     )
-    with mock.patch.object(bootinfo, "read_boot_id", return_value="boot-B"), \
-         mock.patch.object(bootinfo, "_gather_evidence",
-                           return_value={"pstore_crash": True}):
+    with (
+        mock.patch.object(bootinfo, "read_boot_id", return_value="boot-B"),
+        mock.patch.object(bootinfo, "_gather_evidence", return_value={"pstore_crash": True}),
+    ):
         result = bootinfo.detect_boot(str(tmp_path))
     assert result["boot_id"] == "boot-B"
     assert result["boot_count"] == 4
@@ -40,19 +43,24 @@ def test_detect_boot_new_boot_id_increments_and_classifies(tmp_path):
 
 
 def test_detect_boot_unwritable_state_dir_degrades():
-    with mock.patch.object(bootinfo, "read_boot_id", return_value="boot-A"), \
-         mock.patch.object(bootinfo, "_gather_evidence", return_value={}), \
-         mock.patch("station_agent.bootinfo._load_state", side_effect=OSError), \
-         mock.patch("station_agent.bootinfo._save_state", side_effect=OSError):
+    with (
+        mock.patch.object(bootinfo, "read_boot_id", return_value="boot-A"),
+        mock.patch.object(bootinfo, "_gather_evidence", return_value={}),
+        mock.patch("station_agent.bootinfo._load_state", side_effect=OSError),
+        mock.patch("station_agent.bootinfo._save_state", side_effect=OSError),
+    ):
         result = bootinfo.detect_boot("/nonexistent/path")
     assert result["boot_count"] == 0
     assert result["reboot_reason"] == "unknown"
 
 
 def test_detect_boot_gather_evidence_raises_does_not_propagate(tmp_path):
-    with mock.patch.object(bootinfo, "read_boot_id", return_value="boot-B"), \
-         mock.patch.object(bootinfo, "_gather_evidence",
-                           side_effect=RuntimeError("throttle read blew up")):
+    with (
+        mock.patch.object(bootinfo, "read_boot_id", return_value="boot-B"),
+        mock.patch.object(
+            bootinfo, "_gather_evidence", side_effect=RuntimeError("throttle read blew up")
+        ),
+    ):
         result = bootinfo.detect_boot(str(tmp_path))
     # Did not raise; degraded evidence -> "unknown", but still a new boot.
     assert result["boot_id"] == "boot-B"

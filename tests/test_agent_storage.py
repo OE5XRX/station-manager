@@ -27,9 +27,7 @@ def test_parse_extcsd():
 
 
 def test_parse_extcsd_pre_eol_urgent():
-    result = storage.parse_extcsd(
-        "eMMC Pre EOL information [EXT_CSD_PRE_EOL_INFO]: 0x03\n"
-    )
+    result = storage.parse_extcsd("eMMC Pre EOL information [EXT_CSD_PRE_EOL_INFO]: 0x03\n")
     assert result["pre_eol"] == "urgent"
 
 

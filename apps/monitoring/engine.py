@@ -3,9 +3,8 @@
 import logging
 from datetime import timedelta
 
-from django.utils import timezone
-
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
 from apps.stations.models import Station, StationInventory
@@ -147,10 +146,7 @@ def _check_power_warning():
             station=tel.station,
             rule=rule,
             title=f"Power warning: {what}",
-            message=(
-                f"Station {tel.station.name}: {what} "
-                f"{'ongoing' if is_now else 'occurred'}."
-            ),
+            message=(f"Station {tel.station.name}: {what} {'ongoing' if is_now else 'occurred'}."),
             severity=severity,
         )
         new_alerts.append(alert)

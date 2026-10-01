@@ -102,6 +102,7 @@ def _bootloader_rollback(bootloader) -> bool:
     """Mirror the agent commit-protocol tuple: upgrade_available=0 & bootcount!=0."""
     try:
         from station_agent import bootloader as bl_mod
+
         ua = bl_mod.get_env(bootloader, "upgrade_available")
         bc = bl_mod.get_env(bootloader, "bootcount")
         return ua == "0" and bc not in (None, "0")
@@ -123,6 +124,7 @@ def _dmesg_watchdog() -> bool:
 
 def _gather_evidence(bootloader, state_dir: str) -> dict:
     from station_agent import power
+
     throttle = power.read_throttle() or {}
     return {
         "pstore_crash": _pstore_has_crash(),

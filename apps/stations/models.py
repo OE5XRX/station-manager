@@ -461,9 +461,7 @@ class StationInventory(models.Model):
 class StationTelemetry(models.Model):
     """Latest telemetry snapshot reported by the agent (one per station)."""
 
-    station = models.OneToOneField(
-        Station, on_delete=models.CASCADE, related_name="telemetry"
-    )
+    station = models.OneToOneField(Station, on_delete=models.CASCADE, related_name="telemetry")
     data = models.JSONField(default=dict, blank=True)
     # boot
     boot_id = models.CharField(max_length=64, blank=True)

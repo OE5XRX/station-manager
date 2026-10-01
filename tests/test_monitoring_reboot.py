@@ -1,11 +1,12 @@
 """Tests for _check_unexpected_reboot (Task 13)."""
 
-import pytest
 from datetime import timedelta
+
+import pytest
 from django.utils import timezone
 
 from apps.monitoring.engine import _check_unexpected_reboot
-from apps.monitoring.models import Alert, AlertRule
+from apps.monitoring.models import AlertRule
 from apps.stations.models import Station, StationTelemetry
 
 

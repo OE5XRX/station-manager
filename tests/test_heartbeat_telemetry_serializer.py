@@ -1,7 +1,6 @@
 from apps.api.serializers import HeartbeatSerializer
 
-BASE = dict(hostname="h", os_version="o", uptime=1.0,
-            module_versions={}, ip_address="10.0.0.1")
+BASE = dict(hostname="h", os_version="o", uptime=1.0, module_versions={}, ip_address="10.0.0.1")
 
 
 def test_serializer_accepts_telemetry():

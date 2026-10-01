@@ -29,7 +29,9 @@ def read_throttle() -> dict | None:
     try:
         proc = subprocess.run(
             ["vcgencmd", "get_throttled"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if proc.returncode != 0:
             return None

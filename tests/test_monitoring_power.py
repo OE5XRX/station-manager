@@ -1,7 +1,6 @@
 """Tests for _check_power_warning (Task 14)."""
 
 import pytest
-from django.utils import timezone
 
 from apps.monitoring.engine import _check_power_warning
 from apps.monitoring.models import Alert, AlertRule

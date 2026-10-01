@@ -28,10 +28,12 @@ def test_read_throttle_absent_binary_returns_none():
 
 
 def test_read_throttle_parses_vcgencmd_output():
-    with mock.patch("shutil.which", return_value="/usr/bin/vcgencmd"), \
-         mock.patch("subprocess.run") as run:
+    with (
+        mock.patch("shutil.which", return_value="/usr/bin/vcgencmd"),
+        mock.patch("subprocess.run") as run,
+    ):
         run.return_value = mock.Mock(returncode=0, stdout="throttled=0x50005\n")
         result = power.read_throttle()
     assert result["throttled_hex"] == "0x50005"
-    assert result["undervoltage_now"] is True       # 0x5...=bit0
+    assert result["undervoltage_now"] is True  # 0x5...=bit0
     assert result["undervoltage_occurred"] is True  # 0x5....=bit16

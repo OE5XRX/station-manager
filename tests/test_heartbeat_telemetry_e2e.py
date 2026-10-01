@@ -22,15 +22,21 @@ def _clear_throttle_cache():
 def test_heartbeat_persists_telemetry(station_with_key):
     station, private_key = station_with_key
     body = {
-        "hostname": "h", "os_version": "o", "uptime": 5.0,
-        "module_versions": {}, "ip_address": "10.0.0.2",
-        "telemetry": {"boot": {"boot_id": "x1", "boot_count": 1, "reboot_reason": "clean"},
-                      "slot": {"active_slot": "a", "image_version": "v2"}},
+        "hostname": "h",
+        "os_version": "o",
+        "uptime": 5.0,
+        "module_versions": {},
+        "ip_address": "10.0.0.2",
+        "telemetry": {
+            "boot": {"boot_id": "x1", "boot_count": 1, "reboot_reason": "clean"},
+            "slot": {"active_slot": "a", "image_version": "v2"},
+        },
     }
     body_bytes = json.dumps(body).encode()
     headers = device_auth_headers(private_key, station.id, body_bytes)
-    resp = Client().post("/api/v1/heartbeat/", data=body_bytes,
-                         content_type="application/json", **headers)
+    resp = Client().post(
+        "/api/v1/heartbeat/", data=body_bytes, content_type="application/json", **headers
+    )
     assert resp.status_code == 200
     tel = StationTelemetry.objects.get(station=station)
     assert tel.boot_id == "x1"
@@ -47,8 +53,11 @@ def test_heartbeat_telemetry_ingest_raises_still_200(station_with_key):
     """
     station, private_key = station_with_key
     body = {
-        "hostname": "h", "os_version": "o", "uptime": 5.0,
-        "module_versions": {}, "ip_address": "10.0.0.2",
+        "hostname": "h",
+        "os_version": "o",
+        "uptime": 5.0,
+        "module_versions": {},
+        "ip_address": "10.0.0.2",
         "telemetry": {"boot": {"boot_id": "x1", "boot_count": 1, "reboot_reason": "clean"}},
     }
     body_bytes = json.dumps(body).encode()
@@ -57,8 +66,9 @@ def test_heartbeat_telemetry_ingest_raises_still_200(station_with_key):
         "apps.stations.ingest.ingest_telemetry",
         side_effect=RuntimeError("boom"),
     ) as mock_ingest:
-        resp = Client().post("/api/v1/heartbeat/", data=body_bytes,
-                             content_type="application/json", **headers)
+        resp = Client().post(
+            "/api/v1/heartbeat/", data=body_bytes, content_type="application/json", **headers
+        )
     assert mock_ingest.called
     assert resp.status_code == 200
     # The 200 did not depend on telemetry being persisted.
@@ -68,11 +78,17 @@ def test_heartbeat_telemetry_ingest_raises_still_200(station_with_key):
 @pytest.mark.django_db
 def test_heartbeat_malformed_telemetry_still_200(station_with_key):
     station, private_key = station_with_key
-    body = {"hostname": "h", "os_version": "o", "uptime": 5.0,
-            "module_versions": {}, "ip_address": "10.0.0.2",
-            "telemetry": {"boot": "garbage"}}
+    body = {
+        "hostname": "h",
+        "os_version": "o",
+        "uptime": 5.0,
+        "module_versions": {},
+        "ip_address": "10.0.0.2",
+        "telemetry": {"boot": "garbage"},
+    }
     body_bytes = json.dumps(body).encode()
     headers = device_auth_headers(private_key, station.id, body_bytes)
-    resp = Client().post("/api/v1/heartbeat/", data=body_bytes,
-                         content_type="application/json", **headers)
+    resp = Client().post(
+        "/api/v1/heartbeat/", data=body_bytes, content_type="application/json", **headers
+    )
     assert resp.status_code == 200

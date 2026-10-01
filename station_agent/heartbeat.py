@@ -78,6 +78,7 @@ def get_module_versions() -> dict:
 
 def _collect_telemetry_safe(config):
     from station_agent import telemetry
+
     try:
         return telemetry.collect_telemetry(config)
     except Exception:  # noqa: BLE001
