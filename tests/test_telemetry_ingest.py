@@ -114,3 +114,33 @@ def test_ingest_same_boot_omitted_reason_keeps_existing():
     tel = ingest_telemetry(station, {"boot": {"boot_id": "b1", "boot_count": 1}})
     # Same boot — reason should be preserved from prior ingest
     assert tel.last_reboot_reason == "crash"
+
+
+# M2: alerted_io_error_count must reset to 0 on boot_id transition
+@pytest.mark.django_db
+def test_ingest_reboot_resets_alerted_io_error_count():
+    """M2: after a reboot (boot_id change), alerted_io_error_count resets to 0
+    so fresh I/O errors in the new boot are not suppressed by the prior baseline.
+    """
+    station = Station.objects.create(name="OE5A")
+    # First boot: 3 I/O errors occurred and were alerted
+    tel = ingest_telemetry(
+        station,
+        {
+            "boot": {"boot_id": "b1", "boot_count": 1, "reboot_reason": "clean"},
+            "storage": {"devices": [{"name": "mmcblk0", "kind": "emmc", "io_error_count": 3}]},
+        },
+    )
+    tel.alerted_io_error_count = 3
+    tel.save(update_fields=["alerted_io_error_count"])
+
+    # New boot arrives
+    tel2 = ingest_telemetry(
+        station,
+        {
+            "boot": {"boot_id": "b2", "boot_count": 2, "reboot_reason": "clean"},
+        },
+    )
+    assert tel2.alerted_io_error_count == 0, (
+        "alerted_io_error_count must reset to 0 on reboot so fresh errors are not suppressed"
+    )

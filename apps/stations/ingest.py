@@ -85,6 +85,10 @@ def ingest_telemetry(station, telemetry):
 
     if reboot_detected:
         tel.last_reboot_at = timezone.now()
+        # M2: the dmesg ring buffer resets at reboot, so prior I/O error counts no
+        # longer reflect the new boot's device state.  Reset the baseline so
+        # fresh errors in the new boot are not suppressed by a stale prior value.
+        tel.alerted_io_error_count = 0
 
     tel.save()
 

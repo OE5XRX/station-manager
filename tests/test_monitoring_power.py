@@ -197,6 +197,7 @@ def test_power_new_boot_resets_episode(power_rule):
     assert _check_power_warning() == []
 
     # New boot with a fresh brownout event.
+    tel.refresh_from_db()
     tel.boot_id = "b2"
     tel.undervoltage_occurred = True
     tel.undervoltage_now = False
@@ -206,3 +207,61 @@ def test_power_new_boot_resets_episode(power_rule):
     alerts = _check_power_warning()
     assert len(alerts) == 1
     assert AlertModel.objects.filter(station=station).count() == 2
+
+
+# H1 regression: after a transient warning (occurred-not-now) fires and resolves in the same
+# boot, a subsequent is_now sample must still create a CRITICAL (must not be suppressed).
+@pytest.mark.django_db
+def test_power_live_critical_not_suppressed_after_transient_warning(power_rule):
+    """H1: episode gate must NOT suppress a live CRITICAL in the same boot.
+
+    Sequence:
+      cycle 1 — occurred=True, now=False  → WARNING created, boot_id recorded, then resolved
+      cycle 2 — occurred=True, now=True   → CRITICAL must be created despite same boot_id
+    """
+    from apps.monitoring.models import Alert as AlertModel
+
+    station = Station.objects.create(name="OE5A")
+    tel = StationTelemetry.objects.create(
+        station=station,
+        boot_id="b1",
+        undervoltage_occurred=True,
+        undervoltage_now=False,
+        throttled_now=False,
+    )
+
+    # Cycle 1: transient warning fires (one alert created, then auto-resolved because now=False)
+    alerts1 = _check_power_warning()
+    assert len(alerts1) == 1
+    assert alerts1[0].severity == Alert.Severity.WARNING
+    assert not AlertModel.objects.filter(station=station, is_resolved=False).exists()
+
+    # Refresh from DB so the episode gate set by cycle-1 is not clobbered by a stale save.
+    tel.refresh_from_db()
+    # Same boot, now the live bit fires — must create a CRITICAL (not suppressed by gate)
+    tel.undervoltage_now = True
+    tel.save()
+
+    alerts2 = _check_power_warning()
+    assert len(alerts2) == 1
+    assert alerts2[0].severity == Alert.Severity.CRITICAL
+    assert AlertModel.objects.filter(station=station, is_resolved=False).exists()
+
+
+# H1: blank boot_id ("") must not skip the first alert
+@pytest.mark.django_db
+def test_power_blank_boot_id_fires_first_alert(power_rule):
+    """H1: blank boot_id must not collide with the default power_alerted_boot_id=""
+    and silently suppress the very first alert.
+    """
+    station = Station.objects.create(name="OE5A")
+    StationTelemetry.objects.create(
+        station=station,
+        boot_id="",  # blank — no boot block
+        undervoltage_occurred=True,
+        undervoltage_now=False,
+        throttled_now=False,
+    )
+    alerts = _check_power_warning()
+    assert len(alerts) == 1
+    assert alerts[0].severity == Alert.Severity.WARNING
