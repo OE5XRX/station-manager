@@ -15,6 +15,9 @@ class AlertRule(models.Model):
         DISK_CRITICAL = "disk_critical", _("Disk Critical")
         RAM_CRITICAL = "ram_critical", _("RAM Critical")
         OTA_FAILED = "ota_failed", _("OTA Failed")
+        UNEXPECTED_REBOOT = "unexpected_reboot", _("Unexpected Reboot")
+        POWER_WARNING = "power_warning", _("Power Warning")
+        STORAGE_HEALTH = "storage_health", _("Storage Health")
 
     class Severity(models.TextChoices):
         WARNING = "warning", _("Warning")

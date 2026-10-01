@@ -3,6 +3,7 @@
 import logging
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
@@ -46,12 +47,16 @@ def _has_unresolved_alert(station, alert_type):
     ).exists()
 
 
-def _create_alert(station, rule, title, message):
-    """Create an alert and return it."""
+def _create_alert(station, rule, title, message, severity=None):
+    """Create an alert and return it.
+
+    severity: override the rule's default severity (Alert.Severity value).
+    When None (the default), rule.severity is used.
+    """
     alert = Alert.objects.create(
         station=station,
         alert_rule=rule,
-        severity=rule.severity,
+        severity=severity if severity is not None else rule.severity,
         title=title,
         message=message,
     )
@@ -77,6 +82,192 @@ def _auto_resolve(alert_type, station=None):
             f" for station {station.name}" if station else "",
         )
     return count
+
+
+REBOOT_CHECK_WINDOW = timedelta(minutes=10)
+UNEXPECTED_REBOOT_REASONS = {"crash", "watchdog", "undervoltage", "unknown"}
+
+
+def _check_unexpected_reboot():
+    """Alert on reboots whose reason is not clean/ota_rollback (event alert, per-reboot dedup)."""
+    from apps.stations.models import StationTelemetry
+
+    rule = _get_active_rule(AlertRule.AlertType.UNEXPECTED_REBOOT)
+    if rule is None:
+        return []
+
+    window_start = timezone.now() - REBOOT_CHECK_WINDOW
+    new_alerts = []
+    qs = StationTelemetry.objects.select_related("station").filter(
+        last_reboot_at__isnull=False,
+        last_reboot_at__gte=window_start,
+        last_reboot_reason__in=UNEXPECTED_REBOOT_REASONS,
+    )
+    for tel in qs:
+        already = Alert.objects.filter(
+            station=tel.station,
+            alert_rule__alert_type=AlertRule.AlertType.UNEXPECTED_REBOOT,
+            created_at__gte=tel.last_reboot_at,
+        ).exists()
+        if already:
+            continue
+        alert = _create_alert(
+            station=tel.station,
+            rule=rule,
+            title=f"Unexpected reboot: {tel.last_reboot_reason}",
+            message=(
+                f"Station {tel.station.name} rebooted unexpectedly "
+                f"(reason: {tel.last_reboot_reason}, boot #{tel.boot_count})."
+            ),
+        )
+        new_alerts.append(alert)
+    return new_alerts
+
+
+def _check_power_warning():
+    """Alert on undervoltage/throttling with per-episode creation + now-based resolution.
+
+    H1 algorithm:
+      - is_now=True  → live incident; ALWAYS create/escalate CRITICAL (never gated by episode).
+      - is_now=False, occurred=True → transient event; warn ONCE per boot episode.
+        episode_key = boot_id or "∅" avoids the blank-boot-id collision with the default "".
+
+    M4: escalate an existing unresolved WARNING to CRITICAL when a *_now bit fires.
+    M5: auto-resolve when both *_now bits are false (occurred stays sticky, so
+        current conditions govern whether the alert remains active). A resolved
+        alert is NOT recreated for the same boot (creation gate); a new boot_id
+        resets the episode so a genuinely fresh event alerts again.
+    """
+    from apps.stations.models import StationTelemetry
+
+    rule = _get_active_rule(AlertRule.AlertType.POWER_WARNING)
+    if rule is None:
+        return []
+
+    new_alerts = []
+    qs = StationTelemetry.objects.select_related("station").filter(
+        Q(undervoltage_occurred=True) | Q(throttled_occurred=True)
+    )
+    for tel in qs:
+        is_now = bool(tel.undervoltage_now) or bool(tel.throttled_now)
+        occurred = bool(tel.undervoltage_occurred) or bool(tel.throttled_occurred)
+        if not occurred:
+            continue
+        what = "Undervoltage" if tel.undervoltage_occurred else "Throttling"
+
+        existing = Alert.objects.filter(
+            station=tel.station,
+            alert_rule__alert_type=AlertRule.AlertType.POWER_WARNING,
+            is_resolved=False,
+        ).first()
+
+        if is_now:
+            # H1: live incident — ALWAYS ensure a CRITICAL alert (never gated by episode).
+            if existing is None:
+                alert = _create_alert(
+                    station=tel.station,
+                    rule=rule,
+                    title=f"Power warning: {what}",
+                    message=f"Station {tel.station.name}: {what} ongoing.",
+                    severity=Alert.Severity.CRITICAL,
+                )
+                new_alerts.append(alert)
+            elif existing.severity == Alert.Severity.WARNING:
+                # M4: escalate an existing unresolved WARNING to CRITICAL.
+                existing.severity = Alert.Severity.CRITICAL
+                existing.title = f"Power warning: {what}"
+                existing.message = (
+                    f"Station {tel.station.name}: {what} ongoing (escalated to critical)."
+                )
+                existing.save(update_fields=["severity", "title", "message"])
+                logger.info("Escalated power alert to CRITICAL for station %s", tel.station.name)
+                new_alerts.append(existing)
+            # else: already-unresolved CRITICAL → dedup, no action.
+        else:
+            # Transient event (occurred but not now) — warn ONCE per boot episode.
+            # Use "∅" sentinel so a blank boot_id ("") doesn't collide with the
+            # default field value of "" and suppress the very first alert.
+            episode_key = tel.boot_id or "∅"
+            if existing is None and tel.power_alerted_boot_id != episode_key:
+                alert = _create_alert(
+                    station=tel.station,
+                    rule=rule,
+                    title=f"Power warning: {what}",
+                    message=f"Station {tel.station.name}: {what} occurred.",
+                    severity=Alert.Severity.WARNING,
+                )
+                tel.power_alerted_boot_id = episode_key
+                tel.save(update_fields=["power_alerted_boot_id"])
+                new_alerts.append(alert)
+
+    # M5: auto-resolve power alerts for stations where both *_now bits are false
+    # (regardless of occurred — occurred bits are sticky until reboot).
+    cleared_ids = list(
+        StationTelemetry.objects.filter(
+            undervoltage_now=False,
+            throttled_now=False,
+        ).values_list("station_id", flat=True)
+    )
+    if cleared_ids:
+        now = timezone.now()
+        Alert.objects.filter(
+            alert_rule__alert_type=AlertRule.AlertType.POWER_WARNING,
+            is_resolved=False,
+            station_id__in=cleared_ids,
+        ).update(is_resolved=True, resolved_at=now)
+
+    return new_alerts
+
+
+def _check_storage_health():
+    """Alert on eMMC/SD wear (pre-eol / life-time) or I/O errors.
+
+    M6: io_error_count is cumulative (dmesg counter, persists until reboot).
+    After an operator resolves a storage alert, we must not immediately
+    re-alert because io_error_count is still non-zero.  We track
+    alerted_io_error_count on the telemetry row and only (re)alert on an
+    increase — wear/pre-eol alerts are monotonic and retain the old behaviour.
+    """
+    from apps.stations.models import StationTelemetry
+
+    rule = _get_active_rule(AlertRule.AlertType.STORAGE_HEALTH)
+    if rule is None:
+        return []
+
+    new_alerts = []
+    for tel in StationTelemetry.objects.select_related("station"):
+        urgent = tel.worst_pre_eol == "urgent"
+        warning = tel.worst_pre_eol == "warning"
+        high_wear = (tel.worst_life_time_pct or 0) >= rule.threshold
+        current_io = tel.io_error_count or 0
+        # M6: only fire/re-fire when the count has increased past the last-alerted baseline.
+        io_errors = current_io > (tel.alerted_io_error_count or 0)
+        if not (urgent or warning or high_wear or io_errors):
+            continue
+        if _has_unresolved_alert(tel.station, AlertRule.AlertType.STORAGE_HEALTH):
+            continue
+        severity = Alert.Severity.CRITICAL if (urgent or high_wear) else Alert.Severity.WARNING
+        reasons = []
+        if urgent or warning:
+            reasons.append(f"PRE_EOL={tel.worst_pre_eol}")
+        if high_wear:
+            reasons.append(f"life={tel.worst_life_time_pct}%")
+        if io_errors:
+            reasons.append(f"{current_io} I/O errors")
+        alert = _create_alert(
+            station=tel.station,
+            rule=rule,
+            title="Storage health warning",
+            message=f"Station {tel.station.name}: {', '.join(reasons)}.",
+            severity=severity,
+        )
+        # M6: record the count that triggered this alert so we don't re-alert
+        # on the same value after an operator resolves it.
+        if io_errors:
+            tel.alerted_io_error_count = current_io
+            tel.save(update_fields=["alerted_io_error_count"])
+        new_alerts.append(alert)
+    return new_alerts
 
 
 def _check_station_offline():
@@ -277,6 +468,9 @@ def check_alerts():
     new_alerts.extend(_check_disk_usage())
     new_alerts.extend(_check_ram_usage())
     new_alerts.extend(_check_ota_failed())
+    new_alerts.extend(_check_unexpected_reboot())
+    new_alerts.extend(_check_power_warning())
+    new_alerts.extend(_check_storage_health())
 
     if new_alerts:
         logger.info("Alert check complete: %d new alert(s) created.", len(new_alerts))

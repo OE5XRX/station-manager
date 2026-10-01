@@ -93,6 +93,7 @@
       <button type="button" class="tab" data-tab="photos" aria-selected="false">{% trans "Photos" %} <span class="count">{{ station.photos.count }}</span></button>
       <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
+      <button type="button" class="tab" data-tab="telemetry" aria-selected="false">{% trans "Telemetry" %}</button>
       <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
       {% if user.is_admin %}
       <button type="button" class="tab" data-tab="terminal" aria-selected="false">{% trans "Terminal" %}</button>
@@ -341,6 +342,121 @@
         {% endif %}
       </div>
     </section>
+  </div>
+
+  <div data-tab-panel="telemetry" hidden>
+    {% comment %} Telemetry: boot/power/slot/storage reported by the agent {% endcomment %}
+    {% with tel=station.telemetry %}
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Agent Telemetry" %}</div>
+        {% if tel %}<span class="t-label">{% trans "Updated" %} {{ tel.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+      </div>
+      <div class="panel-body">
+        {% if tel %}
+        <div class="grid grid-cols-3">
+
+          <div class="panel" style="background:var(--bg-0);">
+            <div class="panel-head"><div class="panel-title" style="font-size:12px;">{% trans "Boot" %}</div></div>
+            <div class="panel-body">
+              <dl class="dlist" style="grid-template-columns: 140px 1fr;">
+                <dt>{% trans "Boot count" %}</dt><dd class="t-mono">{{ tel.boot_count }}</dd>
+                <dt>{% trans "Uptime" %}</dt>
+                <dd class="t-mono">{% if tel.uptime_seconds %}{{ tel.uptime_seconds|floatformat:0 }} s{% else %}—{% endif %}</dd>
+                <dt>{% trans "Last reboot" %}</dt>
+                <dd>
+                  {% if tel.last_reboot_reason %}
+                    {% if tel.last_reboot_reason == "clean" %}
+                      <span style="color:var(--green);">{{ tel.last_reboot_reason }}</span>
+                    {% elif tel.last_reboot_reason == "crash" or tel.last_reboot_reason == "watchdog" %}
+                      <span style="color:var(--red);">{{ tel.last_reboot_reason }}</span>
+                    {% elif tel.last_reboot_reason == "ota_rollback" or tel.last_reboot_reason == "undervoltage" %}
+                      <span style="color:var(--yellow);">{{ tel.last_reboot_reason }}</span>
+                    {% else %}
+                      <span class="t-muted">{{ tel.last_reboot_reason }}</span>
+                    {% endif %}
+                    {% if tel.last_reboot_at %}
+                      <span class="t-mono-sm t-muted">{{ tel.last_reboot_at|timesince }} {% trans "ago" %}</span>
+                    {% endif %}
+                  {% else %}—{% endif %}
+                </dd>
+              </dl>
+            </div>
+          </div>
+
+          <div class="panel" style="background:var(--bg-0);">
+            <div class="panel-head"><div class="panel-title" style="font-size:12px;">{% trans "Slot / Image" %}</div></div>
+            <div class="panel-body">
+              <dl class="dlist" style="grid-template-columns: 140px 1fr;">
+                <dt>{% trans "Active slot" %}</dt><dd class="t-mono">{{ tel.active_slot|default:"—" }}</dd>
+                <dt>{% trans "Image version" %}</dt><dd class="t-mono">{{ tel.image_version|default:"—" }}</dd>
+                <dt>{% trans "Last OTA result" %}</dt><dd class="t-mono">{{ tel.last_ota_result|default:"—" }}</dd>
+              </dl>
+            </div>
+          </div>
+
+          <div class="panel" style="background:var(--bg-0);">
+            <div class="panel-head"><div class="panel-title" style="font-size:12px;">{% trans "Power / Storage" %}</div></div>
+            <div class="panel-body">
+              <dl class="dlist" style="grid-template-columns: 140px 1fr;">
+                <dt>{% trans "Undervoltage" %}</dt>
+                <dd>
+                  {% if tel.data.power %}
+                    {% if tel.undervoltage_now %}
+                      <span style="color:var(--red);">{% trans "now" %}</span>
+                    {% elif tel.undervoltage_occurred %}
+                      <span style="color:var(--yellow);">{% trans "occurred" %}</span>
+                    {% else %}
+                      <span class="t-muted">{% trans "ok" %}</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="t-muted">{% trans "not reported" %}</span>
+                  {% endif %}
+                </dd>
+                <dt>{% trans "Throttled" %}</dt>
+                <dd>
+                  {% if tel.data.power %}
+                    {% if tel.throttled_now %}
+                      <span style="color:var(--red);">{% trans "now" %}</span>
+                    {% elif tel.throttled_occurred %}
+                      <span style="color:var(--yellow);">{% trans "occurred" %}</span>
+                    {% else %}
+                      <span class="t-muted">{% trans "ok" %}</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="t-muted">{% trans "not reported" %}</span>
+                  {% endif %}
+                </dd>
+                <dt>{% trans "Storage wear" %}</dt>
+                <dd class="t-mono">
+                  {% if tel.data.storage %}
+                    {% if tel.worst_life_time_pct is not None %}{{ tel.worst_life_time_pct }}%{% else %}—{% endif %}
+                    {% if tel.worst_pre_eol and tel.worst_pre_eol != "normal" and tel.worst_pre_eol != "n/a" %}
+                      <span style="color:var(--yellow);">{{ tel.worst_pre_eol }}</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="t-muted">{% trans "not reported" %}</span>
+                  {% endif %}
+                </dd>
+                <dt>{% trans "I/O errors" %}</dt>
+                <dd class="t-mono">
+                  {% if tel.data.storage %}{{ tel.io_error_count }}{% else %}<span class="t-muted">{% trans "not reported" %}</span>{% endif %}
+                </dd>
+              </dl>
+            </div>
+          </div>
+
+        </div>
+        {% else %}
+        <div class="empty">
+          <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div>
+          <div class="empty-title">{% trans "No telemetry data received yet" %}</div>
+          <div>{% trans "Telemetry is reported by the agent on each heartbeat." %}</div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+    {% endwith %}
   </div>
 
   <div data-tab-panel="audit" hidden>

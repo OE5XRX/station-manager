@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 
+from .bootinfo import mark_pending_upgrade
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
 from .http_client import HttpClient
 from .inventory import get_current_version
@@ -480,6 +481,17 @@ def apply_update(config, firmware_path: str) -> bool:
     if not set_upgrade_pending(bl, target_slot):
         logger.error("Failed to set bootloader to trial-boot slot %s", target_slot)
         return False
+
+    # H2: write a marker so detect_boot knows a trial boot was deliberately
+    # armed.  Without it, _bootloader_rollback can't distinguish an ordinary
+    # reboot-after-commit from a real bootloader rollback (both show
+    # upgrade_available="0").  Failure is non-fatal — marker absent means
+    # ota_rollback detection simply degrades to never firing (acceptable).
+    try:
+        state_dir = config.state_dir
+        mark_pending_upgrade(state_dir, target_slot)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not write pending-upgrade marker: %s", exc)
 
     logger.info("Update applied to slot %s — reboot to activate", target_slot)
     return True

@@ -118,6 +118,15 @@ class HeartbeatView(APIView):
                 defaults={"data": inventory_data},
             )
 
+        telemetry = serializer.validated_data.get("telemetry")
+        if telemetry:
+            from apps.stations.ingest import ingest_telemetry
+
+            try:
+                ingest_telemetry(station, telemetry)
+            except Exception:  # noqa: BLE001 - telemetry must not break heartbeat
+                logger.exception("telemetry ingest failed for station %s", station.pk)
+
         # Broadcast updated status to WebSocket clients.
         try:
             from apps.stations.consumers import broadcast_station_status

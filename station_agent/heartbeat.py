@@ -76,6 +76,16 @@ def get_module_versions() -> dict:
     return {}
 
 
+def _collect_telemetry_safe(config):
+    from station_agent import telemetry
+
+    try:
+        return telemetry.collect_telemetry(config)
+    except Exception:  # noqa: BLE001
+        logger.debug("telemetry collection failed; sending empty telemetry")
+        return {}
+
+
 def collect_system_info(config=None) -> dict:
     """Collect all system information for the heartbeat payload.
 
@@ -92,6 +102,7 @@ def collect_system_info(config=None) -> dict:
         "image_variant": get_image_variant(),
         "module_versions": get_module_versions(),
         "inventory": collect_inventory(config=config),
+        "telemetry": _collect_telemetry_safe(config),
         "timestamp": time.time(),
     }
 

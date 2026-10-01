@@ -319,6 +319,7 @@ class StationAuditLog(models.Model):
         MODULE_FLASH_REJECTED = "module_flash_rejected", _("Module Flash Rejected")
         MODULE_FLASH_FAILED = "module_flash_failed", _("Module Flash Failed")
         MODULE_QUARANTINED = "module_quarantined", _("Module Quarantined")
+        REBOOT = "reboot", _("Reboot")
 
     station = models.ForeignKey(
         Station,
@@ -455,6 +456,45 @@ class StationInventory(models.Model):
 
     def __str__(self):
         return f"{self.station.name} - inventory"
+
+
+class StationTelemetry(models.Model):
+    """Latest telemetry snapshot reported by the agent (one per station)."""
+
+    station = models.OneToOneField(Station, on_delete=models.CASCADE, related_name="telemetry")
+    data = models.JSONField(default=dict, blank=True)
+    # boot
+    boot_id = models.CharField(max_length=64, blank=True)
+    boot_count = models.PositiveIntegerField(default=0)
+    last_reboot_reason = models.CharField(max_length=16, blank=True)
+    last_reboot_at = models.DateTimeField(null=True, blank=True)
+    uptime_seconds = models.FloatField(null=True, blank=True)
+    # power
+    undervoltage_now = models.BooleanField(null=True)
+    undervoltage_occurred = models.BooleanField(null=True)
+    throttled_now = models.BooleanField(null=True)
+    throttled_occurred = models.BooleanField(null=True)
+    # M4/M5 regression fix: the boot_id for which a power alert was last created.
+    # Creation is gated to once per boot episode so a sticky *_occurred bit (which
+    # stays True until reboot while *_now is False) can't re-fire an alert +
+    # notification every check_alerts cycle. A boot_id change resets the episode.
+    power_alerted_boot_id = models.CharField(max_length=64, blank=True, default="")
+    # slot / version / ota
+    active_slot = models.CharField(max_length=1, blank=True)
+    image_version = models.CharField(max_length=100, blank=True)
+    last_ota_result = models.CharField(max_length=16, blank=True)
+    # storage (worst-case summary across devices)
+    worst_life_time_pct = models.PositiveSmallIntegerField(null=True, blank=True)
+    worst_pre_eol = models.CharField(max_length=8, blank=True)
+    io_error_count = models.PositiveIntegerField(default=0)
+    # M6: baseline io_error_count at the time the last alert was raised; only
+    # re-alert when io_error_count exceeds this value (prevents infinite re-alert
+    # on a cumulative counter that stays non-zero after an operator resolves it).
+    alerted_io_error_count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Telemetry for {self.station}"
 
 
 class _ApplicantForbiddenMixin:

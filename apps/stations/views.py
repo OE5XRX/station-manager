@@ -96,7 +96,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("device_key", "inventory", "current_image_release")
+            .select_related("device_key", "inventory", "telemetry", "current_image_release")
             .prefetch_related("tags", "photos", "log_entries", "audit_logs")
         )
 

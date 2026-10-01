@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 
+from .bootinfo import write_last_ota_result
 from .bootloader import get_bootloader, get_env
 from .config import load_config
 from .health_check import run_health_checks
@@ -123,6 +124,16 @@ class StationAgent:
                     "failed",
                     error_message="Firmware download or checksum verification failed",
                 )
+                # M3: persist outcome at every terminal failure path.
+                try:
+                    write_last_ota_result(
+                        config.state_dir,
+                        "failed",
+                        detail="download or checksum verification failed",
+                        version=version,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("write_last_ota_result failed: %s", exc)
                 return
         else:
             # Resuming from INSTALLING means the download completed once
@@ -146,6 +157,16 @@ class StationAgent:
                         "failed",
                         error_message="Firmware re-download failed during INSTALLING resume",
                     )
+                    # M3: persist outcome at every terminal failure path.
+                    try:
+                        write_last_ota_result(
+                            config.state_dir,
+                            "failed",
+                            detail="re-download failed during INSTALLING resume",
+                            version=version,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("write_last_ota_result failed: %s", exc)
                     return
 
         # Report installing
@@ -166,6 +187,13 @@ class StationAgent:
                 "failed",
                 error_message=f"Install aborted: {exc}",
             )
+            # M3: persist outcome at every terminal failure path.
+            try:
+                write_last_ota_result(
+                    config.state_dir, "failed", detail=f"install aborted: {exc}", version=version
+                )
+            except Exception as exc2:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc2)
             return
         if not install_ok:
             report_status(
@@ -175,6 +203,16 @@ class StationAgent:
                 "failed",
                 error_message="Failed to write firmware to inactive partition",
             )
+            # M3: persist outcome at every terminal failure path.
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "failed",
+                    detail="failed to write firmware to inactive partition",
+                    version=version,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             return
 
         # Report rebooting first so the server knows the station is
@@ -221,6 +259,16 @@ class StationAgent:
                     + (f" — {stderr.strip()}" if stderr else "")
                 ),
             )
+            # M3: persist outcome at every terminal failure path.
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "failed",
+                    detail=f"reboot timed out after {exc.timeout}s",
+                    version=version,
+                )
+            except Exception as exc2:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc2)
             return
         except (OSError, subprocess.CalledProcessError) as exc:
             # No systemctl, permission denied, unit refused, etc. —
@@ -242,6 +290,16 @@ class StationAgent:
                     f"Reboot call failed: {exc}" + (f" — {stderr.strip()}" if stderr else "")
                 ),
             )
+            # M3: persist outcome at every terminal failure path.
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "failed",
+                    detail=f"reboot call failed: {exc}",
+                    version=version,
+                )
+            except Exception as exc2:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc2)
             return
 
         logger.info("Reboot queued — waiting for systemd shutdown signal")
@@ -265,6 +323,16 @@ class StationAgent:
                 "arrived within 5 minutes — reboot was likely inhibited."
             ),
         )
+        # M3: persist outcome at every terminal failure path.
+        try:
+            write_last_ota_result(
+                config.state_dir,
+                "failed",
+                detail="reboot queued but shutdown signal never arrived within 5 minutes",
+                version=version,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("write_last_ota_result failed: %s", exc)
 
     def _verify_and_commit(self, config, http_client, result_pk, version):
         """Run health checks and commit or roll back the update."""
@@ -292,6 +360,16 @@ class StationAgent:
                 ),
             )
             logger.warning("Refusing to commit deployment %s: running version unknown", result_pk)
+            # M13: persist outcome (additive, guarded).
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "rolled_back",
+                    detail="running version unknown",
+                    version=version,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             return
         if running_version != version:
             report_status(
@@ -308,6 +386,16 @@ class StationAgent:
                 running_version,
                 version,
             )
+            # M13: persist outcome (additive, guarded).
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "rolled_back",
+                    detail=f"running {running_version!r} expected {version!r}",
+                    version=version,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             return
 
         # Trial-flag guard: both oe5xrx-grub.cfg and boot.cmd clear
@@ -392,8 +480,23 @@ class StationAgent:
         if passed:
             if commit_boot(config, http_client, version):
                 logger.info("Update to version %s committed successfully", version)
+                # M13: persist outcome so slot telemetry can surface it.
+                try:
+                    write_last_ota_result(config.state_dir, "success", version=version)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("write_last_ota_result failed: %s", exc)
             else:
                 logger.error("Failed to commit boot for version %s", version)
+                # M3: persist outcome at every terminal failure path.
+                try:
+                    write_last_ota_result(
+                        config.state_dir,
+                        "failed",
+                        detail="commit_boot failed (server POST or local env write)",
+                        version=version,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("write_last_ota_result failed: %s", exc)
         else:
             error = "; ".join(m for m in messages if "FAIL" in m)
             report_status(
@@ -403,6 +506,13 @@ class StationAgent:
                 "rolled_back",
                 error_message=f"Health checks failed: {error}",
             )
+            # M13: persist outcome so slot telemetry can surface it.
+            try:
+                write_last_ota_result(
+                    config.state_dir, "rolled_back", detail=error, version=version
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             logger.warning("Update rolled back due to failed health checks")
 
     def run(self):
@@ -539,5 +649,11 @@ class StationAgent:
             audio_client.stop()
         if audio_thread is not None:
             audio_thread.join(timeout=5)
+
+        # Write clean-shutdown marker so the next boot can classify the
+        # reboot reason as "clean" rather than "unknown".
+        from station_agent import bootinfo
+
+        bootinfo.mark_clean_shutdown(config.state_dir)
 
         logger.info("Station Agent stopped")
