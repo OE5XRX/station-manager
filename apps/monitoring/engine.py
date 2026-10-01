@@ -175,6 +175,43 @@ def _check_power_warning():
     return new_alerts
 
 
+def _check_storage_health():
+    """Alert on eMMC/SD wear (pre-eol / life-time) or I/O errors."""
+    from apps.stations.models import StationTelemetry
+
+    rule = _get_active_rule(AlertRule.AlertType.STORAGE_HEALTH)
+    if rule is None:
+        return []
+
+    new_alerts = []
+    for tel in StationTelemetry.objects.select_related("station"):
+        urgent = tel.worst_pre_eol == "urgent"
+        warning = tel.worst_pre_eol == "warning"
+        high_wear = (tel.worst_life_time_pct or 0) >= rule.threshold
+        io_errors = (tel.io_error_count or 0) > 0
+        if not (urgent or warning or high_wear or io_errors):
+            continue
+        if _has_unresolved_alert(tel.station, AlertRule.AlertType.STORAGE_HEALTH):
+            continue
+        severity = Alert.Severity.CRITICAL if (urgent or high_wear) else Alert.Severity.WARNING
+        reasons = []
+        if urgent or warning:
+            reasons.append(f"PRE_EOL={tel.worst_pre_eol}")
+        if high_wear:
+            reasons.append(f"life={tel.worst_life_time_pct}%")
+        if io_errors:
+            reasons.append(f"{tel.io_error_count} I/O errors")
+        alert = _create_alert(
+            station=tel.station,
+            rule=rule,
+            title="Storage health warning",
+            message=f"Station {tel.station.name}: {', '.join(reasons)}.",
+            severity=severity,
+        )
+        new_alerts.append(alert)
+    return new_alerts
+
+
 def _check_station_offline():
     """Check for stations that have gone offline (no heartbeat for >5 min)."""
     new_alerts = []
@@ -373,6 +410,9 @@ def check_alerts():
     new_alerts.extend(_check_disk_usage())
     new_alerts.extend(_check_ram_usage())
     new_alerts.extend(_check_ota_failed())
+    new_alerts.extend(_check_unexpected_reboot())
+    new_alerts.extend(_check_power_warning())
+    new_alerts.extend(_check_storage_health())
 
     if new_alerts:
         logger.info("Alert check complete: %d new alert(s) created.", len(new_alerts))
