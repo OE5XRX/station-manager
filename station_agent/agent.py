@@ -540,4 +540,9 @@ class StationAgent:
         if audio_thread is not None:
             audio_thread.join(timeout=5)
 
+        # Write clean-shutdown marker so the next boot can classify the
+        # reboot reason as "clean" rather than "unknown".
+        from station_agent import bootinfo
+        bootinfo.mark_clean_shutdown(config.state_dir)
+
         logger.info("Station Agent stopped")
