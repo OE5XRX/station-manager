@@ -5,6 +5,8 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from django.db.models import Q
+
 from apps.deployments.models import DeploymentResult
 from apps.stations.models import Station, StationInventory
 
@@ -120,6 +122,56 @@ def _check_unexpected_reboot():
             ),
         )
         new_alerts.append(alert)
+    return new_alerts
+
+
+def _check_power_warning():
+    """Alert on undervoltage/throttling. Severity critical if happening now, else warning."""
+    from apps.stations.models import StationTelemetry
+
+    rule = _get_active_rule(AlertRule.AlertType.POWER_WARNING)
+    if rule is None:
+        return []
+
+    new_alerts = []
+    qs = StationTelemetry.objects.select_related("station").filter(
+        Q(undervoltage_occurred=True) | Q(throttled_occurred=True)
+    )
+    for tel in qs:
+        is_now = bool(tel.undervoltage_now) or bool(tel.throttled_now)
+        if _has_unresolved_alert(tel.station, AlertRule.AlertType.POWER_WARNING):
+            continue
+        severity = Alert.Severity.CRITICAL if is_now else Alert.Severity.WARNING
+        what = "Undervoltage" if tel.undervoltage_occurred else "Throttling"
+        alert = _create_alert(
+            station=tel.station,
+            rule=rule,
+            title=f"Power warning: {what}",
+            message=(
+                f"Station {tel.station.name}: {what} "
+                f"{'ongoing' if is_now else 'occurred'}."
+            ),
+            severity=severity,
+        )
+        new_alerts.append(alert)
+
+    # Auto-resolve power alerts for stations where nothing is active or has occurred.
+    cleared_ids = list(
+        StationTelemetry.objects.filter(
+            undervoltage_now=False,
+            throttled_now=False,
+            undervoltage_occurred=False,
+            throttled_occurred=False,
+        ).values_list("station_id", flat=True)
+    )
+    if cleared_ids:
+        now = timezone.now()
+        Alert.objects.filter(
+            alert_rule__alert_type=AlertRule.AlertType.POWER_WARNING,
+            is_resolved=False,
+            station_id__in=cleared_ids,
+        ).update(is_resolved=True, resolved_at=now)
+
     return new_alerts
 
 
