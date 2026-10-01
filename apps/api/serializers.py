@@ -11,6 +11,7 @@ class HeartbeatSerializer(serializers.Serializer):
     image_variant = serializers.CharField(max_length=32, required=False, default="")
     timestamp = serializers.FloatField(required=False, default=None)
     inventory = serializers.DictField(required=False, default=dict)
+    telemetry = serializers.DictField(required=False)
 
 
 class HealthSerializer(serializers.Serializer):
