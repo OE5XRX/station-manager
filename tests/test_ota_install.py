@@ -72,6 +72,73 @@ def test_install_to_slot_writes_in_chunks(tmp_path, monkeypatch):
     assert call_count["n"] >= 4
 
 
+def test_install_to_slot_does_not_use_o_sync_but_still_syncs(tmp_path, monkeypatch):
+    """Regression (2026-09-30): install_to_slot must NOT open the slot with
+    O_SYNC. On the real CM4 the SD is ~5 MB/s; O_SYNC (sync every 1 MiB)
+    dragged the ~2 GB write to 11-14 min and saturated the I/O bus until
+    systemd could no longer pet the 14s HW watchdog → mid-write reset, the
+    A/B trial was never armed, and the box rebooted onto the old slot.
+
+    The write must be buffered (fast, kernel-scheduled) and instead flush
+    with fdatasync/fsync (periodically + a final one) for durability, so
+    the write stays fast and PID1 stays responsive. QEMU never hit this
+    because its virtual disk finishes in seconds.
+    """
+    from station_agent import ota
+
+    payload = os.urandom(4 << 20)  # 4 MiB, incompressible
+    src = tmp_path / "image.wic.bz2"
+    src.write_bytes(bz2.compress(payload))
+    target = tmp_path / "fake-slot.bin"
+    target.write_bytes(b"\x00" * len(payload))
+
+    seen = {}
+    real_open = os.open
+
+    def capturing_open(path, flags, *a, **k):
+        if str(path) == str(target):
+            seen["flags"] = flags
+        return real_open(path, flags, *a, **k)
+
+    # Shrink the periodic-flush interval below the payload size so the write
+    # actually crosses it several times — otherwise (64 MiB default vs a 4 MiB
+    # payload) the periodic path never runs and the test would only prove the
+    # final fsync. 1 MiB over 4 MiB → ~4 periodic fdatasyncs.
+    monkeypatch.setattr(ota, "_SYNC_INTERVAL", 1 << 20)
+
+    fdatasync_calls = {"n": 0}
+    fsync_calls = {"n": 0}
+    real_fsync = os.fsync
+    real_fdatasync = os.fdatasync
+
+    def counting_fsync(fd):
+        fsync_calls["n"] += 1
+        return real_fsync(fd)
+
+    def counting_fdatasync(fd):
+        fdatasync_calls["n"] += 1
+        return real_fdatasync(fd)
+
+    monkeypatch.setattr(ota.os, "open", capturing_open)
+    monkeypatch.setattr(ota.os, "fsync", counting_fsync)
+    monkeypatch.setattr(ota.os, "fdatasync", counting_fdatasync)
+
+    ota.install_to_slot(src, str(target))
+
+    assert "flags" in seen, "target slot device was never opened"
+    assert not (seen["flags"] & os.O_SYNC), (
+        "install_to_slot must not use O_SYNC — it starves the HW watchdog on the "
+        "real CM4's slow SD and gets the box reset mid-write"
+    )
+    # Periodic flush path exercised (not just the final fsync): with a 1 MiB
+    # interval over a 4 MiB payload we expect multiple in-loop fdatasyncs.
+    assert fdatasync_calls["n"] >= 2, (
+        f"expected the periodic fdatasync path to run (got {fdatasync_calls['n']} calls)"
+    )
+    assert fsync_calls["n"] >= 1, "expected a final fsync for durability"
+    assert target.read_bytes()[: len(payload)] == payload, "round-trip bytes must be preserved"
+
+
 def test_download_resumes_on_partial(tmp_path):
     """When a .part file exists, the next download pass sends Range."""
     from station_agent import ota
