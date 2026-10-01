@@ -86,3 +86,31 @@ def test_ingest_malformed_blob_returns_none():
     station = Station.objects.create(name="OE5A")
     assert ingest_telemetry(station, "not-a-dict") is None
     assert ingest_telemetry(station, {"boot": "bad"}) is not None  # partial tolerated
+
+
+# M7: on boot_id transition with reason omitted, must default to "unknown" not inherit old
+@pytest.mark.django_db
+def test_ingest_boot_transition_with_no_reason_becomes_unknown():
+    """M7: reboot_detected=True + reason omitted → last_reboot_reason='unknown', not old value."""
+    station = Station.objects.create(name="OE5A")
+    # First boot with explicit reason
+    ingest_telemetry(
+        station, {"boot": {"boot_id": "b1", "boot_count": 1, "reboot_reason": "clean"}}
+    )
+    # Second boot (new boot_id) with reason omitted
+    tel = ingest_telemetry(station, {"boot": {"boot_id": "b2", "boot_count": 2}})
+    # Must not inherit "clean" from prior boot
+    assert tel.last_reboot_reason == "unknown"
+    assert tel.boot_id == "b2"
+
+
+@pytest.mark.django_db
+def test_ingest_same_boot_omitted_reason_keeps_existing():
+    """M7: same boot_id (no transition) + reason omitted → keep existing reason."""
+    station = Station.objects.create(name="OE5A")
+    ingest_telemetry(
+        station, {"boot": {"boot_id": "b1", "boot_count": 1, "reboot_reason": "crash"}}
+    )
+    tel = ingest_telemetry(station, {"boot": {"boot_id": "b1", "boot_count": 1}})
+    # Same boot — reason should be preserved from prior ingest
+    assert tel.last_reboot_reason == "crash"

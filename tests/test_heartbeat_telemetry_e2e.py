@@ -92,3 +92,45 @@ def test_heartbeat_malformed_telemetry_still_200(station_with_key):
         "/api/v1/heartbeat/", data=body_bytes, content_type="application/json", **headers
     )
     assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+def test_heartbeat_string_telemetry_still_200_no_row(station_with_key):
+    """H1: telemetry="bad" must return 200 and not create a StationTelemetry row."""
+    station, private_key = station_with_key
+    body = {
+        "hostname": "h",
+        "os_version": "o",
+        "uptime": 5.0,
+        "module_versions": {},
+        "ip_address": "10.0.0.2",
+        "telemetry": "bad",
+    }
+    body_bytes = json.dumps(body).encode()
+    headers = device_auth_headers(private_key, station.id, body_bytes)
+    resp = Client().post(
+        "/api/v1/heartbeat/", data=body_bytes, content_type="application/json", **headers
+    )
+    assert resp.status_code == 200
+    assert not StationTelemetry.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db
+def test_heartbeat_list_telemetry_still_200_no_row(station_with_key):
+    """H1: telemetry=[1,2] (list) must return 200 and not create a StationTelemetry row."""
+    station, private_key = station_with_key
+    body = {
+        "hostname": "h",
+        "os_version": "o",
+        "uptime": 5.0,
+        "module_versions": {},
+        "ip_address": "10.0.0.2",
+        "telemetry": [1, 2],
+    }
+    body_bytes = json.dumps(body).encode()
+    headers = device_auth_headers(private_key, station.id, body_bytes)
+    resp = Client().post(
+        "/api/v1/heartbeat/", data=body_bytes, content_type="application/json", **headers
+    )
+    assert resp.status_code == 200
+    assert not StationTelemetry.objects.filter(station=station).exists()

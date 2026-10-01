@@ -59,7 +59,13 @@ def ingest_telemetry(station, telemetry):
     tel.boot_id = new_boot_id or prev_boot_id
     if isinstance(boot.get("boot_count"), int):
         tel.boot_count = boot["boot_count"]
-    tel.last_reboot_reason = str(boot.get("reboot_reason") or tel.last_reboot_reason or "")
+    # M7: on a boot_id transition, never inherit the old reason — a new boot with
+    # an omitted reason should default to "unknown", not silently keep "clean" (or
+    # any prior reason) which would mask unexpected-reboot alerting.
+    if reboot_detected:
+        tel.last_reboot_reason = str(boot.get("reboot_reason") or "unknown")
+    else:
+        tel.last_reboot_reason = str(boot.get("reboot_reason") or tel.last_reboot_reason or "")
     if isinstance(boot.get("uptime_seconds"), (int, float)):
         tel.uptime_seconds = float(boot["uptime_seconds"])
 
