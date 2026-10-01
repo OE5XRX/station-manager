@@ -46,12 +46,16 @@ def _has_unresolved_alert(station, alert_type):
     ).exists()
 
 
-def _create_alert(station, rule, title, message):
-    """Create an alert and return it."""
+def _create_alert(station, rule, title, message, severity=None):
+    """Create an alert and return it.
+
+    severity: override the rule's default severity (Alert.Severity value).
+    When None (the default), rule.severity is used.
+    """
     alert = Alert.objects.create(
         station=station,
         alert_rule=rule,
-        severity=rule.severity,
+        severity=severity if severity is not None else rule.severity,
         title=title,
         message=message,
     )
@@ -77,6 +81,46 @@ def _auto_resolve(alert_type, station=None):
             f" for station {station.name}" if station else "",
         )
     return count
+
+
+REBOOT_CHECK_WINDOW = timedelta(minutes=10)
+UNEXPECTED_REBOOT_REASONS = {"crash", "watchdog", "undervoltage", "unknown"}
+
+
+def _check_unexpected_reboot():
+    """Alert on reboots whose reason is not clean/ota_rollback (event alert, per-reboot dedup)."""
+    from apps.stations.models import StationTelemetry
+
+    rule = _get_active_rule(AlertRule.AlertType.UNEXPECTED_REBOOT)
+    if rule is None:
+        return []
+
+    window_start = timezone.now() - REBOOT_CHECK_WINDOW
+    new_alerts = []
+    qs = StationTelemetry.objects.select_related("station").filter(
+        last_reboot_at__isnull=False,
+        last_reboot_at__gte=window_start,
+        last_reboot_reason__in=UNEXPECTED_REBOOT_REASONS,
+    )
+    for tel in qs:
+        already = Alert.objects.filter(
+            station=tel.station,
+            alert_rule__alert_type=AlertRule.AlertType.UNEXPECTED_REBOOT,
+            created_at__gte=tel.last_reboot_at,
+        ).exists()
+        if already:
+            continue
+        alert = _create_alert(
+            station=tel.station,
+            rule=rule,
+            title=f"Unexpected reboot: {tel.last_reboot_reason}",
+            message=(
+                f"Station {tel.station.name} rebooted unexpectedly "
+                f"(reason: {tel.last_reboot_reason}, boot #{tel.boot_count})."
+            ),
+        )
+        new_alerts.append(alert)
+    return new_alerts
 
 
 def _check_station_offline():
