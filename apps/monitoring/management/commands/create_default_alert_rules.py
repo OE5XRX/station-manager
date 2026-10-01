@@ -52,6 +52,24 @@ DEFAULT_RULES = [
         "severity": AlertRule.Severity.CRITICAL,
         "description": "An OTA deployment failed or was rolled back.",
     },
+    {
+        "alert_type": AlertRule.AlertType.UNEXPECTED_REBOOT,
+        "threshold": 0.0,
+        "severity": AlertRule.Severity.WARNING,
+        "description": "Unerwarteter Reboot (Crash/Watchdog/Power).",
+    },
+    {
+        "alert_type": AlertRule.AlertType.POWER_WARNING,
+        "threshold": 0.0,
+        "severity": AlertRule.Severity.WARNING,
+        "description": "Undervoltage / Throttling erkannt.",
+    },
+    {
+        "alert_type": AlertRule.AlertType.STORAGE_HEALTH,
+        "threshold": 80.0,
+        "severity": AlertRule.Severity.WARNING,
+        "description": "SD/eMMC-Verschleiß oder I/O-Fehler.",
+    },
 ]
 
 
