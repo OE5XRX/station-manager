@@ -45,21 +45,23 @@ def _root_block_device() -> str | None:
     """Resolve the mmc block device backing '/', e.g. 'mmcblk0'. None if not mmc."""
     try:
         st = os.stat("/")
-        major, _ = os.major(st.st_dev), os.minor(st.st_dev)
-        # Walk /sys/class/block to find the parent disk of the root partition.
+        root_major = os.major(st.st_dev)
+        root_minor = os.minor(st.st_dev)
+        # Walk /sys/class/block to find the partition whose (major, minor) exactly
+        # matches the root device, then derive the parent disk.  Matching only on
+        # major is insufficient when multiple MMC devices are present (e.g. eMMC +
+        # SD card) — all share the same MMC major but have distinct minors.
         for name in os.listdir("/sys/class/block"):
             if not name.startswith("mmcblk"):
                 continue
             dev_path = f"/sys/class/block/{name}/dev"
             if not os.path.exists(dev_path):
                 continue
-            # parent disk (strip pN partition suffix)
-            disk = re.sub(r"p\d+$", "", name)
-            # match either the partition or its disk device number
             with open(dev_path, encoding="ascii") as f:
-                blk_major, _ = (int(x) for x in f.read().strip().split(":"))
-            if blk_major == major:
-                return disk
+                blk_major, blk_minor = (int(x) for x in f.read().strip().split(":"))
+            if blk_major == root_major and blk_minor == root_minor:
+                # Strip pN partition suffix to get the backing disk name.
+                return re.sub(r"p\d+$", "", name)
     except OSError as exc:
         logger.debug("root block device resolution failed: %s", exc)
     return None

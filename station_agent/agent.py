@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 
+from .bootinfo import write_last_ota_result
 from .bootloader import get_bootloader, get_env
 from .config import load_config
 from .health_check import run_health_checks
@@ -292,6 +293,16 @@ class StationAgent:
                 ),
             )
             logger.warning("Refusing to commit deployment %s: running version unknown", result_pk)
+            # M13: persist outcome (additive, guarded).
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "rolled_back",
+                    detail="running version unknown",
+                    version=version,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             return
         if running_version != version:
             report_status(
@@ -308,6 +319,16 @@ class StationAgent:
                 running_version,
                 version,
             )
+            # M13: persist outcome (additive, guarded).
+            try:
+                write_last_ota_result(
+                    config.state_dir,
+                    "rolled_back",
+                    detail=f"running {running_version!r} expected {version!r}",
+                    version=version,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             return
 
         # Trial-flag guard: both oe5xrx-grub.cfg and boot.cmd clear
@@ -392,6 +413,11 @@ class StationAgent:
         if passed:
             if commit_boot(config, http_client, version):
                 logger.info("Update to version %s committed successfully", version)
+                # M13: persist outcome so slot telemetry can surface it.
+                try:
+                    write_last_ota_result(config.state_dir, "success", version=version)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("write_last_ota_result failed: %s", exc)
             else:
                 logger.error("Failed to commit boot for version %s", version)
         else:
@@ -403,6 +429,13 @@ class StationAgent:
                 "rolled_back",
                 error_message=f"Health checks failed: {error}",
             )
+            # M13: persist outcome so slot telemetry can surface it.
+            try:
+                write_last_ota_result(
+                    config.state_dir, "rolled_back", detail=error, version=version
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("write_last_ota_result failed: %s", exc)
             logger.warning("Update rolled back due to failed health checks")
 
     def run(self):

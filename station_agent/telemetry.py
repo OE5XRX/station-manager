@@ -3,6 +3,7 @@
 import logging
 
 from station_agent import bootinfo, inventory, power, storage
+from station_agent import heartbeat as hb
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,19 @@ def _collect_slot(config) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.debug("image version probe failed: %s", exc)
         out["image_version"] = ""
+    # M13: read persisted OTA outcome written by agent._verify_and_commit.
+    try:
+        ota_result = bootinfo.read_last_ota_result(config.state_dir)
+        if ota_result is not None:
+            out["last_ota_result"] = ota_result.get("result") or ""
+            detail = ota_result.get("detail") or ""
+            if detail:
+                out["last_ota_detail"] = detail
+        else:
+            out["last_ota_result"] = None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("last_ota_result probe failed: %s", exc)
+        out["last_ota_result"] = None
     return out
 
 
@@ -41,6 +55,12 @@ def collect_telemetry(config) -> dict:
         "boot", lambda: bootinfo.detect_boot(config.state_dir, _bootloader_or_none(config))
     )
     if boot:
+        # M14: include uptime_seconds so ingest can populate StationTelemetry.uptime_seconds.
+        # Degrade to omitted if /proc/uptime is unreadable (hb.get_uptime returns 0.0 there,
+        # so we skip the 0.0 value to avoid ambiguity with a real 0-second uptime).
+        uptime = _safe("uptime", hb.get_uptime)
+        if uptime:
+            boot = dict(boot, uptime_seconds=uptime)
         result["boot"] = boot
     pwr = _safe("power", power.read_throttle)
     if pwr:
