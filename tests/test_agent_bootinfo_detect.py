@@ -49,6 +49,19 @@ def test_detect_boot_unwritable_state_dir_degrades():
     assert result["reboot_reason"] == "unknown"
 
 
+def test_detect_boot_gather_evidence_raises_does_not_propagate(tmp_path):
+    with mock.patch.object(bootinfo, "read_boot_id", return_value="boot-B"), \
+         mock.patch.object(bootinfo, "_gather_evidence",
+                           side_effect=RuntimeError("throttle read blew up")):
+        result = bootinfo.detect_boot(str(tmp_path))
+    # Did not raise; degraded evidence -> "unknown", but still a new boot.
+    assert result["boot_id"] == "boot-B"
+    assert result["boot_count"] == 1
+    assert result["reboot_reason"] == "unknown"
+    state = json.loads((tmp_path / "boot_state.json").read_text())
+    assert state["boot_count"] == 1
+
+
 def test_clean_marker_roundtrip(tmp_path):
     assert bootinfo.clean_marker_present(str(tmp_path)) is False
     bootinfo.mark_clean_shutdown(str(tmp_path))

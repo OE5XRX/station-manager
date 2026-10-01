@@ -116,7 +116,7 @@ def _dmesg_watchdog() -> bool:
         if proc.returncode != 0:
             return False
         text = proc.stdout.lower()
-        return "bcm2835-wdt" in text or "watchdog" in text and "reset" in text
+        return "bcm2835-wdt" in text or ("watchdog" in text and "reset" in text)
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -148,8 +148,15 @@ def detect_boot(state_dir: str, bootloader=None) -> dict:
             "reboot_reason": state.get("reboot_reason", "unknown"),
         }
 
-    # New boot (or first run / unreadable state).
-    evidence = _gather_evidence(bootloader, state_dir)
+    # New boot (or first run / unreadable state). Evidence gathering must
+    # never raise out of detect_boot — a collector (e.g. power.read_throttle)
+    # that raises degrades to empty evidence (reason -> "unknown") while we
+    # still persist and increment the boot count for the new boot.
+    try:
+        evidence = _gather_evidence(bootloader, state_dir)
+    except Exception as exc:  # noqa: BLE001 - telemetry must never break boot detection
+        logger.debug("evidence gathering failed, treating as empty: %s", exc)
+        evidence = {}
     reason = compute_reboot_reason(evidence)
     count = state.get("boot_count", 0) + 1
     new_state = {"boot_id": boot_id, "boot_count": count, "reboot_reason": reason}
