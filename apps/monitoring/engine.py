@@ -125,12 +125,21 @@ def _check_unexpected_reboot():
 
 
 def _check_power_warning():
-    """Alert on undervoltage/throttling with escalation and now-based resolution.
+    """Alert on undervoltage/throttling with per-episode creation + now-based resolution.
 
-    M4: escalate an existing WARNING to CRITICAL when a *_now bit later fires.
-    M5: auto-resolve when both *_now bits are false (don't require occurred=False —
-        transient events are sticky in occurred until reboot, but current conditions
-        govern whether the alert stays active).
+    Creation is gated to once per boot episode (power_alerted_boot_id == boot_id).
+    This is essential because the agent reports *_occurred as a STICKY bit that
+    stays True until the station reboots, while *_now clears as soon as the
+    brownout ends. The normal post-brownout state is occurred=True + now=False;
+    without episode-gating, every check_alerts cycle would CREATE a fresh alert
+    (and notification) that the resolve loop immediately clears — an alert/
+    notification storm every 30s until reboot.
+
+    M4: escalate an existing unresolved WARNING to CRITICAL when a *_now bit fires.
+    M5: auto-resolve when both *_now bits are false (occurred stays sticky, so
+        current conditions govern whether the alert remains active). A resolved
+        alert is NOT recreated for the same boot (creation gate); a new boot_id
+        resets the episode so a genuinely fresh event alerts again.
     """
     from apps.stations.models import StationTelemetry
 
@@ -144,6 +153,9 @@ def _check_power_warning():
     )
     for tel in qs:
         is_now = bool(tel.undervoltage_now) or bool(tel.throttled_now)
+        occurred = bool(tel.undervoltage_occurred) or bool(tel.throttled_occurred)
+        if not occurred:
+            continue
         warranted_severity = Alert.Severity.CRITICAL if is_now else Alert.Severity.WARNING
         what = "Undervoltage" if tel.undervoltage_occurred else "Throttling"
 
@@ -153,31 +165,36 @@ def _check_power_warning():
             is_resolved=False,
         ).first()
 
-        if existing is None:
-            alert = _create_alert(
-                station=tel.station,
-                rule=rule,
-                title=f"Power warning: {what}",
-                message=(
-                    f"Station {tel.station.name}: {what} {'ongoing' if is_now else 'occurred'}."
-                ),
-                severity=warranted_severity,
-            )
-            new_alerts.append(alert)
-        elif (
-            existing.severity != warranted_severity
-            and warranted_severity == Alert.Severity.CRITICAL
-        ):
-            # M4: escalate WARNING → CRITICAL when *_now bit fires.
-            existing.severity = Alert.Severity.CRITICAL
-            existing.title = f"Power warning: {what}"
-            existing.message = (
-                f"Station {tel.station.name}: {what} ongoing (escalated to critical)."
-            )
-            existing.save(update_fields=["severity", "title", "message"])
-            logger.info("Escalated power alert to CRITICAL for station %s", tel.station.name)
-            # Return escalated alert as a "new notification" so callers can send it.
-            new_alerts.append(existing)
+        if existing is not None:
+            # M4: escalate an existing unresolved WARNING to CRITICAL when *_now fires.
+            if is_now and existing.severity == Alert.Severity.WARNING:
+                existing.severity = Alert.Severity.CRITICAL
+                existing.title = f"Power warning: {what}"
+                existing.message = (
+                    f"Station {tel.station.name}: {what} ongoing (escalated to critical)."
+                )
+                existing.save(update_fields=["severity", "title", "message"])
+                logger.info("Escalated power alert to CRITICAL for station %s", tel.station.name)
+                # Append so callers send an escalation notification. No second alert.
+                new_alerts.append(existing)
+            continue
+
+        # No unresolved alert. Create exactly once per boot episode: if we've
+        # already alerted for this boot_id, stay silent (the sticky occurred bit
+        # must not re-fire every cycle after a resolve).
+        if tel.power_alerted_boot_id == tel.boot_id:
+            continue
+
+        alert = _create_alert(
+            station=tel.station,
+            rule=rule,
+            title=f"Power warning: {what}",
+            message=(f"Station {tel.station.name}: {what} {'ongoing' if is_now else 'occurred'}."),
+            severity=warranted_severity,
+        )
+        tel.power_alerted_boot_id = tel.boot_id
+        tel.save(update_fields=["power_alerted_boot_id"])
+        new_alerts.append(alert)
 
     # M5: auto-resolve power alerts for stations where both *_now bits are false
     # (regardless of occurred — occurred bits are sticky until reboot).

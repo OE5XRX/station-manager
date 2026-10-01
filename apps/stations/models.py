@@ -474,6 +474,11 @@ class StationTelemetry(models.Model):
     undervoltage_occurred = models.BooleanField(null=True)
     throttled_now = models.BooleanField(null=True)
     throttled_occurred = models.BooleanField(null=True)
+    # M4/M5 regression fix: the boot_id for which a power alert was last created.
+    # Creation is gated to once per boot episode so a sticky *_occurred bit (which
+    # stays True until reboot while *_now is False) can't re-fire an alert +
+    # notification every check_alerts cycle. A boot_id change resets the episode.
+    power_alerted_boot_id = models.CharField(max_length=64, blank=True, default="")
     # slot / version / ota
     active_slot = models.CharField(max_length=1, blank=True)
     image_version = models.CharField(max_length=100, blank=True)
