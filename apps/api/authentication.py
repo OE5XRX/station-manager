@@ -2,10 +2,10 @@ import hashlib
 import time
 
 from django.utils import timezone
-from rest_framework.authentication import BaseAuthentication
+from rest_framework.authentication import BaseAuthentication, get_authorization_header
 from rest_framework.exceptions import AuthenticationFailed
 
-from apps.api.models import DeviceKey
+from apps.api.models import DeviceKey, PersonalAccessToken
 
 
 class DeviceKeyAuthentication(BaseAuthentication):
@@ -90,6 +90,51 @@ class DeviceKeyAuthentication(BaseAuthentication):
             return (device_key, device_key)
 
         raise AuthenticationFailed("Invalid signature.")
+
+    def authenticate_header(self, request):
+        return self.keyword
+
+
+class PersonalAccessTokenAuthentication(BaseAuthentication):
+    """Bearer-token auth for the user/automation API.
+
+    Header: ``Authorization: Bearer <raw_token>``. Resolves the owning
+    user and sets request.auth to the PersonalAccessToken. Returns None
+    for a non-Bearer header so other authenticators can try.
+    """
+
+    keyword = "Bearer"
+
+    def authenticate(self, request):
+        auth = get_authorization_header(request).split()
+        if not auth or auth[0].decode().lower() != self.keyword.lower():
+            return None
+        if len(auth) != 2:
+            raise AuthenticationFailed("Invalid bearer header.")
+
+        raw = auth[1].decode()
+        token_hash = PersonalAccessToken.hash_token(raw)
+        try:
+            token = PersonalAccessToken.objects.select_related("user").get(
+                token_hash=token_hash
+            )
+        except PersonalAccessToken.DoesNotExist:
+            raise AuthenticationFailed("Invalid token.")
+
+        if not token.is_active():
+            raise AuthenticationFailed("Token expired or revoked.")
+        if not token.user.is_active:
+            raise AuthenticationFailed("Token owner is inactive.")
+
+        # best-effort last-used stamp; never break the request on failure
+        try:
+            PersonalAccessToken.objects.filter(pk=token.pk).update(
+                last_used_at=timezone.now()
+            )
+        except Exception:  # noqa: BLE001 - telemetry only, must not 500
+            pass
+
+        return (token.user, token)
 
     def authenticate_header(self, request):
         return self.keyword

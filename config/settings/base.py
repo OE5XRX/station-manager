@@ -187,6 +187,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.api.authentication.DeviceKeyAuthentication",
+        "apps.api.authentication.PersonalAccessTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -198,6 +199,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "heartbeat": "10/min",
         "register": "10/hour",
+        "api-token": "120/min",
     },
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
