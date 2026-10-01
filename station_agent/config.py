@@ -22,6 +22,7 @@ class AgentConfig:
     heartbeat_interval: int = 60
     ota_check_interval: int = 5
     download_dir: str = "/tmp/station-agent"
+    state_dir: str = "/var/lib/station-agent"
     log_level: str = "INFO"
     terminal_enabled: bool = False
     terminal_shell: str = "/bin/sh"
@@ -93,6 +94,7 @@ def load_config() -> AgentConfig:
         heartbeat_interval=int(data.get("heartbeat_interval", 60)),
         ota_check_interval=int(data.get("ota_check_interval", 5)),
         download_dir=str(data.get("download_dir", "/tmp/station-agent")),
+        state_dir=str(data.get("state_dir", "/var/lib/station-agent")),
         log_level=str(data.get("log_level", "INFO")).upper(),
         terminal_enabled=bool(data.get("terminal_enabled", False)),
         terminal_shell=str(data.get("terminal_shell", "/bin/sh")),
