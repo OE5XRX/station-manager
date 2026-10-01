@@ -15,14 +15,23 @@ class ApiTokenListView(LoginRequiredMixin, View):
         tokens = PersonalAccessToken.objects.filter(user=request.user)
         return render(request, self.template_name, {"tokens": tokens})
 
+    def _render_error(self, request, message):
+        tokens = PersonalAccessToken.objects.filter(user=request.user)
+        return render(
+            request,
+            self.template_name,
+            {"tokens": tokens, "error": message},
+        )
+
     def post(self, request):
         name = (request.POST.get("name") or "").strip()
+        max_length = PersonalAccessToken._meta.get_field("name").max_length
         if not name:
-            tokens = PersonalAccessToken.objects.filter(user=request.user)
-            return render(
+            return self._render_error(request, _("Name ist erforderlich."))
+        if len(name) > max_length:
+            return self._render_error(
                 request,
-                self.template_name,
-                {"tokens": tokens, "error": _("Name ist erforderlich.")},
+                _("Name darf höchstens %(max)d Zeichen lang sein.") % {"max": max_length},
             )
         token, raw = PersonalAccessToken.issue(request.user, name=name)
         return render(

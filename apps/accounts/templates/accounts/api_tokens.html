@@ -65,6 +65,7 @@
                 <th>{% trans "Präfix" %}</th>
                 <th>{% trans "Erstellt" %}</th>
                 <th>{% trans "Zuletzt genutzt" %}</th>
+                <th>{% trans "Läuft ab" %}</th>
                 <th></th>
               </tr>
             </thead>
@@ -75,6 +76,7 @@
                   <td class="t-mono">{{ t.prefix }}…</td>
                   <td class="t-mono-sm">{{ t.created_at|date:"Y-m-d H:i" }}</td>
                   <td class="t-mono-sm">{{ t.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                  <td class="t-mono-sm">{% if t.expires_at %}{{ t.expires_at|date:"Y-m-d H:i" }}{% else %}{% trans "nie" %}{% endif %}</td>
                   <td>
                     {% if t.revoked_at %}
                       <span class="pill pill-muted">{% trans "Widerrufen" %}</span>

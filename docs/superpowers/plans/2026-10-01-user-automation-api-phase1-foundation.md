@@ -6,7 +6,7 @@
 
 **Architecture:** A new `PersonalAccessToken` model (SHA-256 hash only) with a DRF `Bearer` authentication class, registered ahead of SessionAuthentication. Central topology scoping helpers that mirror the existing membership + assignment access model. drf-spectacular wired for a versioned OpenAPI contract. A self-scoped token-management UI in the accounts app.
 
-**Tech Stack:** Django 6.0, DRF 3.17, drf-spectacular, PostgreSQL, pytest. Existing device API (`apps/api`, Ed25519 `DeviceKey`) is untouched.
+**Tech Stack:** Django 6.1, DRF 3.18, drf-spectacular 0.30, PostgreSQL, pytest (versions per the committed `requirements/*.txt` locks). Existing device API (`apps/api`, Ed25519 `DeviceKey`) is untouched.
 
 **Spec:** `docs/superpowers/specs/2026-10-01-user-automation-api-design.md`
 

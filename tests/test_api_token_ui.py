@@ -22,12 +22,18 @@ def test_user_sees_only_own_tokens(client, member_user, admin_user):
 
 
 @pytest.mark.django_db
-def test_create_shows_raw_once(client, member_user):
+def test_create_shows_raw_once(client, member_user, monkeypatch):
+    # Make token generation deterministic so we can assert the COMPLETE raw
+    # value is rendered (not just its 8-char prefix) — the raw is unrecoverable
+    # after this response, so showing the whole token is the contract.
+    raw_token = "deterministic-raw-token-value-0123456789"
+    monkeypatch.setattr("apps.api.models.secrets.token_urlsafe", lambda _nbytes: raw_token)
     client.force_login(member_user)
     resp = client.post(reverse("accounts:api_tokens"), {"name": "ci"})
     assert resp.status_code == 200
     token = PersonalAccessToken.objects.get(user=member_user, name="ci")
-    # raw token rendered, and it is not the stored hash
+    # the full raw token is rendered exactly once, and the stored hash never is
+    assert raw_token.encode() in resp.content
     assert token.prefix.encode() in resp.content
     assert token.token_hash.encode() not in resp.content
 

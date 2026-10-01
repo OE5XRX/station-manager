@@ -134,9 +134,14 @@ kompromittierter Token kann die fachlichen Daten im Scope seines Besitzers
 mutieren, aber niemals Auth-Geheimnisse exfiltrieren oder fremde
 Device-Identitäten übernehmen.
 
-> Hinweis: Die in CLAUDE.md gelistete App `firmware` hat auf `main` aktuell
-> kein Model (WIP auf anderem Branch) — daher nicht in der Allowlist. Beim
-> Landen der Firmware-Modelle als eigene Allowlist-Erweiterung nachziehen.
+> Hinweis: Die App `apps.module_firmware` ist inzwischen auf `main` gelandet
+> (Teilbereiche A/B/C) und definiert u.a. `ModuleType`, `Module`,
+> `ModuleFirmwareRelease`, Import-Jobs, Targets und Convergence-State. Sie wird
+> in Phase 1 **bewusst nicht** in die Allowlist aufgenommen (Phase 1 exponiert
+> keine Ressourcen-Endpoints). Entscheidung: die module_firmware-Ressourcen
+> werden als **eigene Allowlist-Erweiterung in Phase 2/3** behandelt — dort pro
+> Modell einzeln scope-gefiltert aufgenommen, analog zu stations/rollouts,
+> sobald der ViewSet-/Serializer-/Permission-Pattern aus Phase 2 konkret steht.
 
 ### Explizit kein Ziel (YAGNI)
 - Kein generisches Auto-Model-Exposing (Ansatz A verworfen).

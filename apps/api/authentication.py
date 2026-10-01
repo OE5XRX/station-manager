@@ -2,6 +2,7 @@ import hashlib
 import time
 
 from django.utils import timezone
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
 from rest_framework.exceptions import AuthenticationFailed
 
@@ -142,3 +143,18 @@ class PersonalAccessTokenAuthentication(BaseAuthentication):
 
     def authenticate_header(self, request):
         return self.keyword
+
+
+class PersonalAccessTokenScheme(OpenApiAuthenticationExtension):
+    """Expose PersonalAccessTokenAuthentication as an HTTP Bearer scheme.
+
+    Without this extension drf-spectacular omits the bearer security scheme
+    from the generated OpenAPI document, so generated clients and the
+    Swagger "Authorize" flow cannot authenticate with personal access tokens.
+    """
+
+    target_class = "apps.api.authentication.PersonalAccessTokenAuthentication"
+    name = "PersonalAccessToken"
+
+    def get_security_definition(self, auto_schema):
+        return {"type": "http", "scheme": "bearer"}
