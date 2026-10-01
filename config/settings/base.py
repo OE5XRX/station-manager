@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     # Third party
     "oauth2_provider",
     "rest_framework",
+    "drf_spectacular",
     "django_htmx",
     "storages",
     "axes",
@@ -198,6 +199,14 @@ REST_FRAMEWORK = {
         "heartbeat": "10/min",
         "register": "10/hour",
     },
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "OE5XRX station-manager API",
+    "DESCRIPTION": "User/automation REST API. Rights mirror membership + topology.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 # Django Channels
