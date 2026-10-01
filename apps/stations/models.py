@@ -482,6 +482,10 @@ class StationTelemetry(models.Model):
     worst_life_time_pct = models.PositiveSmallIntegerField(null=True, blank=True)
     worst_pre_eol = models.CharField(max_length=8, blank=True)
     io_error_count = models.PositiveIntegerField(default=0)
+    # M6: baseline io_error_count at the time the last alert was raised; only
+    # re-alert when io_error_count exceeds this value (prevents infinite re-alert
+    # on a cumulative counter that stays non-zero after an operator resolves it).
+    alerted_io_error_count = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

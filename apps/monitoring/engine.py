@@ -125,7 +125,13 @@ def _check_unexpected_reboot():
 
 
 def _check_power_warning():
-    """Alert on undervoltage/throttling. Severity critical if happening now, else warning."""
+    """Alert on undervoltage/throttling with escalation and now-based resolution.
+
+    M4: escalate an existing WARNING to CRITICAL when a *_now bit later fires.
+    M5: auto-resolve when both *_now bits are false (don't require occurred=False —
+        transient events are sticky in occurred until reboot, but current conditions
+        govern whether the alert stays active).
+    """
     from apps.stations.models import StationTelemetry
 
     rule = _get_active_rule(AlertRule.AlertType.POWER_WARNING)
@@ -138,26 +144,47 @@ def _check_power_warning():
     )
     for tel in qs:
         is_now = bool(tel.undervoltage_now) or bool(tel.throttled_now)
-        if _has_unresolved_alert(tel.station, AlertRule.AlertType.POWER_WARNING):
-            continue
-        severity = Alert.Severity.CRITICAL if is_now else Alert.Severity.WARNING
+        warranted_severity = Alert.Severity.CRITICAL if is_now else Alert.Severity.WARNING
         what = "Undervoltage" if tel.undervoltage_occurred else "Throttling"
-        alert = _create_alert(
-            station=tel.station,
-            rule=rule,
-            title=f"Power warning: {what}",
-            message=(f"Station {tel.station.name}: {what} {'ongoing' if is_now else 'occurred'}."),
-            severity=severity,
-        )
-        new_alerts.append(alert)
 
-    # Auto-resolve power alerts for stations where nothing is active or has occurred.
+        existing = Alert.objects.filter(
+            station=tel.station,
+            alert_rule__alert_type=AlertRule.AlertType.POWER_WARNING,
+            is_resolved=False,
+        ).first()
+
+        if existing is None:
+            alert = _create_alert(
+                station=tel.station,
+                rule=rule,
+                title=f"Power warning: {what}",
+                message=(
+                    f"Station {tel.station.name}: {what} {'ongoing' if is_now else 'occurred'}."
+                ),
+                severity=warranted_severity,
+            )
+            new_alerts.append(alert)
+        elif (
+            existing.severity != warranted_severity
+            and warranted_severity == Alert.Severity.CRITICAL
+        ):
+            # M4: escalate WARNING → CRITICAL when *_now bit fires.
+            existing.severity = Alert.Severity.CRITICAL
+            existing.title = f"Power warning: {what}"
+            existing.message = (
+                f"Station {tel.station.name}: {what} ongoing (escalated to critical)."
+            )
+            existing.save(update_fields=["severity", "title", "message"])
+            logger.info("Escalated power alert to CRITICAL for station %s", tel.station.name)
+            # Return escalated alert as a "new notification" so callers can send it.
+            new_alerts.append(existing)
+
+    # M5: auto-resolve power alerts for stations where both *_now bits are false
+    # (regardless of occurred — occurred bits are sticky until reboot).
     cleared_ids = list(
         StationTelemetry.objects.filter(
             undervoltage_now=False,
             throttled_now=False,
-            undervoltage_occurred=False,
-            throttled_occurred=False,
         ).values_list("station_id", flat=True)
     )
     if cleared_ids:
@@ -172,7 +199,14 @@ def _check_power_warning():
 
 
 def _check_storage_health():
-    """Alert on eMMC/SD wear (pre-eol / life-time) or I/O errors."""
+    """Alert on eMMC/SD wear (pre-eol / life-time) or I/O errors.
+
+    M6: io_error_count is cumulative (dmesg counter, persists until reboot).
+    After an operator resolves a storage alert, we must not immediately
+    re-alert because io_error_count is still non-zero.  We track
+    alerted_io_error_count on the telemetry row and only (re)alert on an
+    increase — wear/pre-eol alerts are monotonic and retain the old behaviour.
+    """
     from apps.stations.models import StationTelemetry
 
     rule = _get_active_rule(AlertRule.AlertType.STORAGE_HEALTH)
@@ -184,7 +218,9 @@ def _check_storage_health():
         urgent = tel.worst_pre_eol == "urgent"
         warning = tel.worst_pre_eol == "warning"
         high_wear = (tel.worst_life_time_pct or 0) >= rule.threshold
-        io_errors = (tel.io_error_count or 0) > 0
+        current_io = tel.io_error_count or 0
+        # M6: only fire/re-fire when the count has increased past the last-alerted baseline.
+        io_errors = current_io > (tel.alerted_io_error_count or 0)
         if not (urgent or warning or high_wear or io_errors):
             continue
         if _has_unresolved_alert(tel.station, AlertRule.AlertType.STORAGE_HEALTH):
@@ -196,7 +232,7 @@ def _check_storage_health():
         if high_wear:
             reasons.append(f"life={tel.worst_life_time_pct}%")
         if io_errors:
-            reasons.append(f"{tel.io_error_count} I/O errors")
+            reasons.append(f"{current_io} I/O errors")
         alert = _create_alert(
             station=tel.station,
             rule=rule,
@@ -204,6 +240,11 @@ def _check_storage_health():
             message=f"Station {tel.station.name}: {', '.join(reasons)}.",
             severity=severity,
         )
+        # M6: record the count that triggered this alert so we don't re-alert
+        # on the same value after an operator resolves it.
+        if io_errors:
+            tel.alerted_io_error_count = current_io
+            tel.save(update_fields=["alerted_io_error_count"])
         new_alerts.append(alert)
     return new_alerts
 
