@@ -215,12 +215,17 @@ def _dmesg_watchdog() -> bool:
         )
         if proc.returncode != 0:
             return False
-        text = proc.stdout.lower()
-        # Require both the watchdog driver and a reset/timeout indicator in
-        # the *prior* boot log — not just driver registration.
-        watchdog_reset = "watchdog" in text and ("reset" in text or "timeout" in text)
-        if "bcm2835-wdt" in text and watchdog_reset:
-            return True
+        # M4: correlate within the SAME log line to avoid false positives.
+        # A driver-registration line ("bcm2835-wdt: ... loaded, period=15s")
+        # never also contains "reset", "reboot", or "timeout", so a per-line
+        # check eliminates the spurious cross-buffer match that caused false
+        # watchdog-reboot classifications when any unrelated module reset
+        # happened to appear in the same prior-boot log.
+        for line in proc.stdout.lower().splitlines():
+            if ("watchdog" in line or "bcm2835-wdt" in line) and (
+                "reset" in line or "reboot" in line or "timeout" in line
+            ):
+                return True
         return False
     except (OSError, subprocess.SubprocessError):
         return False

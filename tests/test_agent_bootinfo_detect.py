@@ -181,6 +181,38 @@ def test_dmesg_watchdog_driver_registration_only_returns_false():
         assert bootinfo._dmesg_watchdog() is False
 
 
+# M4: watchdog match must be on the SAME line — no cross-line false positives
+def test_dmesg_watchdog_driver_reg_plus_unrelated_reset_on_different_lines_false():
+    """M4: bcm2835-wdt driver-registration line + unrelated 'reset' on a different line
+    must NOT be classified as a watchdog reset.
+    """
+    prior_log = (
+        "[1.0] bcm2835-wdt: Broadcom watchdog timer loaded, period=15s\n"
+        "[5.0] pci 0000:00:01.0: some other module: reset\n"
+    )
+    with (
+        mock.patch("station_agent.bootinfo.shutil.which", return_value="/usr/bin/journalctl"),
+        mock.patch(
+            "station_agent.bootinfo.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=prior_log),
+        ),
+    ):
+        assert bootinfo._dmesg_watchdog() is False
+
+
+def test_dmesg_watchdog_reset_on_same_line_returns_true():
+    """M4: a single log line with watchdog reset indicator → True."""
+    prior_log = "[2.0] bcm2835-wdt: watchdog did not stop, watchdog reset\n"
+    with (
+        mock.patch("station_agent.bootinfo.shutil.which", return_value="/usr/bin/journalctl"),
+        mock.patch(
+            "station_agent.bootinfo.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=prior_log),
+        ),
+    ):
+        assert bootinfo._dmesg_watchdog() is True
+
+
 # M13: last_ota_result roundtrip
 def test_write_and_read_last_ota_result(tmp_path):
     """M13: write_last_ota_result persists; read_last_ota_result retrieves it."""
@@ -193,3 +225,84 @@ def test_write_and_read_last_ota_result(tmp_path):
 def test_read_last_ota_result_absent(tmp_path):
     """M13: absent file → None."""
     assert bootinfo.read_last_ota_result(str(tmp_path)) is None
+
+
+# M3: last_ota_result="failed" is persisted on terminal OTA failure paths
+def test_ota_failed_persists_last_ota_result_on_download_failure(tmp_path):
+    """M3: when the firmware download fails, write_last_ota_result is called with result='failed'.
+
+    Tests the download-failure path in StationAgent._handle_ota via direct mock of the
+    _handle_ota helpers so we don't need network or a real config.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from station_agent.agent import StationAgent
+    from station_agent.bootinfo import read_last_ota_result
+
+    agent = StationAgent()
+
+    fake_config = MagicMock()
+    fake_config.download_dir = str(tmp_path)
+    fake_config.state_dir = str(tmp_path)
+
+    fake_http = MagicMock()
+
+    fake_deployment = {
+        "deployment_result_id": 42,
+        "download_url": "http://example.com/fw.bz2",
+        "target_tag": "v1.2.3",
+        "checksum_sha256": "abc",
+        "size_bytes": 1000,
+        "deployment_result_status": "pending",
+    }
+
+    with (
+        patch("station_agent.agent.check_for_update", return_value=fake_deployment),
+        patch("station_agent.agent.report_status"),
+        patch("station_agent.agent.download_firmware_resumable", return_value=False),
+    ):
+        agent._handle_ota(fake_config, fake_http)
+
+    data = read_last_ota_result(str(tmp_path))
+    assert data is not None, "last_ota_result.json must be written on OTA failure"
+    assert data["result"] == "failed"
+    assert data["version"] == "v1.2.3"
+
+
+def test_ota_failed_persists_last_ota_result_on_install_failure(tmp_path):
+    """M3: when apply_update returns False (write failure), write_last_ota_result with 'failed'."""
+    from unittest.mock import MagicMock, patch
+
+    from station_agent.agent import StationAgent
+    from station_agent.bootinfo import read_last_ota_result
+
+    agent = StationAgent()
+
+    fake_config = MagicMock()
+    fake_config.download_dir = str(tmp_path)
+    fake_config.state_dir = str(tmp_path)
+
+    fake_deployment = {
+        "deployment_result_id": 42,
+        "download_url": "http://example.com/fw.bz2",
+        "target_tag": "v1.2.3",
+        "checksum_sha256": "abc",
+        "size_bytes": 1000,
+        "deployment_result_status": "pending",
+    }
+
+    # Create a dummy firmware file so the install path is reached
+    (tmp_path / "firmware-v1.2.3.rootfs.bz2").write_bytes(b"dummy")
+
+    with (
+        patch("station_agent.agent.check_for_update", return_value=fake_deployment),
+        patch("station_agent.agent.report_status"),
+        patch("station_agent.agent.download_firmware_resumable", return_value=True),
+        patch("station_agent.agent.apply_update", return_value=False),
+    ):
+        agent._handle_ota(fake_config, MagicMock())
+
+    data = read_last_ota_result(str(tmp_path))
+    assert data is not None, "last_ota_result.json must be written on install failure"
+    assert data["result"] == "failed"
+    assert data["version"] == "v1.2.3"
