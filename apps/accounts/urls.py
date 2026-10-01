@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import views
+from .views_api_tokens import ApiTokenListView, ApiTokenRevokeView
 from .views_membership import MembershipSetView
 from .views_notifications import NotificationSettingsView
 from .views_region_assignments import (
@@ -91,5 +92,11 @@ urlpatterns = [
         "verify-email/<str:token>/",
         views.VerifyEmailView.as_view(),
         name="verify_email",
+    ),
+    path("api-tokens/", ApiTokenListView.as_view(), name="api_tokens"),
+    path(
+        "api-tokens/<int:pk>/revoke/",
+        ApiTokenRevokeView.as_view(),
+        name="api_token_revoke",
     ),
 ]

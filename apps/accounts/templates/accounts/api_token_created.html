@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Token erstellt" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'accounts:profile' %}">{% trans "Profile" %}</a>
+  <span class="sep">/</span>
+  <a href="{% url 'accounts:api_tokens' %}">{% trans "API-Tokens" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Token erstellt" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Your account" %}</div>
+    <h1 class="page-title">{% trans "Token erstellt:" %} {{ token.name }}</h1>
+    <p class="page-sub">{% trans "Kopiere den Token jetzt — er wird nie wieder angezeigt." %}</p>
+  </div>
+</div>
+
+<div class="grid grid-main">
+  <div class="stack-gap-14">
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Dein neues Token" %}</div>
+      </div>
+      <div class="panel-body">
+        <div class="onboarding-hint" role="alert">
+          <span class="onboarding-hint-icon">⚠️</span>
+          <span class="onboarding-hint-text">
+            {% trans "Kopiere dieses Token jetzt und bewahre es sicher auf. Es wird nie wieder angezeigt." %}
+          </span>
+        </div>
+        <div class="form-group" style="margin-top:1rem;">
+          <label class="form-label">{% trans "Token" %}</label>
+          <pre class="t-mono" style="background:var(--surface-2,#f4f4f5);padding:12px 16px;border-radius:6px;word-break:break-all;">{{ raw_token }}</pre>
+        </div>
+        <div class="form-group">
+          <label class="form-label">{% trans "Präfix zur Wiedererkennung" %}</label>
+          <span class="t-mono">{{ token.prefix }}…</span>
+        </div>
+      </div>
+      <div class="panel-foot row-gap-8">
+        <a href="{% url 'accounts:api_tokens' %}" class="btn btn-primary">{% trans "Zurück zur Token-Liste" %}</a>
+      </div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}
