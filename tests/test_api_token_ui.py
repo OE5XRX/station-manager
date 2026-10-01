@@ -36,6 +36,8 @@ def test_create_shows_raw_once(client, member_user, monkeypatch):
     assert raw_token.encode() in resp.content
     assert token.prefix.encode() in resp.content
     assert token.token_hash.encode() not in resp.content
+    # one-time secret: the response must not be cacheable/redisplayable
+    assert resp["Cache-Control"] == "no-store"
 
 
 @pytest.mark.django_db

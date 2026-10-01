@@ -34,11 +34,15 @@ class ApiTokenListView(LoginRequiredMixin, View):
                 _("Name darf höchstens %(max)d Zeichen lang sein.") % {"max": max_length},
             )
         token, raw = PersonalAccessToken.issue(request.user, name=name)
-        return render(
+        response = render(
             request,
             "accounts/api_token_created.html",
             {"token": token, "raw_token": raw},
         )
+        # The raw token is shown exactly once; prevent the browser from caching
+        # or redisplaying this response from history on a shared/compromised client.
+        response["Cache-Control"] = "no-store"
+        return response
 
 
 class ApiTokenRevokeView(LoginRequiredMixin, View):
