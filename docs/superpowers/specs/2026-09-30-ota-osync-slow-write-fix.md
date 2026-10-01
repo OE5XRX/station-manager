@@ -41,7 +41,15 @@ Trial wird armiert → OTA klappt auf echter HW.
 - Warum ein früher erfolgreicher b-Boot nicht committed blieb (Commit/Verify-Pfad), separat.
 
 ## Verifikation
-- Unit: `install_to_slot` öffnet NICHT mit O_SYNC, synct (fdatasync/fsync) mind. einmal,
-  Round-trip-Bytes korrekt; bestehende Tests (truncated/multi-stream/EIO) bleiben grün.
-- **Auf echtem CM4 (Pflicht, sim reicht nicht):** patched Write-Pfad schreibt die rootfs
-  nach dem inaktiven Slot ohne HW-Reset, in deutlich <7 min; Trial wird armiert.
+- Unit: `install_to_slot` öffnet NICHT mit O_SYNC, der periodische fdatasync-Pfad wird
+  wirklich ausgeübt (Test schrumpft `_SYNC_INTERVAL` unter die Payload und zählt
+  mehrere in-loop fdatasyncs, getrennt vom finalen fsync), Round-trip-Bytes korrekt;
+  bestehende Tests (truncated/multi-stream/EIO/apply-flow) bleiben grün.
+- **Auf echtem CM4 (Pflicht, sim reicht nicht):** der gefixte Write-Pfad hat die volle
+  2.5 GB rootfs (2 684 354 560 B) in **499,8 s ≈ 8,3 min @ 5,4 MB/s (buffered)** nach dem
+  inaktiven Slot geschrieben — die Station blieb durchgehend oben (uptime ununterbrochen),
+  **kein HW-Watchdog-Reset**. Entscheidend: 8,3 min liegen **über** der ~7-min-Schwelle, bei
+  der O_SYNC resettete — das beweist, dass die *I/O-Starvation* der Auslöser war, nicht die
+  bloße Dauer. (Dieser CM4-Test validiert den **Write-I/O-Pfad**; er hat bewusst **keinen**
+  Trial armiert — das Arming/`set_upgrade_pending` ist durch die `apply_update`-Unit-Tests
+  abgedeckt, nicht Teil dieses rohen Slot-Writes.)

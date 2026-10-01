@@ -100,16 +100,23 @@ def test_install_to_slot_does_not_use_o_sync_but_still_syncs(tmp_path, monkeypat
             seen["flags"] = flags
         return real_open(path, flags, *a, **k)
 
-    sync_calls = {"n": 0}
+    # Shrink the periodic-flush interval below the payload size so the write
+    # actually crosses it several times — otherwise (64 MiB default vs a 4 MiB
+    # payload) the periodic path never runs and the test would only prove the
+    # final fsync. 1 MiB over 4 MiB → ~4 periodic fdatasyncs.
+    monkeypatch.setattr(ota, "_SYNC_INTERVAL", 1 << 20)
+
+    fdatasync_calls = {"n": 0}
+    fsync_calls = {"n": 0}
     real_fsync = os.fsync
     real_fdatasync = os.fdatasync
 
     def counting_fsync(fd):
-        sync_calls["n"] += 1
+        fsync_calls["n"] += 1
         return real_fsync(fd)
 
     def counting_fdatasync(fd):
-        sync_calls["n"] += 1
+        fdatasync_calls["n"] += 1
         return real_fdatasync(fd)
 
     monkeypatch.setattr(ota.os, "open", capturing_open)
@@ -123,7 +130,12 @@ def test_install_to_slot_does_not_use_o_sync_but_still_syncs(tmp_path, monkeypat
         "install_to_slot must not use O_SYNC — it starves the HW watchdog on the "
         "real CM4's slow SD and gets the box reset mid-write"
     )
-    assert sync_calls["n"] >= 1, "expected at least one fdatasync/fsync for durability"
+    # Periodic flush path exercised (not just the final fsync): with a 1 MiB
+    # interval over a 4 MiB payload we expect multiple in-loop fdatasyncs.
+    assert fdatasync_calls["n"] >= 2, (
+        f"expected the periodic fdatasync path to run (got {fdatasync_calls['n']} calls)"
+    )
+    assert fsync_calls["n"] >= 1, "expected a final fsync for durability"
     assert target.read_bytes()[: len(payload)] == payload, "round-trip bytes must be preserved"
 
 
