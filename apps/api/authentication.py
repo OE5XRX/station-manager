@@ -123,9 +123,7 @@ class PersonalAccessTokenAuthentication(BaseAuthentication):
             raise AuthenticationFailed("Invalid bearer header.")
         token_hash = PersonalAccessToken.hash_token(raw)
         try:
-            token = PersonalAccessToken.objects.select_related("user").get(
-                token_hash=token_hash
-            )
+            token = PersonalAccessToken.objects.select_related("user").get(token_hash=token_hash)
         except PersonalAccessToken.DoesNotExist:
             raise AuthenticationFailed("Invalid token.")
 
@@ -136,9 +134,7 @@ class PersonalAccessTokenAuthentication(BaseAuthentication):
 
         # best-effort last-used stamp; never break the request on failure
         try:
-            PersonalAccessToken.objects.filter(pk=token.pk).update(
-                last_used_at=timezone.now()
-            )
+            PersonalAccessToken.objects.filter(pk=token.pk).update(last_used_at=timezone.now())
         except Exception:  # noqa: BLE001 - telemetry only, must not 500
             pass
 

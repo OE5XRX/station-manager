@@ -11,9 +11,7 @@ from apps.stations.models import Region, Station
 
 def _is_authenticated_member(user):
     return bool(
-        user
-        and user.is_authenticated
-        and user.membership_level != user.MembershipLevel.APPLICANT
+        user and user.is_authenticated and user.membership_level != user.MembershipLevel.APPLICANT
     )
 
 
@@ -22,9 +20,7 @@ def accessible_regions(user):
         return Region.objects.none()
     if user.is_internal:
         return Region.objects.all()
-    managed = user.region_assignments.filter(role="manager").values_list(
-        "region_id", flat=True
-    )
+    managed = user.region_assignments.filter(role="manager").values_list("region_id", flat=True)
     via_station = user.station_assignments.values_list("station__region_id", flat=True)
     region_ids = set(managed) | {r for r in via_station if r is not None}
     return Region.objects.filter(id__in=region_ids)

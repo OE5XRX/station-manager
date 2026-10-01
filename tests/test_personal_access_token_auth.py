@@ -1,5 +1,6 @@
-import pytest
 from datetime import timedelta
+
+import pytest
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.test import APIRequestFactory

@@ -36,9 +36,10 @@
             {% trans "Kopiere dieses Token jetzt und bewahre es sicher auf. Es wird nie wieder angezeigt." %}
           </span>
         </div>
-        <div class="form-group" style="margin-top:1rem;">
+        <div class="form-group mt-14">
           <label class="form-label">{% trans "Token" %}</label>
-          <pre class="t-mono" style="background:var(--surface-2,#f4f4f5);padding:12px 16px;border-radius:6px;word-break:break-all;">{{ raw_token }}</pre>
+          <pre class="codebox sensitive t-mono" id="raw-token" style="word-break:break-all;">{{ raw_token }}</pre>
+          <button type="button" class="btn btn-sm mt-10" data-copy="#raw-token">{% trans "Kopieren" %}</button>
         </div>
         <div class="form-group">
           <label class="form-label">{% trans "Präfix zur Wiedererkennung" %}</label>
