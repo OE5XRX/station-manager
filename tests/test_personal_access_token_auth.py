@@ -78,6 +78,22 @@ def test_expired_and_revoked_rejected(member_user):
 
 
 @pytest.mark.django_db
+def test_bearer_with_invalid_utf8_is_clean_401():
+    """Invalid UTF-8/ASCII bytes in the token must produce a clean 401, never a 500.
+
+    We set META directly because APIRequestFactory encodes the header via
+    latin-1 and would reject surrogates.  get_authorization_header() returns
+    the raw bytes unchanged when META already contains bytes.
+    """
+    from django.test import RequestFactory as DjangoRequestFactory
+
+    req = DjangoRequestFactory().get("/api/v1/ping/")
+    req.META["HTTP_AUTHORIZATION"] = b"Bearer \xff\xfe"
+    with pytest.raises(AuthenticationFailed):
+        PersonalAccessTokenAuthentication().authenticate(req)
+
+
+@pytest.mark.django_db
 def test_inactive_owner_rejected(member_user):
     token, raw = PersonalAccessToken.issue(member_user, name="x")
     member_user.is_active = False

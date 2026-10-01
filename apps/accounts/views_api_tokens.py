@@ -2,6 +2,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 from django.views import View
 
 from apps.api.models import PersonalAccessToken
@@ -21,7 +22,7 @@ class ApiTokenListView(LoginRequiredMixin, View):
             return render(
                 request,
                 self.template_name,
-                {"tokens": tokens, "error": "Name ist erforderlich."},
+                {"tokens": tokens, "error": _("Name ist erforderlich.")},
             )
         token, raw = PersonalAccessToken.issue(request.user, name=name)
         return render(

@@ -107,12 +107,20 @@ class PersonalAccessTokenAuthentication(BaseAuthentication):
 
     def authenticate(self, request):
         auth = get_authorization_header(request).split()
-        if not auth or auth[0].decode().lower() != self.keyword.lower():
+        if not auth:
+            return None
+        try:
+            scheme = auth[0].decode("ascii")
+        except UnicodeDecodeError:
+            raise AuthenticationFailed("Invalid bearer header.")
+        if scheme.lower() != self.keyword.lower():
             return None
         if len(auth) != 2:
             raise AuthenticationFailed("Invalid bearer header.")
-
-        raw = auth[1].decode()
+        try:
+            raw = auth[1].decode("ascii")
+        except UnicodeDecodeError:
+            raise AuthenticationFailed("Invalid bearer header.")
         token_hash = PersonalAccessToken.hash_token(raw)
         try:
             token = PersonalAccessToken.objects.select_related("user").get(
