@@ -401,32 +401,47 @@
               <dl class="dlist" style="grid-template-columns: 140px 1fr;">
                 <dt>{% trans "Undervoltage" %}</dt>
                 <dd>
-                  {% if tel.undervoltage_now %}
-                    <span style="color:var(--red);">{% trans "now" %}</span>
-                  {% elif tel.undervoltage_occurred %}
-                    <span style="color:var(--yellow);">{% trans "occurred" %}</span>
+                  {% if tel.data.power %}
+                    {% if tel.undervoltage_now %}
+                      <span style="color:var(--red);">{% trans "now" %}</span>
+                    {% elif tel.undervoltage_occurred %}
+                      <span style="color:var(--yellow);">{% trans "occurred" %}</span>
+                    {% else %}
+                      <span class="t-muted">{% trans "ok" %}</span>
+                    {% endif %}
                   {% else %}
-                    <span class="t-muted">{% trans "ok" %}</span>
+                    <span class="t-muted">{% trans "not reported" %}</span>
                   {% endif %}
                 </dd>
                 <dt>{% trans "Throttled" %}</dt>
                 <dd>
-                  {% if tel.throttled_now %}
-                    <span style="color:var(--red);">{% trans "now" %}</span>
-                  {% elif tel.throttled_occurred %}
-                    <span style="color:var(--yellow);">{% trans "occurred" %}</span>
+                  {% if tel.data.power %}
+                    {% if tel.throttled_now %}
+                      <span style="color:var(--red);">{% trans "now" %}</span>
+                    {% elif tel.throttled_occurred %}
+                      <span style="color:var(--yellow);">{% trans "occurred" %}</span>
+                    {% else %}
+                      <span class="t-muted">{% trans "ok" %}</span>
+                    {% endif %}
                   {% else %}
-                    <span class="t-muted">{% trans "ok" %}</span>
+                    <span class="t-muted">{% trans "not reported" %}</span>
                   {% endif %}
                 </dd>
                 <dt>{% trans "Storage wear" %}</dt>
                 <dd class="t-mono">
-                  {% if tel.worst_life_time_pct is not None %}{{ tel.worst_life_time_pct }}%{% else %}—{% endif %}
-                  {% if tel.worst_pre_eol and tel.worst_pre_eol != "normal" and tel.worst_pre_eol != "n/a" %}
-                    <span style="color:var(--yellow);">{{ tel.worst_pre_eol }}</span>
+                  {% if tel.data.storage %}
+                    {% if tel.worst_life_time_pct is not None %}{{ tel.worst_life_time_pct }}%{% else %}—{% endif %}
+                    {% if tel.worst_pre_eol and tel.worst_pre_eol != "normal" and tel.worst_pre_eol != "n/a" %}
+                      <span style="color:var(--yellow);">{{ tel.worst_pre_eol }}</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="t-muted">{% trans "not reported" %}</span>
                   {% endif %}
                 </dd>
-                <dt>{% trans "I/O errors" %}</dt><dd class="t-mono">{{ tel.io_error_count }}</dd>
+                <dt>{% trans "I/O errors" %}</dt>
+                <dd class="t-mono">
+                  {% if tel.data.storage %}{{ tel.io_error_count }}{% else %}<span class="t-muted">{% trans "not reported" %}</span>{% endif %}
+                </dd>
               </dl>
             </div>
           </div>
