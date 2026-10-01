@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "oauth2_provider",
     "rest_framework",
     "drf_spectacular",
+    "drf_spectacular_sidecar",
     "django_htmx",
     "storages",
     "axes",
@@ -209,6 +210,11 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "User/automation REST API. Rights mirror membership + topology.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # Serve Swagger/ReDoc assets from the sidecar package (same-origin static)
+    # instead of jsDelivr, so the docs page works under script-src 'self'.
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
 }
 
 # Django Channels

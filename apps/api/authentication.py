@@ -158,3 +158,31 @@ class PersonalAccessTokenScheme(OpenApiAuthenticationExtension):
 
     def get_security_definition(self, auto_schema):
         return {"type": "http", "scheme": "bearer"}
+
+
+class DeviceKeyScheme(OpenApiAuthenticationExtension):
+    """Document the Ed25519 DeviceKey authenticator in the OpenAPI schema.
+
+    DeviceKeyAuthentication is a custom authenticator, so without this
+    extension drf-spectacular cannot resolve it and emits the agent
+    operations without any security scheme. The signature auth spans three
+    request headers; the primary ``Authorization`` header is modelled as an
+    apiKey scheme and the companion headers are described in prose.
+    """
+
+    target_class = "apps.api.authentication.DeviceKeyAuthentication"
+    name = "DeviceKey"
+
+    def get_security_definition(self, auto_schema):
+        return {
+            "type": "apiKey",
+            "in": "header",
+            "name": "Authorization",
+            "description": (
+                "Ed25519 device-signature auth. Send `Authorization: DeviceKey "
+                "<station_id>` together with the `X-Device-Signature` "
+                "(base64-encoded Ed25519 signature) and `X-Device-Timestamp` "
+                "(unix seconds) headers. The signed payload is "
+                "`{timestamp}:{sha256(body)}`."
+            ),
+        }

@@ -22,3 +22,6 @@ pywebpush>=2.3,<3.0
 django-oauth-toolkit>=3.2,<4.0
 geoip2>=4.8,<6.0
 drf-spectacular>=0.30,<0.31
+# Self-hosted Swagger/ReDoc assets so /api/v1/docs/ works under the repo CSP
+# (script-src 'self'); no jsDelivr CDN. Date-versioned, tracks drf-spectacular.
+drf-spectacular-sidecar>=2026.10.1,<2027
