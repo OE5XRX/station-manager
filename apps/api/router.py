@@ -35,3 +35,4 @@ router.register(r"images", read_views.ImageReleaseViewSet, basename="image")
 router.register(
     r"image-import-jobs", read_views.ImageImportJobViewSet, basename="image-import-job"
 )
+router.register(r"users", read_views.UserViewSet, basename="user")

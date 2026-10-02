@@ -7,6 +7,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
+from apps.accounts.models import User
 from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.permissions import TopologyScopedPermission
 from apps.api.read_filters import (
@@ -37,6 +38,7 @@ from apps.api.read_serializers import (
     StationSerializer,
     StationTagSerializer,
     StationTelemetrySerializer,
+    UserSerializer,
 )
 from apps.api.scoping import (
     accessible_alerts,
@@ -286,3 +288,17 @@ class ImageImportJobViewSet(ScopedReadOnlyViewSet):
         if user.is_internal:
             return ImageImportJob.objects.all().order_by("-created_at")
         return ImageImportJob.objects.none()
+
+
+class UserViewSet(ScopedReadOnlyViewSet):
+    """User profiles: internal (staff/admin) see all; others see only themselves."""
+
+    serializer_class = UserSerializer
+    search_fields = ["username", "email", "first_name", "last_name"]
+    ordering_fields = ["username", "date_joined"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_internal:
+            return User.objects.all().order_by("username")
+        return User.objects.filter(pk=user.pk)

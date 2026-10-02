@@ -5,6 +5,7 @@ No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 
 from rest_framework import serializers
 
+from apps.accounts.models import User
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
@@ -282,4 +283,41 @@ class ImageImportJobSerializer(serializers.ModelSerializer):
             "requested_by",
             "created_at",
             "completed_at",
+        ]
+
+
+class UserSerializer(serializers.ModelSerializer):
+    """Read-only user profile.
+
+    Sensitive fields (password, last_login, is_staff, is_superuser, is_active,
+    deleted_at, deleted_by) are structurally absent — not listed in ``fields``.
+    """
+
+    is_admin = serializers.BooleanField(read_only=True)
+    is_internal = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "language",
+            "notify_channel",
+            "membership_level",
+            "bio",
+            "avatar",
+            "qth_name",
+            "qrz_url",
+            "address",
+            "phone",
+            "latitude",
+            "longitude",
+            "locator",
+            "is_directory_visible",
+            "date_joined",
+            "is_admin",
+            "is_internal",
         ]
