@@ -2,9 +2,113 @@
 
 Takes the agent's run_diagnostic output (anchor, reference, taps, static_gains)
 and adds per-stage deltas and a human verdict.  Pure: no I/O, no Django models.
+
+Also provides the U-anchor Opus reference fixture loader and §5.3 media-frame
+iterator used by the server-side diagnostic injection path.
 """
 
 from __future__ import annotations
+
+import struct
+from collections.abc import Iterator
+from pathlib import Path
+
+from station_agent.audio.frame import pack_frame
+
+# ---------------------------------------------------------------------------
+# U-anchor Opus reference fixture
+# ---------------------------------------------------------------------------
+
+#: Default path to the committed .opusframes fixture — a sequence of
+#: length-prefixed raw Opus packets encoding a 1 kHz −20 dBFS sine at 16 kHz.
+DEFAULT_REF_PATH: Path = Path(__file__).parent / "data" / "ref_1khz_-20dbfs_16k.opusframes"
+
+# Samples per 20 ms frame at 16 kHz.
+_SAMPLES_PER_FRAME: int = 16000 * 20 // 1000  # 320
+
+
+def load_reference_frames(path: Path = DEFAULT_REF_PATH) -> list[bytes]:
+    """Read a length-prefixed ``.opusframes`` file into a list of Opus payloads.
+
+    Each record in the file is a big-endian ``uint16`` length followed by that
+    many bytes of raw Opus data.  A trailing partial record (truncated file) is
+    silently skipped so the function remains safe against partial writes.
+
+    Parameters
+    ----------
+    path:
+        Path to the ``.opusframes`` file.  Defaults to :data:`DEFAULT_REF_PATH`.
+
+    Returns
+    -------
+    list[bytes]
+        One entry per packet; each entry is a non-empty :class:`bytes` object.
+    """
+    data = path.read_bytes()
+    frames: list[bytes] = []
+    offset = 0
+    while offset < len(data):
+        # Need at least 2 bytes for the length prefix.
+        if offset + 2 > len(data):
+            break  # trailing partial record — stop
+        (length,) = struct.unpack_from(">H", data, offset)
+        offset += 2
+        if offset + length > len(data):
+            break  # trailing partial payload — stop
+        frames.append(data[offset : offset + length])
+        offset += length
+    return frames
+
+
+def iter_media_frames(
+    frames: list[bytes],
+    stream_ref: int,
+    *,
+    repeat: int,
+    seq0: int = 0,
+) -> Iterator[bytes]:
+    """Wrap Opus packets into §5.3 media frames for TX injection.
+
+    Each packet in *frames* is packed into a media frame via
+    :func:`station_agent.audio.frame.pack_frame`.  The list is looped
+    *repeat* times so the caller can cover any diagnostics window without
+    storing more data than needed.  ``seq`` advances monotonically across the
+    whole loop; ``ts`` advances by :data:`_SAMPLES_PER_FRAME` (320) per frame.
+
+    Parameters
+    ----------
+    frames:
+        List of raw Opus payloads (e.g. from :func:`load_reference_frames`).
+    stream_ref:
+        The numeric stream handle to embed in each §5.3 frame header.
+    repeat:
+        How many times to loop *frames*.
+    seq0:
+        Starting sequence number (default 0).
+
+    Yields
+    ------
+    bytes
+        One packed §5.3 media frame per iteration.
+    """
+    seq = seq0
+    ts = 0
+    for _ in range(repeat):
+        for payload in frames:
+            yield pack_frame(
+                stream_ref=stream_ref,
+                seq=seq,
+                ts=ts,
+                flags=0,
+                payload=payload,
+            )
+            seq += 1
+            ts += _SAMPLES_PER_FRAME
+
+
+# ---------------------------------------------------------------------------
+# Report assembly
+# ---------------------------------------------------------------------------
 
 # 20·log10(0.40) ≈ -7.96 dB — the expected sink-volume stage attenuation.
 SINK_EXPECTED_DB: float = -7.96
