@@ -280,9 +280,36 @@ def run_diagnostic(
     spawn=_default_spawn,
     read_measfd=_default_read_measfd,
     port_allocator=None,
-    reverse_tap=None,
     rate=16000,
 ):
+    """Run a diagnostic measurement for the given anchor point.
+
+    Supported anchors:
+
+    * **C** — calibrated inject via ``build_measured_inject_argv``.  A sine wave at
+      the requested level is injected into the TX PipeWire node and the raw PCM is
+      captured from the fdsink tap.  D is computed from C + the static sink volume
+      gain (``collect_static_gains``).
+
+    Anchor **U** (server-originated headless reference) is reserved for a future
+    on-station follow-up.  The engine never installs a feeding bridge for U and
+    ``ws_client`` awaits commands serially so reference frames cannot arrive; the
+    anchor is therefore not functional yet.  ``run_diagnostic`` fails fast with an
+    error dict rather than binding a UDP port and measuring silence.
+
+    **D** is always computed from C + measured sink volume on real HW.  The
+    ``build_reverse_tap_argv`` helper exists as a foundation for a possible future
+    direct D measurement (on-station or in a sim loopback), but ``run_diagnostic``
+    does not use it today.
+    """
+    if anchor == "U":
+        return {
+            "anchor": "U",
+            "error": (
+                "anchor U (server-originated headless reference) is an on-station "
+                "follow-up and not yet functional; use anchor C"
+            ),
+        }
     freq = int(signal.get("freq_hz", REF_FREQ_HZ))
     level = float(signal.get("level_dbfs", REF_LEVEL_DBFS))
     # BUG5: clamp duration on BOTH sides — negative/zero would produce invalid nbytes;
@@ -302,9 +329,6 @@ def run_diagnostic(
         make_argv = lambda mfd: build_measured_inject_argv(  # noqa: E731
             tx_node, freq, level, rate, meas_fd=mfd
         )
-    elif anchor == "U":
-        port = port_allocator.acquire() if port_allocator else 47000
-        make_argv = lambda mfd: build_measured_tx_argv(tx_node, port, rate, meas_fd=mfd)  # noqa: E731
     else:
         return {"anchor": anchor, "error": f"unknown anchor {anchor!r}"}
 
@@ -314,8 +338,6 @@ def run_diagnostic(
         pcm = read_measfd(read_fd, nbytes, dur_ms / 1000 + 1.0)
     finally:
         _terminate_proc(proc)
-        if anchor == "U" and port_allocator:
-            port_allocator.release(port)
 
     # Use the last window_ms of the captured PCM (drop settle lead-in).
     win_bytes = int(rate * REF_WINDOW_MS / 1000) * 2

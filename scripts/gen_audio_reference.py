@@ -1,19 +1,24 @@
 """Generate the U-anchor Opus reference fixture.
 
 Produces ``apps/audio/data/ref_1khz_-20dbfs_16k.opusframes``: a sequence of
-length-prefixed raw Opus packets encoding a 1 kHz sine wave at approximately
-−20 dBFS peak (volume=0.1 ≈ −20 dBFS), 20 ms per packet, 16 kHz mono voice.
+length-prefixed raw Opus packets encoding a 1 kHz sine wave at exactly
+−20 dBFS peak, 20 ms per packet, 16 kHz mono voice.
 
 The exact GStreamer pipeline used:
 
     gst-launch-1.0 -q \\
-        audiotestsrc num-buffers=25 wave=sine freq=1000 \\
+        audiotestsrc num-buffers=25 wave=sine freq=1000 volume=1.0 \\
         ! audio/x-raw,rate=16000,channels=1 \\
         ! audioconvert \\
         ! volume volume=0.1 \\
         ! opusenc audio-type=voice frame-size=20 inband-fec=true \\
         ! rtpopuspay pt=96 \\
         ! udpsink host=127.0.0.1 port=47900 sync=false
+
+``audiotestsrc`` has a built-in ``volume`` property that defaults to 0.8; without
+explicitly setting it to 1.0, the tone would be at (0.8 × 0.1) = 0.08 of full
+scale ≈ −21.94 dBFS instead of the intended −20 dBFS.  The ``volume volume=0.1``
+element is the sole gain stage; ``audiotestsrc volume=1.0`` passes through at unity.
 
 num-buffers=25 → approximately 25 RTP packets of 20 ms each ≈ 500 ms of audio.
 
@@ -66,6 +71,7 @@ GST_PIPELINE = [
     f"num-buffers={NUM_BUFFERS}",
     "wave=sine",
     "freq=1000",
+    "volume=1.0",  # override audiotestsrc's 0.8 default; only the volume element sets the level
     "!",
     "audio/x-raw,rate=16000,channels=1",
     "!",

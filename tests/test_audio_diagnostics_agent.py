@@ -157,6 +157,41 @@ def test_run_diagnostic_anchor_c_reports_c_and_derived_d():
     assert rep["static_gains"]["sink_volume_linear"] == 0.40
 
 
+def test_run_diagnostic_anchor_u_fails_fast():
+    """anchor U must return an error dict immediately without spawning anything."""
+
+    class FakeBackend:
+        def resolve_node(self, slot, direction):
+            return "oe5xrx.slot1.tx"
+
+        def tx_sink_node(self, slot):
+            return "FM.Mono"
+
+        def get_volume(self, node):
+            return 0.40
+
+    spawn_called = []
+
+    def fake_spawn(make_argv):
+        spawn_called.append(True)
+        return object(), None
+
+    def fake_read(read_fd, nbytes, timeout):
+        return b""
+
+    rep = d.run_diagnostic(
+        anchor="U",
+        slot=1,
+        signal={"level_dbfs": -20.0},
+        backend=FakeBackend(),
+        spawn=fake_spawn,
+        read_measfd=fake_read,
+    )
+    assert "error" in rep, "anchor U must return an error dict"
+    assert "follow-up" in rep["error"], f"error should mention 'follow-up', got: {rep['error']!r}"
+    assert not spawn_called, "spawn must NOT be called for anchor U"
+
+
 def test_run_diagnostic_clamps_absurd_duration():
     class FakeBackend:
         def resolve_node(self, s, d_):
