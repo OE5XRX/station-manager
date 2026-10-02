@@ -180,11 +180,34 @@ die schon offene, agent-/browser-initiierte WebSocket (heute Control/PTT/Audio):
 - Kein Control-Write (key/unkey) hier — das ist der andere Teil der
   control+audio-API (eigenes Feature/Phase).
 
-## Offene Punkte
-- **Gelöst:** Trigger/Datenkanal = Mess-/Inject-Kommando über die bestehende
-  agent-/browser-initiierte WebSocket (Control-/Audio-Consumer), Result zurück
-  über dieselbe WS; Orchestrierung am station-manager; Heartbeat (#150) als
-  Async-Fallback. Konkrete Message-Typen/Consumer im Plan festlegen.
-- Genaues Referenz-Level/-Frequenz + Fenstergröße als Kalibrier-Konvention.
-- Welcher Consumer die Diagnostic-Messages trägt (bestehenden control/audio
-  erweitern vs. dünner eigener diagnostic-Channel) — Plan-Entscheidung.
+## Offene Punkte — Entschieden
+
+Alle drei offenen Punkte sind im Rahmen der Implementierung (Tasks 1–11) entschieden:
+
+**1. Consumer / Datenkanal:**
+Diagnostic-Messages reiten auf dem **bestehenden Agent AUDIO Consumer**
+(`AgentAudioConsumer`). Kein eigener Diagnostic-Channel. Korrelation erfolgt
+per `request_id`: der Orchestrator reserviert via `channel_layer.new_channel()`
+einen einmaligen Reply-Channel, sendet das Kommando mit dieser ID, und wartet
+bounded (Timeout 504) auf das `diag_result`-Event zurück. Der Agent sendet
+`diag_result` mit demselben `request_id` → Server kann Request und Antwort
+eindeutig zuordnen, ohne State außerhalb der Channel-Layer zu halten.
+
+**2. Kalibrier-Konvention:**
+- Referenzton: **Sinus 1000 Hz**
+- Pegel: **−20 dBFS (Peak)**
+- Messfenster: **300 ms** (trailing, nach Settle)
+- Settle Lead-in: **200 ms** (wird vorne vom Capture verworfen)
+
+Diese Werte sind als Konstanten in `station_agent.audio.diagnostics` fixiert
+(`REF_FREQ_HZ = 1000`, `REF_LEVEL_DBFS = -20.0`, `REF_WINDOW_MS = 300`,
+`REF_SETTLE_MS = 200`) und dienen als Defaults für alle API-Aufrufe.
+
+**3. D-Berechnung (real HW vs. Loopback):**
+Auf **echter Hardware** wird D berechnet aus C + dem gemessenen PipeWire
+Sink-Volumen (gesammelt via `wpctl get-volume`): `D = C + sink_volume_db`.
+Der `computed: true`-Flag im Tap-Dict zeigt an, dass D nicht direkt gemessen
+wurde. Wo ein **Loopback-Tap** vorhanden ist (Sim-/Bench-Umgebung mit
+`reverse_tap`-Callable), kann D auch direkt gemessen werden — der `computed`-Flag
+ist dann `false`. Die Unterscheidung ist im Schema sichtbar und für AI-Konsumenten
+interpretierbar.
