@@ -10,6 +10,7 @@ ALSA/UAC2 edge (D); carrier keying is a separate control-plane action.
 from __future__ import annotations
 
 import math
+import re as _re
 import struct
 
 from station_agent.audio import selftest as _selftest
@@ -91,3 +92,23 @@ def build_measured_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
 
 def build_reverse_tap_argv(tap: str, rate: int, duration: float) -> list[str]:
     return _selftest.build_tx_capture_argv(tap, rate, duration)
+
+
+_WPCTL_VOL = _re.compile(r"Volume:\s*([0-9]+\.[0-9]+)")
+
+
+def parse_wpctl_volume(text: str) -> float | None:
+    m = _WPCTL_VOL.search(text or "")
+    return float(m.group(1)) if m else None
+
+
+def collect_static_gains(backend, slot: int) -> dict:
+    sink = getattr(backend, "tx_sink_node", lambda s: None)(slot)
+    linear = backend.get_volume(sink) if sink else None
+    db = 20 * math.log10(linear) if linear and linear > 0 else None
+    return {
+        "sink_volume_linear": linear,
+        "sink_volume_db": round(db, 2) if db is not None else None,
+        "resample": "48k<->8k",
+        "note": "sink_volume_db is the C->D static gain stage (spec: sink vol 0.40 ~= -8 dB)",
+    }

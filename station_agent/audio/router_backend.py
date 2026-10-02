@@ -63,6 +63,8 @@ class RouterBackend(Protocol):
     def link(self, out_node: str, in_node: str) -> bool: ...
     def unlink(self, out_node: str, in_node: str) -> bool: ...
     def set_volume(self, node: str, linear: float) -> bool: ...
+    def get_volume(self, node: str) -> float | None: ...
+    def tx_sink_node(self, slot: int) -> str | None: ...
 
 
 class PipeWireRouterBackend:
@@ -201,6 +203,18 @@ class PipeWireRouterBackend:
 
     def set_volume(self, node: str, linear: float) -> bool:
         return self._ok(self._safe_run(["wpctl", "set-volume", node, f"{linear:g}"]))
+
+    def get_volume(self, node: str) -> float | None:
+        res = self._safe_run(["wpctl", "get-volume", node])
+        if res is None or res.returncode != 0:
+            return None
+        from station_agent.audio.diagnostics import parse_wpctl_volume
+        return parse_wpctl_volume(res.stdout)
+
+    def tx_sink_node(self, slot: int) -> str | None:
+        # The device sink that carries the 0.40 volume stage is the TX node's
+        # target; on this platform the TX inject node IS that sink.
+        return self.resolve_node(slot, "tx")
 
     # --- helpers -----------------------------------------------------------
     def _safe_run(self, argv: list[str]) -> RunResult | None:

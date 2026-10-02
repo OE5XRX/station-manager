@@ -1,4 +1,34 @@
+import math
+
 from station_agent.audio import diagnostics as d
+
+
+def test_parse_wpctl_volume():
+    assert d.parse_wpctl_volume("Volume: 0.40") == 0.40
+    assert d.parse_wpctl_volume("Volume: 1.00 [MUTED]") == 1.00
+    assert d.parse_wpctl_volume("garbage") is None
+
+
+def test_collect_static_gains_reports_sink_db():
+    class FakeBackend:
+        def resolve_node(self, slot, direction):
+            return "oe5xrx.slot1.tx"
+        def tx_sink_node(self, slot):
+            return "FM.Mono"
+        def get_volume(self, node):
+            return 0.40
+    g = d.collect_static_gains(FakeBackend(), 1)
+    assert g["sink_volume_linear"] == 0.40
+    assert abs(g["sink_volume_db"] - (20 * math.log10(0.40))) < 0.01
+
+
+def test_collect_static_gains_tolerates_missing_volume():
+    class FakeBackend:
+        def resolve_node(self, slot, direction): return "n"
+        def tx_sink_node(self, slot): return None
+        def get_volume(self, node): return None
+    g = d.collect_static_gains(FakeBackend(), 1)
+    assert g["sink_volume_linear"] is None and g["sink_volume_db"] is None
 
 
 def test_measured_inject_has_tee_sink_and_measfd():
