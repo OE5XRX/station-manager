@@ -4,6 +4,7 @@ Usage:
   python -m station_agent                     run the agent (default)
   python -m station_agent selftest serial [--slot N] [--base PATH]
   python -m station_agent selftest audio  [--slot N] [--tx-freq HZ] [--rate HZ]
+  python -m station_agent selftest control-stability [--base PATH] [--duration S]
 """
 
 import argparse
@@ -28,6 +29,15 @@ def main(argv=None) -> int:
     audio_p.add_argument("--rate", type=int, default=8000)
     audio_p.add_argument("--duration", type=float, default=1.0)
 
+    stab_p = st_sub.add_parser(
+        "control-stability",
+        help="re-discovery under concurrent telemetry-poll load (PR #135 flap gate)",
+    )
+    stab_p.add_argument("--base", default="/dev/oe5xrx")
+    stab_p.add_argument("--duration", type=float, default=20.0)
+    stab_p.add_argument("--poll-hz", type=float, default=10.0)
+    stab_p.add_argument("--rescan-s", type=float, default=2.0)
+
     args = parser.parse_args(argv)
 
     if args.cmd == "selftest":
@@ -44,6 +54,15 @@ def main(argv=None) -> int:
                 tx_freq=args.tx_freq,
                 rate=args.rate,
                 duration=args.duration,
+            )
+        if args.what == "control-stability":
+            from station_agent import selftest
+
+            return selftest.run_control_stability(
+                args.base,
+                duration=args.duration,
+                poll_hz=args.poll_hz,
+                rescan_s=args.rescan_s,
             )
         # `selftest` with no/unknown sub-command must NOT silently start the
         # long-running agent (a typo would otherwise boot production behaviour).

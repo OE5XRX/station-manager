@@ -15,6 +15,52 @@ Repo-spezifische Architekturnotizen. Übergeordnete Projektstrategie, Arbeitspro
 
 ## station-agent
 
+### Control-Device Single-Owner-Invariante
+Ein Slot-Control-Device (`/dev/oe5xrx/slotN/control`, real CDC-ACM `ttyACM*`) ist **eine
+einzige** serielle Leitung. **Jeder** Zugriff darauf — Command, Telemetry-Poll, Re-Discovery
+**und** der Heartbeat-Inventory-Scan — darf immer nur **einen** gleichzeitigen Opener haben.
+Zwei unkoordinierte `open()` auf dieselbe Leitung interleaven ihre Writes/Reads: die Antwort
+des einen zerschießt die des anderen (z.B. ein `MODULE-RESULT` des Polls landet in der
+`MODULE-LIST`-Antwort der Probe → `probe_slot` gibt `None` → Slot fällt aus dem Inventory).
+
+Die Invariante wird auf **zwei** Ebenen durchgesetzt:
+
+1. **Prozessweit: Path-keyed `threading.Lock` auf dem Device-Pfad** — `devlock.control_device_lock`,
+   akquiriert von **JEDEM** Opener: `slot_control.SlotControl.execute` (Commands/Polls),
+   `slot_discovery.probe_slot` (Discovery **und** Heartbeat-Scan). Das ist die einzige Ebene,
+   die thread-übergreifend greift: der Heartbeat läuft in einem **separaten Thread** (nicht im
+   Control-Event-Loop), eine `asyncio.Lock` kann ihn nicht serialisieren. Der Lock wird **vor**
+   dem `open()` geholt und erst **nach** dem `close()` freigegeben — er deckt den **gesamten**
+   open→configure→converse→restore→close-Zyklus. Ein `flock` auf dem bereits offenen fd würde
+   das Öffnen/Konfigurieren (Baud, Raw-Mode, Input-Buffer-Reset) und das termios-Restore/Close
+   ungeschützt lassen (Copilot #151 Runde 2) — beides perturbiert die Leitung. Timeout = fail
+   closed (`None`/Timeout-Result), nie ein zweiter paralleler Owner. Cross-Prozess (z.B. manueller
+   `selftest` bei laufendem Agent) deckt die operative HW-Disziplin (genau EIN Zugriff), nicht
+   dieser In-Prozess-Lock.
+2. **Intra-Loop-Optimierung: Broker-Per-Slot-`asyncio.Lock`** (`Broker._slot_locks`) — serialisiert
+   Command/Poll **innerhalb** des Control-Loops (in `_execute`). `Broker.rediscover(discover_fn)`
+   hält diese Locks **NICHT** (control_client ruft `discover_slots()` dennoch nie direkt, sondern
+   immer über `rediscover`): Alle Slot-Locks für den ganzen sequentiellen Scan zu halten würde
+   Cross-Slot-Head-of-Line-Blocking erzeugen — eine langsame/tote Probe blockierte Commands/Telemetry
+   auf **jedem** gesunden Slot über das Server-Command-Timeout (10 s) hinaus (Copilot #151 Runde 3).
+   Die Pro-Device-Serialisierung macht der `devlock`, nicht diese Locks. `rediscover` ist dennoch
+   cancel-sicher: wird der Loop beim Disconnect mitten im Scan gecancelt, läuft die Executor-Future
+   unter `asyncio.shield` aus (`await asyncio.wait`), bevor die Cancellation weitergereicht wird —
+   keine verwaiste Probe überlebt den Call.
+
+Ergänzend:
+- `Broker._execute` gibt bei fehlendem Control-Pfad (`_control_path is None`) sauber
+  `unknown_slot` zurück statt `os.open(None)` zu werfen.
+- `_SlotInventoryDebouncer` (control_client) hält ein kurz fehlendes Modul noch N Zyklen,
+  damit ein transienter Probe-Miss (inkl. flock-Timeout) das Inventory nicht flappt.
+
+**Warum:** Regression aus PR #135 — die neu eingeführte Re-Discovery-Schleife scannte die
+Leitung ohne den Broker-Lock und kollidierte mit dem Telemetry-Poll → das FM-Modul
+„verabschiedete sich" im 30s-Takt auf der echten Station. Der Heartbeat-Scan war ein **dritter**
+Opener, den selbst der Broker-Lock nicht erreichte — deshalb der prozessweite flock. Im Sim
+unsichtbar (pty + schnelles native_sim-Timing, kein paralleler Poll im Test) — siehe
+Ehrlichkeits-Regel unten.
+
 ### Serial-Boundary Ehrlichkeits-Regel
 Ein Bug am Serial-/Modul-Boundary (Modul nicht gefunden/lesbar, Control-Knopf fehlt)
 gilt erst als gefixt, wenn `python -m station_agent selftest serial` auf **echtem CM4**
