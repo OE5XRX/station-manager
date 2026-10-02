@@ -441,6 +441,55 @@
   }
 
   // ---------------------------------------------------------------------------
+  // T0/T1 dBFS taps — pure math helpers
+  // ---------------------------------------------------------------------------
+
+  /* Convert a float-sample RMS (full scale = 1.0) to dBFS.
+     Returns null for silence (rms <= 0) — never -Infinity or NaN. */
+  function rmsToDbfs(rms) {
+    if (typeof rms !== "number" || rms <= 0) return null;
+    return 20 * Math.log10(rms);
+  }
+
+  /* Inverse: dBFS → linear amplitude (0..1). Used for oscillator inject gain. */
+  function dbfsToAmplitude(dbfs) {
+    return Math.pow(10, dbfs / 20);
+  }
+
+  /* Build a uniform tap report object from measurement opts.
+     point  — tap label (e.g. "T0", "T1")
+     opts   — { rms, peak, rate, windowMs, constraints }
+     rms/peak are float FS (0..1). peak_dbfs uses the same 20log10 scale.
+     static_gains is filled from opts.constraints (or empty obj if absent). */
+  function buildTapReport(point, opts) {
+    opts = opts || {};
+    return {
+      point: point,
+      format: { rate: opts.rate, channels: 1 },
+      rms_dbfs: rmsToDbfs(opts.rms),
+      peak_dbfs: rmsToDbfs(opts.peak),
+      window_ms: opts.windowMs,
+      silent: (opts.rms <= 0),
+      static_gains: opts.constraints || {},
+    };
+  }
+
+  /* Extract browser media-constraint flags from a MediaTrackSettings-like object.
+     Picks only autoGainControl, noiseSuppression, echoCancellation — nothing
+     else — into a plain object for tap report static_gains reporting. */
+  function captureConstraintsFromSettings(settings) {
+    var out = {};
+    if (!settings) return out;
+    var keys = ["autoGainControl", "noiseSuppression", "echoCancellation"];
+    for (var i = 0; i < keys.length; i++) {
+      if (Object.prototype.hasOwnProperty.call(settings, keys[i])) {
+        out[keys[i]] = settings[keys[i]];
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
 
@@ -645,5 +694,11 @@
     createJitter: createJitter,
     jitterPush: jitterPush,
     jitterDrain: jitterDrain,
+
+    // T0/T1 dBFS taps
+    rmsToDbfs: rmsToDbfs,
+    dbfsToAmplitude: dbfsToAmplitude,
+    buildTapReport: buildTapReport,
+    captureConstraintsFromSettings: captureConstraintsFromSettings,
   };
 });

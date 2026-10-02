@@ -1362,6 +1362,66 @@
         }
       },
 
+      // =========================================================================
+      // Task 10: T0/T1 dBFS tap helpers (operator diagnostics)
+      // =========================================================================
+
+      // Return the browser constraint flags active on the mic track (T0).
+      // Reads track.getSettings() and extracts autoGainControl/noiseSuppression/
+      // echoCancellation via the pure logic helper for uniform static_gains reporting.
+      _t0Constraints: function () {
+        if (!this._micStream) return {};
+        var tracks = this._micStream.getAudioTracks();
+        if (!tracks || !tracks.length) return {};
+        var settings = tracks[0].getSettings ? tracks[0].getSettings() : {};
+        return A.captureConstraintsFromSettings(settings);
+      },
+
+      // Compute a T0 tap report from the mic AnalyserNode (pre-worklet capture).
+      // Returns a tap-report object or null if the mic is not running.
+      getTapT0: function () {
+        if (!this._micAnalyser || !this._micMeterBuf) return null;
+        var buf = this._micMeterBuf;
+        this._micAnalyser.getFloatTimeDomainData(buf);
+        var sumSq = 0;
+        var peak = 0;
+        for (var i = 0; i < buf.length; i++) {
+          var s = buf[i];
+          sumSq += s * s;
+          var abs = s < 0 ? -s : s;
+          if (abs > peak) peak = abs;
+        }
+        var rms = Math.sqrt(sumSq / (buf.length || 1));
+        var constraints = this._t0Constraints();
+        return A.buildTapReport("T0", {
+          rms: rms,
+          peak: peak,
+          rate: this._micRate || 48000,
+          windowMs: Math.round((buf.length / (this._micRate || 48000)) * 1000),
+          constraints: constraints,
+        });
+      },
+
+      // Request a T1 tap report from the worklet (async — posts diag_report to
+      // the worklet port; result arrives as a "diag_tap" message on the port).
+      // The caller installs a one-shot port listener to receive the result.
+      requestTapT1: function () {
+        if (!this._micWorkletNode) return;
+        this._micWorkletNode.port.postMessage({ type: "diag_report" });
+      },
+
+      // Toggle oscillator inject on/off. When on, the worklet synthesizes a
+      // test tone instead of passing mic input — live operator use only.
+      setDiagInject: function (on, freq, levelDbfs) {
+        if (!this._micWorkletNode) return;
+        this._micWorkletNode.port.postMessage({
+          type: "diag_inject",
+          on: !!on,
+          freq: freq !== undefined ? freq : 1000,
+          levelDbfs: levelDbfs !== undefined ? levelDbfs : -12,
+        });
+      },
+
       _updateSidetone: function () {
         // Sidetone is a browser-local monitor path. The mic ENCODE path lives on
         // _micCtx (native-rate capture context). Web Audio nodes cannot connect
