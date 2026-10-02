@@ -17,8 +17,8 @@ def test_full_scale_sine_is_0_dbfs_peak():
     pcm = _sine_s16(1000, 32767, 300, 8000)
     rms, peak, silent = d.rms_peak_dbfs(pcm)
     assert silent is False
-    assert peak == -0.0 or abs(peak) < 0.1          # full-scale peak ~ 0 dBFS
-    assert abs(rms - (-3.01)) < 0.3                  # sine RMS is ~ -3 dBFS below peak
+    assert peak == -0.0 or abs(peak) < 0.1  # full-scale peak ~ 0 dBFS
+    assert abs(rms - (-3.01)) < 0.3  # sine RMS is ~ -3 dBFS below peak
 
 
 def test_minus20_sine_peaks_at_minus20():

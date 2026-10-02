@@ -7,6 +7,7 @@ injected (mirrors ``selftest.py``) so CI needs no GStreamer/PipeWire.
 RF SAFETY: nothing here keys the SA818. Inject/measure end at the digital
 ALSA/UAC2 edge (D); carrier keying is a separate control-plane action.
 """
+
 from __future__ import annotations
 
 import logging as _logging
@@ -65,37 +66,99 @@ def build_measured_inject_argv(
 ) -> list[str]:
     linear = 10 ** (level_dbfs / 20)
     return [
-        "gst-launch-1.0", "-q",
-        "audiotestsrc", "is-live=true", "wave=sine", f"freq={freq_hz}",
-        "!", f"audio/x-raw,rate={rate},channels=1",
-        "!", "audioconvert",
-        "!", "volume", f"volume={linear:g}",
-        "!", "opusenc", "audio-type=voice", "frame-size=20", "inband-fec=true",
-        "!", "opusdec", "plc=true",
-        "!", "audioconvert", "!", "audioresample",
-        "!", f"audio/x-raw,rate={rate},channels=1",
-        "!", "tee", "name=t",
-        "t.", "!", "queue", "!", "pipewiresink", f"target-object={tx_node}", "sync=false",
-        "t.", "!", "queue", "!", "audioconvert",
-        "!", f"audio/x-raw,format=S16LE,rate={rate},channels=1",
-        "!", "fdsink", f"fd={MEAS_FD}",
+        "gst-launch-1.0",
+        "-q",
+        "audiotestsrc",
+        "is-live=true",
+        "wave=sine",
+        f"freq={freq_hz}",
+        "!",
+        f"audio/x-raw,rate={rate},channels=1",
+        "!",
+        "audioconvert",
+        "!",
+        "volume",
+        f"volume={linear:g}",
+        "!",
+        "opusenc",
+        "audio-type=voice",
+        "frame-size=20",
+        "inband-fec=true",
+        "!",
+        "opusdec",
+        "plc=true",
+        "!",
+        "audioconvert",
+        "!",
+        "audioresample",
+        "!",
+        f"audio/x-raw,rate={rate},channels=1",
+        "!",
+        "tee",
+        "name=t",
+        "t.",
+        "!",
+        "queue",
+        "!",
+        "pipewiresink",
+        f"target-object={tx_node}",
+        "sync=false",
+        "t.",
+        "!",
+        "queue",
+        "!",
+        "audioconvert",
+        "!",
+        f"audio/x-raw,format=S16LE,rate={rate},channels=1",
+        "!",
+        "fdsink",
+        f"fd={MEAS_FD}",
     ]
 
 
 def build_measured_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
     caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
     return [
-        "gst-launch-1.0", "-q",
-        "udpsrc", f"address={_LOOPBACK}", f"port={port}", f"caps={caps}",
-        "!", "rtpjitterbuffer", "!", "rtpopusdepay",
-        "!", "opusdec", "plc=true", "use-inband-fec=true",
-        "!", "audioconvert", "!", "audioresample",
-        "!", f"audio/x-raw,rate={rate},channels=1",
-        "!", "tee", "name=t",
-        "t.", "!", "queue", "!", "pipewiresink", f"target-object={tx_node}", "sync=false",
-        "t.", "!", "queue", "!", "audioconvert",
-        "!", f"audio/x-raw,format=S16LE,rate={rate},channels=1",
-        "!", "fdsink", f"fd={MEAS_FD}",
+        "gst-launch-1.0",
+        "-q",
+        "udpsrc",
+        f"address={_LOOPBACK}",
+        f"port={port}",
+        f"caps={caps}",
+        "!",
+        "rtpjitterbuffer",
+        "!",
+        "rtpopusdepay",
+        "!",
+        "opusdec",
+        "plc=true",
+        "use-inband-fec=true",
+        "!",
+        "audioconvert",
+        "!",
+        "audioresample",
+        "!",
+        f"audio/x-raw,rate={rate},channels=1",
+        "!",
+        "tee",
+        "name=t",
+        "t.",
+        "!",
+        "queue",
+        "!",
+        "pipewiresink",
+        f"target-object={tx_node}",
+        "sync=false",
+        "t.",
+        "!",
+        "queue",
+        "!",
+        "audioconvert",
+        "!",
+        f"audio/x-raw,format=S16LE,rate={rate},channels=1",
+        "!",
+        "fdsink",
+        f"fd={MEAS_FD}",
     ]
 
 
@@ -124,21 +187,25 @@ def collect_static_gains(backend, slot: int) -> dict:
 
 
 def _default_spawn(argv: list[str]):
-    r, w = _os.pipe()                      # measurement fd handed to the child as fd 3
-    proc = _subprocess.Popen(              # noqa: S603 — fixed tool + resolved node
-        argv, stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+    r, w = _os.pipe()  # measurement fd handed to the child as fd 3
+    proc = _subprocess.Popen(  # noqa: S603 — fixed tool + resolved node
+        argv,
+        stdout=_subprocess.DEVNULL,
+        stderr=_subprocess.DEVNULL,
         pass_fds=(w,),
     )
     _os.close(w)
-    proc._meas_read_fd = r                 # type: ignore[attr-defined]
+    proc._meas_read_fd = r  # type: ignore[attr-defined]
     return proc
 
 
 def _default_read_measfd(proc, nbytes: int, timeout: float) -> bytes:
     import select
+
     fd = getattr(proc, "_meas_read_fd")
     buf = bytearray()
     import time as _t
+
     deadline = _t.monotonic() + timeout
     while len(buf) < nbytes and _t.monotonic() < deadline:
         r, _, _ = select.select([fd], [], [], max(0.0, deadline - _t.monotonic()))
@@ -156,14 +223,29 @@ def _default_read_measfd(proc, nbytes: int, timeout: float) -> bytes:
 
 
 def _tap(point, rate, rms, peak, silent, window_ms, computed):
-    return {"point": point, "format": {"rate": rate, "channels": 1},
-            "rms_dbfs": rms, "peak_dbfs": peak, "window_ms": window_ms,
-            "silent": silent, "computed": computed}
+    return {
+        "point": point,
+        "format": {"rate": rate, "channels": 1},
+        "rms_dbfs": rms,
+        "peak_dbfs": peak,
+        "window_ms": window_ms,
+        "silent": silent,
+        "computed": computed,
+    }
 
 
-def run_diagnostic(*, anchor, slot, signal, backend,
-                   spawn=_default_spawn, read_measfd=_default_read_measfd,
-                   port_allocator=None, reverse_tap=None, rate=16000):
+def run_diagnostic(
+    *,
+    anchor,
+    slot,
+    signal,
+    backend,
+    spawn=_default_spawn,
+    read_measfd=_default_read_measfd,
+    port_allocator=None,
+    reverse_tap=None,
+    rate=16000,
+):
     freq = int(signal.get("freq_hz", REF_FREQ_HZ))
     level = float(signal.get("level_dbfs", REF_LEVEL_DBFS))
     dur_ms = min(int(signal.get("duration_ms", REF_SETTLE_MS + REF_WINDOW_MS)), MAX_DURATION_MS)
@@ -175,7 +257,7 @@ def run_diagnostic(*, anchor, slot, signal, backend,
     if anchor == "C":
         argv = build_measured_inject_argv(tx_node, freq, level, rate)
     elif anchor == "U":
-        port = (port_allocator.acquire() if port_allocator else 47000)
+        port = port_allocator.acquire() if port_allocator else 47000
         argv = build_measured_tx_argv(tx_node, port, rate)
     else:
         return {"anchor": anchor, "error": f"unknown anchor {anchor!r}"}
@@ -197,14 +279,26 @@ def run_diagnostic(*, anchor, slot, signal, backend,
 
     sink_db = gains.get("sink_volume_db")
     if not c_silent and sink_db is not None:
-        taps.append(_tap("D", rate, round(c_rms + sink_db, 2), round(c_peak + sink_db, 2),
-                         False, REF_WINDOW_MS, computed=True))
+        taps.append(
+            _tap(
+                "D",
+                rate,
+                round(c_rms + sink_db, 2),
+                round(c_peak + sink_db, 2),
+                False,
+                REF_WINDOW_MS,
+                computed=True,
+            )
+        )
     else:
         taps.append(_tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True))
 
-    return {"anchor": anchor,
-            "reference": {"freq_hz": freq, "level_dbfs": level, "window_ms": REF_WINDOW_MS},
-            "taps": taps, "static_gains": gains}
+    return {
+        "anchor": anchor,
+        "reference": {"freq_hz": freq, "level_dbfs": level, "window_ms": REF_WINDOW_MS},
+        "taps": taps,
+        "static_gains": gains,
+    }
 
 
 def _terminate_proc(proc) -> None:
