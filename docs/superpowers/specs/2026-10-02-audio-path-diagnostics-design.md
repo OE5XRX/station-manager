@@ -81,13 +81,17 @@ ist durch Code-Inspektion freigesprochen und wird **nicht** instrumentiert
 ### Einspeisung (Referenzsignal)
 - Kalibriertes Referenzsignal: Sinus (definierte Frequenz, z.B. 1 kHz, definierter
   Pegel in dBFS) und/oder WAV.
-- **Zwei Inject-Anker**, die die ganze digitale Kette bisektieren:
-  - **T1 (Browser)**: Mic-Quelle durch Referenz-Oszillator/WAV ersetzen → testet
-    Encode → Wire → Agent → gst → ALSA.
+- **Drei Inject-Anker**, die die ganze digitale Kette bisektieren:
+  - **U (Server-originiert, headless)**: station-manager erzeugt die Referenz
+    selbst und speist sie in den op.mic-Uplink Richtung Agent — ersetzt den
+    Browser an seiner Protokoll-Grenze. Testet Relay → Agent → gst → ALSA **ohne
+    echten Browser** (der AI-Pfad).
+  - **T1 (Browser, nur Live-Operator)**: Mic-Quelle durch Referenz-Oszillator/WAV
+    ersetzen → testet zusätzlich echte Browser-Capture/Encode → Wire.
   - **C (Agent/gst)**: Stream-Quelle durch `audiotestsrc`/WAV ersetzen → testet
     nur die Station-Teilkette gst → Sink → ALSA.
-- Vergleich „Inject@T1 vs Inject@C" trennt Browser/Wire-Verluste von
-  Station-Verlusten.
+- Vergleich „Inject@U vs Inject@C" trennt Wire/Agent-Eingang von Station-internem
+  Verlust; „Inject@T1 vs @U" isoliert Browser-Capture/Encode (nur im Live-Modus).
 
 ### RF-Sicherheit (nicht verhandelbar)
 Alle A–D-Messungen sind **rein digital** (im gst/PipeWire-Graph bzw. an der
@@ -111,12 +115,39 @@ unabhängig vom PTT/Keying-Zustand. Der Diagnostic-Lauf fordert kein Keying an.
   Exponiert als REST/WS-Diagnose-Endpoint (fügt sich in die control+audio-API-
   Scope-Erweiterung ein; auth/scope wie die übrige API).
 
+### Betriebsmodi
+- **Headless/AI-Modus (Kernfähigkeit):** kein Browser. Server originiert die
+  Referenz (Anker U), misst Agent-Taps C/D. Komplett über die API fahrbar →
+  das, was Claude Code/Skripte nutzen. Deckt Relay→Agent→gst→ALSA.
+- **Live-Operator-Modus:** echter Browser als Quelle, meldet T0/T1 selbst (echte
+  Capture/AGC/Encode-Realität), Agent meldet C/D. Deckt die Browser-Stufen, die
+  headless nicht sehen kann.
+- **Kombination löst den Loudness-Bug vollständig:** zeigt der Headless-Run an D
+  Vollpegel → Station clean, Verlust sitzt im Browser-Capture/Encode (AGC);
+  zeigt er schon digital Abfall → Station (Sink 0.40). Live-Modus pinnt dann
+  T0/T1.
+
+### Datenfluss — wie der station-manager an die Werte kommt
+**Agent und Browser sind WS-*Clients* des station-managers** (sie wählen sich
+raus; der Server kann nicht zu ihnen reinconnecten — Agent sitzt im NAT). Über
+die schon offene, agent-/browser-initiierte WebSocket (heute Control/PTT/Audio):
+1. Orchestrator (station-manager) **pusht Mess-/Inject-Kommando die WS runter**
+   an Agent (Control-/Audio-Consumer) bzw. Browser (Audio-Relay-Consumer).
+2. Endpunkt **misst lokal** (gst `level` / Worklet-RMS) und **pusht das
+   dBFS-Result über dieselbe WS hoch** — strukturierte Nachricht, kein Audio.
+3. Orchestrator sammelt, baut Delta-Tabelle + Verdikt, gibt es als
+   **REST/WS-Response an den Caller** zurück (AI/Skript, authed per
+   PersonalAccessToken + Topology-Scope aus Phase 1/2).
+- **Async/Persistenz-Fallback:** Heartbeat-Muster (#150) — Agent legt einen
+  Messblock in den Heartbeat, Server ingested. Für „dauerhaft mitschreiben"; für
+  Debug-Latenz ist der WS-Command-Weg vorzuziehen.
+
 ### AI-fahrbares Schema
 - Tap-Report: `{point, format{rate,channels}, rms_dbfs, peak_dbfs, window_ms, static_gains?}`.
-- Inject-Request: `{point, signal:{kind: "sine"|"wav", freq_hz?, level_dbfs, duration_ms}}`.
+- Inject-Request: `{point: "U"|"T1"|"C", signal:{kind: "sine"|"wav", freq_hz?, level_dbfs, duration_ms}}`.
 - Diagnostic-Run-Report: Liste der Tap-Reports + per-Stufe-Deltas + Verdikt.
-  Uniform → ein Agent kann „Referenz rein @T1 → alle Taps lesen → Delta-Tabelle →
-  Stufe mit unerwartetem Verlust" autonom fahren.
+  Uniform → ein Agent kann „Referenz rein @U → C/D lesen → Delta-Tabelle →
+  Stufe mit unerwartetem Verlust" autonom per REST fahren.
 
 ## Komponenten-Schnitt
 
@@ -131,12 +162,14 @@ unabhängig vom PTT/Keying-Zustand. Der Diagnostic-Lauf fordert kein Keying an.
 
 ## Testing
 - **Browser**: dBFS-Berechnung + Inject-Logik (Logik extrahieren / Worklet-Harness).
-- **Agent**: `level`-Readout + Inject, **validiert auf der HIL-Bench (littleone)** —
-  Punkt D fällt exakt mit der HIL-raw-ALSA@8k-USB-Kante zusammen (siehe Memory
-  `architecture/audio-stack`): ein eingespeister Referenzton muss an D den
-  erwarteten dBFS zeigen.
-- **Server**: Orchestrierung/Report-Assembly + Permission-Gating.
-- **E2E**: Referenz @T1 → Report zeigt plausible Deltas inkl. der 0.40-Sink-Stufe.
+- **Agent**: `level`-Readout + Inject, **validiert auf der echten Test-Station**
+  mit vollem station-agent + PipeWire + gst + fm_board (Zugang im Projekt-Memory
+  `infra/test-station-211`, **nicht im Repo**). NICHT auf der HIL-Bench — die
+  testet nur die fm_board-FW über raw ALSA und fährt den Agent/PipeWire-Pfad gar
+  nicht (siehe `architecture/audio-stack`).
+- **Server**: Orchestrierung/Report-Assembly + Permission-Gating (PAT/Topology).
+- **E2E**: Headless-Referenz @U → Report zeigt plausible Deltas inkl. der
+  0.40-Sink-Stufe, verifiziert auf der Test-Station.
 
 ## Non-Goals (YAGNI)
 - Kein Umbau des Audio-Streamings (bleibt WS/Opus Echtzeit).
@@ -148,6 +181,10 @@ unabhängig vom PTT/Keying-Zustand. Der Diagnostic-Lauf fordert kein Keying an.
   control+audio-API (eigenes Feature/Phase).
 
 ## Offene Punkte
-- Trigger-Kanal Agent↔Server im Detail (Terminal/Tunnel vs. Heartbeat-Command vs.
-  eigener WS) — im Plan festzulegen; Orchestrierung sitzt am station-manager.
+- **Gelöst:** Trigger/Datenkanal = Mess-/Inject-Kommando über die bestehende
+  agent-/browser-initiierte WebSocket (Control-/Audio-Consumer), Result zurück
+  über dieselbe WS; Orchestrierung am station-manager; Heartbeat (#150) als
+  Async-Fallback. Konkrete Message-Typen/Consumer im Plan festlegen.
 - Genaues Referenz-Level/-Frequenz + Fenstergröße als Kalibrier-Konvention.
+- Welcher Consumer die Diagnostic-Messages trägt (bestehenden control/audio
+  erweitern vs. dünner eigener diagnostic-Channel) — Plan-Entscheidung.
