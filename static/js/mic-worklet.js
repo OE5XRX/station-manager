@@ -52,12 +52,22 @@ class MicProcessor extends AudioWorkletProcessor {
       if (!msg || !msg.type) return;
 
       if (msg.type === "diag_report") {
-        // Compute windowed RMS and peak of worklet output (T1 tap).
-        const rms = this._diagCount > 0
-          ? Math.sqrt(this._diagSumSq / this._diagCount)
-          : 0;
+        // Compute RMS/peak over the samples accumulated SINCE THE LAST report,
+        // then reset the accumulators so the next report is a fresh window.
+        const count = this._diagCount;
+        const rms = count > 0 ? Math.sqrt(this._diagSumSq / count) : 0;
         const peak = this._diagPeak;
-        this.port.postMessage({ type: "diag_tap", point: "T1", rms, peak });
+        const window_ms = Math.round((1000 * count) / sampleRate);
+        this._diagSumSq = 0;
+        this._diagPeak = 0;
+        this._diagCount = 0;
+        this.port.postMessage({
+          type: "diag_tap",
+          point: "T1",
+          rms,
+          peak,
+          window_ms,
+        });
 
       } else if (msg.type === "diag_inject") {
         // Toggle oscillator inject. When on, synthesize sine instead of mic.

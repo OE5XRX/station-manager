@@ -469,7 +469,7 @@
       rms_dbfs: rmsToDbfs(opts.rms),
       peak_dbfs: rmsToDbfs(opts.peak),
       window_ms: opts.windowMs,
-      silent: (opts.rms <= 0),
+      silent: (typeof opts.rms !== "number" || opts.rms <= 0),
       static_gains: opts.constraints || {},
     };
   }

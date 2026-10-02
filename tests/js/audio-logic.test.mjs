@@ -258,6 +258,7 @@ ok("rmsToDbfs silence is null", function(){ assert.strictEqual(A.rmsToDbfs(0), n
 ok("dbfsToAmplitude -20 ~ 0.1", function(){ assert(Math.abs(A.dbfsToAmplitude(-20) - 0.1) < 0.001); });
 ok("buildTapReport shape", function(){ var r=A.buildTapReport("T1",{rms:0.1,peak:0.1,rate:48000,windowMs:300,constraints:{}}); assert.strictEqual(r.point,"T1"); assert.strictEqual(r.format.rate,48000); assert.strictEqual(r.format.channels,1); assert.strictEqual(r.silent,false); });
 ok("buildTapReport silence flag", function(){ var r=A.buildTapReport("T0",{rms:0,peak:0,rate:48000,windowMs:300}); assert.strictEqual(r.silent,true); assert.strictEqual(r.rms_dbfs,null); });
+ok("buildTapReport undefined rms is silent", function(){ var r=A.buildTapReport("T1",{rate:48000,windowMs:300}); assert.strictEqual(r.silent,true); assert.strictEqual(r.rms_dbfs,null); });
 ok("captureConstraints picks three keys", function(){ var c=A.captureConstraintsFromSettings({autoGainControl:true,noiseSuppression:false,echoCancellation:true,sampleRate:48000}); assert.strictEqual(c.autoGainControl,true); assert.strictEqual(c.noiseSuppression,false); assert.strictEqual(c.echoCancellation,true); assert.strictEqual(c.sampleRate,undefined); });
 
 // --- jitter buffer ---------------------------------------------------------
