@@ -193,9 +193,10 @@ class ControlClient:
         logs into the MODULE-LIST reply). Discovery must not be a one-shot: re-scan on an
         interval and push a fresh inventory whenever it differs from what we last sent, so a
         module that lost the race — or is hot-plugged — comes online without a reconnect.
-        The scan runs under the broker's control locks (serialized against polls/commands)
-        and its result is debounced, so neither a concurrent tick nor a one-off probe miss
-        can flap a present module back offline.
+        Each probe is serialized against polls/commands on the same control serial by the
+        process-wide per-device lock (``devlock``, held by every opener), and the scan's
+        result is debounced, so neither a concurrent tick nor a one-off probe miss can flap a
+        present module back offline.
         """
         interval = getattr(self._config, "control_rediscovery_interval", 30.0)
         if interval <= 0:
@@ -209,10 +210,11 @@ class ControlClient:
             if not enabled:
                 continue
             try:
-                # Run the scan under the broker's per-slot control locks: the probe shares
-                # the single control serial with telemetry polls/commands, and a concurrent
-                # tick corrupts the MODULE-LIST reply so the slot drops out of inventory —
-                # the module flaps offline every re-scan. rediscover() serializes them.
+                # The probe shares the single control serial with telemetry polls/commands;
+                # a concurrent access would corrupt the MODULE-LIST reply so the slot drops
+                # out of inventory and the module flaps offline every re-scan. Per-device
+                # serialization is enforced by the devlock each opener holds; rediscover()
+                # additionally keeps the scan cancellation-safe (shield + drain on disconnect).
                 discovered = await broker.rediscover(
                     lambda: discover_slots(self._config.slot_dev_base, trace=trace)
                 )
