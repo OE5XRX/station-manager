@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 import struct
 
+from station_agent.audio import selftest as _selftest
+
 FULL_SCALE_S16 = 32767
 
 REF_FREQ_HZ = 1000
@@ -43,3 +45,49 @@ def generate_sine_pcm(freq_hz: int, level_dbfs: float, duration_ms: int, rate: i
         for i in range(n)
     ]
     return struct.pack(f"<{n}h", *out)
+
+
+MEAS_FD = 3
+_RTP_PT = 96
+_LOOPBACK = "127.0.0.1"
+
+
+def build_measured_inject_argv(tx_node: str, freq_hz: int, level_dbfs: float, rate: int) -> list[str]:
+    linear = 10 ** (level_dbfs / 20)
+    return [
+        "gst-launch-1.0", "-q",
+        "audiotestsrc", "is-live=true", "wave=sine", f"freq={freq_hz}",
+        "!", f"audio/x-raw,rate={rate},channels=1",
+        "!", "audioconvert",
+        "!", "volume", f"volume={linear:g}",
+        "!", "opusenc", "audio-type=voice", "frame-size=20", "inband-fec=true",
+        "!", "opusdec", "plc=true",
+        "!", "audioconvert", "!", "audioresample",
+        "!", f"audio/x-raw,rate={rate},channels=1",
+        "!", "tee", "name=t",
+        "t.", "!", "queue", "!", "pipewiresink", f"target-object={tx_node}", "sync=false",
+        "t.", "!", "queue", "!", "audioconvert",
+        "!", f"audio/x-raw,format=S16LE,rate={rate},channels=1",
+        "!", "fdsink", f"fd={MEAS_FD}",
+    ]
+
+
+def build_measured_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
+    caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
+    return [
+        "gst-launch-1.0", "-q",
+        "udpsrc", f"address={_LOOPBACK}", f"port={port}", f"caps={caps}",
+        "!", "rtpjitterbuffer", "!", "rtpopusdepay",
+        "!", "opusdec", "plc=true", "use-inband-fec=true",
+        "!", "audioconvert", "!", "audioresample",
+        "!", f"audio/x-raw,rate={rate},channels=1",
+        "!", "tee", "name=t",
+        "t.", "!", "queue", "!", "pipewiresink", f"target-object={tx_node}", "sync=false",
+        "t.", "!", "queue", "!", "audioconvert",
+        "!", f"audio/x-raw,format=S16LE,rate={rate},channels=1",
+        "!", "fdsink", f"fd={MEAS_FD}",
+    ]
+
+
+def build_reverse_tap_argv(tap: str, rate: int, duration: float) -> list[str]:
+    return _selftest.build_tx_capture_argv(tap, rate, duration)
