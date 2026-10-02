@@ -25,3 +25,5 @@ drf-spectacular>=0.30,<0.31
 # Self-hosted Swagger/ReDoc assets so /api/v1/docs/ works under the repo CSP
 # (script-src 'self'); no jsDelivr CDN. Date-versioned, tracks drf-spectacular.
 drf-spectacular-sidecar>=2026.10.1,<2027
+# django-filter backs DjangoFilterBackend for the user/automation read API.
+django-filter>=26.0,<27.0

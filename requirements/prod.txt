@@ -105,6 +105,7 @@ django==6.1.1
     #   -r requirements/base.in
     #   channels
     #   django-axes
+    #   django-filter
     #   django-htmx
     #   django-oauth-toolkit
     #   django-storages
@@ -112,6 +113,10 @@ django==6.1.1
     #   drf-spectacular
     #   drf-spectacular-sidecar
 django-axes==8.3.1
+    # via
+    #   -c requirements/base.txt
+    #   -r requirements/base.in
+django-filter==26.1
     # via
     #   -c requirements/base.txt
     #   -r requirements/base.in

@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Count
@@ -101,37 +103,8 @@ class Deployment(models.Model):
 
     @property
     def progress(self):
-        """Return a dict with per-status counts that sum to total.
-
-        ``in_progress`` is computed by explicitly counting the active
-        statuses rather than as ``total - completed - failed - pending``
-        — the subtraction silently folded terminal CANCELLED and
-        SUPERSEDED results into "in progress", which showed up on the
-        deployment detail page and WebSocket payload as stale work.
-        """
-        status_counts = {
-            row["status"]: row["count"]
-            for row in self.results.values("status").annotate(count=Count("id"))
-        }
-        total = sum(status_counts.values())
-        S = DeploymentResult.Status  # noqa: N806 - local alias for readability
-        completed = status_counts.get(S.SUCCESS, 0)
-        failed = status_counts.get(S.FAILED, 0) + status_counts.get(S.ROLLED_BACK, 0)
-        pending = status_counts.get(S.PENDING, 0)
-        in_progress = sum(
-            status_counts.get(s, 0)
-            for s in (S.DOWNLOADING, S.INSTALLING, S.REBOOTING, S.VERIFYING)
-        )
-        cancelled = status_counts.get(S.CANCELLED, 0) + status_counts.get(S.SUPERSEDED, 0)
-        return {
-            "total": total,
-            "completed": completed,
-            "failed": failed,
-            "pending": pending,
-            "in_progress": in_progress,
-            "cancelled": cancelled,
-            "percentage": round((completed / total) * 100) if total else 0,
-        }
+        """Return a dict with per-status counts that sum to total."""
+        return compute_progress(self.results)
 
 
 class DeploymentResult(models.Model):
@@ -218,3 +191,71 @@ class DeploymentResult(models.Model):
 
     def __str__(self):
         return f"{self.station.name} - {self.get_status_display()}"
+
+
+def _progress_from_counts(status_counts: dict) -> dict:
+    """Derive a progress dict from a ``{status: count}`` mapping.
+
+    Shared by ``compute_progress`` (single-deployment) and
+    ``bulk_compute_progress`` (batch).  All business logic lives here
+    exactly once.
+    """
+    total = sum(status_counts.values())
+    S = DeploymentResult.Status  # noqa: N806 - local alias for readability
+    completed = status_counts.get(S.SUCCESS, 0)
+    failed = status_counts.get(S.FAILED, 0) + status_counts.get(S.ROLLED_BACK, 0)
+    pending = status_counts.get(S.PENDING, 0)
+    in_progress = sum(
+        status_counts.get(s, 0) for s in (S.DOWNLOADING, S.INSTALLING, S.REBOOTING, S.VERIFYING)
+    )
+    cancelled = status_counts.get(S.CANCELLED, 0) + status_counts.get(S.SUPERSEDED, 0)
+    return {
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "pending": pending,
+        "in_progress": in_progress,
+        "cancelled": cancelled,
+        "percentage": round((completed / total) * 100) if total else 0,
+    }
+
+
+def compute_progress(results_qs):
+    """Return a progress dict for the given DeploymentResult queryset.
+
+    ``in_progress`` is computed by explicitly counting the active
+    statuses rather than as ``total - completed - failed - pending``
+    — the subtraction silently folded terminal CANCELLED and
+    SUPERSEDED results into "in progress", which showed up on the
+    deployment detail page and WebSocket payload as stale work.
+
+    Accepts any queryset (or manager) over DeploymentResult so callers
+    can scope it (e.g. to only accessible stations) before computing.
+    """
+    status_counts = {
+        row["status"]: row["count"]
+        for row in results_qs.values("status").annotate(count=Count("id"))
+    }
+    return _progress_from_counts(status_counts)
+
+
+def bulk_compute_progress(results_qs, deployment_ids) -> dict:
+    """Return ``{deployment_id: progress_dict}`` for all given IDs in ONE query.
+
+    ``results_qs`` must be a (possibly scoped) queryset over
+    ``DeploymentResult``.  The scope is honoured: only rows visible in
+    ``results_qs`` are counted, so out-of-scope stations are excluded
+    exactly as in ``compute_progress``.
+
+    Every requested ``deployment_id`` gets an entry — deployments with
+    zero accessible results receive an all-zero progress dict.
+    """
+    rows = (
+        results_qs.filter(deployment_id__in=deployment_ids)
+        .values("deployment_id", "status")
+        .annotate(count=Count("id"))
+    )
+    per_dep: dict = defaultdict(dict)
+    for row in rows:
+        per_dep[row["deployment_id"]][row["status"]] = row["count"]
+    return {dep_id: _progress_from_counts(per_dep.get(dep_id, {})) for dep_id in deployment_ids}

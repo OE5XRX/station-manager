@@ -1,19 +1,17 @@
 import logging
 
 from django.contrib.auth.decorators import login_not_required
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from rest_framework import status
-from rest_framework.authentication import SessionAuthentication
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.api.serializers import HealthSerializer, HeartbeatSerializer
-from apps.stations.models import Station, StationInventory
+from apps.stations.models import StationInventory
 
 logger = logging.getLogger(__name__)
 
@@ -137,38 +135,5 @@ class HeartbeatView(APIView):
 
         return Response(
             {"status": "ok"},
-            status=status.HTTP_200_OK,
-        )
-
-
-class StationInventoryView(APIView):
-    """Returns the hardware inventory for a station.
-
-    GET /api/v1/stations/<station_id>/inventory/
-    """
-
-    authentication_classes = [SessionAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, station_id):
-        if not request.user.is_internal:
-            return Response(
-                {"detail": "Internal (staff/admin) role required."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        station = get_object_or_404(Station, pk=station_id)
-        try:
-            inventory = station.inventory
-        except StationInventory.DoesNotExist:
-            return Response(
-                {"detail": "No inventory data available for this station."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        return Response(
-            {
-                "station_id": station.pk,
-                "data": inventory.data,
-                "updated_at": inventory.updated_at.isoformat(),
-            },
             status=status.HTTP_200_OK,
         )

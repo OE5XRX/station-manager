@@ -104,19 +104,19 @@ class TestHeartbeatWithInventory:
 @pytest.mark.django_db
 class TestInventoryView:
     def test_inventory_view_requires_login(self, client, station):
-        """Unauthenticated user should get 403 from DRF."""
+        """Unauthenticated user should be rejected by DRF (401 or 403)."""
         response = client.get(
-            reverse("api:station_inventory", kwargs={"station_id": station.pk}),
+            reverse("api:station-inventory", kwargs={"pk": station.pk}),
         )
-        assert response.status_code == 403
+        assert response.status_code in (401, 403)
 
-    def test_inventory_view_member_forbidden(self, client, member_user, station):
-        """Member should get 403 on inventory view."""
+    def test_inventory_view_member_no_assignment_gets_404(self, client, member_user, station):
+        """Member without a station assignment cannot see the station → 404."""
         client.force_login(member_user)
         response = client.get(
-            reverse("api:station_inventory", kwargs={"station_id": station.pk}),
+            reverse("api:station-inventory", kwargs={"pk": station.pk}),
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     def test_inventory_view_returns_data(self, client, admin_user, station):
         """Admin should get inventory data as JSON."""
@@ -126,11 +126,11 @@ class TestInventoryView:
         )
         client.force_login(admin_user)
         response = client.get(
-            reverse("api:station_inventory", kwargs={"station_id": station.pk}),
+            reverse("api:station-inventory", kwargs={"pk": station.pk}),
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["station_id"] == station.pk
+        assert data["station"] == station.pk
         assert data["data"]["cpu"]["cores"] == 4
         assert "updated_at" in data
 
@@ -138,19 +138,19 @@ class TestInventoryView:
         """Station without inventory should return 404."""
         client.force_login(admin_user)
         response = client.get(
-            reverse("api:station_inventory", kwargs={"station_id": station.pk}),
+            reverse("api:station-inventory", kwargs={"pk": station.pk}),
         )
         assert response.status_code == 404
 
     def test_inventory_view_operator_access(self, client, operator_user, station):
-        """Operator should be able to view inventory."""
+        """Operator (staff) should be able to view inventory."""
         StationInventory.objects.create(
             station=station,
             data={"cpu": {"cores": 2}},
         )
         client.force_login(operator_user)
         response = client.get(
-            reverse("api:station_inventory", kwargs={"station_id": station.pk}),
+            reverse("api:station-inventory", kwargs={"pk": station.pk}),
         )
         assert response.status_code == 200
 
