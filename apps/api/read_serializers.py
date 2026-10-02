@@ -6,6 +6,7 @@ No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 from rest_framework import serializers
 
 from apps.control.models import StationModule
+from apps.deployments.models import Deployment, DeploymentResult
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
@@ -150,3 +151,40 @@ class RolloutSequenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = RolloutSequence
         fields = ["id", "singleton_key", "created_at", "updated_at", "updated_by"]
+
+
+class DeploymentResultSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeploymentResult
+        fields = [
+            "id",
+            "deployment",
+            "station",
+            "status",
+            "started_at",
+            "completed_at",
+            "error_message",
+            "previous_version",
+            "new_version",
+        ]
+
+
+class DeploymentSerializer(serializers.ModelSerializer):
+    progress = serializers.DictField(read_only=True)
+
+    class Meta:
+        model = Deployment
+        fields = [
+            "id",
+            "image_release",
+            "target_type",
+            "target_tag",
+            "target_station",
+            "strategy",
+            "phase_config",
+            "status",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "progress",
+        ]

@@ -22,3 +22,7 @@ router.register(
     read_views.RolloutSequenceEntryViewSet,
     basename="rollout-sequence-entry",
 )
+router.register(r"deployments", read_views.DeploymentViewSet, basename="deployment")
+router.register(
+    r"deployment-results", read_views.DeploymentResultViewSet, basename="deployment-result"
+)

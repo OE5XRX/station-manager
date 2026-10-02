@@ -9,8 +9,10 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.permissions import TopologyScopedPermission
-from apps.api.read_filters import StationFilter
+from apps.api.read_filters import DeploymentFilter, DeploymentResultFilter, StationFilter
 from apps.api.read_serializers import (
+    DeploymentResultSerializer,
+    DeploymentSerializer,
     RegionAssignmentSerializer,
     RegionSerializer,
     RolloutSequenceEntrySerializer,
@@ -24,6 +26,7 @@ from apps.api.read_serializers import (
     StationTagSerializer,
     StationTelemetrySerializer,
 )
+from apps.api.scoping import accessible_deployment_results, accessible_deployments
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import RegionAssignment, StationAssignment, StationTag
 from apps.stations.scoping import accessible_regions, accessible_stations
@@ -183,3 +186,28 @@ class RolloutSequenceEntryViewSet(ScopedReadOnlyViewSet):
 
     def get_queryset(self):
         return RolloutSequenceEntry.objects.all().order_by("position")
+
+
+class DeploymentViewSet(ScopedReadOnlyViewSet):
+    serializer_class = DeploymentSerializer
+    filterset_class = DeploymentFilter
+    ordering_fields = ["created_at", "updated_at"]
+
+    def get_queryset(self):
+        return accessible_deployments(self.request.user).order_by("-created_at")
+
+    @action(detail=True, url_path="results")
+    def results(self, request, pk=None):
+        dep = self.get_object()
+        return self._child_list(
+            request, dep.results.order_by("station_id"), DeploymentResultSerializer
+        )
+
+
+class DeploymentResultViewSet(ScopedReadOnlyViewSet):
+    serializer_class = DeploymentResultSerializer
+    filterset_class = DeploymentResultFilter
+    ordering_fields = ["started_at", "completed_at"]
+
+    def get_queryset(self):
+        return accessible_deployment_results(self.request.user).order_by("-id")
