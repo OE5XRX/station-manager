@@ -6,7 +6,7 @@
 
 **Architecture:** DRF `DefaultRouter` under `/api/v1/` with one `ReadOnlyModelViewSet` per resource, each using an **explicit** serializer (never `fields="__all__"`). A single `TopologyScopedPermission` gates authentication/membership; per-view `get_queryset()` does the scope filtering so out-of-scope objects are invisible in both list and detail (detail → 404, no existence leak). Cross-app scope querysets live in `apps/api/scoping.py`, built on the existing `apps/stations/scoping.py` helpers (single source of truth). Station-bound OneToOne / child resources (telemetry, inventory, log-entries, photos, modules) are nested under `/api/v1/stations/{id}/…` as DRF detail `@action`s.
 
-**Tech Stack:** Django 6.0, DRF 3.18, `django-filter` (new dep), `drf-spectacular` (already wired), PostgreSQL, pytest + pytest-django.
+**Tech Stack:** Django 6.1, DRF 3.18, `django-filter` (new dep), `drf-spectacular` (already wired), PostgreSQL, pytest + pytest-django.
 
 **Spec:** `docs/superpowers/specs/2026-10-01-user-automation-api-design.md` (§Scope read-only table + §Autorisierung + §Ressourcen-Layout). This plan additionally pulls **StationTelemetry** into the read allowlist per project memory `feature/user-automation-api/phase2-followups` (merged in #150).
 

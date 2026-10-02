@@ -101,37 +101,8 @@ class Deployment(models.Model):
 
     @property
     def progress(self):
-        """Return a dict with per-status counts that sum to total.
-
-        ``in_progress`` is computed by explicitly counting the active
-        statuses rather than as ``total - completed - failed - pending``
-        — the subtraction silently folded terminal CANCELLED and
-        SUPERSEDED results into "in progress", which showed up on the
-        deployment detail page and WebSocket payload as stale work.
-        """
-        status_counts = {
-            row["status"]: row["count"]
-            for row in self.results.values("status").annotate(count=Count("id"))
-        }
-        total = sum(status_counts.values())
-        S = DeploymentResult.Status  # noqa: N806 - local alias for readability
-        completed = status_counts.get(S.SUCCESS, 0)
-        failed = status_counts.get(S.FAILED, 0) + status_counts.get(S.ROLLED_BACK, 0)
-        pending = status_counts.get(S.PENDING, 0)
-        in_progress = sum(
-            status_counts.get(s, 0)
-            for s in (S.DOWNLOADING, S.INSTALLING, S.REBOOTING, S.VERIFYING)
-        )
-        cancelled = status_counts.get(S.CANCELLED, 0) + status_counts.get(S.SUPERSEDED, 0)
-        return {
-            "total": total,
-            "completed": completed,
-            "failed": failed,
-            "pending": pending,
-            "in_progress": in_progress,
-            "cancelled": cancelled,
-            "percentage": round((completed / total) * 100) if total else 0,
-        }
+        """Return a dict with per-status counts that sum to total."""
+        return compute_progress(self.results)
 
 
 class DeploymentResult(models.Model):
@@ -218,3 +189,39 @@ class DeploymentResult(models.Model):
 
     def __str__(self):
         return f"{self.station.name} - {self.get_status_display()}"
+
+
+def compute_progress(results_qs):
+    """Return a progress dict for the given DeploymentResult queryset.
+
+    ``in_progress`` is computed by explicitly counting the active
+    statuses rather than as ``total - completed - failed - pending``
+    — the subtraction silently folded terminal CANCELLED and
+    SUPERSEDED results into "in progress", which showed up on the
+    deployment detail page and WebSocket payload as stale work.
+
+    Accepts any queryset (or manager) over DeploymentResult so callers
+    can scope it (e.g. to only accessible stations) before computing.
+    """
+    status_counts = {
+        row["status"]: row["count"]
+        for row in results_qs.values("status").annotate(count=Count("id"))
+    }
+    total = sum(status_counts.values())
+    S = DeploymentResult.Status  # noqa: N806 - local alias for readability
+    completed = status_counts.get(S.SUCCESS, 0)
+    failed = status_counts.get(S.FAILED, 0) + status_counts.get(S.ROLLED_BACK, 0)
+    pending = status_counts.get(S.PENDING, 0)
+    in_progress = sum(
+        status_counts.get(s, 0) for s in (S.DOWNLOADING, S.INSTALLING, S.REBOOTING, S.VERIFYING)
+    )
+    cancelled = status_counts.get(S.CANCELLED, 0) + status_counts.get(S.SUPERSEDED, 0)
+    return {
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "pending": pending,
+        "in_progress": in_progress,
+        "cancelled": cancelled,
+        "percentage": round((completed / total) * 100) if total else 0,
+    }

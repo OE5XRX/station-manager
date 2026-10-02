@@ -71,6 +71,28 @@ def test_deployment_progress_field_present(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
+def test_deployment_progress_scoped_to_accessible_stations(topology):  # noqa: F811
+    """region_mgr sees only their station's result in progress; admin sees all."""
+    from apps.deployments.models import DeploymentResult
+
+    dep = _dep(topology, topology["station_in"], topology["station_out"])
+    # Set both results to SUCCESS so progress.completed reflects scope correctly.
+    DeploymentResult.objects.filter(deployment=dep).update(status=DeploymentResult.Status.SUCCESS)
+
+    mgr_resp = bearer(topology["region_mgr"]).get(f"/api/v1/deployments/{dep.pk}/")
+    assert mgr_resp.status_code == 200
+    mgr_progress = mgr_resp.data["progress"]
+    assert mgr_progress["total"] == 1, "region_mgr must only count in-scope result"
+    assert mgr_progress["completed"] == 1
+
+    admin_resp = bearer(topology["admin"]).get(f"/api/v1/deployments/{dep.pk}/")
+    assert admin_resp.status_code == 200
+    admin_progress = admin_resp.data["progress"]
+    assert admin_progress["total"] == 2, "admin sees all results"
+    assert admin_progress["completed"] == 2
+
+
+@pytest.mark.django_db
 def test_device_deployment_check_not_shadowed_by_router(topology):  # noqa: F811
     # The automation router must not swallow the device /deployments/check/ path.
     resp = bearer(topology["admin"]).get("/api/v1/deployments/check/")

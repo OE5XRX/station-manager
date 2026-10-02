@@ -18,8 +18,16 @@ EXPECTED_PATHS = [
     "/api/v1/images/",
     "/api/v1/image-import-jobs/",
     "/api/v1/users/",
+    # station nested custom-action routes
     "/api/v1/stations/{id}/telemetry/",
     "/api/v1/stations/{id}/inventory/",
+    "/api/v1/stations/{id}/log-entries/",
+    "/api/v1/stations/{id}/photos/",
+    "/api/v1/stations/{id}/modules/",
+    # rollout-sequence nested entries
+    "/api/v1/rollout-sequences/{id}/entries/",
+    # deployment nested results
+    "/api/v1/deployments/{id}/results/",
 ]
 
 

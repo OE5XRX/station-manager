@@ -1,10 +1,25 @@
 """DefaultRouter for the user/automation read API (v1)."""
 
-from rest_framework.routers import DefaultRouter
+from rest_framework.authentication import SessionAuthentication
+from rest_framework.routers import APIRootView, DefaultRouter
 
 from apps.api import read_views
+from apps.api.authentication import PersonalAccessTokenAuthentication
+from apps.api.permissions import TopologyScopedPermission
 
-router = DefaultRouter()
+
+class ScopedAPIRootView(APIRootView):
+    """API root view with the same auth/permission policy as the viewsets."""
+
+    authentication_classes = [PersonalAccessTokenAuthentication, SessionAuthentication]
+    permission_classes = [TopologyScopedPermission]
+
+
+class ScopedDefaultRouter(DefaultRouter):
+    APIRootView = ScopedAPIRootView
+
+
+router = ScopedDefaultRouter()
 router.register(r"stations", read_views.StationViewSet, basename="station")
 router.register(r"regions", read_views.RegionViewSet, basename="region")
 router.register(r"station-tags", read_views.StationTagViewSet, basename="station-tag")

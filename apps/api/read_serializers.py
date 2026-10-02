@@ -174,7 +174,14 @@ class DeploymentResultSerializer(serializers.ModelSerializer):
 
 
 class DeploymentSerializer(serializers.ModelSerializer):
-    progress = serializers.DictField(read_only=True)
+    progress = serializers.SerializerMethodField()
+
+    def get_progress(self, obj):
+        from apps.api.scoping import accessible_deployment_results
+        from apps.deployments.models import compute_progress
+
+        user = self.context["request"].user
+        return compute_progress(accessible_deployment_results(user).filter(deployment=obj))
 
     class Meta:
         model = Deployment
