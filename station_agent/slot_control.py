@@ -18,6 +18,7 @@ import time
 import tty
 
 from station_agent.descriptor import TOKEN_RE
+from station_agent.devlock import control_device_lock
 from station_agent.slot_discovery import (
     _MAX_RESPONSE_BYTES,
     _MODULE_ID_RE,
@@ -92,12 +93,20 @@ class SlotControl:
 
         saved = None
         try:
-            try:
-                saved = termios.tcgetattr(fd)
-                tty.setraw(fd)
-            except termios.error:
-                pass
-            return self._converse(fd, cmd, trace=trace)
+            # Single-owner invariant: hold the process-wide device lock for the whole
+            # conversation so a heartbeat scan / re-discovery in another thread can never
+            # open this same serial concurrently (see devlock / CLAUDE.md). Fail closed as
+            # a timeout if the line stays busy past the lock budget.
+            with control_device_lock(fd):
+                try:
+                    saved = termios.tcgetattr(fd)
+                    tty.setraw(fd)
+                except termios.error:
+                    pass
+                return self._converse(fd, cmd, trace=trace)
+        except TimeoutError:
+            logger.debug("slot control: device busy, lock not acquired for %s", self._path)
+            return dict(_TIMEOUT_RESULT)
         finally:
             if saved is not None:
                 try:

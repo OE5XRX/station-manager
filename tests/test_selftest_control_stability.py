@@ -112,3 +112,33 @@ def test_no_slots_discovered_fails():
         sleep=_nosleep,
     )
     assert rc == 1
+
+
+def test_non_positive_params_rejected():
+    """Copilot finding #3: non-positive CLI params must fail closed (return 1), never run a
+    degenerate gate. ``duration<=0`` skips the loop → a false "0 scans, 0 flaps" pass;
+    ``poll_hz==0`` → ZeroDivisionError in the interval math; ``rescan_s<=0`` → no pacing.
+    ``discover_fn`` is a sentinel that must never be called — validation happens first."""
+
+    def must_not_run():
+        raise AssertionError("discover_fn called despite invalid params")
+
+    for bad in (
+        {"duration": 0.0},
+        {"duration": -1.0},
+        {"poll_hz": 0.0},
+        {"poll_hz": -5.0},
+        {"rescan_s": 0.0},
+        {"rescan_s": -2.0},
+    ):
+        kwargs = {"duration": 3.0, "poll_hz": 10.0, "rescan_s": 2.0}
+        kwargs.update(bad)
+        rc = selftest.run_control_stability(
+            "/dev/oe5xrx",
+            discover_fn=must_not_run,
+            transport_factory=_FakeTransport,
+            now=_fake_clock(1.0),
+            sleep=_nosleep,
+            **kwargs,
+        )
+        assert rc == 1, f"expected rc=1 for {bad}, got {rc}"

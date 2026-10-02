@@ -17,23 +17,40 @@ Repo-spezifische Architekturnotizen. Übergeordnete Projektstrategie, Arbeitspro
 
 ### Control-Device Single-Owner-Invariante
 Ein Slot-Control-Device (`/dev/oe5xrx/slotN/control`, real CDC-ACM `ttyACM*`) ist **eine
-einzige** serielle Leitung. **Jeder** Zugriff darauf — Command, Telemetry-Poll **und**
-Re-Discovery — MUSS über den Broker und dessen Per-Slot-Lock (`Broker._slot_locks`) laufen.
+einzige** serielle Leitung. **Jeder** Zugriff darauf — Command, Telemetry-Poll, Re-Discovery
+**und** der Heartbeat-Inventory-Scan — darf immer nur **einen** gleichzeitigen Opener haben.
 Zwei unkoordinierte `open()` auf dieselbe Leitung interleaven ihre Writes/Reads: die Antwort
 des einen zerschießt die des anderen (z.B. ein `MODULE-RESULT` des Polls landet in der
 `MODULE-LIST`-Antwort der Probe → `probe_slot` gibt `None` → Slot fällt aus dem Inventory).
 
-- Discovery läuft deshalb über `Broker.rediscover(discover_fn)` (hält alle Slot-Locks), **nie**
-  direkt per `discover_slots()` aus dem control_client.
+Die Invariante wird auf **zwei** Ebenen durchgesetzt:
+
+1. **Prozessweit: OS-Advisory-Lock (`fcntl.flock`) auf dem Device-Node** — `devlock.control_device_lock`,
+   akquiriert von **JEDEM** Opener: `slot_control.SlotControl.execute` (Commands/Polls),
+   `slot_discovery.probe_slot` (Discovery **und** Heartbeat-Scan). Das ist die einzige Ebene,
+   die thread-übergreifend greift: der Heartbeat läuft in einem **separaten Thread** (nicht im
+   Control-Event-Loop), eine `asyncio.Lock` kann ihn nicht serialisieren. flock hängt an der
+   Open-File-Description → serialisiert auch zwei Opens aus demselben Prozess. Timeout = fail
+   closed (`None`/Timeout-Result), nie ein zweiter paralleler Owner.
+2. **Intra-Loop-Optimierung: Broker-Per-Slot-`asyncio.Lock`** (`Broker._slot_locks`) — serialisiert
+   Command/Poll/Re-Discovery **innerhalb** des Control-Loops ohne flock-Contention.
+   `Broker.rediscover(discover_fn)` hält alle Slot-Locks für den Scan (control_client ruft **nie**
+   `discover_slots()` direkt). `rediscover` ist cancel-sicher: wird der Loop beim Disconnect
+   mitten im Scan gecancelt, läuft die Executor-Future unter `asyncio.shield` **vor** dem
+   Lock-Release aus (`await asyncio.wait`), damit kein wartender Poll auf die verwaiste Probe trifft.
+
+Ergänzend:
 - `Broker._execute` gibt bei fehlendem Control-Pfad (`_control_path is None`) sauber
   `unknown_slot` zurück statt `os.open(None)` zu werfen.
 - `_SlotInventoryDebouncer` (control_client) hält ein kurz fehlendes Modul noch N Zyklen,
-  damit ein transienter Probe-Miss das Inventory nicht flappt.
+  damit ein transienter Probe-Miss (inkl. flock-Timeout) das Inventory nicht flappt.
 
 **Warum:** Regression aus PR #135 — die neu eingeführte Re-Discovery-Schleife scannte die
 Leitung ohne den Broker-Lock und kollidierte mit dem Telemetry-Poll → das FM-Modul
-„verabschiedete sich" im 30s-Takt auf der echten Station. Im Sim unsichtbar (pty + schnelles
-native_sim-Timing, kein paralleler Poll im Test) — siehe Ehrlichkeits-Regel unten.
+„verabschiedete sich" im 30s-Takt auf der echten Station. Der Heartbeat-Scan war ein **dritter**
+Opener, den selbst der Broker-Lock nicht erreichte — deshalb der prozessweite flock. Im Sim
+unsichtbar (pty + schnelles native_sim-Timing, kein paralleler Poll im Test) — siehe
+Ehrlichkeits-Regel unten.
 
 ### Serial-Boundary Ehrlichkeits-Regel
 Ein Bug am Serial-/Modul-Boundary (Modul nicht gefunden/lesbar, Control-Knopf fehlt)

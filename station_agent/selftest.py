@@ -72,6 +72,18 @@ def run_control_stability(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    # Validate the CLI knobs before anything runs: duration<=0 would skip the scan loop and
+    # report a false "0 scans, 0 flaps" pass; poll_hz<=0 divides by zero in the interval math
+    # (max(1, int(1000/poll_hz))); rescan_s<=0 removes the pacing between scans. Fail closed.
+    if duration <= 0 or poll_hz <= 0 or rescan_s <= 0:
+        logger.error(
+            "selftest control-stability: FAIL — duration, poll_hz and rescan_s must all be > 0 "
+            "(got duration=%r, poll_hz=%r, rescan_s=%r)",
+            duration,
+            poll_hz,
+            rescan_s,
+        )
+        return 1
     disc = discover_fn or (lambda: slot_discovery.discover_slots(base))
 
     async def scenario() -> int:

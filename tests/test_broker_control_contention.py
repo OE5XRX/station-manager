@@ -24,6 +24,7 @@ Two coupled defects, one root (the shared, unsynchronised control serial):
 """
 
 import asyncio
+import threading
 
 import pytest
 
@@ -199,6 +200,45 @@ def test_rediscover_acquires_every_slot_lock_in_order():
         return result
 
     assert _run(scenario()) == [_SLOT2, _SLOT3]
+
+
+def test_rediscover_drains_orphaned_scan_before_releasing_locks_on_cancel():
+    """Cancellation safety (Copilot finding #1): if ``_rediscovery_loop`` is cancelled while
+    the blocking scan is still running in the executor, that scan thread is STILL on the
+    serial line. ``rediscover`` must not release the slot locks until the orphaned scan has
+    drained — otherwise a waiting poll/command acquires the lock and opens the same serial
+    concurrently with the still-running scan (the exact contention the lock exists to
+    prevent). The lock stays held until the scan finishes, then frees, and the cancellation
+    still propagates so the loop actually stops."""
+    b, _ = _phys_broker(lambda path: _FakeTransport(path))
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_scan():
+        started.set()
+        release.wait(5)  # hold the "serial line" until the test lets go
+        return [_SLOT2]
+
+    async def scenario():
+        task = asyncio.ensure_future(b.rediscover(blocking_scan))
+        # Wait until the scan thread is actually running (holding the serial).
+        await asyncio.get_running_loop().run_in_executor(None, started.wait, 5)
+        lock = b._slot_locks[2]
+        assert lock.locked(), "scan should hold slot 2's lock while running"
+
+        task.cancel()
+        # Cancellation is delivered, but the scan thread still holds the serial: the lock
+        # must stay held across several event-loop turns while the scan drains.
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert lock.locked(), "lock released while the orphaned scan was still on the wire"
+
+        release.set()  # let the scan finish
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not lock.locked(), "lock not released after the orphaned scan drained"
+
+    _run(scenario())
 
 
 def test_command_on_dropped_slot_builds_no_transport():

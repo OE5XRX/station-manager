@@ -332,6 +332,14 @@ class Broker:
         time, so no acquisition cycle — hence no deadlock — is possible. Every slot that
         can be polled has a control path (``_controls``); include already-created locks
         too so an in-flight access can never slip a probe onto the wire.
+
+        Cancellation safety: ``_rediscovery_loop`` cancels this coroutine on disconnect. A
+        cancel arriving mid-scan unblocks the ``await`` immediately, but the blocking
+        ``discover_fn`` is still running in its executor thread — still on the serial line.
+        We must NOT release the slot locks until it drains, or a waiting poll/command would
+        acquire a lock and open the same serial concurrently with the orphaned scan. So we
+        ``shield`` the scan future and, if cancelled, wait for it to finish (locks still
+        held) before re-raising the cancellation.
         """
         loop = asyncio.get_running_loop()
         slots = sorted(set(self._controls) | set(self._slot_locks))
@@ -347,7 +355,14 @@ class Broker:
             for lock in locks:
                 await lock.acquire()
                 acquired.append(lock)
-            return await loop.run_in_executor(None, discover_fn)
+            fut = loop.run_in_executor(None, discover_fn)
+            try:
+                return await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                # The scan thread still owns the serial line; let it drain before the
+                # finally releases the locks, then propagate the cancellation.
+                await asyncio.wait({fut})
+                raise
         finally:
             for lock in reversed(acquired):
                 lock.release()

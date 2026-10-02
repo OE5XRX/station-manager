@@ -36,6 +36,8 @@ import time
 
 import serial
 
+from station_agent.devlock import control_device_lock
+
 logger = logging.getLogger(__name__)
 
 _LIST_CMD = b"module list\r\n"
@@ -95,72 +97,88 @@ def probe_slot(
         return None
 
     try:
-        # Drain any unsolicited output already on the link (boot banner / stale prompt) until
-        # it goes quiet, so it can't interleave with our command's reply (see module docstring).
-        _drain_until_quiet(ser, _BOOT_QUIET, _BOOT_MAX)
-
-        deadline = time.monotonic() + timeout
-
-        # `module list` can arrive corrupted when an async Zephyr log/status line is spliced
-        # into its MODULE-LIST payload (the JSON on that line then fails to parse). Retry a
-        # few times, re-draining between attempts to absorb the periodic status burst — a
-        # single race must never leave a present module undiscovered.
-        # Give each attempt a fair slice of the total budget so a single failed attempt
-        # cannot exhaust the entire deadline before the retry fires.
-        n_attempts = max(1, list_retries)
-        attempt_budget = timeout / n_attempts
-        listing = None
-        for attempt in range(n_attempts):
-            if attempt > 0:
-                # Bound the inter-retry settle + re-drain by the remaining budget so
-                # probe_slot keeps honoring `timeout` even as list_retries grows.
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                time.sleep(min(_LIST_RETRY_SETTLE, remaining))
-                drain_max = min(_LIST_RETRY_DRAIN_MAX, max(0.0, deadline - time.monotonic()))
-                if drain_max > 0:
-                    _drain_until_quiet(ser, min(_LIST_RETRY_DRAIN_QUIET, drain_max), drain_max)
-            attempt_deadline = min(deadline, time.monotonic() + attempt_budget)
-            listing = _command(
-                ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace
-            )
-            if listing is not None:
-                break
-            if time.monotonic() >= deadline:
-                break
-        if listing is None:
-            logger.debug("slot probe: no MODULE-LIST from %s", control_path)
-            return None
-        # Fail closed if `modules` is missing or not a list; a present empty list
-        # legitimately means "firmware responded, no modules".
-        ids = listing.get("modules")
-        if not isinstance(ids, list):
-            return None
-
-        modules: list[dict] = []
-        for mid in ids:
-            if not isinstance(mid, str) or not _MODULE_ID_RE.match(mid):
-                logger.debug("slot probe: skipping invalid module id %r on %s", mid, control_path)
-                continue
-            cmd = f"module {mid} describe\r\n".encode()
-            described = _command(ser, cmd, _DESCRIBE_PREFIX, deadline, control_path, trace=trace)
-            if described is None:
-                logger.debug("slot probe: no describe for module %s on %s", mid, control_path)
-                continue
-            modules.append(
-                {
-                    "id": mid,
-                    "identity": described.get("identity", {}),
-                    "capabilities": described.get("capabilities", []),
-                }
-            )
-        return modules
+        # Single-owner invariant: hold the process-wide device lock for the whole probe so
+        # the control plane (commands / telemetry polls) or a parallel scan can never open
+        # this same serial concurrently and corrupt the MODULE-LIST reply (see devlock /
+        # CLAUDE.md "Control-Device Single-Owner-Invariante"). Fail closed (return None, a
+        # transient miss the debouncer absorbs) if the line stays busy past the lock budget.
+        with control_device_lock(ser.fileno()):
+            return _probe_locked(ser, control_path, timeout, trace, list_retries)
+    except TimeoutError:
+        logger.debug("slot probe: device busy, lock not acquired for %s", control_path)
+        return None
     finally:
         try:
             ser.close()
         except (serial.SerialException, OSError):
             pass  # close() must never raise into the heartbeat
+
+
+def _probe_locked(
+    ser: serial.Serial, control_path: str, timeout: float, trace: bool, list_retries: int
+) -> list[dict] | None:
+    """Run the enumerate+describe conversation on an already-open, device-locked serial."""
+    # Drain any unsolicited output already on the link (boot banner / stale prompt) until
+    # it goes quiet, so it can't interleave with our command's reply (see module docstring).
+    _drain_until_quiet(ser, _BOOT_QUIET, _BOOT_MAX)
+
+    deadline = time.monotonic() + timeout
+
+    # `module list` can arrive corrupted when an async Zephyr log/status line is spliced
+    # into its MODULE-LIST payload (the JSON on that line then fails to parse). Retry a
+    # few times, re-draining between attempts to absorb the periodic status burst — a
+    # single race must never leave a present module undiscovered.
+    # Give each attempt a fair slice of the total budget so a single failed attempt
+    # cannot exhaust the entire deadline before the retry fires.
+    n_attempts = max(1, list_retries)
+    attempt_budget = timeout / n_attempts
+    listing = None
+    for attempt in range(n_attempts):
+        if attempt > 0:
+            # Bound the inter-retry settle + re-drain by the remaining budget so
+            # probe_slot keeps honoring `timeout` even as list_retries grows.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(_LIST_RETRY_SETTLE, remaining))
+            drain_max = min(_LIST_RETRY_DRAIN_MAX, max(0.0, deadline - time.monotonic()))
+            if drain_max > 0:
+                _drain_until_quiet(ser, min(_LIST_RETRY_DRAIN_QUIET, drain_max), drain_max)
+        attempt_deadline = min(deadline, time.monotonic() + attempt_budget)
+        listing = _command(
+            ser, _LIST_CMD, _LIST_PREFIX, attempt_deadline, control_path, trace=trace
+        )
+        if listing is not None:
+            break
+        if time.monotonic() >= deadline:
+            break
+    if listing is None:
+        logger.debug("slot probe: no MODULE-LIST from %s", control_path)
+        return None
+    # Fail closed if `modules` is missing or not a list; a present empty list
+    # legitimately means "firmware responded, no modules".
+    ids = listing.get("modules")
+    if not isinstance(ids, list):
+        return None
+
+    modules: list[dict] = []
+    for mid in ids:
+        if not isinstance(mid, str) or not _MODULE_ID_RE.match(mid):
+            logger.debug("slot probe: skipping invalid module id %r on %s", mid, control_path)
+            continue
+        cmd = f"module {mid} describe\r\n".encode()
+        described = _command(ser, cmd, _DESCRIBE_PREFIX, deadline, control_path, trace=trace)
+        if described is None:
+            logger.debug("slot probe: no describe for module %s on %s", mid, control_path)
+            continue
+        modules.append(
+            {
+                "id": mid,
+                "identity": described.get("identity", {}),
+                "capabilities": described.get("capabilities", []),
+            }
+        )
+    return modules
 
 
 def _drain_until_quiet(ser: serial.Serial, quiet: float, max_wait: float) -> None:
