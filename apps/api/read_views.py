@@ -131,6 +131,9 @@ class StationAssignmentViewSet(ScopedReadOnlyViewSet):
             return StationAssignment.objects.all().order_by("-assigned_at")
         return (
             StationAssignment.objects.filter(
+                # | Q(user=user) is defensive/redundant today: accessible_stations
+                # already includes the user's own station assignments; kept in case
+                # scoping semantics narrow later.
                 Q(station__in=accessible_stations(user)) | Q(user=user)
             )
             .distinct()
@@ -148,7 +151,12 @@ class RegionAssignmentViewSet(ScopedReadOnlyViewSet):
         if user.is_internal:
             return RegionAssignment.objects.all().order_by("-assigned_at")
         return (
-            RegionAssignment.objects.filter(Q(region__in=accessible_regions(user)) | Q(user=user))
+            RegionAssignment.objects.filter(
+                # | Q(user=user) is defensive/redundant today: accessible_regions
+                # already includes the user's own manager-regions; kept in case
+                # scoping semantics narrow later.
+                Q(region__in=accessible_regions(user)) | Q(user=user)
+            )
             .distinct()
             .order_by("-assigned_at")
         )
