@@ -130,6 +130,7 @@
       _workletLoaded: false,
       _workletUrl: null,        // cached in init() from the panel root (see enableMic)
       _micWarnedNoRef: false,   // one-shot warn when op.mic ref is missing
+      _diagTapCb: null,         // one-shot callback for the next diag_tap reply
 
       // Suppress repeated not_locked toasts.
       _notLockedTimer: null,
@@ -943,7 +944,36 @@
             self._micWorkletNode.connect(self._micSink);
             self._micSink.connect(micCtx.destination);
             self._micWorkletNode.port.onmessage = function (ev) {
-              self._onMicChunk(ev.data);
+              // Branch on control replies vs. genuine PCM chunks.
+              // The worklet posts two message shapes:
+              //   - PCM audio: a Float32Array (normal mic capture, every 20 ms)
+              //   - Diagnostic reply: {type:"diag_tap", point, rms, peak, window_ms}
+              // Passing a diag_tap object to _onMicChunk would feed a plain object
+              // to the resampler/encoder (corrupting the uplink and incrementing PCM
+              // counters). Diag replies must be intercepted and converted to dBFS
+              // before delivery; only Float32Array chunks continue to the encode path.
+              var d = ev.data;
+              if (d && d.type === "diag_tap") {
+                // Convert raw linear rms/peak from the worklet into the uniform
+                // dBFS tap report (same schema as getTapT0). The conversion is done
+                // here on the main thread because audio-logic.js (UMD) is not
+                // available in the AudioWorklet global scope.
+                var report = A.buildTapReport(d.point || "T1", {
+                  rms: d.rms,
+                  peak: d.peak,
+                  rate: self._micRate || 48000,
+                  windowMs: d.window_ms,
+                });
+                // Deliver to the pending one-shot caller (requestTapT1), then clear.
+                if (self._diagTapCb) {
+                  var cb = self._diagTapCb;
+                  self._diagTapCb = null;
+                  try { cb(report); } catch (_) {}
+                }
+                return; // do NOT pass to the PCM encode path
+              }
+              // Normal PCM chunk (Float32Array) — continue to encoder.
+              self._onMicChunk(d);
             };
             // Surface an audio-thread processor crash (e.g. a throwing
             // constructor) instead of silently producing zero frames — this
@@ -1403,10 +1433,15 @@
       },
 
       // Request a T1 tap report from the worklet (async — posts diag_report to
-      // the worklet port; result arrives as a "diag_tap" message on the port).
-      // The caller installs a one-shot port listener to receive the result.
-      requestTapT1: function () {
+      // the worklet port; result arrives as a "diag_tap" message on the port and
+      // is intercepted by the port.onmessage branch, converted to a dBFS tap
+      // report, then delivered to the cb callback (if provided).
+      // cb(report) is invoked once when the reply arrives; report has the same
+      // shape as getTapT0() — {point, format, rms_dbfs, peak_dbfs, window_ms, silent}.
+      // Replaces any previously registered pending callback.
+      requestTapT1: function (cb) {
         if (!this._micWorkletNode) return;
+        this._diagTapCb = (typeof cb === "function") ? cb : null;
         this._micWorkletNode.port.postMessage({ type: "diag_report" });
       },
 

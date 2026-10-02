@@ -260,6 +260,23 @@ ok("buildTapReport shape", function(){ var r=A.buildTapReport("T1",{rms:0.1,peak
 ok("buildTapReport silence flag", function(){ var r=A.buildTapReport("T0",{rms:0,peak:0,rate:48000,windowMs:300}); assert.strictEqual(r.silent,true); assert.strictEqual(r.rms_dbfs,null); });
 ok("buildTapReport undefined rms is silent", function(){ var r=A.buildTapReport("T1",{rate:48000,windowMs:300}); assert.strictEqual(r.silent,true); assert.strictEqual(r.rms_dbfs,null); });
 ok("captureConstraints picks three keys", function(){ var c=A.captureConstraintsFromSettings({autoGainControl:true,noiseSuppression:false,echoCancellation:true,sampleRate:48000}); assert.strictEqual(c.autoGainControl,true); assert.strictEqual(c.noiseSuppression,false); assert.strictEqual(c.echoCancellation,true); assert.strictEqual(c.sampleRate,undefined); });
+ok("buildTapReport window_ms passthrough (simulates worklet diag_tap conversion)", function(){
+  // The port.onmessage branch in audio-panel.js calls
+  //   A.buildTapReport(d.point, {rms:d.rms, peak:d.peak, rate:<contextRate>, windowMs:d.window_ms})
+  // Verify that window_ms is preserved exactly and dBFS values are correct.
+  var rms = 0.5, peak = 0.9, windowMs = 250, rate = 48000;
+  var r = A.buildTapReport("T1", { rms: rms, peak: peak, rate: rate, windowMs: windowMs });
+  assert.strictEqual(r.point, "T1");
+  assert.strictEqual(r.window_ms, windowMs);
+  assert.strictEqual(r.format.rate, rate);
+  assert.ok(Math.abs(r.rms_dbfs - 20 * Math.log10(rms)) < 1e-6, "rms_dbfs matches 20log10(rms)");
+  assert.ok(Math.abs(r.peak_dbfs - 20 * Math.log10(peak)) < 1e-6, "peak_dbfs matches 20log10(peak)");
+  assert.strictEqual(r.silent, false);
+  // Silence case: worklet posts rms=0 (no audio in window).
+  var silent = A.buildTapReport("T1", { rms: 0, peak: 0, rate: rate, windowMs: windowMs });
+  assert.strictEqual(silent.rms_dbfs, null);
+  assert.strictEqual(silent.silent, true);
+});
 
 // --- jitter buffer ---------------------------------------------------------
 function drainSeqs(res) { return res.out.map(o => (o.plc ? "P" : o.seq)); }
