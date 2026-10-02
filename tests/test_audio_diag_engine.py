@@ -56,6 +56,20 @@ def test_on_diag_command_rejects_non_int_slot():
 
     res = asyncio.run(scenario())
     assert "error" in res
+    assert res["request_id"] == "r2"
+
+
+def test_on_diag_command_rejects_bool_slot():
+    eng, _ = _engine()
+
+    async def scenario():
+        return await eng.on_diag_command(
+            {"anchor": "C", "slot": True, "request_id": "r4", "signal": {"level_dbfs": -20.0}}
+        )
+
+    res = asyncio.run(scenario())
+    assert "error" in res
+    assert res["request_id"] == "r4"
 
 
 def test_on_diag_command_anchor_c_returns_report(monkeypatch):
