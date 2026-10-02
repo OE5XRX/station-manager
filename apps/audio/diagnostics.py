@@ -26,7 +26,8 @@ def build_run_report(agent_report: dict) -> dict:
     """
     taps = agent_report["taps"]
     static_gains = agent_report["static_gains"]
-    sink_volume_db: float = static_gains["sink_volume_db"]
+    # May be None when the agent could not read the sink volume (wpctl failed).
+    sink_db: float | None = static_gains.get("sink_volume_db")
 
     # Build a point→tap lookup for verdict logic.
     tap_by_point: dict[str, dict] = {t["point"]: t for t in taps}
@@ -48,9 +49,10 @@ def build_run_report(agent_report: dict) -> dict:
 
         stage: dict = {"from": from_pt, "to": to_pt, "delta_db": delta_db, "note": None}
 
-        # Attach expected_db for the known sink stage (C→D).
+        # Attach expected_db for the known sink stage (C→D). Keep the key for
+        # schema stability even when the sink volume could not be read (None).
         if from_pt == "C" and to_pt == "D":
-            stage["expected_db"] = sink_volume_db
+            stage["expected_db"] = sink_db if sink_db is not None else None
 
         stages.append(stage)
 
@@ -71,13 +73,14 @@ def build_run_report(agent_report: dict) -> dict:
         if (
             cd_stage is not None
             and cd_stage["delta_db"] is not None
-            and abs(cd_stage["delta_db"] - sink_volume_db) <= 1.0
+            and sink_db is not None
+            and abs(cd_stage["delta_db"] - sink_db) <= 1.0
             and c_peak is not None
             and c_peak > -6.0
         ):
             verdict = (
                 f"digital chain clean to D; C->D loss is the sink volume stage"
-                f" ({sink_volume_db:.2f} dB) — expected"
+                f" ({sink_db:.2f} dB) — expected"
             )
         else:
             verdict = "audio path check completed — review stage deltas for anomalies"

@@ -49,3 +49,33 @@ def test_verdict_silent_c_flags_broken_inject():
 def test_verdict_low_c_blames_upstream():
     rep = sd.build_run_report(_agent_report(-24.0, -27.0))
     assert "upstream" in rep["verdict"].lower()
+
+
+def test_report_tolerates_missing_sink_volume():
+    # Real station: wpctl failed, so the agent reports a None sink volume.
+    report = {
+        "anchor": "C",
+        "reference": {"freq_hz": 1000, "level_dbfs": -20.0, "window_ms": 300},
+        "taps": [
+            {
+                "point": "C",
+                "rms_dbfs": -6.0,
+                "peak_dbfs": -3.0,
+                "silent": False,
+                "computed": False,
+            },
+            {
+                "point": "D",
+                "rms_dbfs": -14.0,
+                "peak_dbfs": -11.0,
+                "silent": False,
+                "computed": True,
+            },
+        ],
+        "static_gains": {"sink_volume_linear": None, "sink_volume_db": None},
+    }
+    rep = sd.build_run_report(report)
+    assert isinstance(rep["verdict"], str) and rep["verdict"]
+    stages = {(s["from"], s["to"]): s for s in rep["stages"]}
+    cd = stages[("C", "D")]
+    assert cd["expected_db"] is None
