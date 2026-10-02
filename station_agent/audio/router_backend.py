@@ -204,8 +204,33 @@ class PipeWireRouterBackend:
     def set_volume(self, node: str, linear: float) -> bool:
         return self._ok(self._safe_run(["wpctl", "set-volume", node, f"{linear:g}"]))
 
+    def _object_id_for_node(self, node_name: str) -> int | None:
+        """Resolve the PipeWire numeric object id for a node by its ``node.name``.
+
+        ``wpctl get-volume`` / ``wpctl set-volume`` require a numeric pw object id, not a
+        node.name string — passing a name always fails silently.  We reuse the already-cached
+        pw-dump machinery to look it up.
+        """
+        for node in self._pw_nodes():
+            props = node.get("info", {}).get("props", {})
+            if props.get("node.name") == node_name:
+                oid = node.get("id")
+                if isinstance(oid, int):
+                    return oid
+        logger.debug("router: no pw object id found for node.name=%r", node_name)
+        return None
+
     def get_volume(self, node: str) -> float | None:
-        res = self._safe_run(["wpctl", "get-volume", node])
+        """Return the linear volume of *node*, or ``None`` if it cannot be determined.
+
+        BUG3 fix: ``wpctl get-volume`` expects a numeric PipeWire object id, not a node.name
+        string.  We resolve the id via pw-dump first; if it cannot be found we return None
+        gracefully (static gains stay None downstream).
+        """
+        oid = self._object_id_for_node(node)
+        if oid is None:
+            return None
+        res = self._safe_run(["wpctl", "get-volume", str(oid)])
         if res is None or res.returncode != 0:
             return None
         from station_agent.audio.diagnostics import parse_wpctl_volume

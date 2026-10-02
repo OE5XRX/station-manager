@@ -90,3 +90,30 @@ def test_on_diag_command_anchor_c_returns_report(monkeypatch):
     res = asyncio.run(scenario())
     assert res["type"] == "diag_result" and res["request_id"] == "r3"
     assert res["anchor"] == "C"
+
+
+def test_on_diag_command_refuses_while_tx_active(monkeypatch):
+    """BUG4 — RF safety: diagnostic inject must be refused when a TX bridge is up."""
+    from station_agent.audio import diagnostics
+
+    eng, _ = _engine()
+
+    # Simulate an active TX bridge (PTT / mic up)
+    eng._tx = {"bridge": object(), "slot": 0, "module": "fm"}
+
+    # If run_diagnostic is called it will raise to make the test fail visibly
+    def _should_not_be_called(**kw):
+        raise AssertionError("run_diagnostic must NOT be called while TX is active")
+
+    monkeypatch.setattr(diagnostics, "run_diagnostic", _should_not_be_called)
+
+    async def scenario():
+        return await eng.on_diag_command(
+            {"anchor": "C", "slot": 1, "request_id": "rf1", "signal": {"level_dbfs": -20.0}}
+        )
+
+    res = asyncio.run(scenario())
+    assert res["type"] == "diag_result"
+    assert res["request_id"] == "rf1"
+    assert "error" in res
+    assert "TX active" in res["error"]

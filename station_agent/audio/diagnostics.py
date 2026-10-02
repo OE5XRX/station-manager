@@ -62,8 +62,19 @@ _LOOPBACK = "127.0.0.1"
 
 
 def build_measured_inject_argv(
-    tx_node: str, freq_hz: int, level_dbfs: float, rate: int
+    tx_node: str, freq_hz: int, level_dbfs: float, rate: int, *, meas_fd: int = MEAS_FD
 ) -> list[str]:
+    """Build a gst-launch argv that injects a calibrated sine into *tx_node* and taps PCM.
+
+    ``meas_fd`` is the file descriptor the child will write raw S16LE samples to.  The
+    caller must open an OS pipe, pass the write-end fd as *meas_fd* **and** include it in
+    ``pass_fds`` when spawning, so the child actually inherits it.  Hardcoding fd=3 is wrong
+    because ``pass_fds`` preserves the fd at its current number, which is usually >3.
+
+    BUG2 fix: ``audiotestsrc volume=1.0`` so the dedicated ``volume`` element is the sole
+    gain stage (audiotestsrc default 0.8 would compound with the volume element and yield
+    −21.94 dBFS instead of the requested level).
+    """
     linear = 10 ** (level_dbfs / 20)
     return [
         "gst-launch-1.0",
@@ -72,6 +83,7 @@ def build_measured_inject_argv(
         "is-live=true",
         "wave=sine",
         f"freq={freq_hz}",
+        "volume=1.0",
         "!",
         f"audio/x-raw,rate={rate},channels=1",
         "!",
@@ -112,11 +124,18 @@ def build_measured_inject_argv(
         f"audio/x-raw,format=S16LE,rate={rate},channels=1",
         "!",
         "fdsink",
-        f"fd={MEAS_FD}",
+        f"fd={meas_fd}",
     ]
 
 
-def build_measured_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
+def build_measured_tx_argv(
+    tx_node: str, port: int, rate: int, *, meas_fd: int = MEAS_FD
+) -> list[str]:
+    """Build a gst-launch argv that taps a UDP RTP stream into *tx_node* and measures PCM.
+
+    ``meas_fd`` is the pipe write-end fd the child will write to; see
+    :func:`build_measured_inject_argv` for the rationale.
+    """
     caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
     return [
         "gst-launch-1.0",
@@ -158,7 +177,7 @@ def build_measured_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
         f"audio/x-raw,format=S16LE,rate={rate},channels=1",
         "!",
         "fdsink",
-        f"fd={MEAS_FD}",
+        f"fd={meas_fd}",
     ]
 
 
@@ -167,10 +186,21 @@ def build_reverse_tap_argv(tap: str, rate: int, duration: float) -> list[str]:
 
 
 _WPCTL_VOL = _re.compile(r"Volume:\s*([0-9]+\.[0-9]+)")
+_WPCTL_MUTED = _re.compile(r"\[MUTED\]", _re.IGNORECASE)
 
 
 def parse_wpctl_volume(text: str) -> float | None:
-    m = _WPCTL_VOL.search(text or "")
+    """Parse the linear volume from ``wpctl get-volume`` output.
+
+    Returns ``0.0`` if the output contains ``[MUTED]`` (muted sink → effectively
+    zero gain for diagnostic purposes; 20log10(0) is −∞ dB, handled downstream by
+    the ``linear > 0`` guard in ``collect_static_gains``).
+    """
+    if not text:
+        return None
+    if _WPCTL_MUTED.search(text):
+        return 0.0
+    m = _WPCTL_VOL.search(text)
     return float(m.group(1)) if m else None
 
 
@@ -186,8 +216,17 @@ def collect_static_gains(backend, slot: int) -> dict:
     }
 
 
-def _default_spawn(argv: list[str]):
-    r, w = _os.pipe()  # measurement fd handed to the child as fd 3
+def _default_spawn(make_argv):
+    """Spawn the measurement pipeline.
+
+    ``make_argv(meas_fd: int) -> list[str]`` is called with the actual write-end fd
+    so the child's argv embeds the real fd number (not the hardcoded constant 3).
+    ``pass_fds`` passes it to the child; the parent's copy is closed right after.
+
+    Returns ``(proc, read_fd)`` where ``read_fd`` is the pipe read-end.
+    """
+    r, w = _os.pipe()
+    argv = make_argv(w)
     proc = _subprocess.Popen(  # noqa: S603 — fixed tool + resolved node
         argv,
         stdout=_subprocess.DEVNULL,
@@ -195,28 +234,26 @@ def _default_spawn(argv: list[str]):
         pass_fds=(w,),
     )
     _os.close(w)
-    proc._meas_read_fd = r  # type: ignore[attr-defined]
-    return proc
+    return proc, r
 
 
-def _default_read_measfd(proc, nbytes: int, timeout: float) -> bytes:
+def _default_read_measfd(read_fd: int, nbytes: int, timeout: float) -> bytes:
+    """Read up to *nbytes* raw bytes from *read_fd* within *timeout* seconds, then close it."""
     import select
-
-    fd = getattr(proc, "_meas_read_fd")
-    buf = bytearray()
     import time as _t
 
+    buf = bytearray()
     deadline = _t.monotonic() + timeout
     while len(buf) < nbytes and _t.monotonic() < deadline:
-        r, _, _ = select.select([fd], [], [], max(0.0, deadline - _t.monotonic()))
+        r, _, _ = select.select([read_fd], [], [], max(0.0, deadline - _t.monotonic()))
         if not r:
             break
-        chunk = _os.read(fd, nbytes - len(buf))
+        chunk = _os.read(read_fd, nbytes - len(buf))
         if not chunk:
             break
         buf.extend(chunk)
     try:
-        _os.close(fd)
+        _os.close(read_fd)
     except OSError:
         pass
     return bytes(buf)
@@ -248,24 +285,33 @@ def run_diagnostic(
 ):
     freq = int(signal.get("freq_hz", REF_FREQ_HZ))
     level = float(signal.get("level_dbfs", REF_LEVEL_DBFS))
-    dur_ms = min(int(signal.get("duration_ms", REF_SETTLE_MS + REF_WINDOW_MS)), MAX_DURATION_MS)
+    # BUG5: clamp duration on BOTH sides — negative/zero would produce invalid nbytes;
+    # floor at REF_WINDOW_MS so there is always a measurable capture window.
+    dur_ms = max(
+        REF_WINDOW_MS,
+        min(int(signal.get("duration_ms", REF_SETTLE_MS + REF_WINDOW_MS)), MAX_DURATION_MS),
+    )
     tx_node = backend.resolve_node(slot, "tx")
     if tx_node is None:
         return {"anchor": anchor, "error": f"no TX node for slot {slot}"}
     gains = collect_static_gains(backend, slot)
 
     if anchor == "C":
-        argv = build_measured_inject_argv(tx_node, freq, level, rate)
+        # BUG1: build make_argv as a closure so _default_spawn can bake the real write-fd
+        # into the argv rather than using the hardcoded MEAS_FD constant.
+        make_argv = lambda mfd: build_measured_inject_argv(  # noqa: E731
+            tx_node, freq, level, rate, meas_fd=mfd
+        )
     elif anchor == "U":
         port = port_allocator.acquire() if port_allocator else 47000
-        argv = build_measured_tx_argv(tx_node, port, rate)
+        make_argv = lambda mfd: build_measured_tx_argv(tx_node, port, rate, meas_fd=mfd)  # noqa: E731
     else:
         return {"anchor": anchor, "error": f"unknown anchor {anchor!r}"}
 
-    nbytes = int(rate * (dur_ms) / 1000) * 2
-    proc = spawn(argv)
+    nbytes = int(rate * dur_ms / 1000) * 2
+    proc, read_fd = spawn(make_argv)
     try:
-        pcm = read_measfd(proc, nbytes, dur_ms / 1000 + 1.0)
+        pcm = read_measfd(read_fd, nbytes, dur_ms / 1000 + 1.0)
     finally:
         _terminate_proc(proc)
         if anchor == "U" and port_allocator:

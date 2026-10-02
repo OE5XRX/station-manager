@@ -223,6 +223,13 @@ class AudioEngine:
             return {**base, "error": f"unsupported anchor {anchor!r}"}
         if not isinstance(slot, int) or isinstance(slot, bool):
             return {**base, "error": "slot must be an int"}
+        # BUG4 — RF safety: refuse inject while a TX bridge is active (PTT/mic up).
+        # Writing a tone to the TX sink while the SA818 is keyed would produce RF.
+        if self._tx is not None:
+            return {
+                **base,
+                "error": "refused: TX active — diagnostic inject would reach a keyed transmitter",
+            }
         try:
             report = await self._to_thread(
                 lambda: diagnostics.run_diagnostic(
