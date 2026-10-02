@@ -82,36 +82,38 @@ def probe_slot(
     empty if the firmware lists no modules), or ``None`` if the slot cannot be opened or
     does not answer ``module list``. Never raises — discovery must not disrupt the heartbeat.
     """
+    # Single-owner invariant: hold the process-wide device lock for the WHOLE probe — before
+    # opening, through configure/converse, until after close — so the control plane (commands /
+    # telemetry polls) or a parallel scan can never open OR perturb this same serial
+    # concurrently and corrupt the MODULE-LIST reply (see devlock / CLAUDE.md "Control-Device
+    # Single-Owner-Invariante"). Opening a tty already configures it, so the lock must precede
+    # the open. Fail closed (return None, a transient miss the debouncer absorbs) if the line
+    # stays busy past the lock budget.
     try:
-        ser = serial.Serial(
-            port=control_path,
-            baudrate=_SERIAL_BAUD,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=_READ_TIMEOUT,
-            write_timeout=_WRITE_TIMEOUT,
-        )
-    except (serial.SerialException, ValueError, OSError) as exc:
-        logger.debug("slot probe: cannot open %s: %s", control_path, exc)
-        return None
-
-    try:
-        # Single-owner invariant: hold the process-wide device lock for the whole probe so
-        # the control plane (commands / telemetry polls) or a parallel scan can never open
-        # this same serial concurrently and corrupt the MODULE-LIST reply (see devlock /
-        # CLAUDE.md "Control-Device Single-Owner-Invariante"). Fail closed (return None, a
-        # transient miss the debouncer absorbs) if the line stays busy past the lock budget.
-        with control_device_lock(ser.fileno()):
-            return _probe_locked(ser, control_path, timeout, trace, list_retries)
+        with control_device_lock(control_path):
+            try:
+                ser = serial.Serial(
+                    port=control_path,
+                    baudrate=_SERIAL_BAUD,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=_READ_TIMEOUT,
+                    write_timeout=_WRITE_TIMEOUT,
+                )
+            except (serial.SerialException, ValueError, OSError) as exc:
+                logger.debug("slot probe: cannot open %s: %s", control_path, exc)
+                return None
+            try:
+                return _probe_locked(ser, control_path, timeout, trace, list_retries)
+            finally:
+                try:
+                    ser.close()
+                except (serial.SerialException, OSError):
+                    pass  # close() must never raise into the heartbeat
     except TimeoutError:
         logger.debug("slot probe: device busy, lock not acquired for %s", control_path)
         return None
-    finally:
-        try:
-            ser.close()
-        except (serial.SerialException, OSError):
-            pass  # close() must never raise into the heartbeat
 
 
 def _probe_locked(

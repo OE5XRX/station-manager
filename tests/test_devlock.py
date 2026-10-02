@@ -1,21 +1,25 @@
-"""Process-wide control-device lock (Copilot finding #2).
+"""Process-wide single-owner control-device lock (Copilot findings #2 and round-2 follow-ups).
 
-The heartbeat's inventory scan runs in a separate thread and used to call ``discover_slots``
-with no coordination against the control plane — a THIRD opener on the same ``ttyACM0`` the
-broker's asyncio lock cannot serialize (the asyncio lock only orders accesses inside the
-control event loop). ``devlock.control_device_lock`` is the cross-thread/cross-component
-enforcement: an OS advisory ``flock`` on the device fd that EVERY opener takes.
+Finding #2: the heartbeat's inventory scan runs in a separate thread and used to call
+``discover_slots`` with no coordination against the control plane — a THIRD opener on the same
+``ttyACM0`` the broker's asyncio lock (control event loop only) cannot serialize.
 
-These tests exercise the primitive directly (real ``flock`` on a temp file, two threads) and
-the two call sites — ``slot_discovery.probe_slot`` and ``slot_control.SlotControl.execute`` —
-to prove each opener is serialized behind an external holder of the device lock.
+Round-2 refinement: an advisory ``flock`` taken on the *already-open* fd is not enough — in
+pyserial, opening and configuring the tty (baud, raw mode, input-buffer reset) and restoring
+termios / closing it are themselves line-perturbing, so a second opener could disturb an active
+exchange during those windows before it ever blocks on the lock. The lock must therefore span
+the ENTIRE open→configure→converse→restore→close lifecycle, which means it must be a path-keyed
+lock acquired BEFORE the device is opened. ``devlock.control_device_lock`` is that primitive; a
+process-wide ``threading.Lock`` keyed by the device path, taken by EVERY opener
+(``slot_control.SlotControl.execute`` and ``slot_discovery.probe_slot``).
+
+These tests exercise the primitive directly (two threads, blocking + timeout) and the two call
+sites — proving each opener takes the lock BEFORE it opens the serial and is serialized behind
+an external holder of the same path lock.
 """
 
-import os
 import threading
 import time
-
-import pytest
 
 from station_agent import devlock, slot_discovery
 from station_agent.slot_control import SlotControl
@@ -33,37 +37,37 @@ FM = {
 
 
 def test_lock_is_exclusive_and_times_out_while_held(tmp_path):
-    """A second acquirer cannot take the lock while the first holds it, and fails closed with
-    TimeoutError rather than opening a concurrent owner."""
-    path = tmp_path / "control"
-    path.write_bytes(b"")
-    fd_a = os.open(str(path), os.O_RDWR)
-    fd_b = os.open(str(path), os.O_RDWR)
-    try:
-        with devlock.control_device_lock(fd_a, timeout=1.0):
-            with pytest.raises(TimeoutError):
-                with devlock.control_device_lock(fd_b, timeout=0.2):
-                    pass
-        # Released on exit: the second acquirer now succeeds immediately.
-        with devlock.control_device_lock(fd_b, timeout=1.0):
-            pass
-    finally:
-        os.close(fd_a)
-        os.close(fd_b)
+    """A second acquirer cannot take the lock for the same path while the first holds it, and
+    fails closed with TimeoutError rather than proceeding as a concurrent owner."""
+    path = str(tmp_path / "control")
+    with devlock.control_device_lock(path, timeout=1.0):
+        done = []
+
+        def second():
+            try:
+                with devlock.control_device_lock(path, timeout=0.2):
+                    done.append("acquired")
+            except TimeoutError:
+                done.append("timeout")
+
+        t = threading.Thread(target=second)
+        t.start()
+        t.join(2.0)
+        assert done == ["timeout"], done
+    # Released on exit: the second acquirer now succeeds immediately.
+    with devlock.control_device_lock(path, timeout=1.0):
+        pass
 
 
 def test_lock_blocks_until_holder_releases(tmp_path):
     """A waiter blocks (does not fail) while the lock is held, then acquires once released —
     the "take turns" behaviour that serializes heartbeat vs. control plane."""
-    path = tmp_path / "control"
-    path.write_bytes(b"")
-    fd_a = os.open(str(path), os.O_RDWR)
-    fd_b = os.open(str(path), os.O_RDWR)
+    path = str(tmp_path / "control")
     acquired = threading.Event()
     release = threading.Event()
 
     def holder():
-        with devlock.control_device_lock(fd_a, timeout=2.0):
+        with devlock.control_device_lock(path, timeout=2.0):
             acquired.set()
             release.wait(2.0)
 
@@ -74,7 +78,7 @@ def test_lock_blocks_until_holder_releases(tmp_path):
         got = []
 
         def waiter():
-            with devlock.control_device_lock(fd_b, timeout=2.0):
+            with devlock.control_device_lock(path, timeout=2.0):
                 got.append(time.monotonic())
 
         w = threading.Thread(target=waiter)
@@ -87,19 +91,65 @@ def test_lock_blocks_until_holder_releases(tmp_path):
     finally:
         release.set()
         t.join(2.0)
-        os.close(fd_a)
-        os.close(fd_b)
 
 
-def _hold_external_lock(control_path, acquired, release):
-    """Open the same device node and hold the device lock until *release* is set."""
-    fd = os.open(control_path, os.O_RDWR | os.O_NOCTTY)
+def test_different_paths_do_not_contend(tmp_path):
+    """The lock is per-path: two different control nodes never block each other."""
+    p1 = str(tmp_path / "a")
+    p2 = str(tmp_path / "b")
+    with devlock.control_device_lock(p1, timeout=1.0):
+        with devlock.control_device_lock(p2, timeout=0.5):
+            pass  # must not block
+
+
+def test_probe_slot_takes_lock_before_opening_the_serial(monkeypatch):
+    """Round-2 regression: ``probe_slot`` must acquire the device lock BEFORE it opens the
+    serial, so an opener holding the lock blocks the probe at the lock — the serial is never
+    even opened (let alone configured) while another owner is on the line."""
+    path = "/dev/oe5xrx/slot9/control"
+    opened = []
+
+    def spy_serial(*a, **k):
+        opened.append(True)
+        # Raise the pyserial error probe_slot already handles, so the probe thread exits
+        # cleanly (return None) once it legitimately opens after release — the regression is
+        # captured by asserting ``opened`` stays empty while the lock is held, below.
+        raise slot_discovery.serial.SerialException("spy: no real device")
+
+    monkeypatch.setattr(slot_discovery.serial, "Serial", spy_serial)
+
+    release = threading.Event()
+    holder_ready = threading.Event()
+
+    def holder():
+        with devlock.control_device_lock(path, timeout=2.0):
+            holder_ready.set()
+            release.wait(2.0)
+
+    t = threading.Thread(target=holder)
+    t.start()
     try:
-        with devlock.control_device_lock(fd, timeout=2.0):
-            acquired.set()
-            release.wait(5.0)
+        assert holder_ready.wait(2.0)
+        result = {}
+
+        def probe():
+            result["r"] = slot_discovery.probe_slot(path, timeout=0.5)
+
+        p = threading.Thread(target=probe)
+        p.start()
+        time.sleep(0.3)
+        assert not opened, "probe_slot opened the serial while the lock was held"
+        release.set()
+        p.join(2.0)
     finally:
-        os.close(fd)
+        release.set()
+        t.join(2.0)
+
+
+def _hold_path_lock(path, acquired, release):
+    with devlock.control_device_lock(path, timeout=2.0):
+        acquired.set()
+        release.wait(5.0)
 
 
 def test_probe_slot_serializes_behind_device_lock():
@@ -109,9 +159,7 @@ def test_probe_slot_serializes_behind_device_lock():
     fw.start()
     acquired = threading.Event()
     release = threading.Event()
-    holder = threading.Thread(
-        target=_hold_external_lock, args=(fw.control_path, acquired, release)
-    )
+    holder = threading.Thread(target=_hold_path_lock, args=(fw.control_path, acquired, release))
     holder.start()
     try:
         assert acquired.wait(2.0)
@@ -141,9 +189,7 @@ def test_slot_control_execute_serializes_behind_device_lock():
     fw.start()
     acquired = threading.Event()
     release = threading.Event()
-    holder = threading.Thread(
-        target=_hold_external_lock, args=(fw.control_path, acquired, release)
-    )
+    holder = threading.Thread(target=_hold_path_lock, args=(fw.control_path, acquired, release))
     holder.start()
     try:
         assert acquired.wait(2.0)

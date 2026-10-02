@@ -1,27 +1,29 @@
-"""Process-wide advisory lock for a slot's control device node.
+"""Process-wide single-owner lock for a slot's control device node.
 
-A slot's control serial (``/dev/oe5xrx/slotN/control``) is a single-owner line (see
-CLAUDE.md "Control-Device Single-Owner-Invariante"). Three independent openers reach it:
-control-plane commands / telemetry polls (``slot_control.SlotControl``), re-discovery, and
-the heartbeat's inventory scan (both via ``slot_discovery``). The broker's per-slot
-``asyncio.Lock`` only serializes the first two — they share the control event loop. The
-heartbeat runs in a SEPARATE thread (the ``agent`` main loop), so no asyncio primitive can
-serialize it against the control plane; its unsynchronised ``discover_slots`` was the last
-opener still able to corrupt an in-flight command/poll on the wire.
+A slot's control serial (``/dev/oe5xrx/slotN/control``, real CDC-ACM ``ttyACM*``) is a single
+line. Three openers in the station_agent PROCESS reach it: control-plane commands / telemetry
+polls (``slot_control.SlotControl.execute``), re-discovery, and the heartbeat's inventory scan
+(both via ``slot_discovery``). The broker's per-slot ``asyncio.Lock`` only serializes the first
+two — they share the control event loop. The heartbeat runs in a SEPARATE thread, so no asyncio
+primitive can serialize it against the control plane; its unsynchronised ``discover_slots`` was
+the last opener still able to corrupt an in-flight command/poll on the wire.
 
-An OS advisory lock (``flock``) on the device fd, taken by EVERY opener for the duration of
-its conversation, enforces the single-owner invariant across threads and components. flock
-is tied to the open file description and released on close, so it also serializes two opens
-from the same process. The broker's asyncio lock stays as an intra-loop optimisation.
+Enforcement is a path-keyed, process-wide ``threading.Lock`` acquired BEFORE the device is
+opened and held until after it is closed. Opening and configuring a tty (baud, raw mode,
+input-buffer reset) and restoring termios / closing it are themselves line-perturbing, so the
+lock must span the ENTIRE open→configure→converse→restore→close lifecycle of every opener — an
+advisory ``flock`` taken on the already-open fd would leave the open/configure and
+restore/close windows unguarded (Copilot review #151, round 2). Cross-process exclusivity
+(e.g. a manual ``selftest`` while the agent runs) is covered by operational HW discipline
+(single concurrent access), not by this in-process lock.
 """
 
 from __future__ import annotations
 
 import contextlib
-import errno
-import fcntl
 import logging
-import time
+import os
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -31,35 +33,39 @@ logger = logging.getLogger(__name__)
 # wedged and never releases still cannot block a waiter forever.
 DEFAULT_LOCK_TIMEOUT = 15.0
 
-_POLL_INTERVAL = 0.05
+# One lock per control device path, created on first use. Guarded by _registry_guard so two
+# threads racing to first-open the same path share a single lock instance.
+_registry_guard = threading.Lock()
+_path_locks: dict[str, threading.Lock] = {}
+
+
+def _lock_for(path: str) -> threading.Lock:
+    # Canonicalise so a udev symlink and its real ttyACM node map to one lock. realpath never
+    # raises (it returns the longest resolvable prefix for a missing/dangling path).
+    key = os.path.realpath(path)
+    with _registry_guard:
+        lock = _path_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _path_locks[key] = lock
+        return lock
 
 
 @contextlib.contextmanager
-def control_device_lock(fd: int, *, timeout: float = DEFAULT_LOCK_TIMEOUT):
-    """Hold an exclusive advisory (``flock``) lock on *fd* for the duration of the block.
+def control_device_lock(path: str, *, timeout: float = DEFAULT_LOCK_TIMEOUT):
+    """Hold the process-wide single-owner lock for *path* across the whole block.
 
-    Polls for the lock up to *timeout* seconds. Raises :class:`TimeoutError` if it cannot be
-    acquired in time, so the caller fails closed rather than opening a second concurrent
-    owner on the serial line. Released on block exit (and implicitly when *fd* is closed).
+    MUST be entered BEFORE the device is opened and kept until after it is closed, so no other
+    opener in the process can open / configure / converse / restore / close the same control
+    line concurrently. Raises :class:`TimeoutError` if the lock cannot be acquired within
+    *timeout*, so the caller fails closed rather than proceeding as a second concurrent owner.
     """
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except OSError as exc:
-            if exc.errno not in (errno.EACCES, errno.EAGAIN):
-                raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(
-                    f"control device fd {fd}: flock not acquired within {timeout:.1f}s"
-                ) from exc
-            time.sleep(min(_POLL_INTERVAL, remaining))
+    lock = _lock_for(path)
+    if not lock.acquire(timeout=timeout):
+        raise TimeoutError(
+            f"control device {path!r}: single-owner lock not acquired within {timeout:.1f}s"
+        )
     try:
         yield
     finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
+        lock.release()

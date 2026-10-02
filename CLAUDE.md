@@ -25,13 +25,18 @@ des einen zerschießt die des anderen (z.B. ein `MODULE-RESULT` des Polls landet
 
 Die Invariante wird auf **zwei** Ebenen durchgesetzt:
 
-1. **Prozessweit: OS-Advisory-Lock (`fcntl.flock`) auf dem Device-Node** — `devlock.control_device_lock`,
+1. **Prozessweit: Path-keyed `threading.Lock` auf dem Device-Pfad** — `devlock.control_device_lock`,
    akquiriert von **JEDEM** Opener: `slot_control.SlotControl.execute` (Commands/Polls),
    `slot_discovery.probe_slot` (Discovery **und** Heartbeat-Scan). Das ist die einzige Ebene,
    die thread-übergreifend greift: der Heartbeat läuft in einem **separaten Thread** (nicht im
-   Control-Event-Loop), eine `asyncio.Lock` kann ihn nicht serialisieren. flock hängt an der
-   Open-File-Description → serialisiert auch zwei Opens aus demselben Prozess. Timeout = fail
-   closed (`None`/Timeout-Result), nie ein zweiter paralleler Owner.
+   Control-Event-Loop), eine `asyncio.Lock` kann ihn nicht serialisieren. Der Lock wird **vor**
+   dem `open()` geholt und erst **nach** dem `close()` freigegeben — er deckt den **gesamten**
+   open→configure→converse→restore→close-Zyklus. Ein `flock` auf dem bereits offenen fd würde
+   das Öffnen/Konfigurieren (Baud, Raw-Mode, Input-Buffer-Reset) und das termios-Restore/Close
+   ungeschützt lassen (Copilot #151 Runde 2) — beides perturbiert die Leitung. Timeout = fail
+   closed (`None`/Timeout-Result), nie ein zweiter paralleler Owner. Cross-Prozess (z.B. manueller
+   `selftest` bei laufendem Agent) deckt die operative HW-Disziplin (genau EIN Zugriff), nicht
+   dieser In-Prozess-Lock.
 2. **Intra-Loop-Optimierung: Broker-Per-Slot-`asyncio.Lock`** (`Broker._slot_locks`) — serialisiert
    Command/Poll/Re-Discovery **innerhalb** des Control-Loops ohne flock-Contention.
    `Broker.rediscover(discover_fn)` hält alle Slot-Locks für den Scan (control_client ruft **nie**
