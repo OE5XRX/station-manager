@@ -129,38 +129,38 @@ def test_dropped_slot_poll_builds_no_transport():
     assert paths, "expected the poll to build a transport while the slot was present"
 
 
-def test_rediscover_serializes_against_slot_io():
-    """``Broker.rediscover`` must hold a slot's control lock for the whole scan, so a probe
-    never shares the serial line with an in-flight poll/command on that slot. With the
-    lock held by a simulated in-flight access, the blocking scan must not start until the
-    lock is released."""
-    b, _ = _phys_broker(lambda path: _FakeTransport(path))
-    # Simulate the lock an in-flight telemetry poll / command holds for slot 2.
-    b._slot_locks[2] = asyncio.Lock()
-    ran = []
+def test_rediscover_does_not_block_slot_io_during_scan():
+    """``Broker.rediscover`` must NOT hold the per-slot control locks for the scan. Device
+    serialization is now the per-device ``devlock`` (every opener — probe_slot AND
+    SlotControl.execute — takes it around its whole open→close lifecycle), so holding every
+    broker asyncio lock for the whole sequential scan would only create cross-slot
+    head-of-line blocking: one slow/unresponsive probe would stall commands/telemetry on
+    every healthy slot past the server's command deadline (Copilot #151 r3). So while a
+    (slow) scan is mid-flight, a telemetry read on a healthy slot must still complete."""
+    b, _ = _phys_broker(lambda path: _FakeTransport(path), inventory=[_SLOT2, _SLOT3])
+    scanning = threading.Event()
+    release = threading.Event()
 
-    def discover_fn():
-        ran.append("scanned")
-        return [_SLOT2]
+    def slow_scan():
+        scanning.set()
+        release.wait(5)
+        return [_SLOT2, _SLOT3]
 
     async def scenario():
-        lock = b._slot_locks[2]
-        await lock.acquire()
-        task = asyncio.ensure_future(b.rediscover(discover_fn))
-        await asyncio.sleep(0.02)
-        assert not ran, "discovery ran on the wire while slot 2's control lock was held"
-        lock.release()
-        result = await task
-        assert ran == ["scanned"], "discovery never ran after the lock was released"
-        return result
+        task = asyncio.ensure_future(b.rediscover(slow_scan))
+        await asyncio.get_running_loop().run_in_executor(None, scanning.wait, 5)
+        # Scan is blocked mid-flight; a poll on slot 2 must not be gated behind it.
+        res = await asyncio.wait_for(b._execute(2, "fm", "get", "rssi", None), 1.0)
+        assert res == {"ok": True, "value": 7}, res
+        release.set()
+        assert await task == [_SLOT2, _SLOT3]
 
-    assert _run(scenario()) == [_SLOT2]
+    _run(scenario())
 
 
-def test_rediscover_releases_all_locks_when_scan_raises():
-    """If the blocking scan raises, rediscover must still release every lock it took — a
-    leaked lock would silently deadlock every poll/command on that slot forever
-    (_rediscovery_loop swallows the exception and keeps going, so it would never recover)."""
+def test_rediscover_scan_raises_does_not_break_subsequent_execute():
+    """A raising scan must propagate cleanly and leave no broken state — a follow-up execute
+    still completes (``_rediscovery_loop`` swallows the exception and keeps going)."""
     b, _ = _phys_broker(lambda path: _FakeTransport(path))
 
     def boom():
@@ -169,74 +169,41 @@ def test_rediscover_releases_all_locks_when_scan_raises():
     async def scenario():
         with pytest.raises(RuntimeError):
             await b.rediscover(boom)
-        # The slot lock must be free: a follow-up execute must complete, not hang.
         return await asyncio.wait_for(b._execute(2, "fm", "get", "rssi", None), 0.5)
 
     assert _run(scenario()) == {"ok": True, "value": 7}
 
 
-def test_rediscover_acquires_every_slot_lock_in_order():
-    """rediscover must hold ALL slots' control locks for the scan, acquired in sorted order.
-    With a lower slot free and a higher slot held, it grabs the lower, then blocks on the
-    higher — proving multi-slot serialization (the single-slot test can't show ordering)."""
-    b, _ = _phys_broker(lambda path: _FakeTransport(path), inventory=[_SLOT2, _SLOT3])
-    b._slot_locks[2] = asyncio.Lock()
-    b._slot_locks[3] = asyncio.Lock()
-    ran = []
-
-    def discover_fn():
-        ran.append("scanned")
-        return [_SLOT2, _SLOT3]
-
-    async def scenario():
-        await b._slot_locks[3].acquire()  # hold the higher slot
-        task = asyncio.ensure_future(b.rediscover(discover_fn))
-        await asyncio.sleep(0.02)
-        assert not ran, "scan ran while slot 3's lock was held"
-        assert b._slot_locks[2].locked(), "rediscover must already hold slot 2 while waiting on 3"
-        b._slot_locks[3].release()
-        result = await task
-        assert ran == ["scanned"]
-        return result
-
-    assert _run(scenario()) == [_SLOT2, _SLOT3]
-
-
-def test_rediscover_drains_orphaned_scan_before_releasing_locks_on_cancel():
-    """Cancellation safety (Copilot finding #1): if ``_rediscovery_loop`` is cancelled while
-    the blocking scan is still running in the executor, that scan thread is STILL on the
-    serial line. ``rediscover`` must not release the slot locks until the orphaned scan has
-    drained — otherwise a waiting poll/command acquires the lock and opens the same serial
-    concurrently with the still-running scan (the exact contention the lock exists to
-    prevent). The lock stays held until the scan finishes, then frees, and the cancellation
-    still propagates so the loop actually stops."""
+def test_rediscover_drains_orphaned_scan_on_cancel():
+    """Cancellation safety: if ``_rediscovery_loop`` is cancelled while the blocking scan is
+    still running in the executor, ``rediscover`` must not return until that scan has drained —
+    it shields the scan future and waits for it before propagating ``CancelledError``, so no
+    orphaned scan thread outlives the call to collide with the next connection's discovery."""
     b, _ = _phys_broker(lambda path: _FakeTransport(path))
     started = threading.Event()
     release = threading.Event()
+    finished = threading.Event()
 
     def blocking_scan():
         started.set()
-        release.wait(5)  # hold the "serial line" until the test lets go
+        release.wait(5)
+        finished.set()
         return [_SLOT2]
 
     async def scenario():
         task = asyncio.ensure_future(b.rediscover(blocking_scan))
-        # Wait until the scan thread is actually running (holding the serial).
         await asyncio.get_running_loop().run_in_executor(None, started.wait, 5)
-        lock = b._slot_locks[2]
-        assert lock.locked(), "scan should hold slot 2's lock while running"
 
         task.cancel()
-        # Cancellation is delivered, but the scan thread still holds the serial: the lock
-        # must stay held across several event-loop turns while the scan drains.
-        for _ in range(5):
-            await asyncio.sleep(0.01)
-        assert lock.locked(), "lock released while the orphaned scan was still on the wire"
+        # The scan is still blocked: rediscover must be draining it, not yet done.
+        await asyncio.sleep(0.05)
+        assert not task.done(), "rediscover returned before the orphaned scan drained"
+        assert not finished.is_set()
 
         release.set()  # let the scan finish
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert not lock.locked(), "lock not released after the orphaned scan drained"
+        assert finished.is_set(), "scan did not finish before rediscover completed"
 
     _run(scenario())
 

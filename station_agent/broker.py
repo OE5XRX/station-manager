@@ -84,16 +84,17 @@ class Broker:
         self._subscriptions: dict[tuple[int, str], dict] = {}
         # (slot, module) -> {"cap": capability_name, "task": asyncio.Task}
         self._ptt: dict[tuple[int, str], dict] = {}
-        # slot -> asyncio.Lock serializing device access. A slot's control device
-        # is a single serial/pty line: concurrent execute() calls (e.g. a telemetry
-        # poll tick and a command) would interleave their write/read framing on the
-        # wire and corrupt each other's MODULE-RESULT. One lock per slot makes every
-        # command+telemetry access to a given slot mutually exclusive.
-        # INVARIANT: this lock is the single owner of a slot's control line. EVERYTHING
-        # that opens it — commands, telemetry polls, AND re-discovery (via rediscover())
-        # — must hold it. Bypassing it (e.g. a raw discover_slots() from control_client)
-        # re-introduces the flap regression from PR #135. See CLAUDE.md "Control-Device
-        # Single-Owner-Invariante".
+        # slot -> asyncio.Lock serializing device access WITHIN the control event loop. A
+        # slot's control device is a single serial/pty line: concurrent execute() calls (e.g.
+        # a telemetry poll tick and a command) would interleave their write/read framing on
+        # the wire and corrupt each other's MODULE-RESULT. One lock per slot makes every
+        # command+telemetry access to a given slot mutually exclusive inside the loop.
+        # This is an intra-loop optimisation only. The authoritative single-owner enforcement
+        # — across threads (the heartbeat scan runs in another thread) AND across the
+        # open→configure→converse→restore→close lifecycle — is the process-wide per-device lock
+        # devlock.control_device_lock, taken by every opener (SlotControl.execute AND
+        # slot_discovery.probe_slot). re-discovery therefore does NOT hold these locks (see
+        # rediscover()). See CLAUDE.md "Control-Device Single-Owner-Invariante".
         self._slot_locks: dict[int, asyncio.Lock] = {}
 
     # --- inventory cache ---------------------------------------------------
@@ -316,56 +317,39 @@ class Broker:
             )
 
     async def rediscover(self, discover_fn):
-        """Run the blocking slot scan *discover_fn* with every known slot's control lock
-        held, then return its result.
+        """Run the blocking slot scan *discover_fn* and return its result.
 
-        Re-discovery probes the same single control serial that telemetry polls and
-        commands drive through :meth:`_execute`. Run concurrently, a re-scan and an
-        in-flight poll tick interleave their framing on the wire: the poll's
-        ``MODULE-RESULT`` lands inside the probe's ``MODULE-LIST``/``MODULE-DESCRIBE``
-        reply, ``probe_slot`` gives up after its retries, and the slot drops out of
-        inventory for that cycle — the module flaps offline every re-scan. Holding each
-        slot's lock for the whole scan makes discovery mutually exclusive with per-slot
-        device I/O, exactly like a command or a poll tick.
+        Re-discovery probes the same single control serial that telemetry polls and commands
+        drive through :meth:`_execute`. Run concurrently, a re-scan and an in-flight poll tick
+        would interleave their framing on the wire: the poll's ``MODULE-RESULT`` lands inside
+        the probe's ``MODULE-LIST``/``MODULE-DESCRIBE`` reply, ``probe_slot`` gives up, and the
+        slot flaps out of inventory. That mutual exclusion is now enforced per device by the
+        process-wide ``devlock.control_device_lock`` — EVERY opener (``probe_slot`` AND
+        ``SlotControl.execute``) holds it around its whole open→close lifecycle, so a probe and
+        a poll on the *same* control path can never be on the wire together, across threads.
 
-        Locks are acquired in sorted slot order and ``_execute`` only ever holds one at a
-        time, so no acquisition cycle — hence no deadlock — is possible. Every slot that
-        can be polled has a control path (``_controls``); include already-created locks
-        too so an in-flight access can never slip a probe onto the wire.
+        Therefore this scan does NOT hold the broker's per-slot :attr:`_slot_locks`. Those
+        remain purely an intra-loop command/poll serializer inside :meth:`_execute`. Acquiring
+        every one of them for the whole sequential scan would instead create cross-slot
+        head-of-line blocking: ``discover_slots`` probes paths one at a time (seconds each, plus
+        up to the device-lock budget if a path is busy), so one slow or unresponsive slot would
+        stall commands and telemetry on every *healthy* slot past the server's command deadline
+        (Copilot #151 r3). Per-slot device serialization is the device lock's job; the scan just
+        runs.
 
         Cancellation safety: ``_rediscovery_loop`` cancels this coroutine on disconnect. A
         cancel arriving mid-scan unblocks the ``await`` immediately, but the blocking
-        ``discover_fn`` is still running in its executor thread — still on the serial line.
-        We must NOT release the slot locks until it drains, or a waiting poll/command would
-        acquire a lock and open the same serial concurrently with the orphaned scan. So we
-        ``shield`` the scan future and, if cancelled, wait for it to finish (locks still
-        held) before re-raising the cancellation.
+        ``discover_fn`` is still running in its executor thread (still holding a device lock).
+        Shield the scan future and, if cancelled, wait for it to drain before re-raising, so no
+        orphaned scan outlives this call to collide with the next connection's discovery.
         """
         loop = asyncio.get_running_loop()
-        slots = sorted(set(self._controls) | set(self._slot_locks))
-        locks = []
-        for slot in slots:
-            lock = self._slot_locks.get(slot)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._slot_locks[slot] = lock
-            locks.append(lock)
-        acquired = []
+        fut = loop.run_in_executor(None, discover_fn)
         try:
-            for lock in locks:
-                await lock.acquire()
-                acquired.append(lock)
-            fut = loop.run_in_executor(None, discover_fn)
-            try:
-                return await asyncio.shield(fut)
-            except asyncio.CancelledError:
-                # The scan thread still owns the serial line; let it drain before the
-                # finally releases the locks, then propagate the cancellation.
-                await asyncio.wait({fut})
-                raise
-        finally:
-            for lock in reversed(acquired):
-                lock.release()
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            await asyncio.wait({fut})
+            raise
 
     async def _execute_virtual(self, vm, capability) -> dict:
         """Read a virtual module's telemetry capability from its own ``state()`` snapshot.

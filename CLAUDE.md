@@ -38,11 +38,15 @@ Die Invariante wird auf **zwei** Ebenen durchgesetzt:
    `selftest` bei laufendem Agent) deckt die operative HW-Disziplin (genau EIN Zugriff), nicht
    dieser In-Prozess-Lock.
 2. **Intra-Loop-Optimierung: Broker-Per-Slot-`asyncio.Lock`** (`Broker._slot_locks`) — serialisiert
-   Command/Poll/Re-Discovery **innerhalb** des Control-Loops ohne flock-Contention.
-   `Broker.rediscover(discover_fn)` hält alle Slot-Locks für den Scan (control_client ruft **nie**
-   `discover_slots()` direkt). `rediscover` ist cancel-sicher: wird der Loop beim Disconnect
-   mitten im Scan gecancelt, läuft die Executor-Future unter `asyncio.shield` **vor** dem
-   Lock-Release aus (`await asyncio.wait`), damit kein wartender Poll auf die verwaiste Probe trifft.
+   Command/Poll **innerhalb** des Control-Loops (in `_execute`). `Broker.rediscover(discover_fn)`
+   hält diese Locks **NICHT** (control_client ruft `discover_slots()` dennoch nie direkt, sondern
+   immer über `rediscover`): Alle Slot-Locks für den ganzen sequentiellen Scan zu halten würde
+   Cross-Slot-Head-of-Line-Blocking erzeugen — eine langsame/tote Probe blockierte Commands/Telemetry
+   auf **jedem** gesunden Slot über das Server-Command-Timeout (10 s) hinaus (Copilot #151 Runde 3).
+   Die Pro-Device-Serialisierung macht der `devlock`, nicht diese Locks. `rediscover` ist dennoch
+   cancel-sicher: wird der Loop beim Disconnect mitten im Scan gecancelt, läuft die Executor-Future
+   unter `asyncio.shield` aus (`await asyncio.wait`), bevor die Cancellation weitergereicht wird —
+   keine verwaiste Probe überlebt den Call.
 
 Ergänzend:
 - `Broker._execute` gibt bei fehlendem Control-Pfad (`_control_path is None`) sauber
