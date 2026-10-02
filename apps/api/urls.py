@@ -1,6 +1,7 @@
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerSplitView
 
+from apps.api.router import router
 from apps.api.views import HealthCheckView, HeartbeatView, StationInventoryView
 
 app_name = "api"
@@ -14,6 +15,7 @@ urlpatterns = [
         name="station_inventory",
     ),
     path("v1/deployments/", include("apps.deployments.api_urls")),
+    path("v1/", include(router.urls)),
     path("v1/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "v1/docs/",
