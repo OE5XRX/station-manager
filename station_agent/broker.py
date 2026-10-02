@@ -84,11 +84,17 @@ class Broker:
         self._subscriptions: dict[tuple[int, str], dict] = {}
         # (slot, module) -> {"cap": capability_name, "task": asyncio.Task}
         self._ptt: dict[tuple[int, str], dict] = {}
-        # slot -> asyncio.Lock serializing device access. A slot's control device
-        # is a single serial/pty line: concurrent execute() calls (e.g. a telemetry
-        # poll tick and a command) would interleave their write/read framing on the
-        # wire and corrupt each other's MODULE-RESULT. One lock per slot makes every
-        # command+telemetry access to a given slot mutually exclusive.
+        # slot -> asyncio.Lock serializing device access WITHIN the control event loop. A
+        # slot's control device is a single serial/pty line: concurrent execute() calls (e.g.
+        # a telemetry poll tick and a command) would interleave their write/read framing on
+        # the wire and corrupt each other's MODULE-RESULT. One lock per slot makes every
+        # command+telemetry access to a given slot mutually exclusive inside the loop.
+        # This is an intra-loop optimisation only. The authoritative single-owner enforcement
+        # — across threads (the heartbeat scan runs in another thread) AND across the
+        # open→configure→converse→restore→close lifecycle — is the process-wide per-device lock
+        # devlock.control_device_lock, taken by every opener (SlotControl.execute AND
+        # slot_discovery.probe_slot). re-discovery therefore does NOT hold these locks (see
+        # rediscover()). See CLAUDE.md "Control-Device Single-Owner-Invariante".
         self._slot_locks: dict[int, asyncio.Lock] = {}
 
     # --- inventory cache ---------------------------------------------------
@@ -288,7 +294,16 @@ class Broker:
             # telemetry poll reaches _execute directly, so guard here too. Snapshot the
             # module's own state off the event loop (state() may shell out to PipeWire/udev).
             return await self._execute_virtual(vm, capability)
-        transport = self._transport_factory(self._control_path(slot))
+        control_path = self._control_path(slot)
+        if control_path is None:
+            # The slot is not currently in inventory — it dropped on a re-discovery, or the
+            # module was physically removed. A telemetry subscription armed while it was
+            # present keeps polling (so it self-heals when the slot returns), and reaches
+            # _execute directly. Fail closed here: building SlotControl(None) would os.open(
+            # None) and raise TypeError once per cap per tick (~1×/s) — the physical-module
+            # twin of the virtual-module RC#2 guard above.
+            return {"ok": False, "error": proto.UNKNOWN_SLOT}
+        transport = self._transport_factory(control_path)
         loop = asyncio.get_running_loop()
         lock = self._slot_locks.get(slot)
         if lock is None:
@@ -300,6 +315,41 @@ class Broker:
             return await loop.run_in_executor(
                 None, transport.execute, module, op, capability, token, self._trace
             )
+
+    async def rediscover(self, discover_fn):
+        """Run the blocking slot scan *discover_fn* and return its result.
+
+        Re-discovery probes the same single control serial that telemetry polls and commands
+        drive through :meth:`_execute`. Run concurrently, a re-scan and an in-flight poll tick
+        would interleave their framing on the wire: the poll's ``MODULE-RESULT`` lands inside
+        the probe's ``MODULE-LIST``/``MODULE-DESCRIBE`` reply, ``probe_slot`` gives up, and the
+        slot flaps out of inventory. That mutual exclusion is now enforced per device by the
+        process-wide ``devlock.control_device_lock`` — EVERY opener (``probe_slot`` AND
+        ``SlotControl.execute``) holds it around its whole open→close lifecycle, so a probe and
+        a poll on the *same* control path can never be on the wire together, across threads.
+
+        Therefore this scan does NOT hold the broker's per-slot :attr:`_slot_locks`. Those
+        remain purely an intra-loop command/poll serializer inside :meth:`_execute`. Acquiring
+        every one of them for the whole sequential scan would instead create cross-slot
+        head-of-line blocking: ``discover_slots`` probes paths one at a time (seconds each, plus
+        up to the device-lock budget if a path is busy), so one slow or unresponsive slot would
+        stall commands and telemetry on every *healthy* slot past the server's command deadline
+        (Copilot #151 r3). Per-slot device serialization is the device lock's job; the scan just
+        runs.
+
+        Cancellation safety: ``_rediscovery_loop`` cancels this coroutine on disconnect. A
+        cancel arriving mid-scan unblocks the ``await`` immediately, but the blocking
+        ``discover_fn`` is still running in its executor thread (still holding a device lock).
+        Shield the scan future and, if cancelled, wait for it to drain before re-raising, so no
+        orphaned scan outlives this call to collide with the next connection's discovery.
+        """
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(None, discover_fn)
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            await asyncio.wait({fut})
+            raise
 
     async def _execute_virtual(self, vm, capability) -> dict:
         """Read a virtual module's telemetry capability from its own ``state()`` snapshot.

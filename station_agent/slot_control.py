@@ -18,6 +18,7 @@ import time
 import tty
 
 from station_agent.descriptor import TOKEN_RE
+from station_agent.devlock import control_device_lock
 from station_agent.slot_discovery import (
     _MAX_RESPONSE_BYTES,
     _MODULE_ID_RE,
@@ -84,30 +85,39 @@ class SlotControl:
             parts.append(token)
         cmd = (" ".join(parts) + "\r\n").encode()
 
+        # Single-owner invariant: hold the process-wide device lock across the WHOLE
+        # open→configure→converse→restore→close lifecycle, so a heartbeat scan / re-discovery
+        # in another thread can never open or perturb this same serial concurrently (see
+        # devlock / CLAUDE.md). The lock precedes the open because opening a tty already
+        # configures it. Fail closed as a timeout if the line stays busy past the lock budget.
         try:
-            fd = os.open(self._path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        except OSError as exc:
-            logger.debug("slot control: cannot open %s: %s", self._path, exc)
-            return dict(_TIMEOUT_RESULT)
-
-        saved = None
-        try:
-            try:
-                saved = termios.tcgetattr(fd)
-                tty.setraw(fd)
-            except termios.error:
-                pass
-            return self._converse(fd, cmd, trace=trace)
-        finally:
-            if saved is not None:
+            with control_device_lock(self._path):
                 try:
-                    termios.tcsetattr(fd, termios.TCSANOW, saved)
-                except (termios.error, OSError):
-                    pass
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+                    fd = os.open(self._path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+                except OSError as exc:
+                    logger.debug("slot control: cannot open %s: %s", self._path, exc)
+                    return dict(_TIMEOUT_RESULT)
+                saved = None
+                try:
+                    try:
+                        saved = termios.tcgetattr(fd)
+                        tty.setraw(fd)
+                    except termios.error:
+                        pass
+                    return self._converse(fd, cmd, trace=trace)
+                finally:
+                    if saved is not None:
+                        try:
+                            termios.tcsetattr(fd, termios.TCSANOW, saved)
+                        except (termios.error, OSError):
+                            pass
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+        except TimeoutError:
+            logger.debug("slot control: device busy, lock not acquired for %s", self._path)
+            return dict(_TIMEOUT_RESULT)
 
     def _converse(self, fd: int, cmd: bytes, trace: bool = False) -> dict:
         from station_agent import serial_trace

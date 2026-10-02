@@ -40,6 +40,12 @@ class AgentConfig:
     # Control channel re-discovery: re-scan slots this often (s) and re-emit inventory if it
     # changed. A single startup race that yielded an empty inventory recovers on the next scan.
     control_rediscovery_interval: float = 30.0
+    # Debounce: how many *consecutive* re-discovery misses a previously-present slot
+    # tolerates before it is declared offline. A transient probe miss (corrupted
+    # MODULE-LIST, chatty console, one-off timeout) must not flap the module out of
+    # inventory. 0 restores legacy drop-on-first-miss. Genuine removal surfaces after at
+    # most (max_misses+1) * control_rediscovery_interval seconds.
+    control_rediscovery_max_misses: int = 2
     # Audio subsystem parameters. Audio hardware is auto-detected at runtime (no flag needed).
     # These values parametrize the audio engine when audio hardware is present.
     audio_rx_rate: int = 8000  # FM module native (8 kHz NB); op.mic uplink is 16 kHz WB
@@ -107,6 +113,7 @@ def load_config() -> AgentConfig:
         telemetry_default_interval_ms=int(data.get("telemetry_default_interval_ms", 1000)),
         telemetry_min_floor_ms=int(data.get("telemetry_min_floor_ms", 200)),
         control_rediscovery_interval=float(data.get("control_rediscovery_interval", 30.0)),
+        control_rediscovery_max_misses=int(data.get("control_rediscovery_max_misses", 2)),
         audio_rx_rate=int(data.get("audio_rx_rate", 8000)),
         audio_mic_rate=int(data.get("audio_mic_rate", 16000)),
         audio_udp_port_base=int(data.get("audio_udp_port_base", 47000)),

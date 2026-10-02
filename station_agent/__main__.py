@@ -6,6 +6,7 @@ Usage:
   python -m station_agent selftest audio  [--slot N] [--tx-freq HZ] [--rate HZ]
   python -m station_agent selftest audio-diag [--slot N] [--anchor C|U] [--freq HZ]
                                               [--level-dbfs DBFS] [--duration-ms MS]
+  python -m station_agent selftest control-stability [--base PATH] [--duration S]
 """
 
 import argparse
@@ -38,6 +39,15 @@ def main(argv=None) -> int:
     diag_p.add_argument("--freq", type=int, default=1000)
     diag_p.add_argument("--level-dbfs", type=float, default=-20.0)
     diag_p.add_argument("--duration-ms", type=int, default=500)
+
+    stab_p = st_sub.add_parser(
+        "control-stability",
+        help="re-discovery under concurrent telemetry-poll load (PR #135 flap gate)",
+    )
+    stab_p.add_argument("--base", default="/dev/oe5xrx")
+    stab_p.add_argument("--duration", type=float, default=20.0)
+    stab_p.add_argument("--poll-hz", type=float, default=10.0)
+    stab_p.add_argument("--rescan-s", type=float, default=2.0)
 
     args = parser.parse_args(argv)
 
@@ -75,6 +85,15 @@ def main(argv=None) -> int:
             )
             print(json.dumps(report, indent=2))
             return 0
+        if args.what == "control-stability":
+            from station_agent import selftest
+
+            return selftest.run_control_stability(
+                args.base,
+                duration=args.duration,
+                poll_hz=args.poll_hz,
+                rescan_s=args.rescan_s,
+            )
         # `selftest` with no/unknown sub-command must NOT silently start the
         # long-running agent (a typo would otherwise boot production behaviour).
         st.print_help(sys.stderr)

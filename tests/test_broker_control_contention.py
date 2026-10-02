@@ -1,0 +1,238 @@
+# tests/test_broker_control_contention.py
+"""Regression: the FM module flaps offline every re-discovery cycle on a real station.
+
+Live bug (RC#3): PR #135 added a periodic re-discovery loop so a module that lost the
+startup race comes back online. But ``control_client._rediscovery_loop`` ran
+``discover_slots`` on its own, with no coordination against the broker's per-slot control
+lock. Re-discovery probes the *same* single ``ttyACM0`` control serial that telemetry
+polls and commands use (``broker._execute``): a re-scan racing an in-flight poll tick on
+the wire corrupts the probe's ``MODULE-LIST``/``MODULE-DESCRIBE`` reply, ``probe_slot``
+gives up, and the slot drops out of inventory for that cycle. The result the operator
+sees is the module "verabschiedet sich" (flaps online/offline) every ~30 s in
+station-manager's inventory.
+
+Two coupled defects, one root (the shared, unsynchronised control serial):
+
+1. ``Broker.rediscover`` must run the blocking scan with every known slot's control lock
+   held, so discovery is mutually exclusive with per-slot device I/O (this test file's
+   ``test_rediscover_serializes_against_slot_io``).
+2. When a slot drops from inventory, a telemetry subscription armed while it was present
+   keeps polling. ``_execute`` then built ``SlotControl(_control_path(slot) -> None)`` and
+   did ``os.open(None)`` — ``TypeError`` once per cap per tick (~1×/s). Physical modules
+   got no guard; only virtual ones did (RC#2). Now it fails closed with ``unknown_slot``
+   (``test_execute_offline_*`` / ``test_dropped_slot_poll_builds_no_transport``).
+"""
+
+import asyncio
+import threading
+
+import pytest
+
+from station_agent import protocol as proto
+from station_agent.broker import Broker
+
+
+class Collector:
+    def __init__(self):
+        self.sent = []
+
+    async def __call__(self, msg):
+        self.sent.append(msg)
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+_SLOT2 = {
+    "slot": 2,
+    "control": "/dev/oe5xrx/slot2/control",
+    "modules": [
+        {
+            "id": "fm",
+            "identity": {"type": "fm_transceiver"},
+            "capabilities": [
+                {"name": "rssi", "kind": "telemetry", "type": "int", "readonly": True},
+            ],
+        }
+    ],
+}
+
+
+class _FakeTransport:
+    """Records the control path it was built for and returns a canned telemetry value."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def execute(self, module_id, op, cap, token=None, trace=False):
+        return {"ok": True, "value": 7}
+
+
+_SLOT3 = {
+    "slot": 3,
+    "control": "/dev/oe5xrx/slot3/control",
+    "modules": [{"id": "pa", "identity": {}, "capabilities": []}],
+}
+
+
+def _phys_broker(transport_factory, inventory=None):
+    col = Collector()
+    b = Broker(
+        col,
+        transport_factory=transport_factory,
+        telemetry_min_floor_ms=10,
+        telemetry_default_interval_ms=20,
+        now=lambda: 1.0,
+    )
+    b.set_inventory([_SLOT2] if inventory is None else inventory)
+    return b, col
+
+
+def test_execute_offline_when_slot_has_no_control_path():
+    """A telemetry poll that reaches ``_execute`` after its slot left inventory must fail
+    closed with ``unknown_slot`` instead of building ``SlotControl(None)`` and raising
+    ``TypeError`` in ``os.open(None)``."""
+    b, _ = _phys_broker(lambda path: _FakeTransport(path))
+    b.set_inventory([])  # slot 2 dropped: _control_path(2) is now None
+
+    async def scenario():
+        return await b._execute(2, "fm", "get", "rssi", None)
+
+    result = _run(scenario())
+    assert result == {"ok": False, "error": proto.UNKNOWN_SLOT}, result
+
+
+def test_dropped_slot_poll_builds_no_transport():
+    """End-to-end: subscribe telemetry while the slot is present, then drop the slot. The
+    persisted poll keeps ticking but must never hand a ``None`` path to the transport
+    factory (which would ``os.open(None)``)."""
+    paths = []
+
+    def spy_factory(path):
+        paths.append(path)
+        return _FakeTransport(path)
+
+    b, _ = _phys_broker(spy_factory)
+
+    async def scenario():
+        await b.handle_subscribe(
+            {"slot": 2, "module": "fm", "capabilities": ["rssi"], "interval_ms": 10}
+        )
+        await asyncio.sleep(0.05)  # ticks while present -> factory sees the real path
+        b.set_inventory([])  # slot 2 drops; subscription persists
+        await asyncio.sleep(0.05)  # ticks while absent -> must NOT see a None path
+        await b.stop()
+
+    _run(scenario())
+    assert None not in paths, f"transport factory received a None control path: {paths}"
+    assert paths, "expected the poll to build a transport while the slot was present"
+
+
+def test_rediscover_does_not_block_slot_io_during_scan():
+    """``Broker.rediscover`` must NOT hold the per-slot control locks for the scan. Device
+    serialization is now the per-device ``devlock`` (every opener — probe_slot AND
+    SlotControl.execute — takes it around its whole open→close lifecycle), so holding every
+    broker asyncio lock for the whole sequential scan would only create cross-slot
+    head-of-line blocking: one slow/unresponsive probe would stall commands/telemetry on
+    every healthy slot past the server's command deadline (Copilot #151 r3). So while a
+    (slow) scan is mid-flight, a telemetry read on a healthy slot must still complete."""
+    b, _ = _phys_broker(lambda path: _FakeTransport(path), inventory=[_SLOT2, _SLOT3])
+    scanning = threading.Event()
+    release = threading.Event()
+
+    def slow_scan():
+        scanning.set()
+        release.wait(5)
+        return [_SLOT2, _SLOT3]
+
+    async def scenario():
+        task = asyncio.ensure_future(b.rediscover(slow_scan))
+        await asyncio.get_running_loop().run_in_executor(None, scanning.wait, 5)
+        # Scan is blocked mid-flight; a poll on slot 2 must not be gated behind it.
+        res = await asyncio.wait_for(b._execute(2, "fm", "get", "rssi", None), 1.0)
+        assert res == {"ok": True, "value": 7}, res
+        release.set()
+        assert await task == [_SLOT2, _SLOT3]
+
+    _run(scenario())
+
+
+def test_rediscover_scan_raises_does_not_break_subsequent_execute():
+    """A raising scan must propagate cleanly and leave no broken state — a follow-up execute
+    still completes (``_rediscovery_loop`` swallows the exception and keeps going)."""
+    b, _ = _phys_broker(lambda path: _FakeTransport(path))
+
+    def boom():
+        raise RuntimeError("probe blew up")
+
+    async def scenario():
+        with pytest.raises(RuntimeError):
+            await b.rediscover(boom)
+        return await asyncio.wait_for(b._execute(2, "fm", "get", "rssi", None), 0.5)
+
+    assert _run(scenario()) == {"ok": True, "value": 7}
+
+
+def test_rediscover_drains_orphaned_scan_on_cancel():
+    """Cancellation safety: if ``_rediscovery_loop`` is cancelled while the blocking scan is
+    still running in the executor, ``rediscover`` must not return until that scan has drained —
+    it shields the scan future and waits for it before propagating ``CancelledError``, so no
+    orphaned scan thread outlives the call to collide with the next connection's discovery."""
+    b, _ = _phys_broker(lambda path: _FakeTransport(path))
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocking_scan():
+        started.set()
+        release.wait(5)
+        finished.set()
+        return [_SLOT2]
+
+    async def scenario():
+        task = asyncio.ensure_future(b.rediscover(blocking_scan))
+        await asyncio.get_running_loop().run_in_executor(None, started.wait, 5)
+
+        task.cancel()
+        # The scan is still blocked: rediscover must be draining it, not yet done.
+        await asyncio.sleep(0.05)
+        assert not task.done(), "rediscover returned before the orphaned scan drained"
+        assert not finished.is_set()
+
+        release.set()  # let the scan finish
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set(), "scan did not finish before rediscover completed"
+
+    _run(scenario())
+
+
+def test_command_on_dropped_slot_builds_no_transport():
+    """A command for a slot that left inventory must come back as a clean unknown_slot result
+    (via handle_command's descriptor check) — never reaching _execute to build SlotControl."""
+    paths = []
+
+    def spy_factory(path):
+        paths.append(path)
+        return _FakeTransport(path)
+
+    b, col = _phys_broker(spy_factory)
+    b.set_inventory([])  # slot 2 dropped
+
+    async def scenario():
+        await b.handle_command(
+            {
+                "type": "command",
+                "request_id": 1,
+                "slot": 2,
+                "module": "fm",
+                "op": "get",
+                "capability": "rssi",
+            }
+        )
+
+    _run(scenario())
+    assert None not in paths, f"transport built for a dropped slot via command path: {paths}"
+    results = [m for m in col.sent if m.get("type") == "result"]
+    assert results and results[-1].get("ok") is False, f"expected an error result; sent={col.sent}"
