@@ -51,7 +51,7 @@ class StationAudioDiagnosticView(APIView):
             )
 
         raw_slot = request.data.get("slot", 0)
-        if not isinstance(raw_slot, int):
+        if not isinstance(raw_slot, int) or isinstance(raw_slot, bool):
             raise ValidationError({"slot": "Must be an integer."})
         slot = raw_slot
 

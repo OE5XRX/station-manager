@@ -32,7 +32,7 @@ Content-Type: application/json
 
 | Field | Values | Default | Notes |
 |-------|--------|---------|-------|
-| `anchor` | `"U"` or `"C"` | required | Inject point (see below) |
+| `anchor` | `"U"` or `"C"` | `"U"` | Inject point (see below) |
 | `slot` | integer | required | Station hardware slot number |
 | `signal.kind` | `"sine"` | `"sine"` | Reference signal type |
 | `signal.freq_hz` | integer | `1000` | Test tone frequency |

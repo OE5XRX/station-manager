@@ -151,6 +151,24 @@ def test_bad_slot_type_400(topology, monkeypatch):  # noqa: F811
 
 
 @pytest.mark.django_db
+def test_bool_slot_400(topology, monkeypatch):  # noqa: F811
+    """slot=true (JSON boolean) must be rejected as 400 — bool is a subclass of int."""
+    from apps.audio import orchestrator
+
+    async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
+        return _fake_report(anchor)
+
+    monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
+    client = bearer(topology["station_user"])
+    r = client.post(
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
+        {"anchor": "C", "slot": True},
+        format="json",
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.django_db
 def test_admin_sees_any_station(topology, monkeypatch):  # noqa: F811
     """Admin can reach station_out as well."""
     from apps.audio import orchestrator

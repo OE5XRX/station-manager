@@ -147,7 +147,9 @@ def test_diag_result_unknown_rid_dropped(audio_agent_auth):
         connected, _ = await agent.connect()
         assert connected is True
 
-        # Send a diag_result with a rid that was never registered.
+        layer = get_channel_layer()
+
+        # Send a diag_result with a rid that was never registered — must be dropped.
         await agent.send_to(
             text_data=json.dumps(
                 {
@@ -160,13 +162,49 @@ def test_diag_result_unknown_rid_dropped(audio_agent_auth):
             )
         )
 
-        # Consumer must stay alive — send an unrelated JSON and check no crash.
-        # No exception from within the consumer is expected.
-        # Give the consumer a moment to process.
+        # Give the consumer a moment to process the unknown-rid message.
         await asyncio.sleep(0.1)
 
-        # Consumer must still be alive (no exception surfaced).
-        assert not agent.output_queue.empty() or True  # just checking no exception
+        # Prove the consumer is still alive by exercising a known-rid round-trip.
+        reply_channel = await layer.new_channel()
+        command = {
+            "v": 1,
+            "type": "diag_command",
+            "request_id": "rq-alive",
+            "anchor": "C",
+            "slot": 0,
+            "signal": {},
+        }
+        await layer.group_send(
+            agent_group(station.id),
+            {
+                "type": "audio.diag_command",
+                "request_id": "rq-alive",
+                "reply_channel": reply_channel,
+                "command": command,
+            },
+        )
+
+        # Agent must receive the diag_command (consumer is still routing).
+        msg = await asyncio.wait_for(agent.receive_json_from(), timeout=2.0)
+        assert msg["type"] == "diag_command"
+        assert msg["request_id"] == "rq-alive"
+
+        # Send the result back; it must arrive on the reply_channel.
+        await agent.send_to(
+            text_data=json.dumps(
+                {
+                    "v": 1,
+                    "type": "diag_result",
+                    "request_id": "rq-alive",
+                    "anchor": "C",
+                    "taps": [],
+                }
+            )
+        )
+        reply = await asyncio.wait_for(layer.receive(reply_channel), timeout=2.0)
+        assert reply["type"] == "diag.reply"
+        assert reply["msg"]["request_id"] == "rq-alive"
 
         await agent.disconnect()
 
