@@ -28,3 +28,10 @@ router.register(
 )
 router.register(r"alert-rules", read_views.AlertRuleViewSet, basename="alert-rule")
 router.register(r"alerts", read_views.AlertViewSet, basename="alert")
+router.register(
+    r"provisioning-jobs", read_views.ProvisioningJobViewSet, basename="provisioning-job"
+)
+router.register(r"images", read_views.ImageReleaseViewSet, basename="image")
+router.register(
+    r"image-import-jobs", read_views.ImageImportJobViewSet, basename="image-import-job"
+)

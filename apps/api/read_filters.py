@@ -3,7 +3,9 @@
 import django_filters
 
 from apps.deployments.models import Deployment, DeploymentResult
+from apps.images.models import ImageRelease
 from apps.monitoring.models import Alert
+from apps.provisioning.models import ProvisioningJob
 from apps.stations.models import Station
 
 
@@ -35,3 +37,15 @@ class AlertFilter(django_filters.FilterSet):
             "is_acknowledged": ["exact"],
             "alert_rule": ["exact"],
         }
+
+
+class ImageReleaseFilter(django_filters.FilterSet):
+    class Meta:
+        model = ImageRelease
+        fields = {"machine": ["exact"], "channel": ["exact"], "is_latest": ["exact"]}
+
+
+class ProvisioningJobFilter(django_filters.FilterSet):
+    class Meta:
+        model = ProvisioningJob
+        fields = {"station": ["exact"], "status": ["exact"]}

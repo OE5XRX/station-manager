@@ -13,6 +13,8 @@ from apps.api.read_filters import (
     AlertFilter,
     DeploymentFilter,
     DeploymentResultFilter,
+    ImageReleaseFilter,
+    ProvisioningJobFilter,
     StationFilter,
 )
 from apps.api.read_serializers import (
@@ -20,6 +22,9 @@ from apps.api.read_serializers import (
     AlertSerializer,
     DeploymentResultSerializer,
     DeploymentSerializer,
+    ImageImportJobSerializer,
+    ImageReleaseSerializer,
+    ProvisioningJobSerializer,
     RegionAssignmentSerializer,
     RegionSerializer,
     RolloutSequenceEntrySerializer,
@@ -37,7 +42,9 @@ from apps.api.scoping import (
     accessible_alerts,
     accessible_deployment_results,
     accessible_deployments,
+    accessible_provisioning_jobs,
 )
+from apps.images.models import ImageImportJob, ImageRelease
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import RegionAssignment, StationAssignment, StationTag
 from apps.stations.scoping import accessible_regions, accessible_stations
@@ -248,3 +255,34 @@ class AlertViewSet(ScopedReadOnlyViewSet):
 
     def get_queryset(self):
         return accessible_alerts(self.request.user).order_by("-created_at")
+
+
+class ProvisioningJobViewSet(ScopedReadOnlyViewSet):
+    serializer_class = ProvisioningJobSerializer
+    filterset_class = ProvisioningJobFilter
+    ordering_fields = ["created_at"]
+
+    def get_queryset(self):
+        return accessible_provisioning_jobs(self.request.user).order_by("-created_at")
+
+
+class ImageReleaseViewSet(ScopedReadOnlyViewSet):
+    serializer_class = ImageReleaseSerializer
+    filterset_class = ImageReleaseFilter
+    search_fields = ["tag"]
+    ordering_fields = ["imported_at", "tag"]
+
+    def get_queryset(self):
+        return ImageRelease.objects.all().order_by("-imported_at")
+
+
+class ImageImportJobViewSet(ScopedReadOnlyViewSet):
+    serializer_class = ImageImportJobSerializer
+    filterset_fields = ["machine", "status", "channel"]
+    ordering_fields = ["created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_internal:
+            return ImageImportJob.objects.all().order_by("-created_at")
+        return ImageImportJob.objects.none()

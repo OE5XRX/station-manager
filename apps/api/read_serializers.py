@@ -7,7 +7,9 @@ from rest_framework import serializers
 
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
+from apps.images.models import ImageImportJob, ImageRelease
 from apps.monitoring.models import Alert, AlertRule
+from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
@@ -221,4 +223,63 @@ class AlertSerializer(serializers.ModelSerializer):
             "is_resolved",
             "resolved_at",
             "created_at",
+        ]
+
+
+class ProvisioningJobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProvisioningJob
+        fields = [
+            "id",
+            "station",
+            "image_release",
+            "status",
+            "error_message",
+            "output_size_bytes",
+            "created_at",
+            "ready_at",
+            "downloaded_at",
+            "expires_at",
+            "requested_by",
+        ]  # excludes output_s3_key (infra storage)
+
+
+class ImageReleaseSerializer(serializers.ModelSerializer):
+    is_ota_ready = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = ImageRelease
+        fields = [
+            "id",
+            "tag",
+            "machine",
+            "channel",
+            "sha256",
+            "size_bytes",
+            "rootfs_sha256",
+            "rootfs_size_bytes",
+            "is_latest",
+            "is_ota_ready",
+            "imported_at",
+            "imported_by",
+            "archived_at",
+        ]
+        # excludes s3_key, cosign_bundle_s3_key, rootfs_s3_key (infra storage)
+
+
+class ImageImportJobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ImageImportJob
+        fields = [
+            "id",
+            "tag",
+            "machine",
+            "channel",
+            "mark_as_latest",
+            "status",
+            "error_message",
+            "image_release",
+            "requested_by",
+            "created_at",
+            "completed_at",
         ]
