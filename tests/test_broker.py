@@ -102,6 +102,9 @@ def test_trace_serial_flows_to_control_transport():
             return {"ok": True}
 
     b = Broker(lambda *a: None, transport_factory=RecordingTransport, trace_serial=True)
+    # Slot 1 needs a control path, else _execute fails closed with unknown_slot before
+    # building the transport (the guard against os.open(None) on a dropped slot).
+    b.set_inventory([{"slot": 1, "control": "/dev/slot1", "modules": []}])
     _run(b._execute(1, "fm", "get", "freq", None))
     assert recorded["trace"] is True
 

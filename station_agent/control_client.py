@@ -35,6 +35,40 @@ BACKOFF_MAX = 60.0
 BACKOFF_FACTOR = 2.0
 
 
+class _SlotInventoryDebouncer:
+    """Hysteresis over successive ``discover_slots`` results so a *transient* probe miss
+    does not drop a previously-present slot from inventory.
+
+    ``discover_slots`` omits a slot both when the module is genuinely gone and when a
+    single probe fails (corrupted MODULE-LIST, chatty console, one-off timeout). Treating
+    those alike flaps the module online/offline every re-scan. A slot that was present but
+    is missing this cycle is retained (last-known-good) for up to ``max_misses`` consecutive
+    misses, then dropped — genuine removal still surfaces after a bounded delay, a transient
+    miss never flaps. ``max_misses=0`` restores legacy drop-on-first-miss. ``update`` is
+    pure given its call history; the effective inventory is returned sorted by slot so the
+    caller's change-detection is deterministic.
+    """
+
+    def __init__(self, max_misses: int = 2):
+        self._max = max_misses
+        self._last_good: dict = {}
+        self._miss: dict = {}
+
+    def update(self, discovered: list) -> list:
+        present = {e.get("slot"): e for e in discovered}
+        for slot, entry in present.items():
+            self._last_good[slot] = entry
+            self._miss[slot] = 0
+        for slot in list(self._last_good):
+            if slot in present:
+                continue
+            self._miss[slot] = self._miss.get(slot, 0) + 1
+            if self._miss[slot] > self._max:
+                del self._last_good[slot]
+                del self._miss[slot]
+        return [self._last_good[slot] for slot in sorted(self._last_good)]
+
+
 class ControlClient:
     def __init__(self, config: AgentConfig, *, virtual_modules=None):
         self._config = config
@@ -115,11 +149,20 @@ class ControlClient:
                     discovered = []
             else:
                 discovered = []
-            broker.set_inventory(discovered)
+            # Debounce slot disappearance so a transient probe miss never flaps the module
+            # out of inventory (see _SlotInventoryDebouncer). Seed it with the first scan so
+            # the re-discovery loop starts from the same effective baseline.
+            debouncer = _SlotInventoryDebouncer(
+                getattr(self._config, "control_rediscovery_max_misses", 2)
+            )
+            effective = debouncer.update(discovered)
+            broker.set_inventory(effective)
             await broker.emit_inventory()
             logger.info("Control: connected, inventory sent")
 
-            rediscovery = loop.create_task(self._rediscovery_loop(broker, loop, discovered))
+            rediscovery = loop.create_task(
+                self._rediscovery_loop(broker, loop, debouncer, effective)
+            )
             try:
                 async for message in ws:
                     if self._shutdown.is_set():
@@ -143,13 +186,16 @@ class ControlClient:
                 await broker.on_disconnect()
                 self._ws = None
 
-    async def _rediscovery_loop(self, broker, loop, last_discovered) -> None:
-        """Periodically re-scan slots; if the inventory changed, re-emit it.
+    async def _rediscovery_loop(self, broker, loop, debouncer, last_emitted) -> None:
+        """Periodically re-scan slots; if the (debounced) inventory changed, re-emit it.
 
         A single startup race can yield an empty inventory (the FM console interleaves async
         logs into the MODULE-LIST reply). Discovery must not be a one-shot: re-scan on an
         interval and push a fresh inventory whenever it differs from what we last sent, so a
         module that lost the race — or is hot-plugged — comes online without a reconnect.
+        The scan runs under the broker's control locks (serialized against polls/commands)
+        and its result is debounced, so neither a concurrent tick nor a one-off probe miss
+        can flap a present module back offline.
         """
         interval = getattr(self._config, "control_rediscovery_interval", 30.0)
         if interval <= 0:
@@ -163,17 +209,22 @@ class ControlClient:
             if not enabled:
                 continue
             try:
-                discovered = await loop.run_in_executor(
-                    None, lambda: discover_slots(self._config.slot_dev_base, trace=trace)
+                # Run the scan under the broker's per-slot control locks: the probe shares
+                # the single control serial with telemetry polls/commands, and a concurrent
+                # tick corrupts the MODULE-LIST reply so the slot drops out of inventory —
+                # the module flaps offline every re-scan. rediscover() serializes them.
+                discovered = await broker.rediscover(
+                    lambda: discover_slots(self._config.slot_dev_base, trace=trace)
                 )
             except Exception:  # noqa: BLE001 — re-discovery must never break the control link
                 logger.exception("Control: re-discovery failed; keeping current inventory")
                 continue
-            if discovered == last_discovered:
+            effective = debouncer.update(discovered)
+            if effective == last_emitted:
                 continue
             logger.info("Control: inventory changed on re-discovery; re-emitting")
-            last_discovered = discovered
-            broker.set_inventory(discovered)
+            last_emitted = effective
+            broker.set_inventory(effective)
             await broker.emit_inventory()
 
     async def _run_async(self) -> None:

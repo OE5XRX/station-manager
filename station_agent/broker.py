@@ -89,6 +89,11 @@ class Broker:
         # poll tick and a command) would interleave their write/read framing on the
         # wire and corrupt each other's MODULE-RESULT. One lock per slot makes every
         # command+telemetry access to a given slot mutually exclusive.
+        # INVARIANT: this lock is the single owner of a slot's control line. EVERYTHING
+        # that opens it — commands, telemetry polls, AND re-discovery (via rediscover())
+        # — must hold it. Bypassing it (e.g. a raw discover_slots() from control_client)
+        # re-introduces the flap regression from PR #135. See CLAUDE.md "Control-Device
+        # Single-Owner-Invariante".
         self._slot_locks: dict[int, asyncio.Lock] = {}
 
     # --- inventory cache ---------------------------------------------------
@@ -288,7 +293,16 @@ class Broker:
             # telemetry poll reaches _execute directly, so guard here too. Snapshot the
             # module's own state off the event loop (state() may shell out to PipeWire/udev).
             return await self._execute_virtual(vm, capability)
-        transport = self._transport_factory(self._control_path(slot))
+        control_path = self._control_path(slot)
+        if control_path is None:
+            # The slot is not currently in inventory — it dropped on a re-discovery, or the
+            # module was physically removed. A telemetry subscription armed while it was
+            # present keeps polling (so it self-heals when the slot returns), and reaches
+            # _execute directly. Fail closed here: building SlotControl(None) would os.open(
+            # None) and raise TypeError once per cap per tick (~1×/s) — the physical-module
+            # twin of the virtual-module RC#2 guard above.
+            return {"ok": False, "error": proto.UNKNOWN_SLOT}
+        transport = self._transport_factory(control_path)
         loop = asyncio.get_running_loop()
         lock = self._slot_locks.get(slot)
         if lock is None:
@@ -300,6 +314,43 @@ class Broker:
             return await loop.run_in_executor(
                 None, transport.execute, module, op, capability, token, self._trace
             )
+
+    async def rediscover(self, discover_fn):
+        """Run the blocking slot scan *discover_fn* with every known slot's control lock
+        held, then return its result.
+
+        Re-discovery probes the same single control serial that telemetry polls and
+        commands drive through :meth:`_execute`. Run concurrently, a re-scan and an
+        in-flight poll tick interleave their framing on the wire: the poll's
+        ``MODULE-RESULT`` lands inside the probe's ``MODULE-LIST``/``MODULE-DESCRIBE``
+        reply, ``probe_slot`` gives up after its retries, and the slot drops out of
+        inventory for that cycle — the module flaps offline every re-scan. Holding each
+        slot's lock for the whole scan makes discovery mutually exclusive with per-slot
+        device I/O, exactly like a command or a poll tick.
+
+        Locks are acquired in sorted slot order and ``_execute`` only ever holds one at a
+        time, so no acquisition cycle — hence no deadlock — is possible. Every slot that
+        can be polled has a control path (``_controls``); include already-created locks
+        too so an in-flight access can never slip a probe onto the wire.
+        """
+        loop = asyncio.get_running_loop()
+        slots = sorted(set(self._controls) | set(self._slot_locks))
+        locks = []
+        for slot in slots:
+            lock = self._slot_locks.get(slot)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._slot_locks[slot] = lock
+            locks.append(lock)
+        acquired = []
+        try:
+            for lock in locks:
+                await lock.acquire()
+                acquired.append(lock)
+            return await loop.run_in_executor(None, discover_fn)
+        finally:
+            for lock in reversed(acquired):
+                lock.release()
 
     async def _execute_virtual(self, vm, capability) -> dict:
         """Read a virtual module's telemetry capability from its own ``state()`` snapshot.
