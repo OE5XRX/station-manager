@@ -5,7 +5,16 @@ No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 
 from rest_framework import serializers
 
-from apps.stations.models import Region, Station, StationTag
+from apps.control.models import StationModule
+from apps.stations.models import (
+    Region,
+    Station,
+    StationInventory,
+    StationLogEntry,
+    StationPhoto,
+    StationTag,
+    StationTelemetry,
+)
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -46,6 +55,71 @@ class StationSerializer(serializers.ModelSerializer):
             "status",
             "current_image_release",
             "is_online",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class StationTelemetrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StationTelemetry
+        fields = [
+            "id",
+            "station",
+            "data",
+            "boot_id",
+            "boot_count",
+            "last_reboot_reason",
+            "last_reboot_at",
+            "uptime_seconds",
+            "undervoltage_now",
+            "undervoltage_occurred",
+            "throttled_now",
+            "throttled_occurred",
+            "active_slot",
+            "image_version",
+            "last_ota_result",
+            "worst_life_time_pct",
+            "worst_pre_eol",
+            "io_error_count",
+            "updated_at",
+        ]  # excludes power_alerted_boot_id, alerted_io_error_count (internal alerting)
+
+
+class StationInventorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StationInventory
+        fields = ["id", "station", "data", "updated_at"]
+
+
+class StationLogEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StationLogEntry
+        fields = ["id", "station", "entry_type", "title", "message", "created_by", "created_at"]
+
+
+class StationPhotoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StationPhoto
+        fields = ["id", "station", "image", "caption", "uploaded_by", "uploaded_at"]
+
+
+class StationModuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StationModule
+        fields = [
+            "id",
+            "station",
+            "slot",
+            "module_id",
+            "type",
+            "model",
+            "version",
+            "tracked_module",
+            "capability_descriptor",
+            "last_state",
+            "online",
+            "last_seen",
             "created_at",
             "updated_at",
         ]
