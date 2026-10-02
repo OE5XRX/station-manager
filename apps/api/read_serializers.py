@@ -177,6 +177,10 @@ class DeploymentSerializer(serializers.ModelSerializer):
     progress = serializers.SerializerMethodField()
 
     def get_progress(self, obj):
+        progress_map = self.context.get("deployment_progress_map")
+        if progress_map is not None and obj.pk in progress_map:
+            return progress_map[obj.pk]
+        # Detail / no-map fallback: single scoped aggregate (1 query).
         from apps.api.scoping import accessible_deployment_results
         from apps.deployments.models import compute_progress
 

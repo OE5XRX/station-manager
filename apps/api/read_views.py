@@ -216,6 +216,19 @@ class DeploymentViewSet(ScopedReadOnlyViewSet):
     def get_queryset(self):
         return accessible_deployments(self.request.user).order_by("-created_at")
 
+    def get_serializer(self, *args, **kwargs):
+        if kwargs.get("many"):
+            from apps.deployments.models import bulk_compute_progress
+
+            instances = args[0] if args else kwargs.get("instance")
+            ids = [obj.pk for obj in instances]
+            context = kwargs.pop("context", None) or self.get_serializer_context()
+            context["deployment_progress_map"] = bulk_compute_progress(
+                accessible_deployment_results(self.request.user), ids
+            )
+            kwargs["context"] = context
+        return super().get_serializer(*args, **kwargs)
+
     @action(detail=True, url_path="results")
     def results(self, request, pk=None):
         # get_object() enforces parent-deployment scope (404 if invisible).
