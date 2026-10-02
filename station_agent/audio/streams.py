@@ -114,3 +114,8 @@ class StreamRegistry:
     @property
     def mic_ref(self) -> int | None:
         return self.ref_for(OP_MIC)
+
+    @property
+    def mic_rate(self) -> int:
+        """Sample rate configured for the operator-mic / TX path."""
+        return self._mic_rate
