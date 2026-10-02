@@ -102,6 +102,7 @@ ImageRelease bleibt draußen.
 | StationAuditLog | stations | Audit append-only |
 | AccountAuditLog | accounts | dito |
 | StationInventory | stations | vom Agent-Heartbeat gefüllt |
+| StationTelemetry | stations | vom Agent-Heartbeat gefüllt (health/boot/power/storage); read-only. Ergänzt in Phase 2 aus #150. Route `/api/v1/stations/{id}/telemetry/` |
 | DeploymentResult | deployments | Ergebnis, nicht editierbar |
 | Alert | monitoring | gefeuerte Alerts (optional `acknowledge`-Action später) |
 | ImageImportJob | images | Import-Status |
