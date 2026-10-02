@@ -8,6 +8,7 @@ def test_measured_inject_has_tee_sink_and_measfd():
     assert "opusenc" in s and "opusdec" in s        # real roundtrip, mirrors mic path
     assert "tee" in s
     assert "pipewiresink" in s and "target-object=oe5xrx.slot1.tx" in s
+    assert "sync=false" in s                          # playback sink un-clocked
     assert f"fd={d.MEAS_FD}" in s                     # synchronous measurement branch
     assert "is-live=true" in s
 
@@ -19,3 +20,10 @@ def test_measured_tx_binds_loopback_and_taps():
     assert "rtpjitterbuffer" in s and "opusdec" in s
     assert "tee" in s and f"fd={d.MEAS_FD}" in s
     assert "pipewiresink" in s and "target-object=oe5xrx.slot1.tx" in s
+    assert "sync=false" in s                          # playback sink un-clocked
+
+
+def test_reverse_tap_delegates_to_selftest():
+    argv = d.build_reverse_tap_argv("hw:1,0,0", 8000, 1.0)
+    assert isinstance(argv, list)
+    assert argv[0] == "arecord"                       # delegates to selftest.build_tx_capture_argv
