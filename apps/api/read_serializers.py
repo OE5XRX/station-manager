@@ -6,6 +6,7 @@ No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 from rest_framework import serializers
 
 from apps.control.models import StationModule
+from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
     RegionAssignment,
@@ -137,3 +138,15 @@ class RegionAssignmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = RegionAssignment
         fields = ["id", "user", "region", "role", "assigned_at", "assigned_by"]
+
+
+class RolloutSequenceEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolloutSequenceEntry
+        fields = ["id", "sequence", "tag", "position"]
+
+
+class RolloutSequenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolloutSequence
+        fields = ["id", "singleton_key", "created_at", "updated_at", "updated_by"]

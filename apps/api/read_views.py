@@ -13,6 +13,8 @@ from apps.api.read_filters import StationFilter
 from apps.api.read_serializers import (
     RegionAssignmentSerializer,
     RegionSerializer,
+    RolloutSequenceEntrySerializer,
+    RolloutSequenceSerializer,
     StationAssignmentSerializer,
     StationInventorySerializer,
     StationLogEntrySerializer,
@@ -22,6 +24,7 @@ from apps.api.read_serializers import (
     StationTagSerializer,
     StationTelemetrySerializer,
 )
+from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import RegionAssignment, StationAssignment, StationTag
 from apps.stations.scoping import accessible_regions, accessible_stations
 
@@ -149,3 +152,26 @@ class RegionAssignmentViewSet(ScopedReadOnlyViewSet):
             .distinct()
             .order_by("-assigned_at")
         )
+
+
+class RolloutSequenceViewSet(ScopedReadOnlyViewSet):
+    serializer_class = RolloutSequenceSerializer
+
+    def get_queryset(self):
+        return RolloutSequence.objects.all().order_by("id")
+
+    @action(detail=True, url_path="entries")
+    def entries(self, request, pk=None):
+        seq = self.get_object()
+        return self._child_list(
+            request, seq.entries.order_by("position"), RolloutSequenceEntrySerializer
+        )
+
+
+class RolloutSequenceEntryViewSet(ScopedReadOnlyViewSet):
+    serializer_class = RolloutSequenceEntrySerializer
+    filterset_fields = ["sequence", "tag"]
+    ordering_fields = ["position"]
+
+    def get_queryset(self):
+        return RolloutSequenceEntry.objects.all().order_by("position")

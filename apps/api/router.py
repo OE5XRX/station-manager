@@ -14,3 +14,11 @@ router.register(
 router.register(
     r"region-assignments", read_views.RegionAssignmentViewSet, basename="region-assignment"
 )
+router.register(
+    r"rollout-sequences", read_views.RolloutSequenceViewSet, basename="rollout-sequence"
+)
+router.register(
+    r"rollout-sequence-entries",
+    read_views.RolloutSequenceEntryViewSet,
+    basename="rollout-sequence-entry",
+)
