@@ -6,10 +6,11 @@ from station_agent.audio import diagnostics as d
 
 def _sine_s16(freq, peak_amp, dur_ms, rate):
     n = int(rate * dur_ms / 1000)
-    return struct.pack(
-        f"<{n}h",
-        *[max(-32768, min(32767, int(peak_amp * math.sin(2 * math.pi * freq * i / rate)))) for i in range(n)],
-    )
+    samples = [
+        max(-32768, min(32767, int(peak_amp * math.sin(2 * math.pi * freq * i / rate))))
+        for i in range(n)
+    ]
+    return struct.pack(f"<{n}h", *samples)
 
 
 def test_full_scale_sine_is_0_dbfs_peak():

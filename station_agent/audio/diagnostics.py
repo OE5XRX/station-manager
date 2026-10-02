@@ -9,11 +9,16 @@ ALSA/UAC2 edge (D); carrier keying is a separate control-plane action.
 """
 from __future__ import annotations
 
+import logging as _logging
 import math
+import os as _os
 import re as _re
 import struct
+import subprocess as _subprocess
 
 from station_agent.audio import selftest as _selftest
+
+_log = _logging.getLogger(__name__)
 
 FULL_SCALE_S16 = 32767
 
@@ -21,6 +26,8 @@ REF_FREQ_HZ = 1000
 REF_LEVEL_DBFS = -20.0
 REF_WINDOW_MS = 300
 REF_SETTLE_MS = 200
+
+MAX_DURATION_MS = 5000
 
 
 def rms_peak_dbfs(pcm: bytes) -> tuple[float | None, float | None, bool]:
@@ -53,7 +60,9 @@ _RTP_PT = 96
 _LOOPBACK = "127.0.0.1"
 
 
-def build_measured_inject_argv(tx_node: str, freq_hz: int, level_dbfs: float, rate: int) -> list[str]:
+def build_measured_inject_argv(
+    tx_node: str, freq_hz: int, level_dbfs: float, rate: int
+) -> list[str]:
     linear = 10 ** (level_dbfs / 20)
     return [
         "gst-launch-1.0", "-q",
@@ -112,14 +121,6 @@ def collect_static_gains(backend, slot: int) -> dict:
         "resample": "48k<->8k",
         "note": "sink_volume_db is the C->D static gain stage (spec: sink vol 0.40 ~= -8 dB)",
     }
-
-
-import logging as _logging
-import os as _os
-import subprocess as _subprocess
-
-_log = _logging.getLogger(__name__)
-MAX_DURATION_MS = 5000
 
 
 def _default_spawn(argv: list[str]):
