@@ -18,7 +18,7 @@ def _default_signal():
     return {"kind": "sine", "freq_hz": 1000, "level_dbfs": -20.0, "duration_ms": 500}
 
 
-def _fake_report(anchor="U"):
+def _fake_report(anchor="C"):
     return {
         "anchor": anchor,
         "verdict": "ok",
@@ -35,7 +35,7 @@ def _fake_report(anchor="U"):
 
 @pytest.mark.django_db
 def test_in_scope_user_gets_report(topology, monkeypatch):  # noqa: F811
-    """station_user (in scope) → 200, report echoes anchor."""
+    """station_user (in scope) with anchor C → 200, report echoes anchor."""
     from apps.audio import orchestrator
 
     async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
@@ -45,11 +45,11 @@ def test_in_scope_user_gets_report(topology, monkeypatch):  # noqa: F811
     client = bearer(topology["station_user"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
-        {"anchor": "U"},
+        {"anchor": "C"},
         format="json",
     )
     assert r.status_code == 200
-    assert r.json()["anchor"] == "U"
+    assert r.json()["anchor"] == "C"
 
 
 @pytest.mark.django_db
@@ -58,7 +58,7 @@ def test_out_of_scope_station_404(topology):  # noqa: F811
     client = bearer(topology["station_user"])
     r = client.post(
         f"/api/v1/stations/{topology['station_out'].pk}/audio-diagnostics/",
-        {"anchor": "U"},
+        {"anchor": "C"},
         format="json",
     )
     assert r.status_code == 404
@@ -70,7 +70,7 @@ def test_applicant_forbidden(topology):  # noqa: F811
     client = bearer(topology["applicant"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
-        {"anchor": "U"},
+        {"anchor": "C"},
         format="json",
     )
     assert r.status_code == 403
@@ -88,7 +88,7 @@ def test_agent_offline_returns_503(topology, monkeypatch):  # noqa: F811
     client = bearer(topology["station_user"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
-        {"anchor": "U"},
+        {"anchor": "C"},
         format="json",
     )
     assert r.status_code == 503
@@ -107,7 +107,7 @@ def test_timeout_returns_504(topology, monkeypatch):  # noqa: F811
     client = bearer(topology["station_user"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
-        {"anchor": "U"},
+        {"anchor": "C"},
         format="json",
     )
     assert r.status_code == 504
@@ -116,7 +116,7 @@ def test_timeout_returns_504(topology, monkeypatch):  # noqa: F811
 
 @pytest.mark.django_db
 def test_bad_anchor_400(topology, monkeypatch):  # noqa: F811
-    """anchor not in {U, C} → 400."""
+    """anchor not in {C} and not U → 400."""
     from apps.audio import orchestrator
 
     async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
@@ -184,3 +184,60 @@ def test_admin_sees_any_station(topology, monkeypatch):  # noqa: F811
         format="json",
     )
     assert r.status_code == 200
+
+
+@pytest.mark.django_db
+def test_anchor_u_rejected_400(topology, monkeypatch):  # noqa: F811
+    """anchor 'U' is experimental — must be rejected with 400 and the experimental detail."""
+    from apps.audio import orchestrator
+
+    async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
+        return _fake_report(anchor)
+
+    monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
+    client = bearer(topology["station_user"])
+    r = client.post(
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
+        {"anchor": "U"},
+        format="json",
+    )
+    assert r.status_code == 400
+    body = r.json()
+    detail = str(body)
+    assert "experimental" in detail.lower()
+
+
+@pytest.mark.django_db
+def test_non_dict_signal_400(topology, monkeypatch):  # noqa: F811
+    """signal must be a JSON object; a bare string → 400."""
+    from apps.audio import orchestrator
+
+    async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
+        return _fake_report(anchor)
+
+    monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
+    client = bearer(topology["station_user"])
+    r = client.post(
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
+        {"anchor": "C", "signal": "loud"},
+        format="json",
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.django_db
+def test_unsupported_kind_400(topology, monkeypatch):  # noqa: F811
+    """signal.kind='wav' is not supported → 400."""
+    from apps.audio import orchestrator
+
+    async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
+        return _fake_report(anchor)
+
+    monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
+    client = bearer(topology["station_user"])
+    r = client.post(
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
+        {"anchor": "C", "signal": {"kind": "wav"}},
+        format="json",
+    )
+    assert r.status_code == 400

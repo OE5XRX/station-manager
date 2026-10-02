@@ -29,7 +29,8 @@ def _agent_report(c_peak, c_rms, sink_db=-7.96):
 
 
 def test_report_has_stage_delta_and_expected():
-    rep = sd.build_run_report(_agent_report(-3.0, -6.0))
+    # C peak = -20.0 (at reference), D computed=True, sink=-7.96 dB.
+    rep = sd.build_run_report(_agent_report(-20.0, -23.0))
     stages = {(s["from"], s["to"]): s for s in rep["stages"]}
     cd = stages[("C", "D")]
     assert abs(cd["delta_db"] - (-7.96)) < 0.1
@@ -37,7 +38,8 @@ def test_report_has_stage_delta_and_expected():
 
 
 def test_verdict_clean_chain_blames_sink_volume():
-    rep = sd.build_run_report(_agent_report(-3.0, -6.0))
+    # C peak ≈ reference level (-20 dBFS); D is computed → verdict must mention "sink volume".
+    rep = sd.build_run_report(_agent_report(-20.0, -23.0))
     assert "sink volume" in rep["verdict"].lower()
 
 
@@ -47,7 +49,8 @@ def test_verdict_silent_c_flags_broken_inject():
 
 
 def test_verdict_low_c_blames_upstream():
-    rep = sd.build_run_report(_agent_report(-24.0, -27.0))
+    # C peak = -30 dBFS, well below the reference of -20 dBFS (delta = 10 dB > LOSS_TOL 6 dB).
+    rep = sd.build_run_report(_agent_report(-30.0, -33.0))
     assert "upstream" in rep["verdict"].lower()
 
 

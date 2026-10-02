@@ -19,7 +19,7 @@ Content-Type: application/json
 
 ```json
 {
-  "anchor": "U",
+  "anchor": "C",
   "slot": 1,
   "signal": {
     "kind": "sine",
@@ -32,7 +32,7 @@ Content-Type: application/json
 
 | Field | Values | Default | Notes |
 |-------|--------|---------|-------|
-| `anchor` | `"U"` or `"C"` | `"U"` | Inject point (see below) |
+| `anchor` | `"C"` | `"C"` | Inject point. Anchor `"U"` (server-originated headless reference) is experimental and only validated on-station; it is rejected at the API. |
 | `slot` | integer | required | Station hardware slot number |
 | `signal.kind` | `"sine"` | `"sine"` | Reference signal type |
 | `signal.freq_hz` | integer | `1000` | Test tone frequency |
@@ -46,7 +46,7 @@ curl -s -X POST \
   "https://station-manager.example.com/api/v1/stations/211/audio-diagnostics/" \
   -H "Authorization: Bearer <your-PAT>" \
   -H "Content-Type: application/json" \
-  -d '{"anchor":"U","slot":1,"signal":{"kind":"sine","freq_hz":1000,"level_dbfs":-20.0,"duration_ms":500}}'
+  -d '{"anchor":"C","slot":1,"signal":{"kind":"sine","freq_hz":1000,"level_dbfs":-20.0,"duration_ms":500}}'
 ```
 
 ### Response
@@ -55,7 +55,7 @@ HTTP 200 — diagnostic run report:
 
 ```json
 {
-  "anchor": "U",
+  "anchor": "C",
   "reference": {"freq_hz": 1000, "level_dbfs": -20.0, "window_ms": 300},
   "taps": [
     {
@@ -91,9 +91,9 @@ HTTP 200 — diagnostic run report:
 | Code | Meaning |
 |------|---------|
 | `200` | Run complete; inspect `taps` for deltas |
-| `400` | Bad anchor/slot (e.g. unknown anchor, slot out of range) |
-| `403` | Applicant membership or station not in caller's topology scope |
-| `404` | Station ID not found or not in scope |
+| `400` | Bad anchor/slot/signal (e.g. unknown anchor, slot out of range, unsupported signal kind) |
+| `403` | Applicant membership or insufficient access level |
+| `404` | Station ID not found or not in caller's topology scope |
 | `503` | Agent offline / not connected |
 | `504` | Diagnostic timed out waiting for agent result |
 
@@ -101,46 +101,48 @@ HTTP 200 — diagnostic run report:
 
 ## Bisection Loop (AI/Operator Interpretation)
 
-The diagnostic bisects the digital TX chain with two anchor modes:
+The diagnostic measures the digital TX chain using anchor C (the only production-ready
+anchor). Anchor U (server-originated headless reference) is experimental and not yet
+available via the REST API.
 
-### Anchor U — headless, server-originated reference (AI path)
+### Anchor C — agent/station sub-chain (production)
 
-Server injects a calibrated sine reference into the op.mic uplink toward the agent,
-replacing the browser at its protocol boundary. Tests the full relay → agent → GStreamer
-→ PipeWire sink → ALSA path without a real browser.
+Agent uses `audiotestsrc` directly → PipeWire sink → ALSA. Tests the
+station-internal path from the GStreamer inject point through PipeWire and to the
+ALSA/UAC2 boundary. Does not cover the relay or Opus decode path.
 
 **Interpret the result:**
 
 1. **Check C (before PipeWire sink volume):**
    - C close to the injected level (e.g. −20 dBFS inject → C ≈ −20 to −22 dBFS): the
-     agent and GStreamer decode path are clean.
-   - C is much lower (> 6 dB below inject level): loss is upstream — in the relay,
-     Opus encode/decode, or the agent RTP receive path.
+     agent and GStreamer inject path are clean.
+   - C is much lower (> 6 dB below inject level): loss is upstream — in the GStreamer
+     graph or the PipeWire source node.
 
-2. **Check C→D delta:**
-   - The PipeWire sink volume on station 211 is `0.40` (≈ −8 dB). D = C + sink_volume_db.
-   - If the computed D delta matches `static_gains.sink_volume_db`, the C→D stage is
-     accounted for: the only loss between C and D is the intentional sink attenuation.
-   - A larger C→D delta indicates an additional loss in the sink or ALSA driver path.
+2. **Check C→D (sink volume stage):**
+   - On real HW, tap D is **projected** as C + `static_gains.sink_volume_db` (not
+     independently measured). The C→D delta therefore equals the known sink volume by
+     construction and **cannot** reveal extra loss in the ALSA driver path beyond what
+     the sink volume accounts for.
+   - To detect extra loss between C and D (e.g. an unexpected ALSA driver attenuation),
+     a direct reverse or loopback tap at D would be required (not currently implemented).
+   - The verdict reflects this: when D is projected, it is labelled "D not independently
+     measured".
 
 3. **Summary decision tree:**
    ```
-   C ≈ inject level AND D = C + sink_db  →  digital chain clean; loss is analog (E/F)
-   C ≈ inject level AND D >> sink_db loss →  extra loss in sink/ALSA stage
-   C << inject level                       →  loss upstream of C (relay/Opus/agent)
+   C ≈ inject level                        →  digital chain healthy to C; D projected from C + sink_db
+   C << inject level (> 6 dB loss)         →  loss upstream of C (GStreamer/PipeWire source)
    C silent                                →  agent TX node not found / GStreamer failed
    ```
 
-### Anchor C — agent/station sub-chain only
+### Anchor U — experimental, on-station only
 
-Agent uses `audiotestsrc` directly → PipeWire sink → ALSA. Tests only the
-station-internal path (not the relay or Opus decode). Use anchor C to isolate
-whether a loss measured with anchor U is in the station or in the wire/relay.
-
-**Comparison:**
-- `U` shows a loss at C, but `C` shows C at full level → loss is in the relay or
-  Opus path between server and agent.
-- Both `U` and `C` show the same loss at C → loss is in the station's GStreamer graph.
+Server injects a calibrated sine reference into the op.mic uplink toward the agent,
+replacing the browser at its protocol boundary. Tests the full relay → agent → GStreamer
+→ PipeWire sink → ALSA path without a real browser. This anchor is **not yet validated
+end-to-end** and is rejected by the REST API (`400`). Use it only via the on-station CLI
+for development and validation work.
 
 ---
 
