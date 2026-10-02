@@ -4,8 +4,9 @@ Drives one diagnostic run over the channel layer without a live browser
 WebSocket.  The caller sends a diag_command to the agent group, optionally
 streams a U-anchor reference, and awaits the correlated diag_result reply.
 
-Note: the agent-side op.mic ref matching and live measfd read for anchor U is
-validated on test-station 211.  CI covers the control/transport flow.
+Note: anchor U (server-originated reference) is an on-station follow-up and is
+currently rejected at the REST endpoint (400); CI covers the control/transport
+flow and anchor C is the validated production path.
 """
 
 from __future__ import annotations

@@ -248,8 +248,224 @@ def test_run_diagnostic_floors_negative_duration():
         spawn=lambda make_argv: (object(), None),
         read_measfd=fake_read,
     )
-    # Floored at REF_WINDOW_MS → nbytes must be positive
-    min_nbytes = int(16000 * d.REF_WINDOW_MS / 1000) * 2
+    # Floored at REF_SETTLE_MS + REF_WINDOW_MS → nbytes must be >= settle+window floor
+    min_nbytes = int(16000 * (d.REF_SETTLE_MS + d.REF_WINDOW_MS) / 1000) * 2
     assert captured["nbytes"] >= min_nbytes, (
-        f"nbytes={captured['nbytes']} is below the REF_WINDOW_MS floor ({min_nbytes})"
+        f"nbytes={captured['nbytes']} is below the settle+window floor ({min_nbytes})"
     )
+
+
+# ---------------------------------------------------------------------------
+# FIX 1: _default_spawn fd leak — both r and w must be closed on failure
+# ---------------------------------------------------------------------------
+
+
+def test_default_spawn_closes_both_fds_on_popen_failure():
+    """On Popen failure both r and w must be closed; no fd leak."""
+    import os
+
+    import pytest
+
+    orig_pipe = d._os.pipe
+
+    saved_fds = {}
+
+    def capturing_pipe():
+        r, w = orig_pipe()
+        saved_fds["r"] = r
+        saved_fds["w"] = w
+        return r, w
+
+    d._os.pipe = capturing_pipe
+    orig_popen = d._subprocess.Popen
+
+    def boom(*args, **kwargs):
+        raise OSError("fake Popen failure")
+
+    d._subprocess.Popen = boom
+    try:
+        with pytest.raises(OSError, match="fake Popen failure"):
+            d._default_spawn(lambda fd: ["false", str(fd)])
+    finally:
+        d._os.pipe = orig_pipe
+        d._subprocess.Popen = orig_popen
+
+    # Both fds must be closed — os.fstat on a closed fd raises OSError.
+    for name, fd in saved_fds.items():
+        try:
+            os.fstat(fd)
+            # If we reach here the fd is still open → close it (prevents fd pollution)
+            # and then fail the assertion.
+            os.close(fd)
+            raise AssertionError(f"fd {name}={fd} was NOT closed after Popen failure")
+        except OSError:
+            pass  # expected: fd is closed
+
+
+def test_default_spawn_closes_both_fds_on_make_argv_failure():
+    """On make_argv failure (before Popen) both r and w must be closed."""
+    import os
+
+    import pytest
+
+    orig_pipe = d._os.pipe
+    saved_fds = {}
+
+    def capturing_pipe():
+        r, w = orig_pipe()
+        saved_fds["r"] = r
+        saved_fds["w"] = w
+        return r, w
+
+    d._os.pipe = capturing_pipe
+    try:
+        with pytest.raises(ValueError, match="intentional"):
+            d._default_spawn(lambda fd: (_ for _ in ()).throw(ValueError("intentional")))
+    finally:
+        d._os.pipe = orig_pipe
+
+    for name, fd in saved_fds.items():
+        try:
+            os.fstat(fd)
+            os.close(fd)
+            raise AssertionError(f"fd {name}={fd} was NOT closed after make_argv failure")
+        except OSError:
+            pass  # expected: fd is closed
+
+
+# ---------------------------------------------------------------------------
+# FIX 2: window clamp floor raised to REF_SETTLE_MS + REF_WINDOW_MS (500 ms)
+# ---------------------------------------------------------------------------
+
+
+def test_duration_clamp_floor_is_settle_plus_window():
+    """Requested 100 ms or negative → clamped to REF_SETTLE_MS + REF_WINDOW_MS = 500 ms."""
+
+    class FakeBackend:
+        def resolve_node(self, s, d_):
+            return "n"
+
+        def tx_sink_node(self, s):
+            return None
+
+        def get_volume(self, n):
+            return None
+
+    for dur_ms_req in (100, -1, 0):
+        captured = {}
+
+        def fake_read(read_fd, nbytes, timeout, _cap=captured):
+            _cap["nbytes"] = nbytes
+            return b""
+
+        d.run_diagnostic(
+            anchor="C",
+            slot=1,
+            signal={"kind": "sine", "level_dbfs": -20.0, "duration_ms": dur_ms_req},
+            backend=FakeBackend(),
+            spawn=lambda make_argv: (object(), None),
+            read_measfd=fake_read,
+        )
+        floor_ms = d.REF_SETTLE_MS + d.REF_WINDOW_MS  # 500
+        expected_min_nbytes = int(16000 * floor_ms / 1000) * 2
+        assert captured["nbytes"] >= expected_min_nbytes, (
+            f"dur_ms_req={dur_ms_req}: nbytes={captured['nbytes']} < floor {expected_min_nbytes}"
+        )
+
+
+def test_duration_clamp_huge_caps_at_max():
+    class FakeBackend:
+        def resolve_node(self, s, d_):
+            return "n"
+
+        def tx_sink_node(self, s):
+            return None
+
+        def get_volume(self, n):
+            return None
+
+    captured = {}
+
+    def fake_read(read_fd, nbytes, timeout):
+        captured["nbytes"] = nbytes
+        return b""
+
+    d.run_diagnostic(
+        anchor="C",
+        slot=1,
+        signal={"kind": "sine", "level_dbfs": -20.0, "duration_ms": 10_000_000},
+        backend=FakeBackend(),
+        spawn=lambda make_argv: (object(), None),
+        read_measfd=fake_read,
+    )
+    max_nbytes = int(16000 * d.MAX_DURATION_MS / 1000) * 2
+    assert captured["nbytes"] <= max_nbytes
+
+
+# ---------------------------------------------------------------------------
+# FIX 3: D tap — unavailable vs muted distinction
+# ---------------------------------------------------------------------------
+
+
+def test_d_tap_unavailable_when_sink_volume_none():
+    """When get_volume returns None → D silent=False, rms=None, note mentions unavailable."""
+
+    class FakeBackend:
+        def resolve_node(self, slot, direction):
+            return "oe5xrx.slot1.tx"
+
+        def tx_sink_node(self, slot):
+            return "FM.Mono"
+
+        def get_volume(self, node):
+            return None  # wpctl failed
+
+    ref_pcm = d.generate_sine_pcm(1000, -20.0, 300, 16000)
+
+    rep = d.run_diagnostic(
+        anchor="C",
+        slot=1,
+        signal={"level_dbfs": -20.0, "duration_ms": 500},
+        backend=FakeBackend(),
+        spawn=lambda make_argv: (object(), None),
+        read_measfd=lambda fd, nb, to: ref_pcm,
+    )
+    taps = {t["point"]: t for t in rep["taps"]}
+    d_tap = taps["D"]
+    assert d_tap["silent"] is False, (
+        "D should NOT be marked silent when sink volume is unavailable"
+    )
+    assert d_tap["rms_dbfs"] is None
+    note = d_tap.get("note", "")
+    assert "unavailable" in note.lower(), f"note should mention 'unavailable', got: {note!r}"
+
+
+def test_d_tap_silent_when_sink_muted():
+    """When get_volume returns 0.0 (muted) → D silent=True, note mentions muted."""
+
+    class FakeBackend:
+        def resolve_node(self, slot, direction):
+            return "oe5xrx.slot1.tx"
+
+        def tx_sink_node(self, slot):
+            return "FM.Mono"
+
+        def get_volume(self, node):
+            return 0.0  # muted
+
+    ref_pcm = d.generate_sine_pcm(1000, -20.0, 300, 16000)
+
+    rep = d.run_diagnostic(
+        anchor="C",
+        slot=1,
+        signal={"level_dbfs": -20.0, "duration_ms": 500},
+        backend=FakeBackend(),
+        spawn=lambda make_argv: (object(), None),
+        read_measfd=lambda fd, nb, to: ref_pcm,
+    )
+    taps = {t["point"]: t for t in rep["taps"]}
+    d_tap = taps["D"]
+    assert d_tap["silent"] is True, "D should be silent when sink is muted"
+    assert d_tap["rms_dbfs"] is None
+    note = d_tap.get("note", "")
+    assert "muted" in note.lower(), f"note should mention 'muted', got: {note!r}"

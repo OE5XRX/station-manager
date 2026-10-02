@@ -224,15 +224,29 @@ def _default_spawn(make_argv):
     ``pass_fds`` passes it to the child; the parent's copy is closed right after.
 
     Returns ``(proc, read_fd)`` where ``read_fd`` is the pipe read-end.
+
+    Both ``r`` and ``w`` are closed if ``make_argv`` or ``Popen`` raises so that
+    repeated failures on a long-running agent do not exhaust file descriptors.
     """
     r, w = _os.pipe()
-    argv = make_argv(w)
-    proc = _subprocess.Popen(  # noqa: S603 — fixed tool + resolved node
-        argv,
-        stdout=_subprocess.DEVNULL,
-        stderr=_subprocess.DEVNULL,
-        pass_fds=(w,),
-    )
+    try:
+        argv = make_argv(w)
+        proc = _subprocess.Popen(  # noqa: S603 — fixed tool + resolved node
+            argv,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            pass_fds=(w,),
+        )
+    except Exception:
+        try:
+            _os.close(r)
+        except OSError:
+            pass
+        try:
+            _os.close(w)
+        except OSError:
+            pass
+        raise
     _os.close(w)
     return proc, r
 
@@ -259,8 +273,8 @@ def _default_read_measfd(read_fd: int, nbytes: int, timeout: float) -> bytes:
     return bytes(buf)
 
 
-def _tap(point, rate, rms, peak, silent, window_ms, computed):
-    return {
+def _tap(point, rate, rms, peak, silent, window_ms, computed, note=None):
+    d = {
         "point": point,
         "format": {"rate": rate, "channels": 1},
         "rms_dbfs": rms,
@@ -269,6 +283,9 @@ def _tap(point, rate, rms, peak, silent, window_ms, computed):
         "silent": silent,
         "computed": computed,
     }
+    if note is not None:
+        d["note"] = note
+    return d
 
 
 def run_diagnostic(
@@ -312,10 +329,12 @@ def run_diagnostic(
         }
     freq = int(signal.get("freq_hz", REF_FREQ_HZ))
     level = float(signal.get("level_dbfs", REF_LEVEL_DBFS))
-    # BUG5: clamp duration on BOTH sides — negative/zero would produce invalid nbytes;
-    # floor at REF_WINDOW_MS so there is always a measurable capture window.
+    # Clamp duration on BOTH sides — negative/zero would produce invalid nbytes;
+    # floor at REF_SETTLE_MS + REF_WINDOW_MS so there is always settle lead-in + a
+    # full capture window (a floor of only REF_WINDOW_MS would leave no room for the
+    # 200 ms settle, so the measurement window would capture startup transients).
     dur_ms = max(
-        REF_WINDOW_MS,
+        REF_SETTLE_MS + REF_WINDOW_MS,
         min(int(signal.get("duration_ms", REF_SETTLE_MS + REF_WINDOW_MS)), MAX_DURATION_MS),
     )
     tx_node = backend.resolve_node(slot, "tx")
@@ -345,8 +364,18 @@ def run_diagnostic(
     c_rms, c_peak, c_silent = rms_peak_dbfs(window)
     taps = [_tap("C", rate, c_rms, c_peak, c_silent, REF_WINDOW_MS, computed=False)]
 
+    linear = gains.get("sink_volume_linear")
     sink_db = gains.get("sink_volume_db")
-    if not c_silent and sink_db is not None:
+    if c_silent:
+        # No signal at C → D is genuinely silent.
+        taps.append(_tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True))
+    elif linear == 0:
+        # Sink genuinely muted (linear == 0.0) → D is silent (true zero).
+        taps.append(
+            _tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True, note="sink muted")
+        )
+    elif sink_db is not None:
+        # Positive sink volume → project D = C + sink_db.
         taps.append(
             _tap(
                 "D",
@@ -359,7 +388,19 @@ def run_diagnostic(
             )
         )
     else:
-        taps.append(_tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True))
+        # linear is None → sink volume could not be read; D is UNAVAILABLE, not silent.
+        taps.append(
+            _tap(
+                "D",
+                rate,
+                None,
+                None,
+                False,
+                REF_WINDOW_MS,
+                computed=True,
+                note="sink volume unavailable — D not projected",
+            )
+        )
 
     return {
         "anchor": anchor,

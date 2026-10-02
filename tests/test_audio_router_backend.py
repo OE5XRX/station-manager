@@ -268,3 +268,88 @@ def test_enumeration_fails_closed_on_missing_sysfs_base(tmp_path):
         assert b.list_audio_slots() == []
         assert b.resolve_node(1, "rx") is None
         assert b.alsa_card_for_slot(1) is None
+
+
+# ---------------------------------------------------------------------------
+# FIX 5: get_volume / _object_id_for_node — direct unit tests
+# ---------------------------------------------------------------------------
+
+#: pw-dump snapshot with a known TX sink node carrying numeric id 41.
+_VOL_PW_DUMP = json.dumps(
+    [
+        {
+            "id": 41,
+            "type": "PipeWire:Interface:Node",
+            "info": {
+                "props": {
+                    "media.class": "Audio/Sink",
+                    "node.name": "oe5xrx.slot1.tx",
+                    "api.alsa.card": 1,
+                }
+            },
+        },
+    ]
+)
+
+
+def _vol_backend(tmp_path, *, wpctl_stdout="Volume: 0.40", wpctl_rc=0, calls=None):
+    """Backend with a single TX node (id=41) and a configurable wpctl response."""
+    sound = tmp_path / "sound"
+    (sound / "card1").mkdir(parents=True)
+
+    def fake_run(argv, timeout=5.0):
+        if calls is not None:
+            calls.append(argv)
+        if argv[0] == "pw-dump":
+            return RunResult(0, _VOL_PW_DUMP, "")
+        if argv[0] == "wpctl":
+            return RunResult(wpctl_rc, wpctl_stdout, "")
+        return RunResult(1, "", "unknown")
+
+    return PipeWireRouterBackend(run=fake_run, sysfs_sound=str(sound))
+
+
+def test_object_id_for_node_resolves_by_node_name(tmp_path):
+    """_object_id_for_node returns the numeric pw object id when node.name matches."""
+    b = _vol_backend(tmp_path)
+    oid = b._object_id_for_node("oe5xrx.slot1.tx")
+    assert oid == 41
+
+
+def test_object_id_for_node_returns_none_when_no_match(tmp_path):
+    """_object_id_for_node returns None when no node carries the given node.name."""
+    b = _vol_backend(tmp_path)
+    assert b._object_id_for_node("nonexistent.node") is None
+
+
+def test_get_volume_id_resolution_and_parse(tmp_path):
+    """Happy path: id resolved → wpctl called with str(41) → 0.40 returned."""
+    calls = []
+    b = _vol_backend(tmp_path, wpctl_stdout="Volume: 0.40", calls=calls)
+    vol = b.get_volume("oe5xrx.slot1.tx")
+    assert vol == pytest.approx(0.40)
+    wpctl_calls = [c for c in calls if c[0] == "wpctl"]
+    assert len(wpctl_calls) == 1
+    assert "41" in wpctl_calls[0], f"wpctl must be called with numeric id 41, got {wpctl_calls[0]}"
+
+
+def test_get_volume_returns_none_when_id_not_found(tmp_path):
+    """When _object_id_for_node returns None, get_volume returns None WITHOUT calling wpctl."""
+    calls = []
+    b = _vol_backend(tmp_path, calls=calls)
+    vol = b.get_volume("no.such.node")
+    assert vol is None
+    wpctl_calls = [c for c in calls if c[0] == "wpctl"]
+    assert wpctl_calls == [], "wpctl must NOT be invoked when the object id cannot be resolved"
+
+
+def test_get_volume_returns_none_on_wpctl_failure(tmp_path):
+    """When wpctl returns non-zero, get_volume returns None."""
+    b = _vol_backend(tmp_path, wpctl_stdout="", wpctl_rc=1)
+    assert b.get_volume("oe5xrx.slot1.tx") is None
+
+
+def test_get_volume_muted_returns_zero(tmp_path):
+    """wpctl output 'Volume: 1.00 [MUTED]' → get_volume returns 0.0."""
+    b = _vol_backend(tmp_path, wpctl_stdout="Volume: 1.00 [MUTED]")
+    assert b.get_volume("oe5xrx.slot1.tx") == 0.0
