@@ -57,3 +57,48 @@ def test_reverse_tap_delegates_to_selftest():
     argv = d.build_reverse_tap_argv("hw:1,0,0", 8000, 1.0)
     assert isinstance(argv, list)
     assert argv[0] == "arecord"                       # delegates to selftest.build_tx_capture_argv
+
+
+def test_run_diagnostic_anchor_c_reports_c_and_derived_d():
+    ref_pcm = d.generate_sine_pcm(1000, -20.0, 300, 16000)
+
+    class FakeBackend:
+        def resolve_node(self, slot, direction): return "oe5xrx.slot1.tx"
+        def tx_sink_node(self, slot): return "FM.Mono"
+        def get_volume(self, node): return 0.40
+
+    spawned = {}
+    def fake_spawn(argv):
+        spawned["argv"] = argv
+        return object()
+    def fake_read(proc, nbytes, timeout):
+        return ref_pcm
+
+    rep = d.run_diagnostic(
+        anchor="C", slot=1,
+        signal={"kind": "sine", "freq_hz": 1000, "level_dbfs": -20.0, "duration_ms": 500},
+        backend=FakeBackend(), spawn=fake_spawn, read_measfd=fake_read,
+    )
+    assert rep["anchor"] == "C"
+    taps = {t["point"]: t for t in rep["taps"]}
+    assert abs(taps["C"]["peak_dbfs"] - (-20.0)) < 0.5
+    assert taps["C"]["computed"] is False
+    # D = C + 20log10(0.40) ~= C - 7.96 dB, flagged computed
+    assert taps["D"]["computed"] is True
+    assert abs(taps["D"]["rms_dbfs"] - (taps["C"]["rms_dbfs"] - 7.96)) < 0.1
+    assert rep["static_gains"]["sink_volume_linear"] == 0.40
+
+
+def test_run_diagnostic_clamps_absurd_duration():
+    class FakeBackend:
+        def resolve_node(self, s, d_): return "n"
+        def tx_sink_node(self, s): return None
+        def get_volume(self, n): return None
+    captured = {}
+    def fake_read(proc, nbytes, timeout):
+        captured["timeout"] = timeout
+        return b"\x00\x00" * 10
+    d.run_diagnostic(anchor="C", slot=1,
+                     signal={"kind": "sine", "level_dbfs": -20.0, "duration_ms": 10_000_000},
+                     backend=FakeBackend(), spawn=lambda a: object(), read_measfd=fake_read)
+    assert captured["timeout"] <= (d.MAX_DURATION_MS / 1000) + 1.0
