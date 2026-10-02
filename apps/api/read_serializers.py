@@ -8,7 +8,9 @@ from rest_framework import serializers
 from apps.control.models import StationModule
 from apps.stations.models import (
     Region,
+    RegionAssignment,
     Station,
+    StationAssignment,
     StationInventory,
     StationLogEntry,
     StationPhoto,
@@ -123,3 +125,15 @@ class StationModuleSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class StationAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StationAssignment
+        fields = ["id", "user", "station", "role", "assigned_at", "assigned_by"]
+
+
+class RegionAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RegionAssignment
+        fields = ["id", "user", "region", "role", "assigned_at", "assigned_by"]

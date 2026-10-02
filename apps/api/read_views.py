@@ -1,5 +1,6 @@
 """Read-only viewsets for the user/automation API (v1)."""
 
+from django.db.models import Q
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
@@ -10,7 +11,9 @@ from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.permissions import TopologyScopedPermission
 from apps.api.read_filters import StationFilter
 from apps.api.read_serializers import (
+    RegionAssignmentSerializer,
     RegionSerializer,
+    StationAssignmentSerializer,
     StationInventorySerializer,
     StationLogEntrySerializer,
     StationModuleSerializer,
@@ -19,7 +22,7 @@ from apps.api.read_serializers import (
     StationTagSerializer,
     StationTelemetrySerializer,
 )
-from apps.stations.models import StationTag
+from apps.stations.models import RegionAssignment, StationAssignment, StationTag
 from apps.stations.scoping import accessible_regions, accessible_stations
 
 
@@ -112,3 +115,37 @@ class StationTagViewSet(ScopedReadOnlyViewSet):
     def get_queryset(self):
         # Global taxonomy; any ≥member may read (applicants blocked by perm).
         return StationTag.objects.all().order_by("name")
+
+
+class StationAssignmentViewSet(ScopedReadOnlyViewSet):
+    serializer_class = StationAssignmentSerializer
+    filterset_fields = ["station", "user", "role"]
+    ordering_fields = ["assigned_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_internal:
+            return StationAssignment.objects.all().order_by("-assigned_at")
+        return (
+            StationAssignment.objects.filter(
+                Q(station__in=accessible_stations(user)) | Q(user=user)
+            )
+            .distinct()
+            .order_by("-assigned_at")
+        )
+
+
+class RegionAssignmentViewSet(ScopedReadOnlyViewSet):
+    serializer_class = RegionAssignmentSerializer
+    filterset_fields = ["region", "user", "role"]
+    ordering_fields = ["assigned_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_internal:
+            return RegionAssignment.objects.all().order_by("-assigned_at")
+        return (
+            RegionAssignment.objects.filter(Q(region__in=accessible_regions(user)) | Q(user=user))
+            .distinct()
+            .order_by("-assigned_at")
+        )
