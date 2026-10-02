@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import secrets
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -11,7 +13,9 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
+from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class DeviceKey(models.Model):
@@ -94,3 +98,55 @@ class DeviceKey(models.Model):
             return True
         except (InvalidSignature, ValueError, TypeError):
             return False
+
+
+class PersonalAccessToken(models.Model):
+    """User-owned bearer token for the automation/CLI API.
+
+    Only the SHA-256 hash is stored; the raw token is shown once at
+    creation (pattern mirrors AccountToken / DeviceKey private keys).
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="api_tokens",
+    )
+    name = models.CharField(max_length=100)
+    prefix = models.CharField(max_length=8, db_index=True)
+    token_hash = models.CharField(max_length=64, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "personal access token"
+        verbose_name_plural = "personal access tokens"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix}…) — {self.user}"
+
+    @staticmethod
+    def hash_token(raw):
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @classmethod
+    def issue(cls, user, name, expires_at=None):
+        raw = secrets.token_urlsafe(32)
+        token = cls.objects.create(
+            user=user,
+            name=name,
+            prefix=raw[:8],
+            token_hash=cls.hash_token(raw),
+            expires_at=expires_at,
+        )
+        return token, raw
+
+    def is_active(self):
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is not None and self.expires_at <= timezone.now():
+            return False
+        return True

@@ -33,6 +33,8 @@ INSTALLED_APPS = [
     # Third party
     "oauth2_provider",
     "rest_framework",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
     "django_htmx",
     "storages",
     "axes",
@@ -186,6 +188,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.api.authentication.DeviceKeyAuthentication",
+        "apps.api.authentication.PersonalAccessTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -197,7 +200,21 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "heartbeat": "10/min",
         "register": "10/hour",
+        "api-token": "120/min",
     },
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "OE5XRX station-manager API",
+    "DESCRIPTION": "User/automation REST API. Rights mirror membership + topology.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    # Serve Swagger/ReDoc assets from the sidecar package (same-origin static)
+    # instead of jsDelivr, so the docs page works under script-src 'self'.
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
 }
 
 # Django Channels

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "API-Tokens" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'accounts:profile' %}">{% trans "Profile" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "API-Tokens" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Your account" %}</div>
+    <h1 class="page-title">{% trans "API-Tokens" %}</h1>
+    <p class="page-sub">{% trans "Erstelle und verwalte persönliche Zugriffstoken für die API." %}</p>
+  </div>
+</div>
+
+<div class="grid grid-main">
+  <div class="stack-gap-14">
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Neues Token erstellen" %}</div>
+      </div>
+      <div class="panel-body">
+        {% if error %}
+          <div class="form-error" role="alert">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="{% url 'accounts:api_tokens' %}">
+          {% csrf_token %}
+          <div class="form-group">
+            <label class="form-label" for="id_token_name">{% trans "Token-Name" %}</label>
+            <input
+              class="form-control"
+              type="text"
+              id="id_token_name"
+              name="name"
+              placeholder="{% trans "z.B. ci-script" %}"
+              required
+            >
+            <div class="form-help">{% trans "Ein beschreibender Name, der das Token identifiziert." %}</div>
+          </div>
+          <div class="panel-foot row-gap-8">
+            <button type="submit" class="btn btn-primary">{% trans "Token erstellen" %}</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>{% trans "Aktive Tokens" %}</div>
+      </div>
+      <div class="panel-body">
+        {% if tokens %}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>{% trans "Name" %}</th>
+                <th>{% trans "Präfix" %}</th>
+                <th>{% trans "Erstellt" %}</th>
+                <th>{% trans "Zuletzt genutzt" %}</th>
+                <th>{% trans "Läuft ab" %}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for t in tokens %}
+                <tr>
+                  <td>{{ t.name }}</td>
+                  <td class="t-mono">{{ t.prefix }}…</td>
+                  <td class="t-mono-sm">{{ t.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="t-mono-sm">{{ t.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                  <td class="t-mono-sm">{% if t.expires_at %}{{ t.expires_at|date:"Y-m-d H:i" }}{% else %}{% trans "nie" %}{% endif %}</td>
+                  <td>
+                    {% if t.revoked_at %}
+                      <span class="pill pill-muted">{% trans "Widerrufen" %}</span>
+                    {% else %}
+                      <form method="post" action="{% url 'accounts:api_token_revoke' t.pk %}">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-danger">{% trans "Widerrufen" %}</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="t-muted">{% trans "Noch keine Tokens erstellt." %}</p>
+        {% endif %}
+      </div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}

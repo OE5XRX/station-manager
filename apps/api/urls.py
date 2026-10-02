@@ -1,4 +1,5 @@
 from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerSplitView
 
 from apps.api.views import HealthCheckView, HeartbeatView, StationInventoryView
 
@@ -13,4 +14,10 @@ urlpatterns = [
         name="station_inventory",
     ),
     path("v1/deployments/", include("apps.deployments.api_urls")),
+    path("v1/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path(
+        "v1/docs/",
+        SpectacularSwaggerSplitView.as_view(url_name="api:schema"),
+        name="docs",
+    ),
 ]
