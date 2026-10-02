@@ -198,10 +198,16 @@ class DeploymentViewSet(ScopedReadOnlyViewSet):
 
     @action(detail=True, url_path="results")
     def results(self, request, pk=None):
+        # get_object() enforces parent-deployment scope (404 if invisible).
+        # Scope the nested results through the same single-source helper so a
+        # broad deployment doesn't leak out-of-scope stations' results.
         dep = self.get_object()
-        return self._child_list(
-            request, dep.results.order_by("station_id"), DeploymentResultSerializer
+        qs = (
+            accessible_deployment_results(request.user)
+            .filter(deployment=dep)
+            .order_by("station_id")
         )
+        return self._child_list(request, qs, DeploymentResultSerializer)
 
 
 class DeploymentResultViewSet(ScopedReadOnlyViewSet):
