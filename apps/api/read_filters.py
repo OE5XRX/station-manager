@@ -3,6 +3,7 @@
 import django_filters
 
 from apps.deployments.models import Deployment, DeploymentResult
+from apps.monitoring.models import Alert
 from apps.stations.models import Station
 
 
@@ -22,3 +23,15 @@ class DeploymentResultFilter(django_filters.FilterSet):
     class Meta:
         model = DeploymentResult
         fields = {"deployment": ["exact"], "station": ["exact"], "status": ["exact"]}
+
+
+class AlertFilter(django_filters.FilterSet):
+    class Meta:
+        model = Alert
+        fields = {
+            "station": ["exact"],
+            "severity": ["exact"],
+            "is_resolved": ["exact"],
+            "is_acknowledged": ["exact"],
+            "alert_rule": ["exact"],
+        }

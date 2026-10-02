@@ -7,6 +7,7 @@ from rest_framework import serializers
 
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
+from apps.monitoring.models import Alert, AlertRule
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
@@ -187,4 +188,37 @@ class DeploymentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "progress",
+        ]
+
+
+class AlertRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AlertRule
+        fields = [
+            "id",
+            "alert_type",
+            "threshold",
+            "severity",
+            "is_active",
+            "description",
+            "created_at",
+        ]
+
+
+class AlertSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Alert
+        fields = [
+            "id",
+            "station",
+            "alert_rule",
+            "severity",
+            "title",
+            "message",
+            "is_acknowledged",
+            "acknowledged_by",
+            "acknowledged_at",
+            "is_resolved",
+            "resolved_at",
+            "created_at",
         ]

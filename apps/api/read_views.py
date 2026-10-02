@@ -9,8 +9,15 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.permissions import TopologyScopedPermission
-from apps.api.read_filters import DeploymentFilter, DeploymentResultFilter, StationFilter
+from apps.api.read_filters import (
+    AlertFilter,
+    DeploymentFilter,
+    DeploymentResultFilter,
+    StationFilter,
+)
 from apps.api.read_serializers import (
+    AlertRuleSerializer,
+    AlertSerializer,
     DeploymentResultSerializer,
     DeploymentSerializer,
     RegionAssignmentSerializer,
@@ -26,7 +33,11 @@ from apps.api.read_serializers import (
     StationTagSerializer,
     StationTelemetrySerializer,
 )
-from apps.api.scoping import accessible_deployment_results, accessible_deployments
+from apps.api.scoping import (
+    accessible_alerts,
+    accessible_deployment_results,
+    accessible_deployments,
+)
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import RegionAssignment, StationAssignment, StationTag
 from apps.stations.scoping import accessible_regions, accessible_stations
@@ -217,3 +228,23 @@ class DeploymentResultViewSet(ScopedReadOnlyViewSet):
 
     def get_queryset(self):
         return accessible_deployment_results(self.request.user).order_by("-id")
+
+
+class AlertRuleViewSet(ScopedReadOnlyViewSet):
+    serializer_class = AlertRuleSerializer
+    filterset_fields = ["alert_type", "severity", "is_active"]
+    ordering_fields = ["created_at"]
+
+    def get_queryset(self):
+        from apps.monitoring.models import AlertRule
+
+        return AlertRule.objects.all().order_by("alert_type")
+
+
+class AlertViewSet(ScopedReadOnlyViewSet):
+    serializer_class = AlertSerializer
+    filterset_class = AlertFilter
+    ordering_fields = ["created_at"]
+
+    def get_queryset(self):
+        return accessible_alerts(self.request.user).order_by("-created_at")
