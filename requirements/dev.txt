@@ -105,6 +105,7 @@ django==6.1.1
     #   channels
     #   django-axes
     #   django-debug-toolbar
+    #   django-filter
     #   django-htmx
     #   django-oauth-toolkit
     #   django-storages
@@ -117,6 +118,10 @@ django-axes==8.3.1
     #   -r requirements/base.in
 django-debug-toolbar==8.0.0
     # via -r requirements/dev.in
+django-filter==26.1
+    # via
+    #   -c requirements/base.txt
+    #   -r requirements/base.in
 django-htmx==1.29.0
     # via
     #   -c requirements/base.txt
