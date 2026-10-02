@@ -82,3 +82,13 @@ def test_report_tolerates_missing_sink_volume():
     stages = {(s["from"], s["to"]): s for s in rep["stages"]}
     cd = stages[("C", "D")]
     assert cd["expected_db"] is None
+
+
+def test_zero_dbfs_reference_not_treated_as_missing():
+    # Verify that a 0.0 dBFS reference is valid and does not fall back to REF_LEVEL_DBFS.
+    # When C peak is at 0.0 dBFS (at the reference level), the verdict should NOT say "upstream".
+    rep = sd.build_run_report(_agent_report(0.0, -3.0))
+    verdict = rep["verdict"].lower()
+    # Should treat C as "at expected level", not as below reference due to fallback.
+    assert "upstream" not in verdict
+    assert "sink volume" in verdict or "at expected" in verdict

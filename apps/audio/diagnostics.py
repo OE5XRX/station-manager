@@ -173,7 +173,8 @@ def build_run_report(agent_report: dict) -> dict:
     verdict: str
 
     # The reference level we expect to see at C (dBFS peak).
-    ref_level: float = agent_report.get("reference", {}).get("level_dbfs") or REF_LEVEL_DBFS
+    _ref = agent_report.get("reference", {}).get("level_dbfs")
+    ref_level: float = _ref if _ref is not None else REF_LEVEL_DBFS
 
     if c_tap is None or c_tap.get("silent") or c_tap.get("rms_dbfs") is None:
         # Rule 1: C is silent → inject/agent path broken.
