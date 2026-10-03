@@ -390,6 +390,8 @@ class AccountAuditLog(models.Model):
         USER_SOFT_DELETED = "user_soft_deleted", _("User Soft-Deleted")
         USER_RESTORED = "user_restored", _("User Restored")
         USER_HARD_PURGED = "user_hard_purged", _("User Hard-Purged")
+        # === Added in Phase 3 (user/automation API write surface) ===
+        CONFIG_CHANGED = "config_changed", _("Config Changed")
 
     event_type = models.CharField(
         _("event type"),
