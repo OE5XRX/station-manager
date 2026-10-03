@@ -516,10 +516,40 @@ class DeploymentViewSet(
 
     def perform_create(self, serializer):
         station = serializer.validated_data["target_station"]
+        # Authz first: an unauthorized user gets 403 regardless of image
+        # validity (403-before-400 ordering).
         if not ws.can_trigger_deployment(self.request.user, station):
             raise PermissionDenied("Not allowed to trigger a deployment for this station.")
 
         image_release = serializer.validated_data["image_release"]
+
+        # Input-validation parity with the canonical UI trigger
+        # (apps.rollouts.views.UpgradeStationView): field-specific 400s BEFORE
+        # any DB write, so a wrong-architecture or non-deployable image can't be
+        # queued.
+        current = station.current_image_release
+        if current is None:
+            raise DRFValidationError(
+                {
+                    "target_station": (
+                        "Station has no current image release; cannot target a deployment."
+                    )
+                }
+            )
+        if image_release.machine != current.machine:
+            raise DRFValidationError(
+                {
+                    "image_release": (
+                        f"Image machine {image_release.machine} does not match "
+                        f"station machine {current.machine}."
+                    )
+                }
+            )
+        if not image_release.is_ota_ready:
+            raise DRFValidationError(
+                {"image_release": f"Image release {image_release.tag} is not OTA-ready."}
+            )
+
         strategy = serializer.validated_data.get("strategy", Deployment.Strategy.IMMEDIATE)
         phase_config = serializer.validated_data.get("phase_config", {})
 
