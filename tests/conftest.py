@@ -307,3 +307,58 @@ def audio_agent_auth(monkeypatch):
         return True
 
     monkeypatch.setattr(consumers.AgentAudioConsumer, "_verify_agent", _ok)
+
+
+# --- user/automation API permission-matrix fixtures (Phase 3) ---
+@pytest.fixture
+def api_topology(db):
+    """Two regions/stations ('in' = scoped user may see, 'out' = not) plus a
+    user at every role. Mirrors tests/test_api_read_fixtures.topology so read
+    and write matrix tests share one shape."""
+    from apps.stations.models import Region, RegionAssignment, Station, StationAssignment
+
+    region_in = Region.objects.create(name="In", slug="in")
+    region_out = Region.objects.create(name="Out", slug="out")
+    station_in = Station.objects.create(name="S-in", callsign="OE1AAA", region=region_in)
+    station_out = Station.objects.create(name="S-out", callsign="OE1BBB", region=region_out)
+    admin = _user_with_level("api_admin", "x", User.MembershipLevel.ADMIN)
+    staff = _user_with_level("api_staff", "x", User.MembershipLevel.STAFF)
+    region_mgr = _user_with_level("api_rmgr", "x", User.MembershipLevel.MEMBER)
+    RegionAssignment.objects.create(user=region_mgr, region=region_in, role="manager")
+    station_user = _user_with_level("api_suser", "x", User.MembershipLevel.MEMBER)
+    StationAssignment.objects.create(user=station_user, station=station_in, role="maintainer")
+    applicant = _user_with_level("api_appl", "x", User.MembershipLevel.APPLICANT)
+    return {
+        "region_in": region_in,
+        "region_out": region_out,
+        "station_in": station_in,
+        "station_out": station_out,
+        "admin": admin,
+        "staff": staff,
+        "region_mgr": region_mgr,
+        "station_user": station_user,
+        "applicant": applicant,
+    }
+
+
+@pytest.fixture
+def bearer():
+    """Return a factory: bearer(user) -> token-authenticated APIClient."""
+    from rest_framework.test import APIClient
+
+    from apps.api.models import PersonalAccessToken
+
+    def _make(user):
+        _, raw = PersonalAccessToken.issue(user=user, name="test")
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
+        return client
+
+    return _make
+
+
+@pytest.fixture
+def anon_client():
+    from rest_framework.test import APIClient
+
+    return APIClient()

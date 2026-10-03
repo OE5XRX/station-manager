@@ -14,8 +14,26 @@ Station.region change uses a pre_save + post_save pair: pre_save
 records the pre-mutation FK so post_save can compute the diff. We
 stash the diff on the instance via a private attribute that gets
 deleted after emission.
+
+Cascade-delete guard (A2/A3/A5):
+Django 6 passes the ``origin`` kwarg to every pre_delete/post_delete
+signal.  When ``station.delete()`` is called, ``origin`` is the Station
+instance; cascade sub-signals for StationAssignment receive that same
+origin.  We use this to detect "this delete is part of a Station
+cascade" and skip ONLY the StationAuditLog write (which would reference
+a station that is about to disappear, leaving a dangling FK).  The
+AccountAuditLog revocation still fires because its ``station`` FK is
+SET_NULL — the account trail must remain intact.  The same pattern is
+used for RegionAssignment post_delete: if origin is a Region instance
+the signal skips creating a new AccountAuditLog row with
+``region=instance.region`` (which would reference a just-deleted region
+— the row's region FK is SET_NULL on the model but a *newly created*
+row references the deleted pk, which is not in scope of the collector's
+SET_NULL pass).
 """
 
+from django.core.files.storage import default_storage
+from django.db import transaction
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
@@ -26,6 +44,7 @@ from apps.stations.models import (
     Station,
     StationAssignment,
     StationAuditLog,
+    StationPhoto,
 )
 
 # --- StationAssignment ---
@@ -56,14 +75,23 @@ def _on_station_assignment_save(sender, instance, created, **kwargs):
 
 
 @receiver(post_delete, sender=StationAssignment)
-def _on_station_assignment_delete(sender, instance, **kwargs):
-    # Bestehender StationAuditLog-Eintrag (unverändert):
-    StationAuditLog.log(
-        station=instance.station,
-        event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
-        user=None,
-        message=(f"{instance.user} ({instance.get_role_display()}) entfernt"),
-    )
+def _on_station_assignment_delete(sender, instance, origin=None, **kwargs):
+    # Skip the StationAuditLog write when the assignment is being cascade-deleted
+    # as part of its parent Station's deletion (origin is the Station instance).
+    # Django's collector SET_NULLs pre-existing audit logs *before* firing
+    # post_delete for cascade-deleted objects; a newly created audit log
+    # referencing the station would be outside that SET_NULL scope → dangling FK.
+    # The account audit trail (AccountAuditLog) is still written: its region FK
+    # is not involved here, and the user's audit history must remain intact.
+    station_is_being_deleted = isinstance(origin, Station)
+    if not station_is_being_deleted:
+        # Bestehender StationAuditLog-Eintrag (unverändert):
+        StationAuditLog.log(
+            station=instance.station,
+            event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
+            user=None,
+            message=(f"{instance.user} ({instance.get_role_display()}) entfernt"),
+        )
     # NEU in 1a: zusätzlich AccountAuditLog.
     # Sub-Spec 2b §4: callers (e.g. UserSoftDeleteView) can stash a
     # ``_revoke_reason`` on the instance before calling .delete() so the
@@ -157,10 +185,19 @@ def _on_region_assignment_save(sender, instance, created, **kwargs):
 
 
 @receiver(post_delete, sender=RegionAssignment)
-def _on_region_assignment_delete(sender, instance, **kwargs):
+def _on_region_assignment_delete(sender, instance, origin=None, **kwargs):
     # Sub-Spec 2b §4: callers can stash ``_revoke_reason`` + ``_revoke_actor``
     # on the instance before .delete() so soft-delete-driven revokes carry
     # their reason in the audit message and the originating admin as actor.
+    #
+    # Cascade guard (A3): if this delete is part of a parent Region cascade
+    # (origin is the Region instance), skip creating a new AccountAuditLog row
+    # that references ``instance.region`` — that region row is being deleted in
+    # the same transaction, and newly-created rows are outside the collector's
+    # SET_NULL pass, leaving a dangling FK.
+    region_is_being_deleted = isinstance(origin, Region)
+    if region_is_being_deleted:
+        return
     reason = getattr(instance, "_revoke_reason", None)
     role_display = instance.get_role_display()
     if reason:
@@ -202,3 +239,33 @@ def _on_region_delete(sender, instance, **kwargs):
         region=None,  # FK is gone after delete
         message=f"deleted: {instance.name}",
     )
+
+
+# --- StationPhoto blob cleanup ---
+
+
+@receiver(post_delete, sender=StationPhoto)
+def _on_station_photo_delete(sender, instance, **kwargs):
+    """Delete the image blob from storage when a StationPhoto row is removed.
+
+    Fires on BOTH direct API delete (StationPhotoViewSet.perform_destroy) AND
+    station cascade delete (Station.delete() → CASCADE → StationPhoto.delete()).
+    Guards against empty/missing image names and swallows storage errors so
+    that a transient storage failure never breaks the DB-level delete.
+
+    ``transaction.on_commit`` ensures the blob is only removed after the
+    enclosing transaction (or savepoint, for nested atomics) commits
+    successfully, preventing orphaned blobs from a rolled-back delete.
+    """
+    blob_name = instance.image.name if instance.image else None
+    if not blob_name:
+        return
+
+    def _delete():
+        try:
+            if default_storage.exists(blob_name):
+                default_storage.delete(blob_name)
+        except Exception:  # pragma: no cover — best-effort, never break a mutation
+            pass
+
+    transaction.on_commit(_delete)
