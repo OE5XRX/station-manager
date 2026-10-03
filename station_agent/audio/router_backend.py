@@ -63,6 +63,8 @@ class RouterBackend(Protocol):
     def link(self, out_node: str, in_node: str) -> bool: ...
     def unlink(self, out_node: str, in_node: str) -> bool: ...
     def set_volume(self, node: str, linear: float) -> bool: ...
+    def get_volume(self, node: str) -> float | None: ...
+    def tx_sink_node(self, slot: int) -> str | None: ...
 
 
 class PipeWireRouterBackend:
@@ -201,6 +203,44 @@ class PipeWireRouterBackend:
 
     def set_volume(self, node: str, linear: float) -> bool:
         return self._ok(self._safe_run(["wpctl", "set-volume", node, f"{linear:g}"]))
+
+    def _object_id_for_node(self, node_name: str) -> int | None:
+        """Resolve the PipeWire numeric object id for a node by its ``node.name``.
+
+        ``wpctl get-volume`` / ``wpctl set-volume`` require a numeric pw object id, not a
+        node.name string — passing a name always fails silently.  We reuse the already-cached
+        pw-dump machinery to look it up.
+        """
+        for node in self._pw_nodes():
+            props = node.get("info", {}).get("props", {})
+            if props.get("node.name") == node_name:
+                oid = node.get("id")
+                if isinstance(oid, int):
+                    return oid
+        logger.debug("router: no pw object id found for node.name=%r", node_name)
+        return None
+
+    def get_volume(self, node: str) -> float | None:
+        """Return the linear volume of *node*, or ``None`` if it cannot be determined.
+
+        BUG3 fix: ``wpctl get-volume`` expects a numeric PipeWire object id, not a node.name
+        string.  We resolve the id via pw-dump first; if it cannot be found we return None
+        gracefully (static gains stay None downstream).
+        """
+        oid = self._object_id_for_node(node)
+        if oid is None:
+            return None
+        res = self._safe_run(["wpctl", "get-volume", str(oid)])
+        if res is None or res.returncode != 0:
+            return None
+        from station_agent.audio.diagnostics import parse_wpctl_volume
+
+        return parse_wpctl_volume(res.stdout)
+
+    def tx_sink_node(self, slot: int) -> str | None:
+        # The device sink that carries the 0.40 volume stage is the TX node's
+        # target; on this platform the TX inject node IS that sink.
+        return self.resolve_node(slot, "tx")
 
     # --- helpers -----------------------------------------------------------
     def _safe_run(self, argv: list[str]) -> RunResult | None:

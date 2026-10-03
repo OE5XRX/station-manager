@@ -4,6 +4,8 @@ Usage:
   python -m station_agent                     run the agent (default)
   python -m station_agent selftest serial [--slot N] [--base PATH]
   python -m station_agent selftest audio  [--slot N] [--tx-freq HZ] [--rate HZ]
+  python -m station_agent selftest audio-diag [--slot N] [--anchor C|U] [--freq HZ]
+                                              [--level-dbfs DBFS] [--duration-ms MS]
   python -m station_agent selftest control-stability [--base PATH] [--duration S]
 """
 
@@ -28,6 +30,15 @@ def main(argv=None) -> int:
     audio_p.add_argument("--tx-freq", type=int, default=1500)
     audio_p.add_argument("--rate", type=int, default=8000)
     audio_p.add_argument("--duration", type=float, default=1.0)
+
+    diag_p = st_sub.add_parser(
+        "audio-diag", help="audio-path diagnostics measure/inject (needs PipeWire)"
+    )
+    diag_p.add_argument("--slot", type=int, default=1)
+    diag_p.add_argument("--anchor", choices=["C", "U"], default="C")
+    diag_p.add_argument("--freq", type=int, default=1000)
+    diag_p.add_argument("--level-dbfs", type=float, default=-20.0)
+    diag_p.add_argument("--duration-ms", type=int, default=500)
 
     stab_p = st_sub.add_parser(
         "control-stability",
@@ -55,6 +66,25 @@ def main(argv=None) -> int:
                 rate=args.rate,
                 duration=args.duration,
             )
+        if args.what == "audio-diag":
+            import json
+
+            from station_agent.audio import diagnostics
+            from station_agent.audio.router_backend import PipeWireRouterBackend
+
+            report = diagnostics.run_diagnostic(
+                anchor=args.anchor,
+                slot=args.slot,
+                signal={
+                    "kind": "sine",
+                    "freq_hz": args.freq,
+                    "level_dbfs": args.level_dbfs,
+                    "duration_ms": args.duration_ms,
+                },
+                backend=PipeWireRouterBackend(),
+            )
+            print(json.dumps(report, indent=2))
+            return 0
         if args.what == "control-stability":
             from station_agent import selftest
 

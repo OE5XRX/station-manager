@@ -202,6 +202,49 @@ class AudioEngine:
     async def set_tx_route(self, slot, module) -> None:
         self.tx_route = None if slot is None else {"slot": slot, "module": module}
 
+    # --- diagnostics -------------------------------------------------------
+    async def on_diag_command(self, command: dict) -> dict:
+        """Validate and run an audio-path diagnostic off-thread.
+
+        Returns a ``diag_result`` envelope that is safe to send straight to the
+        WebSocket — never raises into the WS loop.
+
+        RF safety: no PTT / carrier keying is performed; measurement ends at the
+        digital ALSA/UAC2 edge (D).
+        """
+        from station_agent.audio import diagnostics  # local import to keep top-level clean
+
+        rid = command.get("request_id")
+        anchor = command.get("anchor")
+        slot = command.get("slot")
+        signal = command.get("signal") or {}
+        base = {"v": 1, "type": "diag_result", "request_id": rid}
+        if anchor not in ("C", "U"):
+            return {**base, "error": f"unsupported anchor {anchor!r}"}
+        if not isinstance(slot, int) or isinstance(slot, bool):
+            return {**base, "error": "slot must be an int"}
+        # BUG4 — RF safety: refuse inject while a TX bridge is active (PTT/mic up).
+        # Writing a tone to the TX sink while the SA818 is keyed would produce RF.
+        if self._tx is not None:
+            return {
+                **base,
+                "error": "refused: TX active — diagnostic inject would reach a keyed transmitter",
+            }
+        try:
+            report = await self._to_thread(
+                lambda: diagnostics.run_diagnostic(
+                    anchor=anchor,
+                    slot=slot,
+                    signal=signal,
+                    backend=self._backend,
+                    rate=self.registry.mic_rate,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — a diag failure must not kill the WS loop
+            logger.exception("engine: diagnostic run failed")
+            return {**base, "error": f"{type(exc).__name__}: {exc}"}
+        return {**base, **report}
+
     # --- safety timers -----------------------------------------------------
     def _arm_dead_man(self) -> None:
         self._disarm_dead_man()

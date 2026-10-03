@@ -50,6 +50,11 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         # Last advertised streams list, cached so a browser that connects AFTER
         # the agent's one-shot advertise can request a replay (audio_request_advertise).
         self._last_streams: list = []
+        # Pending diag reply channels: request_id → reply channel name.
+        # Populated by audio_diag_command, consumed (popped) by the diag_result
+        # receive branch.  Initialized before the auth guard so it always exists
+        # on disconnect, even on the reject path.
+        self._diag_replies: dict[str, str] = {}
 
         # Assign groups BEFORE the auth guard so disconnect() can safely
         # reference self.agent_group / self.browser_group on the reject path
@@ -133,6 +138,11 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
             await self._handle_advertise(msg)
         elif mtype == "stream_state":
             await self._handle_stream_state(msg)
+        elif mtype == "diag_result":
+            rid = msg.get("request_id")
+            reply_channel = self._diag_replies.pop(rid, None) if rid else None
+            if reply_channel:
+                await self.channel_layer.send(reply_channel, {"type": "diag.reply", "msg": msg})
         # Unknown types ignored (forward-compat).
 
     async def _handle_advertise(self, msg):
@@ -250,6 +260,22 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
                 },
             },
         )
+
+    async def audio_diag_command(self, event):
+        """Server pushes a diag command down to the agent.
+
+        Stores the reply_channel keyed by request_id so the incoming
+        diag_result frame can be routed back to the caller.
+        """
+        self._diag_replies[event["request_id"]] = event["reply_channel"]
+        await self.send(text_data=json.dumps(event["command"]))
+
+    async def audio_ref_media(self, event):
+        """Replay a U-anchor reference media frame to the agent.
+
+        Identical effect to a browser mic uplink frame arriving on the agent WS.
+        """
+        await self.send(bytes_data=event["data"])
 
     async def audio_gate(self, event):
         """Gate state changed -> recompute and send mic_state to agent.
