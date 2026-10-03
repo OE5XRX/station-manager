@@ -344,6 +344,10 @@ class RegionAssignmentViewSet(
     read_views.RegionAssignmentViewSet,
 ):
     write_serializer_class = RegionAssignmentWriteSerializer
+    # R5b: payload-independent create gate — role check runs in has_permission
+    # before DRF validates the serializer (prevents non-staff probing user/region
+    # uniqueness and getting field-validation errors instead of 403).
+    create_requires = staticmethod(ws.can_write_region_assignment)
 
     def can_write_object(self, user, obj, method):
         return ws.can_write_region_assignment(user)
@@ -554,7 +558,15 @@ class RolloutSequenceEntryViewSet(
         tag = serializer.validated_data["tag"]
         # Route through the locked service so concurrent creates serialize and
         # positions remain gap-free (mirrors SequenceAddView's locked protocol).
-        entry = rollout_services.add_entry(sequence=sequence, tag=tag, by_user=self.request.user)
+        # R5d: catch IntegrityError from the (sequence, tag) unique constraint
+        # to handle the race where two concurrent creates both pass validate_tag
+        # but one hits the DB constraint first → translate to 400 instead of 500.
+        try:
+            entry = rollout_services.add_entry(
+                sequence=sequence, tag=tag, by_user=self.request.user
+            )
+        except IntegrityError as exc:
+            raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
         if entry is None:
             raise DRFValidationError({"tag": "This tag is already in the sequence."})
         # Expose the created entry on the serializer so DRF can build the 201
@@ -606,11 +618,19 @@ class RolloutSequenceEntryViewSet(
             # touch_sequence opens its own transaction.atomic() / select_for_update;
             # wrap both the field save and the stamp in ONE outer atomic so they
             # are visible to the DB in the same serialised order.
-            with transaction.atomic():
-                RolloutSequence.objects.select_for_update().filter(pk=entry.sequence_id).first()
-                entry = serializer.save()
-                entry.sequence.updated_by = self.request.user
-                entry.sequence.save(update_fields=["updated_by", "updated_at"])
+            # R5d: catch IntegrityError from the (sequence, tag) unique constraint
+            # to handle the race where two concurrent tag-change PATCHes both pass
+            # validate_tag but one hits the DB constraint first → 400 not 500.
+            try:
+                with transaction.atomic():
+                    RolloutSequence.objects.select_for_update().filter(
+                        pk=entry.sequence_id
+                    ).first()
+                    entry = serializer.save()
+                    entry.sequence.updated_by = self.request.user
+                    entry.sequence.save(update_fields=["updated_by", "updated_at"])
+            except IntegrityError as exc:
+                raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} updated",
@@ -808,6 +828,10 @@ class ProvisioningJobViewSet(
     """
 
     write_serializer_class = ProvisioningJobCreateSerializer
+    # R5c: payload-independent create gate — role check runs in has_permission
+    # before DRF validates the serializer (prevents non-staff probing station/
+    # image FK existence via field-validation errors instead of 403).
+    create_requires = staticmethod(ws.can_trigger_provisioning_role)
 
     def can_write_object(self, user, obj, method):
         # No object-level writes (no Update/Destroy mixin).

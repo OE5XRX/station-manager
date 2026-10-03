@@ -15,10 +15,11 @@ updated_by is intentionally left unchanged here: the signal has no actor context
 (remove_entry, touch_sequence) already set updated_by when they have an actor.
 """
 
+from django.db import transaction
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
-from .models import RolloutSequenceEntry
+from .models import RolloutSequence, RolloutSequenceEntry
 
 
 @receiver(post_delete, sender=RolloutSequenceEntry)
@@ -29,22 +30,38 @@ def _on_sequence_entry_delete(sender, instance, **kwargs):
     deletes (StationTag.delete() → CASCADE → RolloutSequenceEntry.delete()).
 
     The renumber uses the already-established transaction (the caller's atomic
-    block, or the implicit atomic wrapping a plain .delete() call).  No new
-    transaction is opened here — SELECT FOR UPDATE is not needed because:
-      * remove_entry holds the lock before calling entry.delete().
-      * cascade deletes (from tag delete) happen inside Django's collector
-        which runs in a single atomic block at the DB level.
+    block, or the implicit atomic wrapping a plain .delete() call).
+
+    R5a — SELECT FOR UPDATE on parent:
+      The signal acquires a lock on the parent RolloutSequence row before
+      reading and renumbering entries, so it serializes with add_entry /
+      move_entry (which also hold the parent lock).  This prevents a
+      concurrent add/move from interleaving with the signal-driven renumber
+      and producing gaps or position collisions.
+
+      Guard: if the parent no longer exists (e.g. a cascade from a parent
+      RolloutSequence delete), skip safely — no renumber needed.
     """
-    sequence = instance.sequence
-    if sequence is None or sequence.pk is None:
+    # Guard against a detached instance (sequence_id == None) or a parent
+    # that is already being deleted in the same cascade.
+    sequence_id = getattr(instance, "sequence_id", None)
+    if not sequence_id:
         return
 
-    # Renumber remaining entries gap-free.  Uses update_fields so auto_now
-    # fields on the entry itself are not touched.
-    for idx, e in enumerate(sequence.entries.order_by("position")):
-        if e.position != idx:
-            e.position = idx
-            e.save(update_fields=["position"])
+    # Lock the parent sequence row so the renumber serializes with concurrent
+    # add_entry / move_entry calls.  If the parent no longer exists (cascade),
+    # first() returns None and we skip safely.
+    with transaction.atomic():
+        sequence = RolloutSequence.objects.select_for_update().filter(pk=sequence_id).first()
+        if sequence is None:
+            return
 
-    # Stamp updated_at on the parent (updated_by left as caller's responsibility).
-    sequence.save(update_fields=["updated_at"])
+        # Renumber remaining entries gap-free.  Uses update_fields so auto_now
+        # fields on the entry itself are not touched.
+        for idx, e in enumerate(sequence.entries.order_by("position")):
+            if e.position != idx:
+                e.position = idx
+                e.save(update_fields=["position"])
+
+        # Stamp updated_at on the parent (updated_by left as caller's responsibility).
+        sequence.save(update_fields=["updated_at"])

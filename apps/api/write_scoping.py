@@ -62,6 +62,20 @@ def can_trigger_provisioning(user, station):
     return bool(user.is_internal)
 
 
+def can_trigger_provisioning_role(user):
+    """Payload-independent (1-arg) role check for the create_requires pre-gate.
+
+    R5c: used by TopologyScopedWritePermission.has_permission to reject
+    non-staff POSTs to provisioning-jobs BEFORE DRF validates the serializer,
+    preventing non-staff callers from probing station/image FK existence via
+    field-validation errors instead of 403.
+
+    The per-object permission (can_trigger_provisioning with station arg) is
+    kept in perform_create for defense-in-depth.
+    """
+    return bool(user.is_internal)
+
+
 def can_write_user(user):
     return bool(user.is_internal)
 
