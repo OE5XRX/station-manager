@@ -372,6 +372,8 @@ class AccountAuditLog(models.Model):
         PASSWORD_CHANGED = "password_changed", _("Password Changed")
         STATION_ASSIGNMENT_CREATED = "station_assignment_created", _("Station Assignment Created")
         STATION_ASSIGNMENT_REVOKED = "station_assignment_revoked", _("Station Assignment Revoked")
+        STATION_ASSIGNMENT_UPDATED = "station_assignment_updated", _("Station Assignment Updated")
+        REGION_ASSIGNMENT_UPDATED = "region_assignment_updated", _("Region Assignment Updated")
         # === Added in Sub-Spec 2a Token-Email-Flows ===
         WELCOME_TOKEN_SENT = "welcome_token_sent", _("Welcome Token Sent")
         PASSWORD_RESET_REQUESTED = "password_reset_requested", _("Password Reset Requested")

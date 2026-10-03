@@ -145,6 +145,58 @@ def test_station_assignment_update(api_topology, bearer):
     assert assignment.role == "admin"
 
 
+def test_region_mgr_cannot_move_assignment_to_out_of_scope_station(api_topology, bearer):
+    """C1: `station` is writable; perform_update must re-validate the NEW station.
+
+    region_mgr of region_in may edit an in-scope assignment, but must NOT be
+    able to PATCH its `station` to station_out (out of scope) -> 403, DB
+    unchanged.
+    """
+    from apps.stations.models import StationAssignment
+
+    t = api_topology
+    assignment = StationAssignment.objects.create(
+        user=t["staff"], station=t["station_in"], role="maintainer"
+    )
+    url = reverse("api:station-assignment-detail", args=[assignment.pk])
+    r = bearer(t["region_mgr"]).patch(url, {"station": t["station_out"].pk}, format="json")
+    assert r.status_code == 403
+    assignment.refresh_from_db()
+    assert assignment.station == t["station_in"]  # unchanged
+
+
+def test_staff_can_move_assignment_to_any_station(api_topology, bearer):
+    """Guard isn't over-restrictive: staff (is_internal) may move an assignment."""
+    from apps.stations.models import StationAssignment
+
+    t = api_topology
+    assignment = StationAssignment.objects.create(
+        user=t["staff"], station=t["station_in"], role="maintainer"
+    )
+    url = reverse("api:station-assignment-detail", args=[assignment.pk])
+    r = bearer(t["admin"]).patch(url, {"station": t["station_out"].pk}, format="json")
+    assert r.status_code == 200
+    assignment.refresh_from_db()
+    assert assignment.station == t["station_out"]
+
+
+def test_station_assignment_update_audit_uses_updated_event(api_topology, bearer):
+    """Update emits STATION_ASSIGNMENT_UPDATED (not _CREATED) with token origin."""
+    from apps.accounts.models import AccountAuditLog
+    from apps.stations.models import StationAssignment
+
+    t = api_topology
+    assignment = StationAssignment.objects.create(
+        user=t["staff"], station=t["station_in"], role="maintainer"
+    )
+    url = reverse("api:station-assignment-detail", args=[assignment.pk])
+    bearer(t["region_mgr"]).patch(url, {"role": "admin"}, format="json")
+    assert AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_UPDATED,
+        message__contains="via API token",
+    ).exists()
+
+
 def test_anon_station_assignment_create_401(api_topology, anon_client):
     """Unauthenticated POST returns 401."""
     t = api_topology

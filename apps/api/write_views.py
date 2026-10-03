@@ -74,6 +74,13 @@ class StationViewSet(
         )
 
     def perform_update(self, serializer):
+        # `region` is writable: re-validate the NEW target region before saving,
+        # else a region-manager could PATCH a station they manage into a region
+        # they don't (move-via-update privilege escalation). can_write_object
+        # only checked the OLD region.
+        new_region = serializer.validated_data.get("region", serializer.instance.region)
+        if not ws.can_create_station_in(self.request.user, new_region):
+            raise PermissionDenied("Not allowed to move this station to that region.")
         station = serializer.save()
         audit_station_write(
             self.request,
@@ -224,10 +231,17 @@ class StationAssignmentViewSet(
         )
 
     def perform_update(self, serializer):
+        # `station` is writable: re-validate the NEW target station before saving,
+        # else a region-manager could PATCH an in-scope assignment to move it onto
+        # an out-of-scope station (move-via-update privilege escalation).
+        # can_write_object only checked the OLD station.
+        new_station = serializer.validated_data.get("station", serializer.instance.station)
+        if not ws.can_write_station_assignment(self.request.user, new_station):
+            raise PermissionDenied("Not allowed to move this assignment to that station.")
         assignment = _save_assignment(serializer, actor=self.request.user)
         audit_account_write(
             self.request,
-            event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_UPDATED,
             target_user=assignment.user,
             message=f"StationAssignment for {assignment.user} on {assignment.station} updated",
         )
@@ -270,10 +284,11 @@ class RegionAssignmentViewSet(
         )
 
     def perform_update(self, serializer):
+        self._guard_write()
         assignment = _save_assignment(serializer, actor=self.request.user)
         audit_account_write(
             self.request,
-            event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_CREATED,
+            event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_UPDATED,
             target_user=assignment.user,
             region=assignment.region,
             message=f"RegionAssignment for {assignment.user} on {assignment.region} updated",

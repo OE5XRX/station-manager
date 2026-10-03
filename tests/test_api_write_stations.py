@@ -75,6 +75,30 @@ def test_status_field_not_writable(api_topology, bearer):
     assert t["station_in"].status == before  # status is read-only, PATCH ignores it
 
 
+def test_region_mgr_cannot_move_station_to_out_of_scope_region(api_topology, bearer):
+    """C2: `region` is writable; perform_update must re-validate the NEW region.
+
+    A region_mgr of region_in manages station_in. Attempting to PATCH its
+    `region` to region_out (not managed) must 403, and the row must NOT move.
+    """
+    t = api_topology
+    url = reverse("api:station-detail", args=[t["station_in"].pk])
+    r = bearer(t["region_mgr"]).patch(url, {"region": t["region_out"].pk}, format="json")
+    assert r.status_code == 403
+    t["station_in"].refresh_from_db()
+    assert t["station_in"].region == t["region_in"]  # unchanged
+
+
+def test_staff_can_move_station_to_any_region(api_topology, bearer):
+    """Guard isn't over-restrictive: staff (is_internal) may move a station."""
+    t = api_topology
+    url = reverse("api:station-detail", args=[t["station_in"].pk])
+    r = bearer(t["staff"]).patch(url, {"region": t["region_out"].pk}, format="json")
+    assert r.status_code == 200
+    t["station_in"].refresh_from_db()
+    assert t["station_in"].region == t["region_out"]
+
+
 def test_write_creates_audit_entry(api_topology, bearer):
     from apps.stations.models import StationAuditLog
 
