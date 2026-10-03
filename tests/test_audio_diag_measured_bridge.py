@@ -1,5 +1,7 @@
 # tests/test_audio_diag_measured_bridge.py
+import math
 import os
+import struct
 
 import station_agent.audio.diagnostics as d
 
@@ -72,3 +74,60 @@ def test_measured_bridge_feed_opus_wraps_rtp_to_port():
 def test_measured_bridge_feed_before_start_is_safe():
     br = d.MeasuredTxBridge("tx.node", 47052, 16000, socket_factory=_FakeSock)
     br.feed_opus(b"\x00")  # must not raise (no socket yet)
+
+
+class _FakeBackend:
+    def tx_sink_node(self, slot):
+        return "sink.node"
+
+    def get_volume(self, node):
+        return 0.40
+
+
+def _sine_pcm(level_dbfs, n=16000, rate=16000, freq=1000):
+    amp = (10 ** (level_dbfs / 20)) * 32767
+    return struct.pack(
+        f"<{n}h",
+        *[
+            max(-32768, min(32767, int(round(amp * math.sin(2 * math.pi * freq * i / rate)))))
+            for i in range(n)
+        ],
+    )
+
+
+class _CannedBridge:
+    def __init__(self, pcm):
+        self._pcm = pcm
+
+    def read_measurement(self, nbytes, timeout):
+        return self._pcm[:nbytes]
+
+
+def test_finish_u_builds_report_with_c_measured_and_d_projected():
+    pcm = _sine_pcm(-20.0)
+    rep = d.finish_u_diagnostic(
+        _CannedBridge(pcm),
+        backend=_FakeBackend(),
+        slot=0,
+        signal={"freq_hz": 1000, "level_dbfs": -20.0},
+        rate=16000,
+    )
+    assert rep["anchor"] == "U"
+    pts = {t["point"]: t for t in rep["taps"]}
+    assert pts["C"]["computed"] is False and pts["C"]["silent"] is False
+    assert pts["C"]["peak_dbfs"] == -20.0 or abs(pts["C"]["peak_dbfs"] + 20.0) < 0.2
+    assert pts["D"]["computed"] is True
+    assert abs(pts["D"]["rms_dbfs"] - (pts["C"]["rms_dbfs"] - 7.96)) < 0.05
+    assert rep["static_gains"]["sink_volume_db"] == -7.96
+
+
+def test_finish_u_silent_capture_reports_c_silent():
+    rep = d.finish_u_diagnostic(
+        _CannedBridge(b""),
+        backend=_FakeBackend(),
+        slot=0,
+        signal={},
+        rate=16000,
+    )
+    pts = {t["point"]: t for t in rep["taps"]}
+    assert pts["C"]["silent"] is True and pts["D"]["silent"] is True

@@ -422,6 +422,30 @@ def run_diagnostic(
     }
 
 
+def finish_u_diagnostic(bridge, *, backend, slot: int, signal: dict, rate: int) -> dict:
+    """Read the U diagnostic bridge's PCM tap and assemble the run report.
+
+    Reads SETTLE+WINDOW ms of PCM, measures the trailing WINDOW ms at C, projects D
+    from the static sink volume. Blocking (fd read) — call off the event loop.
+    """
+    freq = int(signal.get("freq_hz", REF_FREQ_HZ))
+    level = float(signal.get("level_dbfs", REF_LEVEL_DBFS))
+    nbytes = int(rate * (REF_SETTLE_MS + REF_WINDOW_MS) / 1000) * 2
+    # Generous timeout: gst spawn + jitterbuffer latency before PCM flows.
+    pcm = bridge.read_measurement(nbytes, (REF_SETTLE_MS + REF_WINDOW_MS) / 1000 + 3.0)
+    win_bytes = int(rate * REF_WINDOW_MS / 1000) * 2
+    window = pcm[-win_bytes:] if len(pcm) > win_bytes else pcm
+    c_rms, c_peak, c_silent = rms_peak_dbfs(window)
+    gains = collect_static_gains(backend, slot)
+    taps = build_cd_taps(c_rms, c_peak, c_silent, gains, rate, REF_WINDOW_MS)
+    return {
+        "anchor": "U",
+        "reference": {"freq_hz": freq, "level_dbfs": level, "window_ms": REF_WINDOW_MS},
+        "taps": taps,
+        "static_gains": gains,
+    }
+
+
 def _terminate_proc(proc) -> None:
     try:
         if hasattr(proc, "poll") and proc.poll() is None:
