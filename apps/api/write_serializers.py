@@ -10,6 +10,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.accounts.models import User
 from apps.deployments.models import Deployment
+from apps.images.models import ImageRelease
 from apps.monitoring.models import AlertRule
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
@@ -232,3 +233,18 @@ class ProvisioningJobCreateSerializer(serializers.ModelSerializer):
         model = ProvisioningJob
         fields = ["id", "station", "image_release"]
         read_only_fields = ["id"]
+
+
+class ImageImportInputSerializer(serializers.Serializer):
+    """Input serializer for the import/ action on ImageReleaseViewSet.
+
+    The ``tag`` field is validated against the live GitHub releases list
+    in the view (after deserialisation) so validation errors return 400
+    with a field-specific error on ``tag``. The machine choices mirror
+    ``ImageRelease.Machine``; channel defaults to "release".
+    """
+
+    tag = serializers.CharField(max_length=64)
+    machine = serializers.ChoiceField(choices=ImageRelease.Machine.choices)
+    channel = serializers.CharField(max_length=32, default="release")
+    mark_as_latest = serializers.BooleanField(default=False)

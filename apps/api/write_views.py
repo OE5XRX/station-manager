@@ -6,20 +6,25 @@ Object-level write authz: TopologyScopedWritePermission -> can_write_object.
 Create-scope: enforced in perform_create. Every mutation audits token origin.
 """
 
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.shortcuts import get_object_or_404
+from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
+from rest_framework.response import Response
 
 from apps.accounts.models import AccountAuditLog, User
-from apps.api import read_views
+from apps.api import read_serializers, read_views
 from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
 from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import (
     AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
+    ImageImportInputSerializer,
     ProvisioningJobCreateSerializer,
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
@@ -37,6 +42,8 @@ from apps.deployments.supersession import (
     ActiveDeploymentConflictError,
     supersede_pending_for_station,
 )
+from apps.images import github_releases
+from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning.models import ProvisioningJob
 from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
 from apps.stations.models import StationAuditLog, StationLogEntry, StationPhoto
@@ -775,4 +782,124 @@ class UserViewSet(
             event_type=event_type,
             target_user=obj,
             message=f"User {obj.username} updated",
+        )
+
+
+_LINUX_IMAGE_REPO_DEFAULT = "OE5XRX/linux-image"
+_GITHUB_RELEASES_LIMIT = 30
+
+
+class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
+    """ImageRelease special write surface: archive/restore + available + import.
+
+    No generic create/update/destroy (no write mixins added). Hard DELETE
+    on images/{id}/ → 405 (inherited from ReadOnlyModelViewSet; no
+    DestroyModelMixin here). Every mutation is staff-only (can_manage_images).
+
+    Actions:
+      POST images/{id}/archive/  — soft-delete (idempotent)
+      POST images/{id}/restore/  — undo archive (idempotent)
+      GET  images/available/     — proxy GitHub releases list
+      POST images/import/        — queue an ImageImportJob
+    """
+
+    def can_write_object(self, user, obj, method):
+        # No generic object writes (no Update/Destroy mixin). All mutations
+        # go through custom actions that gate themselves via can_manage_images.
+        return False
+
+    # ------------------------------------------------------------------ #
+    # archive / restore                                                    #
+    # ------------------------------------------------------------------ #
+
+    @action(detail=True, methods=["post"], url_path="archive")
+    def archive(self, request, pk=None):
+        """Soft-delete a release. Idempotent. Staff-only."""
+        if not ws.can_manage_images(request.user):
+            raise PermissionDenied("Image management requires staff/admin.")
+        obj = get_object_or_404(ImageRelease.all_objects, pk=pk)
+        obj.archive()
+        audit_config_write(request, message=f"ImageRelease {obj.tag} archived")
+        ser = read_serializers.ImageReleaseSerializer(obj, context={"request": request})
+        return Response(ser.data)
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        """Undo a previous archive. Idempotent. Staff-only."""
+        if not ws.can_manage_images(request.user):
+            raise PermissionDenied("Image management requires staff/admin.")
+        obj = get_object_or_404(ImageRelease.all_objects, pk=pk)
+        obj.restore()
+        audit_config_write(request, message=f"ImageRelease {obj.tag} restored")
+        ser = read_serializers.ImageReleaseSerializer(obj, context={"request": request})
+        return Response(ser.data)
+
+    # ------------------------------------------------------------------ #
+    # available — GitHub releases proxy                                   #
+    # ------------------------------------------------------------------ #
+
+    @action(detail=False, methods=["get"], url_path="available")
+    def available(self, request):
+        """List available GitHub releases. Staff-only."""
+        if not ws.can_manage_images(request.user):
+            raise PermissionDenied("Image management requires staff/admin.")
+        repo = getattr(settings, "LINUX_IMAGE_REPO", _LINUX_IMAGE_REPO_DEFAULT)
+        releases = github_releases.fetch_releases(repo, limit=_GITHUB_RELEASES_LIMIT)
+        data = [
+            {
+                "tag": r.tag,
+                "html_url": r.html_url,
+                "is_latest": r.is_latest,
+                "asset_names": sorted(r.asset_names),
+            }
+            for r in releases
+        ]
+        return Response(data)
+
+    # ------------------------------------------------------------------ #
+    # import — queue an ImageImportJob                                    #
+    # ------------------------------------------------------------------ #
+
+    @action(detail=False, methods=["post"], url_path="import", url_name="import")
+    def import_release(self, request):
+        """Queue an ImageImportJob for a given GitHub release tag. Staff-only.
+
+        The ``tag`` must exist in the current GitHub releases list — free-text
+        or unknown tags are rejected with a 400 field error on ``tag``.
+        """
+        if not ws.can_manage_images(request.user):
+            raise PermissionDenied("Image management requires staff/admin.")
+
+        serializer = ImageImportInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+
+        tag = validated["tag"]
+        machine = validated["machine"]
+        channel = validated["channel"]
+        mark_as_latest = validated["mark_as_latest"]
+
+        # Validate tag against live GitHub releases.
+        repo = getattr(settings, "LINUX_IMAGE_REPO", _LINUX_IMAGE_REPO_DEFAULT)
+        releases = github_releases.fetch_releases(repo, limit=_GITHUB_RELEASES_LIMIT)
+        known_tags = {r.tag for r in releases}
+        if tag not in known_tags:
+            raise DRFValidationError(
+                {"tag": f"Tag '{tag}' not found in available GitHub releases."}
+            )
+
+        job = ImageImportJob.objects.create(
+            tag=tag,
+            machine=machine,
+            channel=channel,
+            mark_as_latest=mark_as_latest,
+            requested_by=request.user,
+        )
+        audit_config_write(
+            request,
+            message=f"ImageRelease import {tag}/{machine} requested",
+        )
+        return Response(
+            read_serializers.ImageImportJobSerializer(job, context={"request": request}).data,
+            status=202,
         )
