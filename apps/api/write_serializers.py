@@ -8,6 +8,7 @@ from rest_framework import serializers
 
 from apps.deployments.models import Deployment
 from apps.monitoring.models import AlertRule
+from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
@@ -125,4 +126,17 @@ class DeploymentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Deployment
         fields = ["id", "image_release", "target_station", "strategy", "phase_config"]
+        read_only_fields = ["id"]
+
+
+class ProvisioningJobCreateSerializer(serializers.ModelSerializer):
+    """Create-only serializer for triggering a ProvisioningJob.
+
+    Safe inputs: station, image_release.
+    Server-set (absent from writable fields): requested_by, status, timestamps.
+    """
+
+    class Meta:
+        model = ProvisioningJob
+        fields = ["id", "station", "image_release"]
         read_only_fields = ["id"]

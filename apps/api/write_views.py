@@ -20,6 +20,7 @@ from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import (
     AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
+    ProvisioningJobCreateSerializer,
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
     RolloutSequenceEntryWriteSerializer,
@@ -35,6 +36,8 @@ from apps.deployments.supersession import (
     ActiveDeploymentConflictError,
     supersede_pending_for_station,
 )
+from apps.provisioning.models import ProvisioningJob
+from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
 from apps.stations.models import StationAuditLog, StationLogEntry, StationPhoto
 from apps.stations.signals import discard_deleting_station
 
@@ -631,3 +634,54 @@ class DeploymentViewSet(
         # 201 response (CreateModelMixin.create() calls serializer.save() which
         # we bypassed — set instance directly so get_success_headers works too).
         serializer.instance = dep
+
+
+class ProvisioningJobViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    read_views.ProvisioningJobViewSet,
+):
+    """Create-only (trigger) endpoint for ProvisioningJobs.
+
+    POST  /provisioning-jobs/ — fire a new provisioning job for a station.
+    GET   /provisioning-jobs/ — inherited list (read-only).
+    GET   /provisioning-jobs/{pk}/ — inherited retrieve (read-only).
+    PATCH/PUT/DELETE — not mixed in → 405.
+
+    Authz: staff/admin only (is_internal).  requested_by and status are
+    always server-set; any client-supplied values are ignored.
+    """
+
+    write_serializer_class = ProvisioningJobCreateSerializer
+
+    def can_write_object(self, user, obj, method):
+        # No object-level writes (no Update/Destroy mixin).
+        return False
+
+    def perform_create(self, serializer):
+        station = serializer.validated_data["station"]
+
+        # Authz first: 403 before any input-validation 400 (403-before-400 ordering).
+        if not ws.can_trigger_provisioning(self.request.user, station):
+            raise PermissionDenied("Not allowed to trigger a provisioning job for this station.")
+
+        # Input-validation parity with the UI trigger (CreateProvisioningJobView):
+        # reject if an active job (PENDING/RUNNING/READY) already exists for the
+        # station — prevents duplicate provisioning bundles being queued.
+        if ProvisioningJob.objects.filter(
+            station=station, status__in=ACTIVE_PROVISIONING_STATUSES
+        ).exists():
+            raise DRFValidationError(
+                {"station": "This station already has an active provisioning job."}
+            )
+
+        job = serializer.save(requested_by=self.request.user)
+        audit_station_write(
+            self.request,
+            station=station,
+            event_type=StationAuditLog.EventType.PROVISIONING_REQUESTED,
+            message=f"ProvisioningJob #{job.id} requested via API for station {station}",
+        )
+        # Set instance so DRF returns 201 with the created object (mirrors
+        # DeploymentViewSet — we bypassed serializer.save()'s default path).
+        serializer.instance = job
