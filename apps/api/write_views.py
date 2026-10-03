@@ -9,11 +9,13 @@ Create-scope: enforced in perform_create. Every mutation audits token origin.
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers as rf_serializers
+from rest_framework import status as http_status
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
 from rest_framework.response import Response
@@ -49,7 +51,6 @@ from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning.models import ProvisioningJob
 from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
 from apps.stations.models import StationAuditLog, StationLogEntry, StationPhoto
-from apps.stations.signals import discard_deleting_station
 
 
 class ScopedWriteViewSet:
@@ -115,21 +116,38 @@ class StationViewSet(
         )
 
     def perform_destroy(self, instance):
-        audit_station_write(
-            self.request,
-            station=instance,
-            event_type=StationAuditLog.EventType.DELETED,
-            message=f"Station {instance.callsign or instance.name} deleted",
-        )
-        # The pre_delete signal adds this pk to a delete-tracking thread-local
-        # that cascade sub-signals consult; the post_delete signal clears it.
-        # If delete() raises, post_delete never fires — discard here so the
-        # set can't leak into a later request on the same (pooled) thread.
-        pk = instance.pk
+        # Both the audit write and the delete run inside a single atomic
+        # savepoint so that:
+        #   - a ProtectedError from instance.delete() rolls back the audit
+        #     row too (no false "deleted" record for a station that still
+        #     exists), and
+        #   - a transient audit failure rolls back the delete (keeps the
+        #     station and audit trail consistent).
+        # The audit is written BEFORE delete() so StationAuditLog.station
+        # still references a live row — the SET_NULL cascade then nulls it
+        # after the station row is removed, which is the intended behaviour.
+        label = instance.callsign or instance.name
         try:
-            instance.delete()
-        finally:
-            discard_deleting_station(pk)
+            with transaction.atomic():
+                audit_station_write(
+                    self.request,
+                    station=instance,
+                    event_type=StationAuditLog.EventType.DELETED,
+                    message=f"Station {label} deleted",
+                )
+                instance.delete()
+        except ProtectedError as exc:
+            # One or more PROTECT FKs (e.g. DeploymentResult.station) block
+            # deletion.  Return 409 Conflict so the caller knows the station
+            # still exists and why.
+            protected_models = ", ".join(
+                sorted({obj.__class__.__name__ for obj in exc.protected_objects})
+            )
+            err = APIException(
+                detail=(f"Station cannot be deleted while referenced by: {protected_models}.")
+            )
+            err.status_code = http_status.HTTP_409_CONFLICT
+            raise err from exc
 
 
 class RegionViewSet(

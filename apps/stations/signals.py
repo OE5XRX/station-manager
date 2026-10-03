@@ -14,11 +14,25 @@ Station.region change uses a pre_save + post_save pair: pre_save
 records the pre-mutation FK so post_save can compute the diff. We
 stash the diff on the instance via a private attribute that gets
 deleted after emission.
+
+Cascade-delete guard (A2/A3/A5):
+Django 6 passes the ``origin`` kwarg to every pre_delete/post_delete
+signal.  When ``station.delete()`` is called, ``origin`` is the Station
+instance; cascade sub-signals for StationAssignment receive that same
+origin.  We use this to detect "this delete is part of a Station
+cascade" and skip ONLY the StationAuditLog write (which would reference
+a station that is about to disappear, leaving a dangling FK).  The
+AccountAuditLog revocation still fires because its ``station`` FK is
+SET_NULL — the account trail must remain intact.  The same pattern is
+used for RegionAssignment post_delete: if origin is a Region instance
+the signal skips creating a new AccountAuditLog row with
+``region=instance.region`` (which would reference a just-deleted region
+— the row's region FK is SET_NULL on the model but a *newly created*
+row references the deleted pk, which is not in scope of the collector's
+SET_NULL pass).
 """
 
-import threading
-
-from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from apps.accounts.models import AccountAuditLog
@@ -29,50 +43,6 @@ from apps.stations.models import (
     StationAssignment,
     StationAuditLog,
 )
-
-# Thread-local set tracking station PKs that are currently being deleted.
-# Used by cascade sub-signals to skip audit-log creation that would leave
-# dangling FKs (see _on_station_pre_delete / _on_station_post_delete).
-_deleting_stations = threading.local()
-
-# --- Station deletion marker ---
-
-
-@receiver(pre_delete, sender=Station)
-def _on_station_pre_delete(sender, instance, **kwargs):
-    """Track stations being deleted so cascade sub-signals can skip sub-audits.
-
-    Django's deletion collector runs SET_NULL on related audit logs *before*
-    firing post_delete on cascade-deleted objects (e.g. StationAssignment).
-    Those cascade post_delete signals would create *new* audit logs pointing
-    back to the station — leaving dangling FKs after the station row is
-    removed (and outside the collector's SET_NULL scope).  Tracking the pk in
-    a thread-local lets sub-signal handlers skip the station-targeted audit
-    log creation.
-    """
-    ids = getattr(_deleting_stations, "ids", None)
-    if ids is None:
-        _deleting_stations.ids = set()
-    _deleting_stations.ids.add(instance.pk)
-
-
-def discard_deleting_station(pk):
-    """Remove a station pk from the delete-tracking thread-local.
-
-    Called by the Station post_delete signal on the happy path, and by the
-    API ``perform_destroy`` in a finally block so the set never leaks if
-    ``station.delete()`` raises (post_delete does not fire on failure).
-    """
-    ids = getattr(_deleting_stations, "ids", None)
-    if ids is not None:
-        ids.discard(pk)
-
-
-@receiver(post_delete, sender=Station)
-def _on_station_post_delete(sender, instance, **kwargs):
-    """Clean up the thread-local tracker after station deletion completes."""
-    discard_deleting_station(instance.pk)
-
 
 # --- StationAssignment ---
 
@@ -102,23 +72,23 @@ def _on_station_assignment_save(sender, instance, created, **kwargs):
 
 
 @receiver(post_delete, sender=StationAssignment)
-def _on_station_assignment_delete(sender, instance, **kwargs):
-    # Skip station audit when the station itself is being cascade-deleted.
-    # Django's collector SET_NULLs pre-existing audit logs before this signal
-    # fires, but a newly created audit log would land AFTER that phase,
-    # leaving a dangling FK.  The station deletion audit already covers the
-    # event; per-assignment revoke audits are redundant when the whole station
-    # is gone.
-    ids = getattr(_deleting_stations, "ids", None)
-    if ids and instance.station_id in ids:
-        return
-    # Bestehender StationAuditLog-Eintrag (unverändert):
-    StationAuditLog.log(
-        station=instance.station,
-        event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
-        user=None,
-        message=(f"{instance.user} ({instance.get_role_display()}) entfernt"),
-    )
+def _on_station_assignment_delete(sender, instance, origin=None, **kwargs):
+    # Skip the StationAuditLog write when the assignment is being cascade-deleted
+    # as part of its parent Station's deletion (origin is the Station instance).
+    # Django's collector SET_NULLs pre-existing audit logs *before* firing
+    # post_delete for cascade-deleted objects; a newly created audit log
+    # referencing the station would be outside that SET_NULL scope → dangling FK.
+    # The account audit trail (AccountAuditLog) is still written: its region FK
+    # is not involved here, and the user's audit history must remain intact.
+    station_is_being_deleted = isinstance(origin, Station)
+    if not station_is_being_deleted:
+        # Bestehender StationAuditLog-Eintrag (unverändert):
+        StationAuditLog.log(
+            station=instance.station,
+            event_type=StationAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
+            user=None,
+            message=(f"{instance.user} ({instance.get_role_display()}) entfernt"),
+        )
     # NEU in 1a: zusätzlich AccountAuditLog.
     # Sub-Spec 2b §4: callers (e.g. UserSoftDeleteView) can stash a
     # ``_revoke_reason`` on the instance before calling .delete() so the
@@ -212,10 +182,19 @@ def _on_region_assignment_save(sender, instance, created, **kwargs):
 
 
 @receiver(post_delete, sender=RegionAssignment)
-def _on_region_assignment_delete(sender, instance, **kwargs):
+def _on_region_assignment_delete(sender, instance, origin=None, **kwargs):
     # Sub-Spec 2b §4: callers can stash ``_revoke_reason`` + ``_revoke_actor``
     # on the instance before .delete() so soft-delete-driven revokes carry
     # their reason in the audit message and the originating admin as actor.
+    #
+    # Cascade guard (A3): if this delete is part of a parent Region cascade
+    # (origin is the Region instance), skip creating a new AccountAuditLog row
+    # that references ``instance.region`` — that region row is being deleted in
+    # the same transaction, and newly-created rows are outside the collector's
+    # SET_NULL pass, leaving a dangling FK.
+    region_is_being_deleted = isinstance(origin, Region)
+    if region_is_being_deleted:
+        return
     reason = getattr(instance, "_revoke_reason", None)
     role_display = instance.get_role_display()
     if reason:
