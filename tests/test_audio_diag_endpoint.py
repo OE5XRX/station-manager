@@ -116,7 +116,7 @@ def test_timeout_returns_504(topology, monkeypatch):  # noqa: F811
 
 @pytest.mark.django_db
 def test_bad_anchor_400(topology, monkeypatch):  # noqa: F811
-    """anchor not in {C} and not U → 400."""
+    """anchor not in {C, U} → 400."""
     from apps.audio import orchestrator
 
     async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
@@ -186,9 +186,12 @@ def test_admin_sees_any_station(topology, monkeypatch):  # noqa: F811
     assert r.status_code == 200
 
 
+# test_anchor_u_rejected_400 removed: anchor U is now a supported production anchor (Task 8).
+
+
 @pytest.mark.django_db
-def test_anchor_u_rejected_400(topology, monkeypatch):  # noqa: F811
-    """anchor 'U' is experimental — must be rejected with 400 and the experimental detail."""
+def test_anchor_u_is_accepted_and_runs(topology, monkeypatch):  # noqa: F811
+    """anchor 'U' is now a supported headless anchor — must return 200 with anchor==U."""
     from apps.audio import orchestrator
 
     async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
@@ -201,10 +204,45 @@ def test_anchor_u_rejected_400(topology, monkeypatch):  # noqa: F811
         {"anchor": "U"},
         format="json",
     )
+    assert r.status_code == 200
+    assert r.json()["anchor"] == "U"
+
+
+@pytest.mark.django_db
+def test_busy_returns_409(topology, monkeypatch):  # noqa: F811
+    """StationBusy raised by orchestrator → 409 with detail 'station busy'."""
+    from apps.audio import orchestrator
+
+    async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
+        raise orchestrator.StationBusy()
+
+    monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
+    client = bearer(topology["station_user"])
+    r = client.post(
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
+        {"anchor": "U"},
+        format="json",
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == "station busy"
+
+
+@pytest.mark.django_db
+def test_anchor_z_still_400(topology, monkeypatch):  # noqa: F811
+    """Invalid anchor 'Z' (not in {C,U}) still returns 400 after un-gating U."""
+    from apps.audio import orchestrator
+
+    async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
+        return _fake_report(anchor)
+
+    monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
+    client = bearer(topology["station_user"])
+    r = client.post(
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
+        {"anchor": "Z"},
+        format="json",
+    )
     assert r.status_code == 400
-    body = r.json()
-    detail = str(body)
-    assert "experimental" in detail.lower()
 
 
 @pytest.mark.django_db

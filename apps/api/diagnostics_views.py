@@ -27,7 +27,7 @@ _DEFAULT_SIGNAL = {
     "duration_ms": 500,
 }
 
-_VALID_ANCHORS = {"C"}
+_VALID_ANCHORS = {"C", "U"}
 
 _SIGNAL_DURATION_MAX_MS: int = 5000
 
@@ -47,15 +47,6 @@ class StationAudioDiagnosticView(APIView):
 
         # --- Parse + validate request body -----------------------------------
         anchor = request.data.get("anchor", "C")
-        if anchor == "U":
-            raise ValidationError(
-                {
-                    "anchor": (
-                        "anchor 'U' (server-originated headless reference) is experimental"
-                        " and validated on-station only; use anchor 'C'"
-                    )
-                }
-            )
         if anchor not in _VALID_ANCHORS:
             raise ValidationError(
                 {"anchor": f"Must be one of {sorted(_VALID_ANCHORS)}; got {anchor!r}."}
@@ -112,6 +103,8 @@ class StationAudioDiagnosticView(APIView):
             )
         except orchestrator.AgentNotConnected:
             return Response({"detail": "station agent not connected"}, status=503)
+        except orchestrator.StationBusy:
+            return Response({"detail": "station busy"}, status=409)
         except orchestrator.DiagnosticTimeout:
             return Response({"detail": "diagnostic timed out"}, status=504)
 

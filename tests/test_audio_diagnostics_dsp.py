@@ -42,3 +42,35 @@ def test_generate_sine_round_trips_to_requested_level():
     assert silent is False
     assert abs(peak - (-20.0)) < 0.5
     assert len(pcm) == int(16000 * 300 / 1000) * 2
+
+
+def test_diag_stream_ref_is_reserved_high_value():
+    assert d.DIAG_STREAM_REF == 0xFFFE  # cannot collide with small real slot/mic refs
+
+
+def test_build_cd_taps_projects_d_from_sink_db():
+    gains = {"sink_volume_linear": 0.40, "sink_volume_db": -7.96}
+    taps = d.build_cd_taps(-20.0, -20.0, False, gains, 16000, 300)
+    assert [t["point"] for t in taps] == ["C", "D"]
+    assert taps[0]["computed"] is False and taps[0]["silent"] is False
+    assert taps[1]["computed"] is True
+    assert taps[1]["rms_dbfs"] == -27.96 and taps[1]["peak_dbfs"] == -27.96
+
+
+def test_build_cd_taps_silent_c_makes_d_silent():
+    gains = {"sink_volume_linear": 0.40, "sink_volume_db": -7.96}
+    taps = d.build_cd_taps(None, None, True, gains, 16000, 300)
+    assert taps[1]["silent"] is True and taps[1]["rms_dbfs"] is None
+
+
+def test_build_cd_taps_muted_sink_makes_d_silent():
+    gains = {"sink_volume_linear": 0.0, "sink_volume_db": None}
+    taps = d.build_cd_taps(-20.0, -20.0, False, gains, 16000, 300)
+    assert taps[1]["silent"] is True and taps[1].get("note") == "sink muted"
+
+
+def test_build_cd_taps_unreadable_sink_makes_d_unavailable():
+    gains = {"sink_volume_linear": None, "sink_volume_db": None}
+    taps = d.build_cd_taps(-20.0, -20.0, False, gains, 16000, 300)
+    assert taps[1]["silent"] is False and taps[1]["rms_dbfs"] is None
+    assert "unavailable" in taps[1]["note"]

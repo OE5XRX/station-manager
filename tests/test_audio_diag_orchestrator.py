@@ -14,13 +14,18 @@ import json
 import pytest
 from channels.testing import WebsocketCommunicator
 
+import apps.audio.orchestrator as _orch_module
 from apps.audio.orchestrator import (
+    REF_STREAM_SETTLE_S,
     AgentNotConnected,
     DiagnosticTimeout,
+    StationBusy,
+    diag_ref_for_request,
     run_headless_diagnostic,
 )
 from apps.stations.models import Station
 from config.asgi import application
+from station_agent.audio import frame as audio_frame
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -150,5 +155,362 @@ def test_orchestrator_missing_station():
         with pytest.raises(AgentNotConnected):
             # Use a pk that can't exist.
             await run_headless_diagnostic(999_999_999, "C", _SAMPLE_SIGNAL)
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Test: U-anchor reference frames use DIAG_STREAM_REF
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_frames_use_diag_stream_ref(audio_agent_auth, monkeypatch):
+    """Every audio.ref_media frame streamed during a U diagnostic must carry
+    stream_ref == the per-run diag_ref sent in the diag_command (not the old
+    global DIAG_STREAM_REF sentinel), and that ref must be in the reserved
+    high band (>= 0x8000).
+
+    Strategy: intercept channel-layer group_send calls to capture the diag_command
+    (to read the per-run diag_ref) and the audio.ref_media payloads (to verify
+    stream_ref matches).  A real agent communicator handles the round-trip.
+
+    REF_FRAME_INTERVAL_S is zeroed so test latency stays well under a second
+    (production pacing adds ~1.2 s for 243 frames; not needed in unit tests).
+    """
+    monkeypatch.setattr(_orch_module, "REF_FRAME_INTERVAL_S", 0)
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-uref", callsign="OE1URF", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        captured_ref_frames: list[bytes] = []
+        captured_diag_ref: list[int] = []
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.diag_command":
+                dr = message["command"].get("diag_ref")
+                if dr is not None:
+                    captured_diag_ref.append(dr)
+            if message.get("type") == "audio.ref_media":
+                captured_ref_frames.append(message["data"])
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_agent_reply():
+                """Drain the diag_command, wait past the settle window, then reply.
+
+                A real accepted U run never sends anything during the settle window
+                (the agent only emits a result after receiving ref frames).  Delay
+                by slightly more than REF_STREAM_SETTLE_S so the orchestrator's
+                bounded-receive times out → fixture frames are streamed → then the
+                reply is consumed from the post-stream await as expected.
+                """
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                # Wait past the settle window so the early-refusal check times out.
+                await asyncio.sleep(REF_STREAM_SETTLE_S + 0.1)
+                report = dict(_SAMPLE_AGENT_REPORT)
+                report["anchor"] = "U"
+                report["request_id"] = rid
+                await agent.send_to(text_data=json.dumps(report))
+
+            agent_task = asyncio.ensure_future(fake_agent_reply())
+            await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # The diag_command must carry a per-run ref in the reserved high band.
+        assert len(captured_diag_ref) == 1
+        diag_ref = captured_diag_ref[0]
+        assert diag_ref >= 0x8000, f"diag_ref {diag_ref:#06x} must be in reserved band (>=0x8000)"
+
+        # Every ref frame must carry the per-run diag_ref (not the old global sentinel).
+        assert len(captured_ref_frames) > 0, "No audio.ref_media frames were streamed"
+        for data in captured_ref_frames:
+            parsed = audio_frame.parse_frame(data)
+            assert parsed.stream_ref == diag_ref, (
+                f"Expected stream_ref={diag_ref:#06x}, got {parsed.stream_ref:#06x}"
+            )
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Test: busy reply raises StationBusy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_busy_reply_raises_station_busy(audio_agent_auth):
+    """Agent reply with busy=True → orchestrator raises StationBusy."""
+    station = Station.objects.create(name="orch-busy", callsign="OE1BSY", status="online")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        connected, _ = await agent.connect()
+        assert connected is True
+
+        async def fake_busy_reply():
+            """Drain the diag_command, send a busy report."""
+            msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+            assert msg["type"] == "diag_command"
+            rid = msg["request_id"]
+            # Reply with a busy envelope (anchor C has no binary ref frames).
+            busy_report = {
+                "type": "diag_result",
+                "request_id": rid,
+                "busy": True,
+                "error": "refused: TX active",
+            }
+            await agent.send_to(text_data=json.dumps(busy_report))
+
+        agent_task = asyncio.ensure_future(fake_busy_reply())
+        with pytest.raises(StationBusy):
+            await run_headless_diagnostic(station.id, "C", _SAMPLE_SIGNAL)
+        await agent_task
+
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Test: U busy during settle → StationBusy + zero ref frames streamed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_busy_during_settle_no_ref_frames(audio_agent_auth):
+    """Anchor-U request where the agent replies busy during the settle window
+    must raise StationBusy and stream ZERO audio.ref_media frames.
+
+    This is the core regression guard for the cross-run ref-frame pollution bug:
+    a refused U run must not inject its fixture frames into the channel group,
+    because those frames carry the global DIAG_STREAM_REF and would be routed
+    into the first (running) diagnostic's bridge.
+    """
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-ubsy", callsign="OE1UBS", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        ref_frame_count: list[int] = [0]
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.ref_media":
+                ref_frame_count[0] += 1
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_u_busy_reply():
+                """Drain the diag_command, immediately send a busy report."""
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                busy_report = {
+                    "type": "diag_result",
+                    "request_id": rid,
+                    "anchor": "U",
+                    "busy": True,
+                    "error": "refused: diagnostic already active",
+                }
+                await agent.send_to(text_data=json.dumps(busy_report))
+
+            agent_task = asyncio.ensure_future(fake_u_busy_reply())
+            with pytest.raises(StationBusy):
+                await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # Regression guard: a refused U run must not stream ANY ref frames.
+        assert ref_frame_count[0] == 0, (
+            f"Expected 0 audio.ref_media frames for a refused U run, got {ref_frame_count[0]}"
+        )
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Finding A — per-run diag_ref: reserved band + derivation from rid
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_frames_use_per_run_diag_ref_in_reserved_band(audio_agent_auth, monkeypatch):
+    """Frames streamed for a U run must carry stream_ref >= 0x8000 (reserved high band),
+    and two different request ids yield different diag_refs (almost always).
+
+    Strategy: intercept group_send to capture the diag_command (to inspect diag_ref)
+    and the audio.ref_media frames (to verify their stream_ref matches).
+
+    REF_FRAME_INTERVAL_S is zeroed so test latency stays well under a second.
+    """
+    monkeypatch.setattr(_orch_module, "REF_FRAME_INTERVAL_S", 0)
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-pref", callsign="OE1PRF", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        captured_commands: list[dict] = []
+        captured_ref_frames: list[bytes] = []
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.diag_command":
+                captured_commands.append(message["command"])
+            if message.get("type") == "audio.ref_media":
+                captured_ref_frames.append(message["data"])
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_agent_reply():
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                await asyncio.sleep(REF_STREAM_SETTLE_S + 0.1)
+                report = dict(_SAMPLE_AGENT_REPORT)
+                report["anchor"] = "U"
+                report["request_id"] = rid
+                await agent.send_to(text_data=json.dumps(report))
+
+            agent_task = asyncio.ensure_future(fake_agent_reply())
+            await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # diag_ref in the command must be in the reserved high band.
+        assert len(captured_commands) == 1
+        cmd = captured_commands[0]
+        diag_ref = cmd.get("diag_ref")
+        assert diag_ref is not None, "diag_ref must be present in diag_command"
+        assert diag_ref >= 0x8000, f"diag_ref {diag_ref:#06x} must be >= 0x8000"
+
+        # Every ref frame must carry the same diag_ref from the command.
+        assert len(captured_ref_frames) > 0
+        for data in captured_ref_frames:
+            parsed = audio_frame.parse_frame(data)
+            assert parsed.stream_ref == diag_ref, (
+                f"frame stream_ref {parsed.stream_ref:#06x} != diag_ref {diag_ref:#06x}"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_two_different_rids_yield_different_diag_refs():
+    """Two calls with different request ids must (almost always) produce different diag_refs.
+
+    Calls the production helper diag_ref_for_request() directly — not a local
+    re-derivation of the formula — so this test would catch any change to the
+    production derivation.
+    """
+    import uuid
+
+    refs = {diag_ref_for_request(uuid.uuid4().hex) for _ in range(20)}
+    # With 15 random bits, 20 draws should not all collide.
+    assert len(refs) > 1, "different rids must (almost always) yield different diag_refs"
+
+
+# ---------------------------------------------------------------------------
+# Finding A (copilot round 5) — streaming stops when reply arrives (bounded tail)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_streaming_stops_when_reply_arrives(audio_agent_auth, monkeypatch):
+    """The U reference stream must be cancelled as soon as the diag_result arrives.
+
+    Strategy: zero REF_FRAME_INTERVAL_S so the stream loop is fast; the fake agent
+    replies after a short delay.  The test asserts that the run returns the report
+    (streaming stopped), and that no pending-task / coroutine-never-awaited warnings
+    are raised (the stream task is properly cancelled and awaited in the finally block).
+
+    We also count the total streamed frames and assert it is bounded — i.e. the agent
+    replies before the full 243-frame loop finishes, and the frame count reflects that.
+    """
+    monkeypatch.setattr(_orch_module, "REF_FRAME_INTERVAL_S", 0)
+    # Patch REF_REPEAT to a larger value so 3×81=243 frames would take noticeably
+    # longer than the agent's reply delay if not cancelled.
+    monkeypatch.setattr(_orch_module, "REF_REPEAT", 50)  # would be 50×81=4050 frames
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-stop", callsign="OE1STP", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        ref_frame_count: list[int] = [0]
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.ref_media":
+                ref_frame_count[0] += 1
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_agent_reply():
+                """Accept the diag_command (wait past settle), reply quickly after settle."""
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                # Wait past settle window so orchestrator starts streaming.
+                await asyncio.sleep(REF_STREAM_SETTLE_S + 0.05)
+                report = dict(_SAMPLE_AGENT_REPORT)
+                report["anchor"] = "U"
+                report["request_id"] = rid
+                await agent.send_to(text_data=json.dumps(report))
+
+            agent_task = asyncio.ensure_future(fake_agent_reply())
+            result = await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # Run must return successfully.
+        assert "stages" in result or "anchor" in result
+        # With REF_REPEAT=50 and REF_FRAME_INTERVAL_S=0 the stream loop would send 4050
+        # frames if not cancelled; assert it stopped well before that.
+        assert ref_frame_count[0] < 4050, (
+            f"Streaming must stop when reply arrives; got {ref_frame_count[0]} frames "
+            f"(uncancelled would be 4050)"
+        )
+        # Some frames must have been streamed (the agent waited past the settle window).
+        assert ref_frame_count[0] > 0, "At least some reference frames must have been streamed"
 
     asyncio.run(scenario())

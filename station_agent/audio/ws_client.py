@@ -167,7 +167,8 @@ class AudioClient:
             )
         elif mtype == "diag_command":
             result = await self._engine.on_diag_command(msg)
-            await self._send_json(result)
+            if result is not None:
+                await self._send_json(result)
         else:
             logger.debug("Audio: ignoring message type %r", mtype)
 

@@ -35,6 +35,11 @@ from station_agent.audio import frame
 from station_agent.audio.bridge_factory import BridgeFactory
 from station_agent.audio.streams import OP_MIC, StreamRegistry
 
+try:
+    from station_agent.audio.diagnostics import DIAG_STREAM_REF
+except ImportError:  # pragma: no cover — guard against hypothetical future cycle
+    DIAG_STREAM_REF = 0xFFFE
+
 logger = logging.getLogger(__name__)
 
 # Opus DTX comfort-noise packets are ≤2 bytes; flag them so a receiver can treat the gap
@@ -65,6 +70,8 @@ class AudioEngine:
         # stream_id -> {"bridge", "seq", "ts", "rate", "ref", "dead"}
         self._rx: dict[str, dict] = {}
         self._tx = None  # {"bridge": tx_bridge, "slot": int, "module": str}
+        self._diag: dict | None = None  # {"bridge": diag_bridge, "slot": int}
+        self._diag_task: asyncio.Task | None = None
         self._dead_man: asyncio.Task | None = None
         # A token identifies the *current* dead-man arming. cancel() alone cannot un-fire a
         # task whose sleep has already elapsed but not yet resumed, so the loop re-checks the
@@ -72,6 +79,17 @@ class AudioEngine:
         self._dead_man_token: object | None = None
         self._tot: asyncio.Task | None = None
         self.tx_route: dict | None = None
+        # Tracks whether the server has PTT active, independently of whether the audio TX
+        # bridge is up.  Set to True as soon as mic_state(active=True) is received — even
+        # if the bridge fails to start — so the RF interlock in on_diag_command can refuse
+        # diagnostic injection regardless of _tx state.  Cleared only when the server sends
+        # mic_state(active=False); safety timers (dead-man, TOT) do NOT clear this because
+        # they only tear down the audio bridge, not the carrier/PTT.
+        self._mic_active: bool = False
+        # Serialises clear-refs + _safe_stop inside _teardown_diag so the
+        # "cleared but bridge not yet stopped" window is never observable to
+        # a concurrent on_mic_state / stop that also acquires this lock.
+        self._diag_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     async def _to_thread(fn, *args):
@@ -92,6 +110,7 @@ class AudioEngine:
         for stream_id in list(self._rx):
             await self.on_source_unsubscribe(stream_id)
         await self._teardown_tx()
+        await self._teardown_diag()
 
     # --- RX (demand-gated source production) -------------------------------
     async def on_source_subscribe(self, stream_id: str) -> None:
@@ -161,11 +180,25 @@ class AudioEngine:
     # --- TX (mic → module) -------------------------------------------------
     async def on_mic_state(self, *, active: bool, tx_slot, tx_module) -> None:
         if not active:
+            self._mic_active = False
             await self._teardown_tx()
             return
         if not isinstance(tx_slot, int) or isinstance(tx_slot, bool):
             logger.warning("engine: mic_state with non-int tx_slot %r — ignoring", tx_slot)
             return
+        # Mark PTT active BEFORE any lookups or early returns so that every code path in
+        # the active=True branch — including failures in resolve_node or bridge.start() —
+        # leaves _mic_active=True.  The diagnostic RF interlock checks this flag, not _tx,
+        # so that a failed bridge start cannot open a window for diagnostic injection while
+        # PTT is asserted.
+        self._mic_active = True
+        # RF safety: always pass through _teardown_diag (lock-guarded) before starting
+        # TX so any in-flight diagnostic bridge is fully stopped before the TX bridge
+        # starts — even if the bridge stop is slow (up to 3 s _safe_stop).  This closes
+        # the overlap window where _diag was already None but the bridge was still running.
+        if self._diag is not None:
+            logger.info("engine: mic_state active — aborting in-flight diagnostic")
+        await self._teardown_diag()
         mic_info = self.registry.get(OP_MIC)
         if mic_info is None:
             logger.warning("engine: op.mic not registered — cannot start TX")
@@ -194,6 +227,12 @@ class AudioEngine:
         except frame.FrameError:
             logger.debug("engine: dropping malformed media frame")
             return
+        # Route diagnostic reference frames (server-originated U-anchor) to the diagnostic
+        # bridge BEFORE the TX gate.  Match only the per-run ref so frames from a
+        # concurrent refused/stale run cannot pollute the active diagnostic bridge.
+        if self._diag is not None and mf.stream_ref == self._diag["ref"]:
+            self._diag["bridge"].feed_opus(mf.payload)
+            return
         if self._tx is None or mf.stream_ref != self.registry.mic_ref:
             return  # only op.mic media is injected, and only while TX is up
         self._tx["bridge"].feed_opus(mf.payload)
@@ -203,14 +242,18 @@ class AudioEngine:
         self.tx_route = None if slot is None else {"slot": slot, "module": module}
 
     # --- diagnostics -------------------------------------------------------
-    async def on_diag_command(self, command: dict) -> dict:
-        """Validate and run an audio-path diagnostic off-thread.
+    async def on_diag_command(self, command: dict) -> dict | None:
+        """Validate and dispatch an audio-path diagnostic command.
 
-        Returns a ``diag_result`` envelope that is safe to send straight to the
-        WebSocket — never raises into the WS loop.
+        * Anchor **C**: runs synchronously off-thread, returns the ``diag_result``
+          dict directly (same as before).
+        * Anchor **U**: non-blocking — starts the diagnostic bridge + a background
+          measurement task and returns ``None``; the ``diag_result`` is emitted via
+          ``emit_json`` once the measurement completes.
 
-        RF safety: no PTT / carrier keying is performed; measurement ends at the
-        digital ALSA/UAC2 edge (D).
+        RF safety: refused while a TX bridge is active (keyed transmitter). A
+        second U is refused while one is already running.  Never raises into the
+        WS loop.
         """
         from station_agent.audio import diagnostics  # local import to keep top-level clean
 
@@ -223,13 +266,28 @@ class AudioEngine:
             return {**base, "error": f"unsupported anchor {anchor!r}"}
         if not isinstance(slot, int) or isinstance(slot, bool):
             return {**base, "error": "slot must be an int"}
-        # BUG4 — RF safety: refuse inject while a TX bridge is active (PTT/mic up).
-        # Writing a tone to the TX sink while the SA818 is keyed would produce RF.
-        if self._tx is not None:
+        # RF safety + exclusivity: refuse while PTT is active OR a TX bridge is up.
+        # _mic_active is set as soon as mic_state(active=True) arrives — even when the audio
+        # bridge fails to start (_tx stays None).  Interlocking on _tx alone would miss the
+        # window where PTT is asserted but the bridge never came up, allowing a diagnostic to
+        # inject a tone into a keyed transmitter.
+        if self._tx is not None or self._mic_active:
             return {
                 **base,
-                "error": "refused: TX active — diagnostic inject would reach a keyed transmitter",
+                "busy": True,
+                "error": "refused: TX active (PTT keyed) — tone inject would RF-emit",
             }
+        # Mutual exclusion: only one diagnostic (any anchor) at a time.
+        if self._diag is not None:
+            return {
+                **base,
+                "busy": True,
+                "error": "refused: a diagnostic is already running",
+            }
+        if anchor == "U":
+            diag_ref = command.get("diag_ref", DIAG_STREAM_REF)
+            return await self._start_u_diagnostic(base, slot, signal, diag_ref)
+        # anchor C — synchronous inject/measure (unchanged behaviour)
         try:
             report = await self._to_thread(
                 lambda: diagnostics.run_diagnostic(
@@ -244,6 +302,84 @@ class AudioEngine:
             logger.exception("engine: diagnostic run failed")
             return {**base, "error": f"{type(exc).__name__}: {exc}"}
         return {**base, **report}
+
+    async def _start_u_diagnostic(
+        self, base: dict, slot: int, signal: dict, diag_ref: int
+    ) -> dict | None:
+        """Start a non-blocking anchor-U diagnostic run.
+
+        Returns ``None`` on acceptance (result emitted later); returns a busy/error
+        dict if the run is refused or the bridge fails to start.
+
+        *diag_ref* is the per-run stream_ref assigned by the orchestrator (≥ 0x8000)
+        so that frames can only reach the run they belong to.  Falls back to the
+        global ``DIAG_STREAM_REF`` sentinel when the command omits the field.
+        """
+        if self._diag is not None:
+            return {**base, "busy": True, "error": "refused: a diagnostic is already running"}
+        node = await self._to_thread(self._backend.resolve_node, slot, "tx")
+        if node is None:
+            return {**base, "error": f"no TX node for slot {slot}"}
+        bridge = self._factory.make_diag_u(node, self.registry.mic_rate)
+        try:
+            await self._to_thread(bridge.start)
+        except Exception as exc:  # noqa: BLE001 — a failed start must release the port
+            logger.exception("engine: U diagnostic bridge start failed")
+            await self._to_thread(_safe_stop, bridge)
+            return {**base, "error": f"U diagnostic bridge start failed: {exc}"}
+        self._diag = {"bridge": bridge, "slot": slot, "ref": diag_ref}
+        self._diag_task = asyncio.ensure_future(
+            self._run_u_measurement(base, slot, signal, bridge)
+        )
+        return None  # diag_result emitted asynchronously once measurement completes
+
+    async def _run_u_measurement(self, base: dict, slot: int, signal: dict, bridge) -> None:
+        """Background task: read PCM from the diagnostic bridge and emit the result."""
+        from station_agent.audio import diagnostics
+
+        try:
+            report = await self._to_thread(
+                lambda: diagnostics.finish_u_diagnostic(
+                    bridge,
+                    backend=self._backend,
+                    slot=slot,
+                    signal=signal,
+                    rate=self.registry.mic_rate,
+                )
+            )
+            result = {**base, **report}
+        except Exception as exc:  # noqa: BLE001 — never let a diag failure escape
+            logger.exception("engine: U diagnostic measurement failed")
+            result = {**base, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            await self._teardown_diag()
+        await self._emit_json(result)
+
+    async def _teardown_diag(self) -> None:
+        """Tear down the in-flight diagnostic bridge and cancel the measurement task.
+
+        Safe to call from both ``stop()`` and from within ``_run_u_measurement``'s
+        ``finally`` block: when called from the measurement task itself we must NOT
+        cancel the current task (that would inject ``CancelledError`` at the
+        ``_safe_stop`` await and skip bridge cleanup), hence the
+        ``task is not asyncio.current_task()`` guard.
+
+        The ``_diag_lock`` is held for the full clear-refs + ``_safe_stop`` sequence
+        so the "diag cleared but bridge not yet stopped" state is never visible to a
+        concurrent ``on_mic_state`` or ``stop()`` that also acquires the lock.  This
+        closes the TX-start overlap window (Finding B): a PTT key arriving during
+        teardown waits here until the diagnostic bridge is fully stopped before the
+        TX bridge starts.
+        """
+        async with self._diag_lock:
+            task = self._diag_task
+            self._diag_task = None
+            diag = self._diag
+            self._diag = None
+            if diag is not None:
+                await self._to_thread(_safe_stop, diag["bridge"])
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
 
     # --- safety timers -----------------------------------------------------
     def _arm_dead_man(self) -> None:

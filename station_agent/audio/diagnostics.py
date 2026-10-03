@@ -14,10 +14,14 @@ import logging as _logging
 import math
 import os as _os
 import re as _re
+import socket
 import struct
 import subprocess as _subprocess
+import threading
 
+from station_agent.audio import rtp as _rtp
 from station_agent.audio import selftest as _selftest
+from station_agent.audio.opus_bridge import RTP_TS_PER_FRAME
 
 _log = _logging.getLogger(__name__)
 
@@ -29,6 +33,12 @@ REF_WINDOW_MS = 300
 REF_SETTLE_MS = 200
 
 MAX_DURATION_MS = 5000
+
+#: Dedicated stream_ref for server-originated U-anchor reference frames. A high
+#: sentinel so it can never collide with a real slotN.rx / op.mic ref (small,
+#: assigned ascending from 0). The engine routes only this ref to the diagnostic
+#: bridge; it is never a live TX stream.
+DIAG_STREAM_REF: int = 0xFFFE
 
 
 def rms_peak_dbfs(pcm: bytes) -> tuple[float | None, float | None, bool]:
@@ -288,6 +298,48 @@ def _tap(point, rate, rms, peak, silent, window_ms, computed, note=None):
     return d
 
 
+def build_cd_taps(c_rms, c_peak, c_silent, gains: dict, rate: int, window_ms: int) -> list[dict]:
+    """Build the [C, D] tap list from a measured C plus the static sink gain.
+
+    C is the real measurement (``computed=False``); D is projected D = C + sink
+    volume (``computed=True``) per spec §3. Mirrors the rules previously inline in
+    ``run_diagnostic`` so anchor C and anchor U produce an identical schema.
+    """
+    taps = [_tap("C", rate, c_rms, c_peak, c_silent, window_ms, computed=False)]
+    linear = gains.get("sink_volume_linear")
+    sink_db = gains.get("sink_volume_db")
+    if c_silent:
+        taps.append(_tap("D", rate, None, None, True, window_ms, computed=True))
+    elif linear == 0:
+        taps.append(_tap("D", rate, None, None, True, window_ms, computed=True, note="sink muted"))
+    elif sink_db is not None:
+        taps.append(
+            _tap(
+                "D",
+                rate,
+                round(c_rms + sink_db, 2),
+                round(c_peak + sink_db, 2),
+                False,
+                window_ms,
+                computed=True,
+            )
+        )
+    else:
+        taps.append(
+            _tap(
+                "D",
+                rate,
+                None,
+                None,
+                False,
+                window_ms,
+                computed=True,
+                note="sink volume unavailable — D not projected",
+            )
+        )
+    return taps
+
+
 def run_diagnostic(
     *,
     anchor,
@@ -301,18 +353,19 @@ def run_diagnostic(
 ):
     """Run a diagnostic measurement for the given anchor point.
 
-    Supported anchors:
+    This synchronous entry point supports **anchor C only**.
 
     * **C** — calibrated inject via ``build_measured_inject_argv``.  A sine wave at
       the requested level is injected into the TX PipeWire node and the raw PCM is
       captured from the fdsink tap.  D is computed from C + the static sink volume
       gain (``collect_static_gains``).
 
-    Anchor **U** (server-originated headless reference) is reserved for a future
-    on-station follow-up.  The engine never installs a feeding bridge for U and
-    ``ws_client`` awaits commands serially so reference frames cannot arrive; the
-    anchor is therefore not functional yet.  ``run_diagnostic`` fails fast with an
-    error dict rather than binding a UDP port and measuring silence.
+    Anchor **U** (server-originated headless reference) is handled by the engine's
+    non-blocking path: ``_start_u_diagnostic`` installs a :class:`MeasuredTxBridge`,
+    feeds incoming ``DIAG_STREAM_REF`` Opus frames through it, and then
+    ``finish_u_diagnostic`` reads the tap and assembles the report.  ``run_diagnostic``
+    is never called for anchor U in normal operation; the guard below is
+    defense-in-depth for direct callers.
 
     **D** is always computed from C + measured sink volume on real HW.  The
     ``build_reverse_tap_argv`` helper exists as a foundation for a possible future
@@ -320,11 +373,13 @@ def run_diagnostic(
     does not use it today.
     """
     if anchor == "U":
+        # Defense-in-depth: anchor U is handled by the engine's non-blocking
+        # follow-up path (finish_u_diagnostic); run_diagnostic only supports C.
         return {
             "anchor": "U",
             "error": (
-                "anchor U (server-originated headless reference) is an on-station "
-                "follow-up and not yet functional; use anchor C"
+                "anchor U is handled by the engine's non-blocking follow-up path "
+                "(finish_u_diagnostic); run_diagnostic supports anchor C only"
             ),
         }
     freq = int(signal.get("freq_hz", REF_FREQ_HZ))
@@ -362,49 +417,43 @@ def run_diagnostic(
     win_bytes = int(rate * REF_WINDOW_MS / 1000) * 2
     window = pcm[-win_bytes:] if len(pcm) > win_bytes else pcm
     c_rms, c_peak, c_silent = rms_peak_dbfs(window)
-    taps = [_tap("C", rate, c_rms, c_peak, c_silent, REF_WINDOW_MS, computed=False)]
-
-    linear = gains.get("sink_volume_linear")
-    sink_db = gains.get("sink_volume_db")
-    if c_silent:
-        # No signal at C → D is genuinely silent.
-        taps.append(_tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True))
-    elif linear == 0:
-        # Sink genuinely muted (linear == 0.0) → D is silent (true zero).
-        taps.append(
-            _tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True, note="sink muted")
-        )
-    elif sink_db is not None:
-        # Positive sink volume → project D = C + sink_db.
-        taps.append(
-            _tap(
-                "D",
-                rate,
-                round(c_rms + sink_db, 2),
-                round(c_peak + sink_db, 2),
-                False,
-                REF_WINDOW_MS,
-                computed=True,
-            )
-        )
-    else:
-        # linear is None → sink volume could not be read; D is UNAVAILABLE, not silent.
-        taps.append(
-            _tap(
-                "D",
-                rate,
-                None,
-                None,
-                False,
-                REF_WINDOW_MS,
-                computed=True,
-                note="sink volume unavailable — D not projected",
-            )
-        )
+    taps = build_cd_taps(c_rms, c_peak, c_silent, gains, rate, REF_WINDOW_MS)
 
     return {
         "anchor": anchor,
         "reference": {"freq_hz": freq, "level_dbfs": level, "window_ms": REF_WINDOW_MS},
+        "taps": taps,
+        "static_gains": gains,
+    }
+
+
+def finish_u_diagnostic(bridge, *, backend, slot: int, signal: dict, rate: int) -> dict:
+    """Read the U diagnostic bridge's PCM tap and assemble the run report.
+
+    Reads SETTLE+WINDOW ms of PCM, measures the trailing WINDOW ms at C, projects D
+    from the static sink volume. Blocking (fd read) — call off the event loop.
+
+    Anchor U measures the committed reference fixture (1 kHz / −20 dBFS); the
+    client-supplied ``signal`` freq/level/duration are NOT honored for U (unlike
+    anchor C) because U replays a fixed fixture injected by the server orchestrator.
+    The ``signal`` parameter remains in the signature for API compatibility but does
+    not drive the reported ``reference`` field.
+    """
+    nbytes = int(rate * (REF_SETTLE_MS + REF_WINDOW_MS) / 1000) * 2
+    # Generous timeout: gst spawn + jitterbuffer latency before PCM flows.
+    pcm = bridge.read_measurement(nbytes, (REF_SETTLE_MS + REF_WINDOW_MS) / 1000 + 3.0)
+    win_bytes = int(rate * REF_WINDOW_MS / 1000) * 2
+    window = pcm[-win_bytes:] if len(pcm) > win_bytes else pcm
+    c_rms, c_peak, c_silent = rms_peak_dbfs(window)
+    gains = collect_static_gains(backend, slot)
+    taps = build_cd_taps(c_rms, c_peak, c_silent, gains, rate, REF_WINDOW_MS)
+    return {
+        "anchor": "U",
+        "reference": {
+            "freq_hz": REF_FREQ_HZ,
+            "level_dbfs": REF_LEVEL_DBFS,
+            "window_ms": REF_WINDOW_MS,
+        },
         "taps": taps,
         "static_gains": gains,
     }
@@ -420,3 +469,99 @@ def _terminate_proc(proc) -> None:
                 proc.kill()
     except Exception as exc:  # noqa: BLE001
         _log.debug("diag: terminate failed: %s", exc)
+
+
+def _default_udp_socket() -> socket.socket:
+    return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+
+class MeasuredTxBridge:
+    """Anchor-U diagnostic TX bridge: receives op.mic Opus frames over UDP loopback,
+    injects them into *tx_node* (output_MONO = C), and taps the post-decode PCM via an
+    fdsink measurement pipe. Non-blocking — ``feed_opus`` is called from the WS loop as
+    reference frames arrive; the captured PCM is read separately via ``read_measurement``.
+
+    RF SAFETY: writes only to the PipeWire sink; never keys the SA818.
+    """
+
+    def __init__(
+        self,
+        tx_node: str,
+        port: int,
+        rate: int,
+        *,
+        spawn=_default_spawn,
+        read_measfd=_default_read_measfd,
+        socket_factory=None,
+        ssrc: int = 0x5852_5841,
+    ):
+        self._node = tx_node
+        self._port = port
+        self._rate = rate
+        self._spawn = spawn
+        self._read_measfd = read_measfd
+        self._socket_factory = socket_factory or _default_udp_socket
+        self._ssrc = ssrc
+        self._proc = None
+        self._sock = None
+        self._read_fd = None
+        self._fd_lock = threading.Lock()
+        self._seq = 0
+        self._ts = 0
+
+    def start(self) -> None:
+        self._sock = self._socket_factory()
+        make_argv = lambda mfd: build_measured_tx_argv(  # noqa: E731
+            self._node, self._port, self._rate, meas_fd=mfd
+        )
+        self._proc, self._read_fd = self._spawn(make_argv)
+
+    def feed_opus(self, payload: bytes) -> None:
+        if self._sock is None:
+            _log.debug("diag-bridge: feed before start; dropping")
+            return
+        datagram = _rtp.wrap_rtp(payload, seq=self._seq, ts=self._ts, ssrc=self._ssrc, pt=_RTP_PT)
+        try:
+            self._sock.sendto(datagram, (_LOOPBACK, self._port))
+        except OSError as exc:
+            _log.debug("diag-bridge: sendto failed: %s", exc)
+        self._seq = (self._seq + 1) & 0xFFFF
+        self._ts = (self._ts + RTP_TS_PER_FRAME) & 0xFFFFFFFF  # RTP 48 kHz clock, 20 ms frame
+
+    def read_measurement(self, nbytes: int, timeout: float) -> bytes:
+        # Atomically take ownership of the fd under the lock so stop() cannot
+        # close it from another thread while we are mid-read.
+        with self._fd_lock:
+            fd = self._read_fd
+            self._read_fd = None
+        if fd is None:
+            return b""
+        # Blocking read happens OUTSIDE the lock so stop() is not held up.
+        # _read_measfd owns closing fd (its documented contract). We MUST NOT
+        # close it ourselves: a `finally: os.close(fd)` would double-close, and
+        # under concurrency another thread could open()/reuse that fd number in
+        # between, so the second close would hit the WRONG descriptor — the exact
+        # race this ownership handoff exists to prevent.
+        return self._read_measfd(fd, nbytes, timeout)
+
+    def stop(self) -> None:
+        # Atomically take ownership of the fd (if any) so read_measurement
+        # cannot race on it after we decide to close.
+        with self._fd_lock:
+            fd = self._read_fd
+            self._read_fd = None
+        # Always terminate the gst process first — this closes the pipe
+        # write-end, which unblocks any thread already mid-read on the read-end.
+        _terminate_proc(self._proc)
+        self._proc = None
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        if fd is not None:
+            try:
+                _os.close(fd)
+            except OSError:
+                pass
