@@ -9,11 +9,16 @@ Create-scope: enforced in perform_create. Every mutation audits token origin.
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
 
+from apps.accounts.models import AccountAuditLog
 from apps.api import read_views
 from apps.api import write_scoping as ws
-from apps.api.audit import audit_station_write
+from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
 from apps.api.write_permissions import TopologyScopedWritePermission
-from apps.api.write_serializers import StationWriteSerializer
+from apps.api.write_serializers import (
+    RegionWriteSerializer,
+    StationTagWriteSerializer,
+    StationWriteSerializer,
+)
 from apps.stations.models import StationAuditLog
 from apps.stations.signals import discard_deleting_station
 
@@ -89,3 +94,86 @@ class StationViewSet(
             instance.delete()
         finally:
             discard_deleting_station(pk)
+
+
+class RegionViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.RegionViewSet,
+):
+    write_serializer_class = RegionWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_region(user)
+
+    def _guard_create(self):
+        if not ws.can_write_region(self.request.user):
+            raise PermissionDenied("Region writes require staff/admin.")
+
+    def perform_create(self, serializer):
+        self._guard_create()
+        region = serializer.save()
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.REGION_CREATED,
+            region=region,
+            message=f"Region {region.slug} created",
+        )
+
+    def perform_update(self, serializer):
+        region = serializer.save()
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.REGION_UPDATED,
+            region=region,
+            message=f"Region {region.slug} updated",
+        )
+
+    def perform_destroy(self, instance):
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.REGION_DELETED,
+            message=f"Region {instance.slug} deleted",
+        )
+        instance.delete()
+
+
+class StationTagViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.StationTagViewSet,
+):
+    write_serializer_class = StationTagWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_station_tag(user)
+
+    def _guard_create(self):
+        if not ws.can_write_station_tag(self.request.user):
+            raise PermissionDenied("StationTag writes require staff/admin.")
+
+    def perform_create(self, serializer):
+        self._guard_create()
+        tag = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"StationTag {tag.slug} created",
+        )
+
+    def perform_update(self, serializer):
+        tag = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"StationTag {tag.slug} updated",
+        )
+
+    def perform_destroy(self, instance):
+        audit_config_write(
+            self.request,
+            message=f"StationTag {instance.slug} deleted",
+        )
+        instance.delete()
