@@ -537,14 +537,12 @@ class MeasuredTxBridge:
         if fd is None:
             return b""
         # Blocking read happens OUTSIDE the lock so stop() is not held up.
-        try:
-            return self._read_measfd(fd, nbytes, timeout)
-        finally:
-            # _default_read_measfd closes fd; guard against non-default impls.
-            try:
-                _os.close(fd)
-            except OSError:
-                pass
+        # _read_measfd owns closing fd (its documented contract). We MUST NOT
+        # close it ourselves: a `finally: os.close(fd)` would double-close, and
+        # under concurrency another thread could open()/reuse that fd number in
+        # between, so the second close would hit the WRONG descriptor — the exact
+        # race this ownership handoff exists to prevent.
+        return self._read_measfd(fd, nbytes, timeout)
 
     def stop(self) -> None:
         # Atomically take ownership of the fd (if any) so read_measurement

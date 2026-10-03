@@ -190,3 +190,48 @@ def test_read_measurement_then_stop_no_double_close():
     assert len(data) == 160
     # stop() after read_measurement → fd already taken → must not raise
     br.stop()  # should be a no-op on the fd, no OSError
+
+
+def test_read_measfd_is_sole_closer_of_fd():
+    """read_measurement must rely on the injected read_measfd to close the fd — and NOT
+    close it a second time itself. A following stop() must not touch that fd either.
+
+    Regression guard for the double-close race: a `finally: os.close(fd)` in
+    read_measurement would close the fd twice, and under concurrency the second
+    close could hit a reused (wrong) descriptor.
+    """
+    r, w = os.pipe()
+    os.write(w, b"\x02\x00" * 80)  # 160 bytes
+    os.close(w)
+
+    closes: list[int] = []
+
+    def tracking_read_measfd(read_fd, nbytes, timeout):
+        """Mimic the real contract: read then close the fd once; record each close."""
+        buf = os.read(read_fd, nbytes)
+        os.close(read_fd)
+        closes.append(read_fd)
+        return buf
+
+    def fake_spawn(make_argv):
+        return _FakeProc(), r
+
+    br = d.MeasuredTxBridge(
+        "tx.node",
+        47061,
+        16000,
+        spawn=fake_spawn,
+        read_measfd=tracking_read_measfd,
+        socket_factory=_FakeSock,
+    )
+    br.start()
+
+    data = br.read_measurement(160, timeout=1.0)
+    assert data == b"\x02\x00" * 80
+    # The injected reader closed the fd exactly once; read_measurement did not add a close.
+    assert closes == [r], f"Expected read_measfd to be the sole closer, got closes={closes}"
+    # Ownership was handed off — the bridge no longer holds the fd.
+    assert br._read_fd is None
+    # A following stop() must NOT attempt to close that same fd again.
+    br.stop()
+    assert closes == [r], f"stop() must not re-close the fd, got closes={closes}"
