@@ -182,6 +182,11 @@ class AudioEngine:
         if node is None:
             logger.warning("engine: no TX node for slot %s — mic not injected", tx_slot)
             return
+        if self._diag is not None:
+            # operator PTT preempts an in-flight diagnostic (RF safety: stop the tone
+            # source before any TX bridge / carrier keying)
+            logger.info("engine: mic_state active — aborting in-flight diagnostic")
+            await self._teardown_diag()
         if self._tx is not None:
             await self._teardown_tx()
         bridge = self._factory.make_tx(node, mic_info.rate)

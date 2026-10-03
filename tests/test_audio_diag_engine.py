@@ -290,3 +290,29 @@ def test_stop_tears_down_inflight_diag():
         assert diag.stopped is True
 
     asyncio.run(scenario())
+
+
+def test_mic_ptt_preempts_inflight_diag():
+    """RF safety: operator PTT must abort an in-flight diagnostic before TX comes up."""
+    import threading
+
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+
+    async def scenario():
+        # build the stream registry so op.mic is registered for the TX path
+        await eng.start()
+        # keep the measurement in-flight so self._diag is genuinely set when PTT lands
+        gate = threading.Event()
+        diag.read_measurement = lambda n, t: (gate.wait(5), b"\x00\x10" * (n // 2))[1]
+        await eng.on_diag_command({"request_id": "r6", "anchor": "U", "slot": 0, "signal": {}})
+        assert eng._diag is not None and diag.started is True
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+        # diagnostic torn down (tone source stopped) BEFORE the TX bridge is up
+        assert diag.stopped is True
+        assert eng._diag is None
+        assert eng._tx is not None
+        gate.set()  # let the measurement thread drain
+        await eng._teardown_tx()
+
+    asyncio.run(scenario())
