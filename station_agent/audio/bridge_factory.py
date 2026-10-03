@@ -22,6 +22,10 @@ class BridgeFactory:
         port = self._ports.acquire()
         return _PortBoundTx(node, port, rate, self._ports)
 
+    def make_diag_u(self, node: str, rate: int):
+        port = self._ports.acquire()
+        return _PortBoundDiagU(node, port, rate, self._ports)
+
 
 class _PortBoundRx(RxBridge):
     """RxBridge that returns its UDP port to the allocator on stop."""
@@ -45,3 +49,27 @@ class _PortBoundTx(TxBridge):
     def stop(self) -> None:
         super().stop()
         self._ports.release(self._port_value)
+
+
+class _PortBoundDiagU:
+    """MeasuredTxBridge wrapper that returns its UDP port to the allocator on stop."""
+
+    def __init__(self, node, port, rate, ports):
+        from station_agent.audio.diagnostics import MeasuredTxBridge
+
+        self._impl = MeasuredTxBridge(node, port, rate)
+        self._ports = ports
+        self._port = port
+
+    def start(self):
+        self._impl.start()
+
+    def feed_opus(self, payload):
+        self._impl.feed_opus(payload)
+
+    def read_measurement(self, nbytes, timeout):
+        return self._impl.read_measurement(nbytes, timeout)
+
+    def stop(self):
+        self._impl.stop()
+        self._ports.release(self._port)
