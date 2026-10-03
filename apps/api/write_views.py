@@ -8,7 +8,7 @@ Create-scope: enforced in perform_create. Every mutation audits token origin.
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, inline_serializer
@@ -158,6 +158,9 @@ class RegionViewSet(
     read_views.RegionViewSet,
 ):
     write_serializer_class = RegionWriteSerializer
+    # B5: payload-independent create gate — role check runs in has_permission
+    # before DRF validates the serializer (prevents non-staff probing names).
+    create_requires = staticmethod(ws.can_write_region)
 
     def can_write_object(self, user, obj, method):
         return ws.can_write_region(user)
@@ -205,6 +208,9 @@ class StationTagViewSet(
     read_views.StationTagViewSet,
 ):
     write_serializer_class = StationTagWriteSerializer
+    # B5: payload-independent create gate — role check runs in has_permission
+    # before DRF validates the serializer (prevents non-staff probing slugs).
+    create_requires = staticmethod(ws.can_write_station_tag)
 
     def can_write_object(self, user, obj, method):
         return ws.can_write_station_tag(user)
@@ -236,17 +242,31 @@ class StationTagViewSet(
         instance.delete()
 
 
-def _save_assignment(serializer, *, actor):
-    """Call serializer.save(assigned_by=actor), converting any Django
-    ValidationError raised by _ApplicantForbiddenMixin.full_clean() into a
-    DRF ValidationError so the API returns 400 instead of 500.
+def _save_assignment(serializer, *, actor, is_create):
+    """Save an assignment serializer, handling validation and integrity errors.
+
+    B3: inject assigned_by=actor ONLY on create so that a PATCH by a different
+    editor does not overwrite the original assignment provenance.
+
+    B2 (race): catch IntegrityError from residual DB-level unique-constraint
+    violations (e.g. two concurrent creates that both pass serializer
+    validation) and translate to 409 Conflict instead of 500.
     """
+    save_kwargs = {}
+    if is_create:
+        save_kwargs["assigned_by"] = actor
     try:
-        return serializer.save(assigned_by=actor)
+        return serializer.save(**save_kwargs)
     except DjangoValidationError as exc:
         raise DRFValidationError(
             exc.message_dict if hasattr(exc, "message_dict") else exc.messages
         )
+    except IntegrityError as exc:
+        # Residual race: two concurrent creates both passed serializer
+        # validation but one hit the DB unique constraint first.
+        err = APIException(detail="Assignment already exists or conflicts with an existing one.")
+        err.status_code = http_status.HTTP_409_CONFLICT
+        raise err from exc
 
 
 class StationAssignmentViewSet(
@@ -265,7 +285,7 @@ class StationAssignmentViewSet(
         station = serializer.validated_data["station"]
         if not ws.can_write_station_assignment(self.request.user, station):
             raise PermissionDenied("Not allowed to create an assignment for this station.")
-        assignment = _save_assignment(serializer, actor=self.request.user)
+        assignment = _save_assignment(serializer, actor=self.request.user, is_create=True)
         audit_account_write(
             self.request,
             event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
@@ -281,7 +301,8 @@ class StationAssignmentViewSet(
         new_station = serializer.validated_data.get("station", serializer.instance.station)
         if not ws.can_write_station_assignment(self.request.user, new_station):
             raise PermissionDenied("Not allowed to move this assignment to that station.")
-        assignment = _save_assignment(serializer, actor=self.request.user)
+        # B3: is_create=False → assigned_by is NOT overwritten (provenance preserved)
+        assignment = _save_assignment(serializer, actor=self.request.user, is_create=False)
         audit_account_write(
             self.request,
             event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_UPDATED,
@@ -317,7 +338,7 @@ class RegionAssignmentViewSet(
 
     def perform_create(self, serializer):
         self._guard_write()
-        assignment = _save_assignment(serializer, actor=self.request.user)
+        assignment = _save_assignment(serializer, actor=self.request.user, is_create=True)
         audit_account_write(
             self.request,
             event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_CREATED,
@@ -328,7 +349,8 @@ class RegionAssignmentViewSet(
 
     def perform_update(self, serializer):
         self._guard_write()
-        assignment = _save_assignment(serializer, actor=self.request.user)
+        # B3: is_create=False → assigned_by is NOT overwritten (provenance preserved)
+        assignment = _save_assignment(serializer, actor=self.request.user, is_create=False)
         audit_account_write(
             self.request,
             event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_UPDATED,
@@ -490,6 +512,8 @@ class RolloutSequenceEntryViewSet(
     """Full CRUD for RolloutSequenceEntry (global, region-mgr/staff)."""
 
     write_serializer_class = RolloutSequenceEntryWriteSerializer
+    # B5: payload-independent create gate (role only, no target FK involved).
+    create_requires = staticmethod(ws.can_write_rollouts)
 
     def can_write_object(self, user, obj, method):
         return ws.can_write_rollouts(user)
@@ -536,6 +560,8 @@ class AlertRuleViewSet(
     """
 
     write_serializer_class = AlertRuleWriteSerializer
+    # B5: payload-independent create gate (role only, no target FK).
+    create_requires = staticmethod(ws.can_write_alert_rule)
 
     def can_write_object(self, user, obj, method):
         return ws.can_write_alert_rule(user)

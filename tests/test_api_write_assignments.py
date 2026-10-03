@@ -203,3 +203,127 @@ def test_anon_station_assignment_create_401(api_topology, anon_client):
     payload = {"user": t["staff"].pk, "station": t["station_in"].pk, "role": "maintainer"}
     r = anon_client.post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Batch B regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_station_assignment_returns_400(api_topology, bearer):
+    """B2: creating a second StationAssignment for the same (user, station)
+    returns 400 (uniqueness validation), not 500.
+    """
+
+    t = api_topology
+    # station_user already has an assignment on station_in (from api_topology fixture)
+    payload = {
+        "user": t["station_user"].pk,
+        "station": t["station_in"].pk,
+        "role": "admin",
+    }
+    r = bearer(t["region_mgr"]).post(
+        reverse("api:station-assignment-list"), payload, format="json"
+    )
+    assert r.status_code in (400, 409), f"Expected 400 or 409, got {r.status_code}: {r.data}"
+
+
+def test_second_admin_assignment_same_station_returns_400(api_topology, bearer):
+    """B2: creating a second admin-role assignment for a station that already
+    has an admin returns 400/409, not 500.
+    """
+    from apps.stations.models import StationAssignment
+
+    t = api_topology
+    # Create first admin assignment
+    StationAssignment.objects.create(user=t["staff"], station=t["station_in"], role="admin")
+    # Now try to create a second admin for the same station
+    new_member = __import__("apps.accounts.models", fromlist=["User"]).User.objects.create_user(
+        "extra_member", password="x"
+    )
+    new_member.membership_level = "member"
+    new_member.save()
+    payload = {
+        "user": new_member.pk,
+        "station": t["station_in"].pk,
+        "role": "admin",
+    }
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
+    assert r.status_code in (400, 409), f"Expected 400 or 409, got {r.status_code}: {r.data}"
+
+
+def test_assigned_by_unchanged_on_patch(api_topology, bearer):
+    """B3: PATCHing a StationAssignment's role must NOT rewrite assigned_by.
+    assigned_by should remain the original creator, not the editor.
+    """
+    from apps.stations.models import StationAssignment
+
+    t = api_topology
+    # Create an assignment as region_mgr
+    payload = {"user": t["staff"].pk, "station": t["station_in"].pk, "role": "maintainer"}
+    r = bearer(t["region_mgr"]).post(
+        reverse("api:station-assignment-list"), payload, format="json"
+    )
+    assert r.status_code == 201, r.data
+    assignment_pk = r.data["id"]
+    assignment = StationAssignment.objects.get(pk=assignment_pk)
+    assert assignment.assigned_by == t["region_mgr"]
+
+    # Now staff (admin) PATCHes the role
+    detail = reverse("api:station-assignment-detail", args=[assignment_pk])
+    r2 = bearer(t["admin"]).patch(detail, {"role": "admin"}, format="json")
+    assert r2.status_code == 200, r2.data
+    assignment.refresh_from_db()
+    assert assignment.role == "admin"
+    # assigned_by must NOT have changed to admin
+    assert assignment.assigned_by == t["region_mgr"], (
+        f"assigned_by was rewritten to {assignment.assigned_by}, expected region_mgr"
+    )
+
+
+def test_soft_deleted_user_rejected_for_station_assignment(api_topology, bearer):
+    """B4: POSTing a StationAssignment for a soft-deleted user → 400, no row."""
+    from django.utils import timezone
+
+    from apps.accounts.models import User
+    from apps.stations.models import StationAssignment
+
+    t = api_topology
+    victim = User.objects.create_user("soft_deleted_sa", password="x")
+    victim.membership_level = "member"
+    victim.deleted_at = timezone.now()
+    victim.save()
+
+    payload = {
+        "user": victim.pk,
+        "station": t["station_in"].pk,
+        "role": "maintainer",
+    }
+    r = bearer(t["region_mgr"]).post(
+        reverse("api:station-assignment-list"), payload, format="json"
+    )
+    assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
+    assert not StationAssignment.objects.filter(user=victim).exists()
+
+
+def test_soft_deleted_user_rejected_for_region_assignment(api_topology, bearer):
+    """B4: POSTing a RegionAssignment for a soft-deleted user → 400, no row."""
+    from django.utils import timezone
+
+    from apps.accounts.models import User
+    from apps.stations.models import RegionAssignment
+
+    t = api_topology
+    victim = User.objects.create_user("soft_deleted_ra", password="x")
+    victim.membership_level = "member"
+    victim.deleted_at = timezone.now()
+    victim.save()
+
+    payload = {
+        "user": victim.pk,
+        "region": t["region_in"].pk,
+        "role": "manager",
+    }
+    r = bearer(t["admin"]).post(reverse("api:region-assignment-list"), payload, format="json")
+    assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
+    assert not RegionAssignment.objects.filter(user=victim).exists()

@@ -2,6 +2,8 @@
 
 Task 3: Region (staff/admin-only CRUD) + StationTag (staff/admin-only CRUD).
 Every mutation must produce a DB audit row containing "via API token".
+
+Batch B regression tests are appended below the original suite.
 """
 
 import pytest
@@ -90,3 +92,66 @@ def test_station_tag_delete_staff_only(api_topology, bearer, make_station_tag):
     assert bearer(t["region_mgr"]).delete(detail).status_code == 403
     assert bearer(t["station_user"]).delete(detail).status_code == 403
     assert bearer(t["staff"]).delete(detail).status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Batch B regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_station_tag_reserved_slug_returns_400(api_topology, bearer):
+    """B1: POST a StationTag with slug='__unassigned__' → 400 (field error on
+    slug), no row created, no 500.  DRF ModelSerializer does NOT call
+    model.clean(), so the reserved-slug check must live in the serializer.
+    """
+    from apps.stations.models import StationTag
+
+    t = api_topology
+    url = reverse("api:station-tag-list")
+    resp = bearer(t["staff"]).post(
+        url,
+        {"name": "Rollout Sentinel", "slug": "__unassigned__"},
+        format="json",
+    )
+    assert resp.status_code == 400, resp.data
+    assert "slug" in resp.data, f"Expected field error on 'slug', got: {resp.data}"
+    assert not StationTag.objects.filter(slug="__unassigned__").exists()
+
+
+def test_station_tag_create_nonstaff_gets_403_before_validation(api_topology, bearer):
+    """B5: non-staff POSTing to StationTag gets 403 from has_permission,
+    BEFORE any serializer/uniqueness validation runs.  A duplicate-name POST
+    by a non-staff caller must return 403 not 400.
+    """
+    t = api_topology
+    # Create the tag as staff first so a 2nd POST would normally trigger
+    # a uniqueness 400 if validation ran before the authz check.
+    from apps.stations.models import StationTag
+
+    StationTag.objects.create(name="Existing", slug="existing")
+    url = reverse("api:station-tag-list")
+    # region_mgr is non-staff; duplicate slug would 400 if validation ran first
+    resp = bearer(t["region_mgr"]).post(
+        url, {"name": "Existing", "slug": "existing"}, format="json"
+    )
+    assert resp.status_code == 403, resp.data
+    # station_user is also non-staff
+    resp = bearer(t["station_user"]).post(url, {"name": "New", "slug": "new"}, format="json")
+    assert resp.status_code == 403, resp.data
+
+
+def test_region_create_nonstaff_gets_403_before_validation(api_topology, bearer):
+    """B5: non-staff POSTing to Region gets 403 from has_permission,
+    BEFORE any serializer/uniqueness validation runs.
+    """
+
+    t = api_topology
+    # 'in' and 'out' already exist in api_topology; a duplicate would 400 if
+    # validation ran before authz.
+    url = reverse("api:region-list")
+    resp = bearer(t["region_mgr"]).post(url, {"name": "In", "slug": "in"}, format="json")
+    assert resp.status_code == 403, resp.data
+    resp = bearer(t["station_user"]).post(
+        url, {"name": "NewRegion", "slug": "newregion"}, format="json"
+    )
+    assert resp.status_code == 403, resp.data

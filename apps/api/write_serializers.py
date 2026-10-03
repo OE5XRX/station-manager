@@ -15,6 +15,7 @@ from apps.monitoring.models import AlertRule
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
+    RESERVED_TAG_SLUGS,
     Region,
     RegionAssignment,
     Station,
@@ -150,15 +151,60 @@ class StationTagWriteSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "slug", "color", "description", "created_at"]
         read_only_fields = ["id", "created_at"]
 
+    def validate_slug(self, value):
+        # DRF ModelSerializer does NOT call model.clean(), so the reserved-slug
+        # guard from StationTag.clean() would be bypassed and reach the DB
+        # CheckConstraint → IntegrityError/500.  Mirror the model check here
+        # for a proper 400 field error.
+        if value in RESERVED_TAG_SLUGS:
+            raise serializers.ValidationError("This slug is reserved by the rollout system.")
+        return value
+
 
 class StationAssignmentWriteSerializer(serializers.ModelSerializer):
+    # B4: restrict to active (non-soft-deleted) users so that a PK of a
+    # soft-deleted user returns a 400 "does-not-exist in queryset" error
+    # rather than silently creating latent authorization.  Mirrors the UI
+    # guard in apps/accounts/views_station_assignments.py (deleted_at__isnull).
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(deleted_at__isnull=True)
+    )
+
     class Meta:
         model = StationAssignment
         fields = ["id", "user", "station", "role", "assigned_at", "assigned_by"]
         read_only_fields = ["id", "assigned_at", "assigned_by"]
 
+    def validate(self, attrs):
+        # B2: serializer-level guard for the one-admin-per-station constraint
+        # (uniq_admin_per_station is a partial UniqueConstraint that DRF's
+        # auto-generated UniqueTogetherValidator does not cover).  This gives
+        # a 400 for the common case; _save_assignment catches the residual
+        # IntegrityError race and returns 409.
+        role = attrs.get("role")
+        station = attrs.get("station")
+        if role == StationAssignment.Role.ADMIN and station is not None:
+            existing_qs = StationAssignment.objects.filter(
+                station=station, role=StationAssignment.Role.ADMIN
+            )
+            # On update (partial_update), exclude the current instance.
+            if self.instance is not None:
+                existing_qs = existing_qs.exclude(pk=self.instance.pk)
+            if existing_qs.exists():
+                raise serializers.ValidationError(
+                    {"role": "This station already has an admin assignment."}
+                )
+        return attrs
+
 
 class RegionAssignmentWriteSerializer(serializers.ModelSerializer):
+    # B4: restrict to active (non-soft-deleted) users so that a PK of a
+    # soft-deleted user returns a 400 "does-not-exist in queryset" error.
+    # Mirrors apps/accounts/views_region_assignments.py (deleted_at__isnull).
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(deleted_at__isnull=True)
+    )
+
     class Meta:
         model = RegionAssignment
         fields = ["id", "user", "region", "role", "assigned_at", "assigned_by"]
