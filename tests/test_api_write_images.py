@@ -193,8 +193,19 @@ def test_import_happy_path(api_topology, bearer, monkeypatch):
     from apps.images import github_releases
     from apps.images.models import ImageImportJob
 
-    fake_releases = [_make_fake_release("v2.0")]
-    monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
+    # Use a release WITH complete asset triples so the (tag, machine, channel)
+    # validation (item 10) passes. channel="stable" is not a standard name, so
+    # we build assets explicitly for that channel.
+    base = "oe5xrx-qemux86-64-stable-v2.0.wic.bz2"
+    from apps.images.github_releases import GitHubRelease
+
+    fake_release = GitHubRelease(
+        tag="v2.0",
+        html_url="https://github.com/OE5XRX/linux-image/releases/tag/v2.0",
+        is_latest=True,
+        asset_names=frozenset({base, f"{base}.bundle", f"{base}.sha256"}),
+    )
+    monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [fake_release])
 
     t = api_topology
     r = bearer(t["staff"]).post(
@@ -317,13 +328,28 @@ def test_available_exposes_channels_per_release(api_topology, bearer, monkeypatc
 # ---------------------------------------------------------------------------
 
 
+def _make_fake_release_with_stable(tag):
+    """Return a GitHubRelease with complete assets for qemux86-64/stable."""
+    from apps.images.github_releases import GitHubRelease
+
+    base = f"oe5xrx-qemux86-64-stable-{tag}.wic.bz2"
+    return GitHubRelease(
+        tag=tag,
+        html_url=f"https://github.com/OE5XRX/linux-image/releases/tag/{tag}",
+        is_latest=True,
+        asset_names=frozenset({base, f"{base}.bundle", f"{base}.sha256"}),
+    )
+
+
 def test_import_duplicate_pending_job_returns_conflict(api_topology, bearer, monkeypatch):
     """import/ for a tag/machine/channel that already has a PENDING job → 409,
     no second job created."""
     from apps.images import github_releases
     from apps.images.models import ImageImportJob
 
-    fake_releases = [_make_fake_release("v2.0")]
+    # Use a release WITH proper assets so the (machine, channel) variant
+    # validation (item 10 fix) passes before reaching the duplicate guard.
+    fake_releases = [_make_fake_release_with_stable("v2.0")]
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
 
     t = api_topology
@@ -358,7 +384,7 @@ def test_import_duplicate_running_job_returns_conflict(api_topology, bearer, mon
     from apps.images import github_releases
     from apps.images.models import ImageImportJob
 
-    fake_releases = [_make_fake_release("v2.0")]
+    fake_releases = [_make_fake_release_with_stable("v2.0")]
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
 
     t = api_topology
@@ -379,11 +405,24 @@ def test_import_duplicate_running_job_returns_conflict(api_topology, bearer, mon
 
 
 def test_import_fresh_variant_still_202(api_topology, bearer, monkeypatch):
-    """import/ for a tag/machine/channel with no active job → 202 as before."""
+    """import/ for a tag/machine/channel with no active job → 202 as before.
+
+    Uses a release WITH complete asset triples so the (tag, machine, channel)
+    variant validation (item 10 fix) passes.
+    """
     from apps.images import github_releases
 
-    fake_releases = [_make_fake_release("v2.0")]
-    monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
+    # Build a release with assets for qemux86-64/stable so channels_for passes.
+    base = "oe5xrx-qemux86-64-stable-v2.0.wic.bz2"
+    from apps.images.github_releases import GitHubRelease
+
+    fake_release = GitHubRelease(
+        tag="v2.0",
+        html_url="https://github.com/OE5XRX/linux-image/releases/tag/v2.0",
+        is_latest=True,
+        asset_names=frozenset({base, f"{base}.bundle", f"{base}.sha256"}),
+    )
+    monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [fake_release])
 
     t = api_topology
     r = bearer(t["staff"]).post(
@@ -399,7 +438,9 @@ def test_import_already_imported_returns_conflict(api_topology, bearer, monkeypa
     from apps.images import github_releases
     from apps.images.models import ImageRelease
 
-    fake_releases = [_make_fake_release("v2.0")]
+    # Use a release WITH proper assets so the (machine, channel) variant
+    # validation (item 10 fix) passes before reaching the already-imported guard.
+    fake_releases = [_make_fake_release_with_stable("v2.0")]
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
 
     t = api_topology

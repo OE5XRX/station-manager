@@ -22,22 +22,40 @@ def _token_suffix(request):
 def _parse_ip(candidate):
     """Return the candidate as a normalised IP string, or None if invalid.
 
-    Strips an optional port suffix (``address:port``) before parsing.  The
-    parsed representation is returned so IPv6 scope IDs etc. are stripped —
-    this matches what GenericIPAddressField stores.
+    Handles the following non-trivial forms, in addition to plain IPv4/IPv6:
+
+    * ``IPv4:port``          — e.g. ``203.0.113.1:8080``  → ``203.0.113.1``
+    * ``[IPv6]:port``        — e.g. ``[::1]:8080``         → ``::1``
+    * ``IPv6%zone``          — e.g. ``fe80::1%eth0``        → ``fe80::1``
+
+    The parsed (normalised) string is returned so scope IDs and leading zeros
+    are always stripped — matching what GenericIPAddressField stores.
+    Garbage input returns ``None``; invalid input must never abort an audit.
     """
     if not candidate:
         return None
-    # Strip optional port suffix written as "address:port" by some proxies.
-    # IPv6 literals with a port use "[::1]:8080"; plain IPv6 never contains ":port"
-    # unless bracketed, so splitting on the last colon only when the portion before
-    # the last colon is not already a valid IP catches the plain IPv4:port case.
+
     stripped = candidate
-    if ":" in candidate:
-        # If it looks like IPv4:port (exactly one colon, left part has dots)
-        parts = candidate.rsplit(":", 1)
+
+    # Bracketed IPv6 with optional port: "[addr]:port" or just "[addr]"
+    if stripped.startswith("["):
+        # Extract address between the brackets
+        close = stripped.find("]")
+        if close != -1:
+            stripped = stripped[1:close]
+        # else malformed bracket — fall through and let ip_address() reject it
+
+    # IPv4:port (exactly one colon, left part contains a dot → IPv4 address)
+    elif ":" in stripped:
+        parts = stripped.rsplit(":", 1)
         if len(parts) == 2 and "." in parts[0]:
             stripped = parts[0]
+        # Otherwise it is a plain IPv6 address (multiple colons) — keep as-is.
+
+    # Strip IPv6 zone/scope ID (e.g. "fe80::1%eth0") — ipaddress rejects these.
+    if "%" in stripped:
+        stripped = stripped.split("%", 1)[0]
+
     try:
         return str(ipaddress.ip_address(stripped))
     except ValueError:

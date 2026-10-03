@@ -244,10 +244,39 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
     serializer level would wrongly reject valid reorder/create requests (the
     transient collision is exactly what the service resolves).
 
-    The ``uniq_tag_per_sequence`` constraint is retained: an explicit duplicate-
-    tag check in ``perform_create`` returns a descriptive 400 if the tag is
-    already in the sequence (idempotent, not a crash).
+    ``sequence`` is create-only (read-only on update).  RolloutSequence is a
+    DB singleton so reparenting an entry to "another" sequence is meaningless,
+    and allowing it on PATCH would bypass the locked renumber on the original
+    sequence.  Any ``sequence`` value in a PATCH body is silently ignored.
+
+    ``tag`` uniqueness per sequence is enforced by a custom ``validate_tag``
+    check: a duplicate tag returns a descriptive 400.  The auto-generated
+    UniqueTogetherValidator is suppressed (``validators = []``) to prevent it
+    from also rejecting valid reorder operations on the position constraint;
+    we re-add only the tag check manually.
     """
+
+    def validate_tag(self, value):
+        """Reject a duplicate tag within the same sequence (400, not a DB 500)."""
+        # On update (partial_update), instance is set — compare against the
+        # sequence that already owns this entry (sequence is read-only on update).
+        if self.instance is not None:
+            sequence = self.instance.sequence
+            qs = RolloutSequenceEntry.objects.filter(sequence=sequence, tag=value).exclude(
+                pk=self.instance.pk
+            )
+        else:
+            # On create, sequence comes from the incoming data.
+            sequence = self.initial_data.get("sequence") or (
+                self.validated_data.get("sequence") if hasattr(self, "_validated_data") else None
+            )
+            if sequence is None:
+                # Can't validate without sequence; rely on service / DB constraint.
+                return value
+            qs = RolloutSequenceEntry.objects.filter(sequence=sequence, tag=value)
+        if qs.exists():
+            raise serializers.ValidationError("This tag is already in the sequence.")
+        return value
 
     class Meta:
         model = RolloutSequenceEntry
@@ -259,6 +288,12 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
         # only the harmless one (tag-uniqueness for 400-on-duplicate) fires.
         # The position constraint is enforced atomically by the service layer.
         validators = []
+
+    def to_internal_value(self, data):
+        """Make ``sequence`` read-only on update: strip it from incoming data."""
+        if self.instance is not None and "sequence" in data:
+            data = {k: v for k, v in data.items() if k != "sequence"}
+        return super().to_internal_value(data)
 
 
 class AlertRuleWriteSerializer(serializers.ModelSerializer):

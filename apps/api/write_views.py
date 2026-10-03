@@ -493,6 +493,10 @@ class StationPhotoViewSet(
         )
 
     def perform_destroy(self, instance):
+        # Capture the blob name BEFORE the row is deleted so we can clean up
+        # storage after the transaction commits.  Mirrors the UPDATE-replace
+        # cleanup in perform_update.
+        blob_name = instance.image.name if instance.image else None
         audit_station_write(
             self.request,
             station=instance.station,
@@ -500,6 +504,8 @@ class StationPhotoViewSet(
             message=f"StationPhoto deleted on {instance.station}",
         )
         instance.delete()
+        if blob_name:
+            transaction.on_commit(lambda: _delete_storage_file(blob_name))
 
 
 class RolloutSequenceViewSet(
@@ -563,6 +569,17 @@ class RolloutSequenceEntryViewSet(
         entry = serializer.instance
         new_position = serializer.validated_data.get("position")
         if new_position is not None and new_position != entry.position:
+            # Non-position fields (e.g. tag) must be saved BEFORE the two-phase
+            # move so no field change is silently dropped.  Both writes happen
+            # inside the same atomic+select_for_update block via move_entry,
+            # which stamps the parent too.
+            non_position_fields = {
+                k: v for k, v in serializer.validated_data.items() if k != "position"
+            }
+            if non_position_fields:
+                for field, value in non_position_fields.items():
+                    setattr(entry, field, value)
+                entry.save(update_fields=list(non_position_fields.keys()))
             # Reorder via locked two-phase move (mirrors SequenceReorderView's
             # two-phase protocol: shift all to temp positions, then assign final).
             rollout_services.move_entry(
@@ -1050,13 +1067,31 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
         channel = validated["channel"]
         mark_as_latest = validated["mark_as_latest"]
 
-        # Validate tag against live GitHub releases.
+        # Validate tag AND (machine, channel) variant against live GitHub releases.
+        # We need the full release objects to call channels_for(), so fetch once
+        # and index by tag.
         repo = getattr(settings, "LINUX_IMAGE_REPO", _LINUX_IMAGE_REPO_DEFAULT)
         releases = github_releases.fetch_releases(repo, limit=_GITHUB_RELEASES_LIMIT)
-        known_tags = {r.tag for r in releases}
-        if tag not in known_tags:
+        release_map = {r.tag: r for r in releases}
+        if tag not in release_map:
             raise DRFValidationError(
                 {"tag": f"Tag '{tag}' not found in available GitHub releases."}
+            )
+        # Validate that (machine, channel) is an importable variant for this tag
+        # (mirrors available/ → channels_for() filtering).  This prevents a
+        # valid tag with a bad machine/channel pair from reaching the async
+        # worker and failing silently there.
+        release_obj = release_map[tag]
+        importable_channels = release_obj.channels_for(machine)
+        if channel not in importable_channels:
+            raise DRFValidationError(
+                {
+                    "channel": (
+                        f"Channel '{channel}' is not an importable variant for "
+                        f"tag '{tag}' / machine '{machine}'. "
+                        f"Available channels: {sorted(importable_channels) or '(none)'}."
+                    )
+                }
             )
 
         # Duplicate-job guard (mirrors QuickQueueView's guard semantics):
