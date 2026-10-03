@@ -14,11 +14,13 @@ import json
 import pytest
 from channels.testing import WebsocketCommunicator
 
+import apps.audio.orchestrator as _orch_module
 from apps.audio.orchestrator import (
     REF_STREAM_SETTLE_S,
     AgentNotConnected,
     DiagnosticTimeout,
     StationBusy,
+    diag_ref_for_request,
     run_headless_diagnostic,
 )
 from apps.stations.models import Station
@@ -163,7 +165,7 @@ def test_orchestrator_missing_station():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_u_frames_use_diag_stream_ref(audio_agent_auth):
+def test_u_frames_use_diag_stream_ref(audio_agent_auth, monkeypatch):
     """Every audio.ref_media frame streamed during a U diagnostic must carry
     stream_ref == the per-run diag_ref sent in the diag_command (not the old
     global DIAG_STREAM_REF sentinel), and that ref must be in the reserved
@@ -172,7 +174,11 @@ def test_u_frames_use_diag_stream_ref(audio_agent_auth):
     Strategy: intercept channel-layer group_send calls to capture the diag_command
     (to read the per-run diag_ref) and the audio.ref_media payloads (to verify
     stream_ref matches).  A real agent communicator handles the round-trip.
+
+    REF_FRAME_INTERVAL_S is zeroed so test latency stays well under a second
+    (production pacing adds ~1.2 s for 243 frames; not needed in unit tests).
     """
+    monkeypatch.setattr(_orch_module, "REF_FRAME_INTERVAL_S", 0)
     from channels.layers import get_channel_layer
 
     station = Station.objects.create(name="orch-uref", callsign="OE1URF", status="online")
@@ -352,13 +358,16 @@ def test_u_busy_during_settle_no_ref_frames(audio_agent_auth):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_u_frames_use_per_run_diag_ref_in_reserved_band(audio_agent_auth):
+def test_u_frames_use_per_run_diag_ref_in_reserved_band(audio_agent_auth, monkeypatch):
     """Frames streamed for a U run must carry stream_ref >= 0x8000 (reserved high band),
     and two different request ids yield different diag_refs (almost always).
 
     Strategy: intercept group_send to capture the diag_command (to inspect diag_ref)
     and the audio.ref_media frames (to verify their stream_ref matches).
+
+    REF_FRAME_INTERVAL_S is zeroed so test latency stays well under a second.
     """
+    monkeypatch.setattr(_orch_module, "REF_FRAME_INTERVAL_S", 0)
     from channels.layers import get_channel_layer
 
     station = Station.objects.create(name="orch-pref", callsign="OE1PRF", status="online")
@@ -418,15 +427,15 @@ def test_u_frames_use_per_run_diag_ref_in_reserved_band(audio_agent_auth):
     asyncio.run(scenario())
 
 
-@pytest.mark.django_db(transaction=True)
 def test_two_different_rids_yield_different_diag_refs():
-    """Two calls with different request ids must (almost always) produce different diag_refs."""
+    """Two calls with different request ids must (almost always) produce different diag_refs.
+
+    Calls the production helper diag_ref_for_request() directly — not a local
+    re-derivation of the formula — so this test would catch any change to the
+    production derivation.
+    """
     import uuid
 
-    # diag_ref = 0x8000 | (int(rid[:4], 16) & 0x7FFF)
-    def _derive(rid):
-        return 0x8000 | (int(rid[:4], 16) & 0x7FFF)
-
-    refs = {_derive(uuid.uuid4().hex) for _ in range(20)}
+    refs = {diag_ref_for_request(uuid.uuid4().hex) for _ in range(20)}
     # With 15 random bits, 20 draws should not all collide.
     assert len(refs) > 1, "different rids must (almost always) yield different diag_refs"

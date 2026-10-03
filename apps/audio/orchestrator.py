@@ -36,6 +36,14 @@ REF_REPEAT: int = 3
 #: residual startup jitter.  Keep well under the run timeout (~15 s).
 REF_STREAM_SETTLE_S: float = 0.5
 
+#: Inter-frame sleep when streaming U-anchor reference frames.
+#: RedisChannelLayer's default per-channel capacity is 100; streaming 3×81 = 243 frames
+#: back-to-back overflows it and drops messages.  A 5 ms pause after each group_send
+#: keeps the in-flight queue well under that limit (the consumer drains each frame to the
+#: agent WS between sends) and loosely mirrors a real ~20 ms op.mic uplink cadence.
+#: Total added latency ≈ 243 × 5 ms ≈ 1.2 s, well within the run timeout.
+REF_FRAME_INTERVAL_S: float = 0.005
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -56,6 +64,31 @@ class StationBusy(Exception):  # noqa: N818
     The station is considered busy when a TX is active or another diagnostic is
     already in flight.  The REST layer maps this to HTTP 409 Conflict.
     """
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def diag_ref_for_request(rid: str) -> int:
+    """Derive a per-run stream_ref in the reserved high band (≥ 0x8000).
+
+    Takes the first 4 hex characters of *rid* (a UUID4 hex string) and maps
+    them into ``[0x8000, 0xFFFF]`` so the ref can never collide with the
+    small ascending slot/mic refs used by production streams.
+
+    Parameters
+    ----------
+    rid:
+        A request id — typically ``uuid.uuid4().hex``.
+
+    Returns
+    -------
+    int
+        A value in the range ``[0x8000, 0xFFFF]``.
+    """
+    return 0x8000 | (int(rid[:4], 16) & 0x7FFF)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +154,7 @@ async def run_headless_diagnostic(
     # Per-run stream_ref in the reserved high band (≥ 0x8000) so frames can only
     # reach the run they belong to.  Real slot/mic refs are small ascending values
     # and can never collide with this range.
-    diag_ref = 0x8000 | (int(rid[:4], 16) & 0x7FFF)
+    diag_ref = diag_ref_for_request(rid)
 
     # 3. Build and send the diag_command to the agent group.
     command = {
@@ -163,12 +196,16 @@ async def run_headless_diagnostic(
             early_envelope = await asyncio.wait_for(layer.receive(reply), REF_STREAM_SETTLE_S)
         except TimeoutError:
             # No early reply — agent accepted the run.  Stream the fixture frames.
+            # Pace the loop so the Redis group queue stays well under its default
+            # 100-message capacity (243 frames total; consumer drains each frame
+            # before the next arrives at ~5 ms intervals).
             frames = load_reference_frames()
             for data in iter_media_frames(frames, stream_ref=diag_ref, repeat=REF_REPEAT):
                 await layer.group_send(
                     agent_group(station_id),
                     {"type": "audio.ref_media", "data": data},
                 )
+                await asyncio.sleep(REF_FRAME_INTERVAL_S)
         else:
             # Early reply received — handle it and return without streaming.
             early_report = early_envelope["msg"]

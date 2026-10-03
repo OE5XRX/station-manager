@@ -449,3 +449,115 @@ def test_anchor_c_refused_while_diag_active(monkeypatch):
         assert "diagnostic is already running" in ret["error"]
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Finding B — _diag_lock: TX start must wait for diag bridge stop to complete
+# ---------------------------------------------------------------------------
+
+
+def test_tx_start_waits_for_diag_bridge_stop():
+    """on_mic_state must not start the TX bridge until the in-flight diagnostic
+    bridge stop() has fully returned.
+
+    Strategy: use a fake diag bridge whose stop() appends to a shared timeline
+    list, and a factory that records when make_tx is called.  Assert that
+    make_tx is only called AFTER the diag bridge's stop() has returned.
+    """
+    import threading
+
+    timeline: list[str] = []
+
+    class _BlockingDiagBridge:
+        def __init__(self, gate: threading.Event):
+            self._gate = gate
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+
+        def feed_opus(self, p):
+            pass
+
+        def read_measurement(self, nbytes, timeout):
+            # Block so the measurement task is still in-flight when PTT arrives.
+            self._gate.wait(10)
+            return b"\x00\x10" * (nbytes // 2)
+
+        def stop(self):
+            timeline.append("diag_stop_returned")
+            self.stopped = True
+
+    class _RecordingFactory:
+        """Factory that records make_tx calls and provides a blocking diag bridge."""
+
+        def __init__(self, diag):
+            self._diag = diag
+
+        def make_rx(self, *a, **k):
+            raise AssertionError("unused")
+
+        def make_tx(self, node, rate):
+            timeline.append("make_tx_called")
+
+            class _SimpleTx:
+                def start(self):
+                    pass
+
+                def feed_opus(self, p):
+                    pass
+
+                def stop(self):
+                    pass
+
+            return _SimpleTx()
+
+        def make_diag_u(self, node, rate):
+            return self._diag
+
+    stop_gate = threading.Event()
+    diag = _BlockingDiagBridge(stop_gate)
+
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _FakeBackendWithTx(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_RecordingFactory(diag),
+    )
+
+    async def scenario():
+        await eng.start()
+        # Start the U diagnostic (measurement blocks on stop_gate).
+        await eng.on_diag_command({"request_id": "rb1", "anchor": "U", "slot": 0, "signal": {}})
+        assert eng._diag is not None and diag.started
+
+        # Release the gate so stop() can complete when teardown is called.
+        stop_gate.set()
+        # Fire PTT — _teardown_diag (lock-guarded) must fully stop the diag bridge
+        # before make_tx is called.
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+
+        # After on_mic_state returns:
+        assert eng._diag is None, "self._diag must be cleared"
+        assert diag.stopped, "diag bridge must be stopped"
+        assert eng._tx is not None, "TX bridge must have started"
+
+        # Ordering: diag stop must have completed BEFORE make_tx was called.
+        assert "diag_stop_returned" in timeline, "diag stop must have been called"
+        assert "make_tx_called" in timeline, "make_tx must have been called"
+        diag_stop_idx = timeline.index("diag_stop_returned")
+        make_tx_idx = timeline.index("make_tx_called")
+        assert diag_stop_idx < make_tx_idx, (
+            f"diag bridge stop ({diag_stop_idx}) must complete before make_tx ({make_tx_idx}); "
+            f"timeline={timeline}"
+        )
+
+        await eng._teardown_tx()
+
+    asyncio.run(scenario())

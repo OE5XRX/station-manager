@@ -79,6 +79,10 @@ class AudioEngine:
         self._dead_man_token: object | None = None
         self._tot: asyncio.Task | None = None
         self.tx_route: dict | None = None
+        # Serialises clear-refs + _safe_stop inside _teardown_diag so the
+        # "cleared but bridge not yet stopped" window is never observable to
+        # a concurrent on_mic_state / stop that also acquires this lock.
+        self._diag_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     async def _to_thread(fn, *args):
@@ -174,13 +178,13 @@ class AudioEngine:
         if not isinstance(tx_slot, int) or isinstance(tx_slot, bool):
             logger.warning("engine: mic_state with non-int tx_slot %r — ignoring", tx_slot)
             return
+        # RF safety: always pass through _teardown_diag (lock-guarded) before starting
+        # TX so any in-flight diagnostic bridge is fully stopped before the TX bridge
+        # starts — even if the bridge stop is slow (up to 3 s _safe_stop).  This closes
+        # the overlap window where _diag was already None but the bridge was still running.
         if self._diag is not None:
-            # RF safety: abort an in-flight diagnostic the moment a valid PTT-active
-            # mic_state arrives — unconditionally and before any slow/fallible node
-            # lookups. This ensures the tone source is stopped even when resolve_node
-            # returns None (which would otherwise cause an early return, skipping teardown).
             logger.info("engine: mic_state active — aborting in-flight diagnostic")
-            await self._teardown_diag()
+        await self._teardown_diag()
         mic_info = self.registry.get(OP_MIC)
         if mic_info is None:
             logger.warning("engine: op.mic not registered — cannot start TX")
@@ -341,15 +345,23 @@ class AudioEngine:
         cancel the current task (that would inject ``CancelledError`` at the
         ``_safe_stop`` await and skip bridge cleanup), hence the
         ``task is not asyncio.current_task()`` guard.
+
+        The ``_diag_lock`` is held for the full clear-refs + ``_safe_stop`` sequence
+        so the "diag cleared but bridge not yet stopped" state is never visible to a
+        concurrent ``on_mic_state`` or ``stop()`` that also acquires the lock.  This
+        closes the TX-start overlap window (Finding B): a PTT key arriving during
+        teardown waits here until the diagnostic bridge is fully stopped before the
+        TX bridge starts.
         """
-        task = self._diag_task
-        self._diag_task = None
-        diag = self._diag
-        self._diag = None
-        if diag is not None:
-            await self._to_thread(_safe_stop, diag["bridge"])
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
+        async with self._diag_lock:
+            task = self._diag_task
+            self._diag_task = None
+            diag = self._diag
+            self._diag = None
+            if diag is not None:
+                await self._to_thread(_safe_stop, diag["bridge"])
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
 
     # --- safety timers -----------------------------------------------------
     def _arm_dead_man(self) -> None:
