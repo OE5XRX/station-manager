@@ -568,6 +568,8 @@ class RolloutSequenceEntryViewSet(
     def perform_update(self, serializer):
         entry = serializer.instance
         new_position = serializer.validated_data.get("position")
+        from apps.rollouts.models import RolloutSequence
+
         if new_position is not None and new_position != entry.position:
             # Wrap the entire position+field update in ONE transaction so that
             # a non-position field save (e.g. tag) and the two-phase position
@@ -576,8 +578,6 @@ class RolloutSequenceEntryViewSet(
             # Lock the parent sequence first (before the field save) so the
             # lock order matches move_entry's own select_for_update, preventing
             # a potential deadlock if two concurrent PATCHes race.
-            from apps.rollouts.models import RolloutSequence
-
             with transaction.atomic():
                 RolloutSequence.objects.select_for_update().filter(pk=entry.sequence_id).first()
                 non_position_fields = {
@@ -589,16 +589,28 @@ class RolloutSequenceEntryViewSet(
                     entry.save(update_fields=list(non_position_fields.keys()))
                 # Reorder via locked two-phase move (mirrors SequenceReorderView's
                 # two-phase protocol: shift all to temp positions, then assign final).
-                rollout_services.move_entry(
-                    entry=entry, new_position=new_position, by_user=self.request.user
-                )
+                # R4c: catch ValueError (offset overflow) and translate to 400.
+                try:
+                    rollout_services.move_entry(
+                        entry=entry, new_position=new_position, by_user=self.request.user
+                    )
+                except ValueError as exc:
+                    raise DRFValidationError(
+                        {"position": "sequence too large to reorder"}
+                    ) from exc
             entry.refresh_from_db()
             serializer.instance = entry
         else:
-            # No position change — save other fields (tag update etc.), then
-            # stamp the parent sequence so updated_by/updated_at stay current.
-            entry = serializer.save()
-            rollout_services.touch_sequence(entry.sequence, by_user=self.request.user)
+            # R4a: tag-only (or no-field-change) path — acquire the parent lock
+            # FIRST so that concurrent reorders cannot interleave with this save.
+            # touch_sequence opens its own transaction.atomic() / select_for_update;
+            # wrap both the field save and the stamp in ONE outer atomic so they
+            # are visible to the DB in the same serialised order.
+            with transaction.atomic():
+                RolloutSequence.objects.select_for_update().filter(pk=entry.sequence_id).first()
+                entry = serializer.save()
+                entry.sequence.updated_by = self.request.user
+                entry.sequence.save(update_fields=["updated_by", "updated_at"])
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} updated",
