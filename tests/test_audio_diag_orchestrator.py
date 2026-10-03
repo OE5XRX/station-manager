@@ -24,7 +24,6 @@ from apps.audio.orchestrator import (
 from apps.stations.models import Station
 from config.asgi import application
 from station_agent.audio import frame as audio_frame
-from station_agent.audio.diagnostics import DIAG_STREAM_REF
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -166,12 +165,13 @@ def test_orchestrator_missing_station():
 @pytest.mark.django_db(transaction=True)
 def test_u_frames_use_diag_stream_ref(audio_agent_auth):
     """Every audio.ref_media frame streamed during a U diagnostic must carry
-    stream_ref == DIAG_STREAM_REF (not the old OP_MIC_DIAG_REF stub of 0).
+    stream_ref == the per-run diag_ref sent in the diag_command (not the old
+    global DIAG_STREAM_REF sentinel), and that ref must be in the reserved
+    high band (>= 0x8000).
 
-    Strategy: intercept channel-layer group_send calls to capture audio.ref_media
-    payloads without involving the WebSocket consumer (so we don't accidentally
-    cancel it via receive_output timeout).  A real agent communicator still handles
-    the diag_command / diag_result round-trip.
+    Strategy: intercept channel-layer group_send calls to capture the diag_command
+    (to read the per-run diag_ref) and the audio.ref_media payloads (to verify
+    stream_ref matches).  A real agent communicator handles the round-trip.
     """
     from channels.layers import get_channel_layer
 
@@ -180,9 +180,14 @@ def test_u_frames_use_diag_stream_ref(audio_agent_auth):
     async def scenario():
         layer = get_channel_layer()
         captured_ref_frames: list[bytes] = []
+        captured_diag_ref: list[int] = []
         _original_group_send = layer.group_send
 
         async def spy_group_send(group, message):
+            if message.get("type") == "audio.diag_command":
+                dr = message["command"].get("diag_ref")
+                if dr is not None:
+                    captured_diag_ref.append(dr)
             if message.get("type") == "audio.ref_media":
                 captured_ref_frames.append(message["data"])
             await _original_group_send(group, message)
@@ -220,12 +225,17 @@ def test_u_frames_use_diag_stream_ref(audio_agent_auth):
         finally:
             layer.group_send = _original_group_send
 
-        # Every captured ref frame must parse with stream_ref == DIAG_STREAM_REF.
+        # The diag_command must carry a per-run ref in the reserved high band.
+        assert len(captured_diag_ref) == 1
+        diag_ref = captured_diag_ref[0]
+        assert diag_ref >= 0x8000, f"diag_ref {diag_ref:#06x} must be in reserved band (>=0x8000)"
+
+        # Every ref frame must carry the per-run diag_ref (not the old global sentinel).
         assert len(captured_ref_frames) > 0, "No audio.ref_media frames were streamed"
         for data in captured_ref_frames:
             parsed = audio_frame.parse_frame(data)
-            assert parsed.stream_ref == DIAG_STREAM_REF, (
-                f"Expected stream_ref={DIAG_STREAM_REF:#06x}, got {parsed.stream_ref:#06x}"
+            assert parsed.stream_ref == diag_ref, (
+                f"Expected stream_ref={diag_ref:#06x}, got {parsed.stream_ref:#06x}"
             )
 
     asyncio.run(scenario())
@@ -334,3 +344,89 @@ def test_u_busy_during_settle_no_ref_frames(audio_agent_auth):
         )
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Finding A — per-run diag_ref: reserved band + derivation from rid
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_frames_use_per_run_diag_ref_in_reserved_band(audio_agent_auth):
+    """Frames streamed for a U run must carry stream_ref >= 0x8000 (reserved high band),
+    and two different request ids yield different diag_refs (almost always).
+
+    Strategy: intercept group_send to capture the diag_command (to inspect diag_ref)
+    and the audio.ref_media frames (to verify their stream_ref matches).
+    """
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-pref", callsign="OE1PRF", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        captured_commands: list[dict] = []
+        captured_ref_frames: list[bytes] = []
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.diag_command":
+                captured_commands.append(message["command"])
+            if message.get("type") == "audio.ref_media":
+                captured_ref_frames.append(message["data"])
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_agent_reply():
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                await asyncio.sleep(REF_STREAM_SETTLE_S + 0.1)
+                report = dict(_SAMPLE_AGENT_REPORT)
+                report["anchor"] = "U"
+                report["request_id"] = rid
+                await agent.send_to(text_data=json.dumps(report))
+
+            agent_task = asyncio.ensure_future(fake_agent_reply())
+            await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # diag_ref in the command must be in the reserved high band.
+        assert len(captured_commands) == 1
+        cmd = captured_commands[0]
+        diag_ref = cmd.get("diag_ref")
+        assert diag_ref is not None, "diag_ref must be present in diag_command"
+        assert diag_ref >= 0x8000, f"diag_ref {diag_ref:#06x} must be >= 0x8000"
+
+        # Every ref frame must carry the same diag_ref from the command.
+        assert len(captured_ref_frames) > 0
+        for data in captured_ref_frames:
+            parsed = audio_frame.parse_frame(data)
+            assert parsed.stream_ref == diag_ref, (
+                f"frame stream_ref {parsed.stream_ref:#06x} != diag_ref {diag_ref:#06x}"
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_two_different_rids_yield_different_diag_refs():
+    """Two calls with different request ids must (almost always) produce different diag_refs."""
+    import uuid
+
+    # diag_ref = 0x8000 | (int(rid[:4], 16) & 0x7FFF)
+    def _derive(rid):
+        return 0x8000 | (int(rid[:4], 16) & 0x7FFF)
+
+    refs = {_derive(uuid.uuid4().hex) for _ in range(20)}
+    # With 15 random bits, 20 draws should not all collide.
+    assert len(refs) > 1, "different rids must (almost always) yield different diag_refs"

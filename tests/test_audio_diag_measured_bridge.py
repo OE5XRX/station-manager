@@ -153,3 +153,40 @@ def test_finish_u_reference_uses_fixture_constants_not_client_signal():
         "level_dbfs": d.REF_LEVEL_DBFS,
         "window_ms": d.REF_WINDOW_MS,
     }, f"Expected fixture constants in reference, got: {rep['reference']}"
+
+
+# ---------------------------------------------------------------------------
+# Finding B — MeasuredTxBridge fd-ownership handoff (stop vs read_measurement)
+# ---------------------------------------------------------------------------
+
+
+def _make_bridge_with_open_pipe():
+    """Return a started MeasuredTxBridge whose read_fd is a real OS pipe."""
+    r, w = os.pipe()
+    os.write(w, b"\x01\x00" * 80)  # 80 S16LE samples = 160 bytes
+    os.close(w)
+
+    def fake_spawn(make_argv):
+        return _FakeProc(), r
+
+    br = d.MeasuredTxBridge("tx.node", 47060, 16000, spawn=fake_spawn, socket_factory=_FakeSock)
+    br.start()
+    return br
+
+
+def test_stop_before_read_measurement_returns_empty():
+    """stop() takes the fd; subsequent read_measurement sees None and returns b''."""
+    br = _make_bridge_with_open_pipe()
+    br.stop()
+    # read_measurement after stop → fd already taken by stop → returns b""
+    result = br.read_measurement(160, timeout=1.0)
+    assert result == b"", f"Expected b'' after stop, got {result!r}"
+
+
+def test_read_measurement_then_stop_no_double_close():
+    """read_measurement takes the fd; subsequent stop() sees None and does not double-close."""
+    br = _make_bridge_with_open_pipe()
+    data = br.read_measurement(160, timeout=1.0)
+    assert len(data) == 160
+    # stop() after read_measurement → fd already taken → must not raise
+    br.stop()  # should be a no-op on the fd, no OSError

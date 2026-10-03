@@ -20,7 +20,6 @@ from channels.layers import get_channel_layer
 
 from apps.audio.constants import agent_group
 from apps.audio.diagnostics import build_run_report, iter_media_frames, load_reference_frames
-from station_agent.audio.diagnostics import DIAG_STREAM_REF
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -119,6 +118,11 @@ async def run_headless_diagnostic(
     layer = get_channel_layer()
     reply = await layer.new_channel()
 
+    # Per-run stream_ref in the reserved high band (≥ 0x8000) so frames can only
+    # reach the run they belong to.  Real slot/mic refs are small ascending values
+    # and can never collide with this range.
+    diag_ref = 0x8000 | (int(rid[:4], 16) & 0x7FFF)
+
     # 3. Build and send the diag_command to the agent group.
     command = {
         "v": 1,
@@ -127,6 +131,7 @@ async def run_headless_diagnostic(
         "anchor": anchor,
         "slot": slot,
         "signal": signal,
+        "diag_ref": diag_ref,
     }
     await layer.group_send(
         agent_group(station_id),
@@ -159,7 +164,7 @@ async def run_headless_diagnostic(
         except TimeoutError:
             # No early reply — agent accepted the run.  Stream the fixture frames.
             frames = load_reference_frames()
-            for data in iter_media_frames(frames, stream_ref=DIAG_STREAM_REF, repeat=REF_REPEAT):
+            for data in iter_media_frames(frames, stream_ref=diag_ref, repeat=REF_REPEAT):
                 await layer.group_send(
                     agent_group(station_id),
                     {"type": "audio.ref_media", "data": data},

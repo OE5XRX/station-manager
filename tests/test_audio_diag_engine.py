@@ -197,20 +197,23 @@ def _engine_with_diag(diag):
 
 
 def test_u_diag_is_nonblocking_and_emits_result():
-    from station_agent.audio import diagnostics, frame
+    from station_agent.audio import frame
 
     diag = _FakeDiagBridge()
     eng, emitted = _engine_with_diag(diag)
 
+    # Use a per-run diag_ref in the reserved high band (≥ 0x8000).
+    diag_ref = 0x8ABC
+
     async def scenario():
         ret = await eng.on_diag_command(
-            {"request_id": "r1", "anchor": "U", "slot": 0, "signal": {}}
+            {"request_id": "r1", "anchor": "U", "slot": 0, "signal": {}, "diag_ref": diag_ref}
         )
         assert ret is None  # non-blocking: no synchronous result
         assert diag.started is True
-        # feed a reference frame via the normal media path
+        # feed a reference frame tagged with the per-run ref → routed to bridge
         f = frame.pack_frame(
-            stream_ref=diagnostics.DIAG_STREAM_REF,
+            stream_ref=diag_ref,
             seq=0,
             ts=0,
             flags=0,
@@ -259,15 +262,14 @@ def test_second_u_while_running_is_busy():
 
 
 def test_diag_ref_frame_ignored_when_no_diag_active():
-    from station_agent.audio import diagnostics, frame
+    from station_agent.audio import frame
 
     diag = _FakeDiagBridge()
     eng, _ = _engine_with_diag(diag)
 
     async def scenario():
-        f = frame.pack_frame(
-            stream_ref=diagnostics.DIAG_STREAM_REF, seq=0, ts=0, flags=0, payload=b"x"
-        )
+        # A frame in the high-band ref range with no active diag → silently dropped.
+        f = frame.pack_frame(stream_ref=0x8ABC, seq=0, ts=0, flags=0, payload=b"x")
         await eng.on_media_frame(f)  # no diag running → silently ignored, no crash
         assert diag.fed == []
 
@@ -368,5 +370,82 @@ def test_mic_ptt_preempts_diag_even_when_resolve_node_returns_none():
         assert eng._diag is None, "self._diag must be cleared on PTT"
         assert eng._tx is None, "TX must NOT be started when resolve_node returns None"
         gate.set()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Finding A — per-run diag_ref: cross-run frame isolation
+# ---------------------------------------------------------------------------
+
+
+def test_frame_with_run_ref_is_fed_to_bridge():
+    """A frame tagged with the active run's diag_ref IS routed to the bridge."""
+    from station_agent.audio import frame
+
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+    diag_ref = 0x8001
+
+    async def scenario():
+        await eng.on_diag_command(
+            {"request_id": "rx1", "anchor": "U", "slot": 0, "signal": {}, "diag_ref": diag_ref}
+        )
+        f = frame.pack_frame(stream_ref=diag_ref, seq=0, ts=0, flags=0, payload=b"\xaa\xbb")
+        await eng.on_media_frame(f)
+        assert b"\xaa\xbb" in diag.fed
+        await eng._diag_task
+
+    asyncio.run(scenario())
+
+
+def test_frame_with_different_ref_is_dropped():
+    """A frame tagged with a DIFFERENT ref while a run is active is NOT routed to the bridge."""
+    from station_agent.audio import frame
+
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+    diag_ref = 0x8001
+    other_ref = diag_ref ^ 1  # any different high-band value
+
+    async def scenario():
+        await eng.on_diag_command(
+            {"request_id": "rx2", "anchor": "U", "slot": 0, "signal": {}, "diag_ref": diag_ref}
+        )
+        # Frame carrying the stale/wrong ref must be dropped.
+        f = frame.pack_frame(stream_ref=other_ref, seq=0, ts=0, flags=0, payload=b"\xcc\xdd")
+        await eng.on_media_frame(f)
+        assert diag.fed == [], "frame with wrong diag_ref must not reach the bridge"
+        await eng._diag_task
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Finding C — anchor C must honour the "diagnostic running" busy gate
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_c_refused_while_diag_active(monkeypatch):
+    """A C request while self._diag is set must return busy=True and not run."""
+    from station_agent.audio import diagnostics
+
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+
+    def _must_not_run(**kw):
+        raise AssertionError("run_diagnostic must NOT be called while a diag is active")
+
+    monkeypatch.setattr(diagnostics, "run_diagnostic", _must_not_run)
+
+    async def scenario():
+        # Plant an active diagnostic so _diag is set.
+        eng._diag = {"bridge": diag, "slot": 0, "ref": 0x8001}
+        ret = await eng.on_diag_command(
+            {"request_id": "rc1", "anchor": "C", "slot": 0, "signal": {}}
+        )
+        assert ret is not None
+        assert ret["busy"] is True
+        assert "diagnostic is already running" in ret["error"]
 
     asyncio.run(scenario())

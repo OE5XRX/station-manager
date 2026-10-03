@@ -17,6 +17,7 @@ import re as _re
 import socket
 import struct
 import subprocess as _subprocess
+import threading
 
 from station_agent.audio import rtp as _rtp
 from station_agent.audio import selftest as _selftest
@@ -504,6 +505,7 @@ class MeasuredTxBridge:
         self._proc = None
         self._sock = None
         self._read_fd = None
+        self._fd_lock = threading.Lock()
         self._seq = 0
         self._ts = 0
 
@@ -527,13 +529,31 @@ class MeasuredTxBridge:
         self._ts = (self._ts + RTP_TS_PER_FRAME) & 0xFFFFFFFF  # RTP 48 kHz clock, 20 ms frame
 
     def read_measurement(self, nbytes: int, timeout: float) -> bytes:
-        if self._read_fd is None:
+        # Atomically take ownership of the fd under the lock so stop() cannot
+        # close it from another thread while we are mid-read.
+        with self._fd_lock:
+            fd = self._read_fd
+            self._read_fd = None
+        if fd is None:
             return b""
-        pcm = self._read_measfd(self._read_fd, nbytes, timeout)
-        self._read_fd = None  # read_measfd closes it
-        return pcm
+        # Blocking read happens OUTSIDE the lock so stop() is not held up.
+        try:
+            return self._read_measfd(fd, nbytes, timeout)
+        finally:
+            # _default_read_measfd closes fd; guard against non-default impls.
+            try:
+                _os.close(fd)
+            except OSError:
+                pass
 
     def stop(self) -> None:
+        # Atomically take ownership of the fd (if any) so read_measurement
+        # cannot race on it after we decide to close.
+        with self._fd_lock:
+            fd = self._read_fd
+            self._read_fd = None
+        # Always terminate the gst process first — this closes the pipe
+        # write-end, which unblocks any thread already mid-read on the read-end.
         _terminate_proc(self._proc)
         self._proc = None
         if self._sock is not None:
@@ -542,9 +562,8 @@ class MeasuredTxBridge:
             except OSError:
                 pass
             self._sock = None
-        if self._read_fd is not None:
+        if fd is not None:
             try:
-                _os.close(self._read_fd)
+                _os.close(fd)
             except OSError:
                 pass
-            self._read_fd = None

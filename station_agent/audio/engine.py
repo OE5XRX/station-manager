@@ -210,10 +210,10 @@ class AudioEngine:
             logger.debug("engine: dropping malformed media frame")
             return
         # Route diagnostic reference frames (server-originated U-anchor) to the diagnostic
-        # bridge BEFORE the TX gate.  Ignore silently when no diagnostic is active.
-        if mf.stream_ref == DIAG_STREAM_REF:
-            if self._diag is not None:
-                self._diag["bridge"].feed_opus(mf.payload)
+        # bridge BEFORE the TX gate.  Match only the per-run ref so frames from a
+        # concurrent refused/stale run cannot pollute the active diagnostic bridge.
+        if self._diag is not None and mf.stream_ref == self._diag["ref"]:
+            self._diag["bridge"].feed_opus(mf.payload)
             return
         if self._tx is None or mf.stream_ref != self.registry.mic_ref:
             return  # only op.mic media is injected, and only while TX is up
@@ -255,8 +255,16 @@ class AudioEngine:
                 "busy": True,
                 "error": "refused: TX active — diagnostic inject would reach a keyed transmitter",
             }
+        # Mutual exclusion: only one diagnostic (any anchor) at a time.
+        if self._diag is not None:
+            return {
+                **base,
+                "busy": True,
+                "error": "refused: a diagnostic is already running",
+            }
         if anchor == "U":
-            return await self._start_u_diagnostic(base, slot, signal)
+            diag_ref = command.get("diag_ref", DIAG_STREAM_REF)
+            return await self._start_u_diagnostic(base, slot, signal, diag_ref)
         # anchor C — synchronous inject/measure (unchanged behaviour)
         try:
             report = await self._to_thread(
@@ -273,11 +281,17 @@ class AudioEngine:
             return {**base, "error": f"{type(exc).__name__}: {exc}"}
         return {**base, **report}
 
-    async def _start_u_diagnostic(self, base: dict, slot: int, signal: dict) -> dict | None:
+    async def _start_u_diagnostic(
+        self, base: dict, slot: int, signal: dict, diag_ref: int
+    ) -> dict | None:
         """Start a non-blocking anchor-U diagnostic run.
 
         Returns ``None`` on acceptance (result emitted later); returns a busy/error
         dict if the run is refused or the bridge fails to start.
+
+        *diag_ref* is the per-run stream_ref assigned by the orchestrator (≥ 0x8000)
+        so that frames can only reach the run they belong to.  Falls back to the
+        global ``DIAG_STREAM_REF`` sentinel when the command omits the field.
         """
         if self._diag is not None:
             return {**base, "busy": True, "error": "refused: a diagnostic is already running"}
@@ -291,7 +305,7 @@ class AudioEngine:
             logger.exception("engine: U diagnostic bridge start failed")
             await self._to_thread(_safe_stop, bridge)
             return {**base, "error": f"U diagnostic bridge start failed: {exc}"}
-        self._diag = {"bridge": bridge, "slot": slot}
+        self._diag = {"bridge": bridge, "slot": slot, "ref": diag_ref}
         self._diag_task = asyncio.ensure_future(
             self._run_u_measurement(base, slot, signal, bridge)
         )
