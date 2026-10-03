@@ -34,10 +34,14 @@ Content-Type: application/json
 |-------|--------|---------|-------|
 | `anchor` | `"C"`, `"U"` | `"C"` | Inject point. Both anchors are production-supported via this endpoint. |
 | `slot` | integer | optional (default 0) | Station hardware slot number |
-| `signal.kind` | `"sine"` | `"sine"` | Reference signal type |
-| `signal.freq_hz` | integer | `1000` | Test tone frequency |
-| `signal.level_dbfs` | float | `-20.0` | Inject level, dBFS peak |
-| `signal.duration_ms` | integer | `500` | Measurement window (max 5000 ms) |
+| `signal.kind` | `"sine"` | `"sine"` | Reference signal type. **Anchor C only.** |
+| `signal.freq_hz` | integer | `1000` | Test tone frequency. **Anchor C only.** |
+| `signal.level_dbfs` | float | `-20.0` | Inject level, dBFS peak. **Anchor C only.** |
+| `signal.duration_ms` | integer | `500` | Measurement window (max 5000 ms). **Anchor C only.** |
+
+> **Note:** The `signal` fields (`kind`, `freq_hz`, `level_dbfs`, `duration_ms`) configure
+> anchor **C** only. Anchor **U** ignores them entirely — it always replays the committed
+> 1 kHz / −20 dBFS Opus reference fixture with fixed settle and measurement windows.
 
 ### curl example
 

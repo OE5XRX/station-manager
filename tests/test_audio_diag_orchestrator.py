@@ -15,6 +15,7 @@ import pytest
 from channels.testing import WebsocketCommunicator
 
 from apps.audio.orchestrator import (
+    REF_STREAM_SETTLE_S,
     AgentNotConnected,
     DiagnosticTimeout,
     StationBusy,
@@ -194,10 +195,19 @@ def test_u_frames_use_diag_stream_ref(audio_agent_auth):
             assert connected is True
 
             async def fake_agent_reply():
-                """Drain the diag_command, then send back a diag_result."""
+                """Drain the diag_command, wait past the settle window, then reply.
+
+                A real accepted U run never sends anything during the settle window
+                (the agent only emits a result after receiving ref frames).  Delay
+                by slightly more than REF_STREAM_SETTLE_S so the orchestrator's
+                bounded-receive times out → fixture frames are streamed → then the
+                reply is consumed from the post-stream await as expected.
+                """
                 msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
                 assert msg["type"] == "diag_command"
                 rid = msg["request_id"]
+                # Wait past the settle window so the early-refusal check times out.
+                await asyncio.sleep(REF_STREAM_SETTLE_S + 0.1)
                 report = dict(_SAMPLE_AGENT_REPORT)
                 report["anchor"] = "U"
                 report["request_id"] = rid
@@ -256,5 +266,71 @@ def test_busy_reply_raises_station_busy(audio_agent_auth):
         await agent_task
 
         await agent.disconnect()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Test: U busy during settle → StationBusy + zero ref frames streamed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_busy_during_settle_no_ref_frames(audio_agent_auth):
+    """Anchor-U request where the agent replies busy during the settle window
+    must raise StationBusy and stream ZERO audio.ref_media frames.
+
+    This is the core regression guard for the cross-run ref-frame pollution bug:
+    a refused U run must not inject its fixture frames into the channel group,
+    because those frames carry the global DIAG_STREAM_REF and would be routed
+    into the first (running) diagnostic's bridge.
+    """
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-ubsy", callsign="OE1UBS", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        ref_frame_count: list[int] = [0]
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.ref_media":
+                ref_frame_count[0] += 1
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_u_busy_reply():
+                """Drain the diag_command, immediately send a busy report."""
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                busy_report = {
+                    "type": "diag_result",
+                    "request_id": rid,
+                    "anchor": "U",
+                    "busy": True,
+                    "error": "refused: diagnostic already active",
+                }
+                await agent.send_to(text_data=json.dumps(busy_report))
+
+            agent_task = asyncio.ensure_future(fake_u_busy_reply())
+            with pytest.raises(StationBusy):
+                await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # Regression guard: a refused U run must not stream ANY ref frames.
+        assert ref_frame_count[0] == 0, (
+            f"Expected 0 audio.ref_media frames for a refused U run, got {ref_frame_count[0]}"
+        )
 
     asyncio.run(scenario())

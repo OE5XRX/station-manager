@@ -103,6 +103,11 @@ async def run_headless_diagnostic(
         If the station does not exist or its status is not ``"online"``.
     DiagnosticTimeout
         If the agent does not reply within *timeout* seconds.
+    StationBusy
+        If the agent refuses the run because the station is busy (another
+        diagnostic or TX is active).  For anchor U this is detected during the
+        settle window — before any fixture frames are streamed — so a refused run
+        never injects frames into the channel group.
     """
     # 1. Presence check — fail fast if the station is not online.
     station = await _get_station(station_id)
@@ -133,19 +138,43 @@ async def run_headless_diagnostic(
         },
     )
 
-    # 4. For anchor U: stream the reference frames after sending the command.
+    # 4. For anchor U: use the settle window as an early-refusal check, then stream frames.
     if anchor == "U":
-        # Settle: give the agent time to spawn gst and bind the udpsrc port before the
-        # first datagram arrives (see REF_STREAM_SETTLE_S for rationale).
-        await asyncio.sleep(REF_STREAM_SETTLE_S)
-        frames = load_reference_frames()
-        for data in iter_media_frames(frames, stream_ref=DIAG_STREAM_REF, repeat=REF_REPEAT):
-            await layer.group_send(
-                agent_group(station_id),
-                {"type": "audio.ref_media", "data": data},
-            )
+        # Dual-purpose settle: wait up to REF_STREAM_SETTLE_S for an early reply on the
+        # reply channel.
+        #
+        # - Accepted U run: the agent's _start_u_diagnostic returns None (it only emits a
+        #   result after receiving frames), so nothing arrives during the settle → receive
+        #   times out → fall through and stream the fixture frames as normal.  The settle
+        #   window also lets the agent spawn gst and bind the udpsrc port before the first
+        #   datagram arrives (see REF_STREAM_SETTLE_S for rationale).
+        #
+        # - Refused run (busy/error): the agent replies immediately (no I/O) → arrives
+        #   within the settle window → handled here and returned WITHOUT streaming any
+        #   frames.  This prevents fixture frames from reaching the channel group when
+        #   refused; those frames carry the global DIAG_STREAM_REF and would be routed into
+        #   any concurrently running diagnostic's bridge, polluting its measurement.
+        try:
+            early_envelope = await asyncio.wait_for(layer.receive(reply), REF_STREAM_SETTLE_S)
+        except TimeoutError:
+            # No early reply — agent accepted the run.  Stream the fixture frames.
+            frames = load_reference_frames()
+            for data in iter_media_frames(frames, stream_ref=DIAG_STREAM_REF, repeat=REF_REPEAT):
+                await layer.group_send(
+                    agent_group(station_id),
+                    {"type": "audio.ref_media", "data": data},
+                )
+        else:
+            # Early reply received — handle it and return without streaming.
+            early_report = early_envelope["msg"]
+            if early_report.get("busy"):
+                raise StationBusy()
+            if early_report.get("error"):
+                return {"anchor": anchor, "error": early_report["error"]}
+            # Unexpected early full report (shouldn't happen in practice, but handle cleanly).
+            return build_run_report(early_report)
 
-    # 5. Await the correlated reply.
+    # 5. Await the correlated reply (post-stream for U, or first reply for C).
     try:
         envelope = await asyncio.wait_for(layer.receive(reply), timeout)
     except TimeoutError:
