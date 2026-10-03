@@ -32,7 +32,7 @@ Content-Type: application/json
 
 | Field | Values | Default | Notes |
 |-------|--------|---------|-------|
-| `anchor` | `"C"` | `"C"` | Inject point. Anchor `"U"` (server-originated headless reference) is experimental and only validated on-station; it is rejected at the API. |
+| `anchor` | `"C"`, `"U"` | `"C"` | Inject point. Both anchors are production-supported via this endpoint. |
 | `slot` | integer | required | Station hardware slot number |
 | `signal.kind` | `"sine"` | `"sine"` | Reference signal type |
 | `signal.freq_hz` | integer | `1000` | Test tone frequency |
@@ -94,6 +94,7 @@ HTTP 200 — diagnostic run report:
 | `400` | Bad anchor/slot/signal (e.g. unknown anchor, slot out of range, unsupported signal kind) |
 | `403` | Applicant membership or insufficient access level |
 | `404` | Station ID not found or not in caller's topology scope |
+| `409` | Station busy — another diagnostic (e.g. operator PTT or in-flight anchor-U run) is active; retry when the station is idle |
 | `503` | Agent offline / not connected |
 | `504` | Diagnostic timed out waiting for agent result |
 
@@ -101,9 +102,8 @@ HTTP 200 — diagnostic run report:
 
 ## Bisection Loop (AI/Operator Interpretation)
 
-The diagnostic measures the digital TX chain using anchor C (the only production-ready
-anchor). Anchor U (server-originated headless reference) is experimental and not yet
-available via the REST API.
+The diagnostic measures the digital TX chain using anchor C or anchor U, both
+production-ready via this endpoint.
 
 ### Anchor C — agent/station sub-chain (production)
 
@@ -136,13 +136,30 @@ ALSA/UAC2 boundary. Does not cover the relay or Opus decode path.
    C silent                                →  agent TX node not found / GStreamer failed
    ```
 
-### Anchor U — experimental, on-station only
+### Anchor U — server-originated headless reference (production)
 
 Server injects a calibrated sine reference into the op.mic uplink toward the agent,
 replacing the browser at its protocol boundary. Tests the full relay → agent → GStreamer
-→ PipeWire sink → ALSA path without a real browser. This anchor is **not yet validated
-end-to-end** and is rejected by the REST API (`400`). Use it only via the on-station CLI
-for development and validation work.
+→ PipeWire sink → ALSA path without a real browser — the entire digital chain U→C→D is
+covered by a single run, with no browser session required.
+
+**Idle-station requirement:** Anchor U holds exclusive control of the agent's TX path for
+the duration of the run. If another diagnostic or an operator PTT event is already active,
+the endpoint returns `409 {"detail": "station busy"}`. Retry when the station is idle.
+
+**RF-safety:** Anchor U terminates at the PipeWire sink / ALSA boundary (tap D) exactly
+as anchor C does. It does **not** key the SA818 transmitter, does **not** generate RF,
+and does **not** assert PTT.
+
+**Request example:**
+
+```bash
+curl -s -X POST \
+  "https://station-manager.example.com/api/v1/stations/211/audio-diagnostics/" \
+  -H "Authorization: Bearer <your-PAT>" \
+  -H "Content-Type: application/json" \
+  -d '{"anchor":"U","slot":1}'
+```
 
 ---
 
