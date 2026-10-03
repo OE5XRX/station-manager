@@ -90,6 +90,49 @@ def test_anon_cannot_archive(anon_client, image_release):
     assert r.status_code == 401
 
 
+def test_non_staff_cannot_restore(api_topology, bearer, image_release):
+    t = api_topology
+    assert (
+        bearer(t["region_mgr"])
+        .post(reverse("api:image-restore", args=[image_release.pk]))
+        .status_code
+        == 403
+    )
+
+
+def test_non_staff_cannot_import(api_topology, bearer):
+    """region_mgr → 403 from the can_manage_images gate, and no job row created.
+
+    No monkeypatch of fetch_releases: the gate fires at the very top of the
+    action, before any fetch or ImageImportJob creation, so a non-staff POST
+    must never reach the network or the DB.
+    """
+    from apps.images.models import ImageImportJob
+
+    t = api_topology
+    before = ImageImportJob.objects.count()
+    r = bearer(t["region_mgr"]).post(
+        reverse("api:image-import"),
+        {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
+        format="json",
+    )
+    assert r.status_code == 403
+    assert ImageImportJob.objects.count() == before
+
+
+def test_anon_cannot_import(anon_client):
+    from apps.images.models import ImageImportJob
+
+    before = ImageImportJob.objects.count()
+    r = anon_client.post(
+        reverse("api:image-import"),
+        {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
+        format="json",
+    )
+    assert r.status_code == 401
+    assert ImageImportJob.objects.count() == before
+
+
 # ---------------------------------------------------------------------------
 # available/ action
 # ---------------------------------------------------------------------------
