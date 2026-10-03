@@ -16,7 +16,9 @@ stash the diff on the instance via a private attribute that gets
 deleted after emission.
 """
 
-from django.db.models.signals import post_delete, post_save, pre_save
+import threading
+
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 
 from apps.accounts.models import AccountAuditLog
@@ -27,6 +29,40 @@ from apps.stations.models import (
     StationAssignment,
     StationAuditLog,
 )
+
+# Thread-local set tracking station PKs that are currently being deleted.
+# Used by cascade sub-signals to skip audit-log creation that would leave
+# dangling FKs (see _on_station_pre_delete / _on_station_post_delete).
+_deleting_stations = threading.local()
+
+# --- Station deletion marker ---
+
+
+@receiver(pre_delete, sender=Station)
+def _on_station_pre_delete(sender, instance, **kwargs):
+    """Track stations being deleted so cascade sub-signals can skip sub-audits.
+
+    Django's deletion collector runs SET_NULL on related audit logs *before*
+    firing post_delete on cascade-deleted objects (e.g. StationAssignment).
+    Those cascade post_delete signals would create *new* audit logs pointing
+    back to the station — leaving dangling FKs after the station row is
+    removed (and outside the collector's SET_NULL scope).  Tracking the pk in
+    a thread-local lets sub-signal handlers skip the station-targeted audit
+    log creation.
+    """
+    ids = getattr(_deleting_stations, "ids", None)
+    if ids is None:
+        _deleting_stations.ids = set()
+    _deleting_stations.ids.add(instance.pk)
+
+
+@receiver(post_delete, sender=Station)
+def _on_station_post_delete(sender, instance, **kwargs):
+    """Clean up the thread-local tracker after station deletion completes."""
+    ids = getattr(_deleting_stations, "ids", None)
+    if ids is not None:
+        ids.discard(instance.pk)
+
 
 # --- StationAssignment ---
 
@@ -57,6 +93,15 @@ def _on_station_assignment_save(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=StationAssignment)
 def _on_station_assignment_delete(sender, instance, **kwargs):
+    # Skip station audit when the station itself is being cascade-deleted.
+    # Django's collector SET_NULLs pre-existing audit logs before this signal
+    # fires, but a newly created audit log would land AFTER that phase,
+    # leaving a dangling FK.  The station deletion audit already covers the
+    # event; per-assignment revoke audits are redundant when the whole station
+    # is gone.
+    ids = getattr(_deleting_stations, "ids", None)
+    if ids and instance.station_id in ids:
+        return
     # Bestehender StationAuditLog-Eintrag (unverändert):
     StationAuditLog.log(
         station=instance.station,
