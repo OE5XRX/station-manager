@@ -7,6 +7,7 @@ status/secret fields are read-only or absent. No ``fields="__all__"``.
 from rest_framework import serializers
 
 from apps.deployments.models import Deployment
+from apps.monitoring.models import AlertRule
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
@@ -96,6 +97,21 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
         model = RolloutSequenceEntry
         fields = ["id", "sequence", "tag", "position"]
         read_only_fields = ["id"]
+
+
+class AlertRuleWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AlertRule
+        fields = [
+            "id",
+            "alert_type",
+            "threshold",
+            "severity",
+            "is_active",
+            "description",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
 
 
 class DeploymentCreateSerializer(serializers.ModelSerializer):

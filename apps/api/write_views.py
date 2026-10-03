@@ -18,6 +18,7 @@ from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
 from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import (
+    AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
@@ -485,6 +486,52 @@ class RolloutSequenceEntryViewSet(
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {instance.pk} deleted",
+        )
+        instance.delete()
+
+
+class AlertRuleViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.AlertRuleViewSet,
+):
+    """Full CRUD for AlertRule (global, region-mgr/staff).
+
+    AlertRule is a global config resource with no topology FK — gated purely
+    by role (is_any_region_manager). alert_type is UNIQUE per the model, so
+    create will fail with 400 if the client POSTs a duplicate type.
+    """
+
+    write_serializer_class = AlertRuleWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_alert_rule(user)
+
+    def _guard_create(self):
+        if not ws.can_write_alert_rule(self.request.user):
+            raise PermissionDenied("AlertRule writes require region-manager or staff.")
+
+    def perform_create(self, serializer):
+        self._guard_create()
+        rule = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"AlertRule {rule.alert_type} created",
+        )
+
+    def perform_update(self, serializer):
+        rule = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"AlertRule {rule.alert_type} updated",
+        )
+
+    def perform_destroy(self, instance):
+        audit_config_write(
+            self.request,
+            message=f"AlertRule {instance.alert_type} deleted",
         )
         instance.delete()
 
