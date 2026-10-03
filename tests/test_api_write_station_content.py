@@ -376,6 +376,75 @@ class TestStationPhotoUpdate:
             message__contains="via API token",
         ).exists()
 
+    def test_patch_with_new_image_removes_old_blob(self, api_topology, bearer):
+        """PATCH with a new image file must delete the old storage blob."""
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        from django.test import TestCase
+
+        from apps.stations.models import StationPhoto
+
+        t = api_topology
+        # Upload an initial file directly into default storage
+        old_name = default_storage.save(
+            "stations/photos/test_old.png",
+            ContentFile(TINY_PNG, name="test_old.png"),
+        )
+        try:
+            photo = StationPhoto.objects.create(
+                station=t["station_in"],
+                image=old_name,
+                caption="Original",
+                uploaded_by=t["station_user"],
+            )
+            url = reverse("api:station-photo-detail", args=[photo.pk])
+            # captureOnCommitCallbacks forces on_commit hooks to fire even
+            # though pytest-django wraps the test in a savepoint that never
+            # commits to the real database.
+            with TestCase.captureOnCommitCallbacks(execute=True):
+                r = bearer(t["station_user"]).patch(
+                    url,
+                    {"image": _tiny_image("new_photo.png")},
+                    format="multipart",
+                )
+            assert r.status_code == 200
+            assert not default_storage.exists(old_name), (
+                "Old image blob must be deleted from storage after PATCH with new image"
+            )
+        finally:
+            # Cleanup new blob if the old cleanup somehow failed
+            photo.refresh_from_db()
+            if photo.image and default_storage.exists(photo.image.name):
+                default_storage.delete(photo.image.name)
+
+    def test_patch_without_image_does_not_remove_blob(self, api_topology, bearer):
+        """PATCH that does not include `image` must leave the blob intact."""
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+
+        from apps.stations.models import StationPhoto
+
+        t = api_topology
+        stored_name = default_storage.save(
+            "stations/photos/test_keep.png",
+            ContentFile(TINY_PNG, name="test_keep.png"),
+        )
+        try:
+            photo = StationPhoto.objects.create(
+                station=t["station_in"],
+                image=stored_name,
+                caption="Keep me",
+                uploaded_by=t["station_user"],
+            )
+            url = reverse("api:station-photo-detail", args=[photo.pk])
+            r = bearer(t["station_user"]).patch(url, {"caption": "Updated caption"}, format="json")
+            assert r.status_code == 200
+            assert default_storage.exists(stored_name), (
+                "Blob must NOT be deleted when image was not included in the PATCH"
+            )
+        finally:
+            default_storage.delete(stored_name)
+
 
 class TestStationPhotoDelete:
     def test_station_user_can_delete_in_scope(self, api_topology, bearer):

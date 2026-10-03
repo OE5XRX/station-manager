@@ -16,6 +16,19 @@ from django.db.models import Max
 from .models import RolloutSequence, RolloutSequenceEntry
 
 
+def touch_sequence(sequence: RolloutSequence, by_user) -> None:
+    """Stamp *sequence*.updated_by / updated_at without reordering entries.
+
+    Acquires a SELECT FOR UPDATE lock on the parent row so it serialises
+    with concurrent add/remove/move calls.  Used when a field other than
+    ``position`` is mutated on an entry (e.g. a tag-only PATCH).
+    """
+    with transaction.atomic():
+        RolloutSequence.objects.select_for_update().filter(pk=sequence.pk).first()
+        sequence.updated_by = by_user
+        sequence.save(update_fields=["updated_by", "updated_at"])
+
+
 def add_entry(
     sequence: RolloutSequence,
     tag,

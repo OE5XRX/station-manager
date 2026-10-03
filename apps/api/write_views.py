@@ -8,6 +8,7 @@ Create-scope: enforced in perform_create. Every mutation audits token origin.
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.shortcuts import get_object_or_404
@@ -52,6 +53,20 @@ from apps.provisioning.models import ProvisioningJob
 from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
 from apps.rollouts import services as rollout_services
 from apps.stations.models import Station, StationAuditLog, StationLogEntry, StationPhoto
+
+
+def _delete_storage_file(name: str) -> None:
+    """Delete *name* from the default storage backend, ignoring missing-file errors.
+
+    Called via transaction.on_commit so the deletion only happens after the DB
+    update has committed.  Silently skips if the file no longer exists (concurrent
+    delete, manual cleanup, etc.).
+    """
+    try:
+        if default_storage.exists(name):
+            default_storage.delete(name)
+    except Exception:  # pragma: no cover — best-effort, never break a mutation
+        pass
 
 
 class ScopedWriteViewSet:
@@ -465,7 +480,11 @@ class StationPhotoViewSet(
         new_station = serializer.validated_data.get("station", serializer.instance.station)
         if not ws.can_write_station_content(self.request.user, new_station):
             raise PermissionDenied("Not allowed to move this photo to that station.")
+        old_name = serializer.instance.image.name if serializer.instance.image else None
         photo = serializer.save()
+        new_name = photo.image.name if photo.image else None
+        if old_name and new_name and old_name != new_name:
+            transaction.on_commit(lambda: _delete_storage_file(old_name))
         audit_station_write(
             self.request,
             station=photo.station,
@@ -552,8 +571,10 @@ class RolloutSequenceEntryViewSet(
             entry.refresh_from_db()
             serializer.instance = entry
         else:
-            # No position change — save other fields normally (tag update etc.)
+            # No position change — save other fields (tag update etc.), then
+            # stamp the parent sequence so updated_by/updated_at stay current.
             entry = serializer.save()
+            rollout_services.touch_sequence(entry.sequence, by_user=self.request.user)
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} updated",

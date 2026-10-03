@@ -362,3 +362,41 @@ def test_api_reorder_entry_leaves_positions_gap_free(api_topology, bearer):
     # entry_a should have been pushed to position 1
     entry_a.refresh_from_db()
     assert entry_a.position == 1
+
+
+# ---------------------------------------------------------------------------
+# D4 — tag-only PATCH stamps parent sequence updated_by/updated_at
+# ---------------------------------------------------------------------------
+
+
+def test_entry_tag_only_patch_stamps_parent_sequence(api_topology, bearer):
+    """A PATCH that changes only `tag` (no position) must also bump the parent
+    sequence's updated_by and updated_at, so structural sequence mutations are
+    always reflected on the parent."""
+    import datetime
+
+    from apps.rollouts.models import RolloutSequenceEntry
+
+    seq = _get_or_create_sequence()
+    tag_a = _make_tag("d4-original-tag")
+    tag_b = _make_tag("d4-replacement-tag")
+    entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+
+    # Clear any existing updated_by so we can assert it is set by the PATCH
+    from apps.rollouts.models import RolloutSequence
+
+    RolloutSequence.objects.filter(pk=seq.pk).update(updated_by=None)
+    before = datetime.datetime.now(datetime.UTC)
+
+    url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
+    r = bearer(api_topology["region_mgr"]).patch(url, {"tag": tag_b.pk}, format="json")
+    assert r.status_code == 200
+
+    entry.refresh_from_db()
+    assert entry.tag == tag_b, "Entry tag must be updated"
+
+    seq.refresh_from_db()
+    assert seq.updated_by == api_topology["region_mgr"], (
+        "Parent sequence.updated_by must be set to the API actor on tag-only PATCH"
+    )
+    assert seq.updated_at >= before, "Parent sequence.updated_at must be bumped on tag-only PATCH"

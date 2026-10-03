@@ -90,9 +90,8 @@ def test_schema_image_import_uses_correct_request_body(topology):  # noqa: F811
 
     for ct, schema_info in content.items():
         ref = schema_info.get("schema", {}).get("$ref", "")
-        assert "ImageRelease" not in ref, (
-            f"import/ requestBody ({ct}) references ImageRelease — "
-            "must reference ImageImportInput instead"
+        assert ref.endswith("/ImageImportInput"), (
+            f"import/ requestBody ({ct}) must reference ImageImportInput, got: {ref!r}"
         )
 
 
