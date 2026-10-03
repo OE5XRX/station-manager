@@ -33,7 +33,7 @@ Content-Type: application/json
 | Field | Values | Default | Notes |
 |-------|--------|---------|-------|
 | `anchor` | `"C"`, `"U"` | `"C"` | Inject point. Both anchors are production-supported via this endpoint. |
-| `slot` | integer | required | Station hardware slot number |
+| `slot` | integer | optional (default 0) | Station hardware slot number |
 | `signal.kind` | `"sine"` | `"sine"` | Reference signal type |
 | `signal.freq_hz` | integer | `1000` | Test tone frequency |
 | `signal.level_dbfs` | float | `-20.0` | Inject level, dBFS peak |

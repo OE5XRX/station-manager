@@ -79,7 +79,10 @@ async def run_headless_diagnostic(
         Audio module slot index (default 0).
     timeout:
         Seconds to wait for the agent reply before raising
-        :class:`DiagnosticTimeout`.
+        :class:`DiagnosticTimeout`.  For anchor U the agent reads ~3.5 s of
+        PCM (settle + window + 3 s read timeout in ``finish_u_diagnostic``),
+        so this value must be ≥ ~4 s or a U run will time out here before the
+        agent can reply.  The default 15.0 s is well above that threshold.
 
     Returns
     -------

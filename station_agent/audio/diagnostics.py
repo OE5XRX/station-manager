@@ -20,6 +20,7 @@ import subprocess as _subprocess
 
 from station_agent.audio import rtp as _rtp
 from station_agent.audio import selftest as _selftest
+from station_agent.audio.opus_bridge import RTP_TS_PER_FRAME
 
 _log = _logging.getLogger(__name__)
 
@@ -351,18 +352,19 @@ def run_diagnostic(
 ):
     """Run a diagnostic measurement for the given anchor point.
 
-    Supported anchors:
+    This synchronous entry point supports **anchor C only**.
 
     * **C** — calibrated inject via ``build_measured_inject_argv``.  A sine wave at
       the requested level is injected into the TX PipeWire node and the raw PCM is
       captured from the fdsink tap.  D is computed from C + the static sink volume
       gain (``collect_static_gains``).
 
-    Anchor **U** (server-originated headless reference) is reserved for a future
-    on-station follow-up.  The engine never installs a feeding bridge for U and
-    ``ws_client`` awaits commands serially so reference frames cannot arrive; the
-    anchor is therefore not functional yet.  ``run_diagnostic`` fails fast with an
-    error dict rather than binding a UDP port and measuring silence.
+    Anchor **U** (server-originated headless reference) is handled by the engine's
+    non-blocking path: ``_start_u_diagnostic`` installs a :class:`MeasuredTxBridge`,
+    feeds incoming ``DIAG_STREAM_REF`` Opus frames through it, and then
+    ``finish_u_diagnostic`` reads the tap and assembles the report.  ``run_diagnostic``
+    is never called for anchor U in normal operation; the guard below is
+    defense-in-depth for direct callers.
 
     **D** is always computed from C + measured sink volume on real HW.  The
     ``build_reverse_tap_argv`` helper exists as a foundation for a possible future
@@ -370,11 +372,13 @@ def run_diagnostic(
     does not use it today.
     """
     if anchor == "U":
+        # Defense-in-depth: anchor U is handled by the engine's non-blocking
+        # follow-up path (finish_u_diagnostic); run_diagnostic only supports C.
         return {
             "anchor": "U",
             "error": (
-                "anchor U (server-originated headless reference) is an on-station "
-                "follow-up and not yet functional; use anchor C"
+                "anchor U is handled by the engine's non-blocking follow-up path "
+                "(finish_u_diagnostic); run_diagnostic supports anchor C only"
             ),
         }
     freq = int(signal.get("freq_hz", REF_FREQ_HZ))
@@ -512,7 +516,7 @@ class MeasuredTxBridge:
         except OSError as exc:
             _log.debug("diag-bridge: sendto failed: %s", exc)
         self._seq = (self._seq + 1) & 0xFFFF
-        self._ts = (self._ts + 960) & 0xFFFFFFFF  # RTP 48 kHz clock, 20 ms frame
+        self._ts = (self._ts + RTP_TS_PER_FRAME) & 0xFFFFFFFF  # RTP 48 kHz clock, 20 ms frame
 
     def read_measurement(self, nbytes: int, timeout: float) -> bytes:
         if self._read_fd is None:
