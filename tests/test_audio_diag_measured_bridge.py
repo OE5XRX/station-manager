@@ -131,3 +131,25 @@ def test_finish_u_silent_capture_reports_c_silent():
     )
     pts = {t["point"]: t for t in rep["taps"]}
     assert pts["C"]["silent"] is True and pts["D"]["silent"] is True
+
+
+def test_finish_u_reference_uses_fixture_constants_not_client_signal():
+    """Fix 2: anchor U reports the FIXED fixture constants, not the client-supplied signal.
+
+    Even when the client asks for freq=440/level=-6/duration=5000, the reported
+    reference must reflect the committed fixture (1 kHz / -20 dBFS / 300 ms window).
+    """
+    pcm = _sine_pcm(-20.0)
+    rep = d.finish_u_diagnostic(
+        _CannedBridge(pcm),
+        backend=_FakeBackend(),
+        slot=0,
+        # Client requests non-default values — these must NOT appear in reference.
+        signal={"freq_hz": 440, "level_dbfs": -6.0, "duration_ms": 5000},
+        rate=16000,
+    )
+    assert rep["reference"] == {
+        "freq_hz": d.REF_FREQ_HZ,
+        "level_dbfs": d.REF_LEVEL_DBFS,
+        "window_ms": d.REF_WINDOW_MS,
+    }, f"Expected fixture constants in reference, got: {rep['reference']}"

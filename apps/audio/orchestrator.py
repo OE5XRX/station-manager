@@ -29,6 +29,14 @@ from station_agent.audio.diagnostics import DIAG_STREAM_REF
 #: Number of times to loop the reference frame list for anchor-U injection.
 REF_REPEAT: int = 3
 
+#: Seconds to wait after sending the diag_command before streaming reference frames.
+#: The agent's MeasuredTxBridge.start() only returns from Popen; gst's udpsrc is not
+#: yet bound at that point, so the earliest reference datagrams would be dropped (UDP
+#: to an unbound port). This short settle lets the agent spawn gst and bind the udpsrc
+#: port before frames arrive.  REF_REPEAT loops provide additional margin against any
+#: residual startup jitter.  Keep well under the run timeout (~15 s).
+REF_STREAM_SETTLE_S: float = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -127,6 +135,9 @@ async def run_headless_diagnostic(
 
     # 4. For anchor U: stream the reference frames after sending the command.
     if anchor == "U":
+        # Settle: give the agent time to spawn gst and bind the udpsrc port before the
+        # first datagram arrives (see REF_STREAM_SETTLE_S for rationale).
+        await asyncio.sleep(REF_STREAM_SETTLE_S)
         frames = load_reference_frames()
         for data in iter_media_frames(frames, stream_ref=DIAG_STREAM_REF, repeat=REF_REPEAT):
             await layer.group_send(

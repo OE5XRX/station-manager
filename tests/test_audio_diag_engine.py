@@ -316,3 +316,57 @@ def test_mic_ptt_preempts_inflight_diag():
         await eng._teardown_tx()
 
     asyncio.run(scenario())
+
+
+def test_mic_ptt_preempts_diag_even_when_resolve_node_returns_none():
+    """Fix 1: PTT teardown must happen BEFORE resolve_node — even when it returns None.
+
+    The old ordering resolved the TX node first; if resolve_node returned None the
+    early-return skipped _teardown_diag entirely. The diagnostic tone would keep
+    feeding the sink while the operator was keying. This test asserts that:
+    - the diagnostic bridge is stopped (diag.stopped is True)
+    - self._diag is cleared (None)
+    - self._tx stays None (TX did not start, because the node was unresolvable)
+    """
+    import threading
+
+    diag = _FakeDiagBridge()
+
+    class _NullTxBackend(_FakeBackendWithTx):
+        """resolve_node always returns None (unresolvable TX node)."""
+
+        def resolve_node(self, slot, direction):
+            return None
+
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _NullTxBackend(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_FakeFactoryWithDiag(diag),
+    )
+
+    async def scenario():
+        await eng.start()
+        gate = threading.Event()
+        diag.read_measurement = lambda n, t: (gate.wait(5), b"\x00\x10" * (n // 2))[1]
+        # Manually install the diag (backend can't start U via on_diag_command because
+        # resolve_node returns None; inject directly to simulate mid-run state)
+        diag.started = True  # mark as started for clarity
+        diag.stopped = False
+        eng._diag = {"bridge": diag, "slot": 0}
+        # PTT arrives — resolve_node will return None, so TX won't start
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+        # Diagnostic must be torn down regardless of resolve_node result
+        assert diag.stopped is True, (
+            "diag bridge must be stopped on PTT even if TX node unresolvable"
+        )
+        assert eng._diag is None, "self._diag must be cleared on PTT"
+        assert eng._tx is None, "TX must NOT be started when resolve_node returns None"
+        gate.set()
+
+    asyncio.run(scenario())

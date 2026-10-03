@@ -431,9 +431,13 @@ def finish_u_diagnostic(bridge, *, backend, slot: int, signal: dict, rate: int) 
 
     Reads SETTLE+WINDOW ms of PCM, measures the trailing WINDOW ms at C, projects D
     from the static sink volume. Blocking (fd read) — call off the event loop.
+
+    Anchor U measures the committed reference fixture (1 kHz / −20 dBFS); the
+    client-supplied ``signal`` freq/level/duration are NOT honored for U (unlike
+    anchor C) because U replays a fixed fixture injected by the server orchestrator.
+    The ``signal`` parameter remains in the signature for API compatibility but does
+    not drive the reported ``reference`` field.
     """
-    freq = int(signal.get("freq_hz", REF_FREQ_HZ))
-    level = float(signal.get("level_dbfs", REF_LEVEL_DBFS))
     nbytes = int(rate * (REF_SETTLE_MS + REF_WINDOW_MS) / 1000) * 2
     # Generous timeout: gst spawn + jitterbuffer latency before PCM flows.
     pcm = bridge.read_measurement(nbytes, (REF_SETTLE_MS + REF_WINDOW_MS) / 1000 + 3.0)
@@ -444,7 +448,11 @@ def finish_u_diagnostic(bridge, *, backend, slot: int, signal: dict, rate: int) 
     taps = build_cd_taps(c_rms, c_peak, c_silent, gains, rate, REF_WINDOW_MS)
     return {
         "anchor": "U",
-        "reference": {"freq_hz": freq, "level_dbfs": level, "window_ms": REF_WINDOW_MS},
+        "reference": {
+            "freq_hz": REF_FREQ_HZ,
+            "level_dbfs": REF_LEVEL_DBFS,
+            "window_ms": REF_WINDOW_MS,
+        },
         "taps": taps,
         "static_gains": gains,
     }

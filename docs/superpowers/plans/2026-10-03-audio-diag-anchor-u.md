@@ -957,7 +957,7 @@ git commit -m "feat(api): un-gate anchor U, return 409 when station busy; docs"
 
 Validation drives the REAL agent-side U path on the test station (full station-agent + PipeWire 1.6.8 + GStreamer + fm_board), direct-driving the engine with the real committed Opus fixture — exercising real `opusdec`/resample/`output_MONO`/sink/ALSA. The server↔agent channel-layer transport is generic and covered by CI (Task 7). Access + fast-dev-loop details: project memory `infra/test-station-211`, `feature/audio-diag-anchor-u/progress`. **Do not commit station IP/SSH.**
 
-- [ ] **Step 1: Deploy branch agent code to the station's fast-dev mount**
+- [x] **Step 1: Deploy branch agent code to the station's fast-dev mount**
 
 ```bash
 ssh root@<station> 'mountpoint -q /mnt/dev || mount -t tmpfs tmpfs /mnt/dev'
@@ -966,7 +966,7 @@ scp <repo>/apps/audio/data/ref_1khz_-20dbfs_16k.opusframes root@<station>:/tmp/r
 ssh root@<station> 'STATION_AGENT_DEV_DRYRUN=1 /usr/bin/station-agent-dev-launch'  # expect: mount:/mnt/dev/station_agent
 ```
 
-- [ ] **Step 2: Run the direct-drive U validation**
+- [x] **Step 2: Run the direct-drive U validation**
 
 Driver (`/tmp/diag_u_onstation.py`, run on the station) builds the real backend + engine, injects the fixture through the real U path, prints the report:
 
@@ -1016,13 +1016,19 @@ ssh root@<station> 'systemctl stop station-agent;
 
 (Find `<tx_slot>` from `list_audio_slots()` / the FM board's `OE5XRX_SLOT` tag. The live sink volume is read by the agent — do not hardcode; node 59 "FM Transceiver Board Mono" was 0.40 at plan time.)
 
-- [ ] **Step 3: Assert the measurement is plausible**
+- [x] **Step 3: Assert the measurement is plausible**
 
 Expected report: `anchor:"U"`, C tap `rms/peak ≈ −20 dBFS` (`silent:false, computed:false`), D tap `= C + sink_volume_db` (`computed:true`), `static_gains.sink_volume_db ≈ −7.96` (if sink still 0.40; if the user left it at 1.0, D≈C and sink_db≈0 — read live, assert against the reported sink_db, not a constant). Verdict references the sink stage. If C is silent → the U path is NOT working on-station: debug (feed order, gst startup race, node resolution) and iterate — **do not** claim done.
 
-- [ ] **Step 4: Record + clean up**
+**Measured on test-station (FM Transceiver Board, sink volume 0.40 = −7.96 dB):**
+- C: peak −19.26 dBFS, rms −22.85 dBFS (`silent: false, computed: false`)
+- D (projected): peak −27.22 dBFS, rms −30.81 dBFS (`computed: true`, = C + sink_volume_db)
+- `static_gains.sink_volume_db = −7.96`
+- U path confirmed working end-to-end: gst udpsrc + opusdec + resample + pipewiresink + fdsink tap
 
-Record the real numbers in `feature/audio-diag-anchor-u/progress`. Restore the station: `rsync`/dev-mount is ephemeral (tmpfs) — `umount /mnt/dev` (or leave empty), ensure `station-agent` is running the baked code again (`STATION_AGENT_DEV_DRYRUN=1 … ` → `baked` after unmount), station back `online`.
+- [x] **Step 4: Record + clean up**
+
+Real numbers recorded above. Station restored to baked agent code.
 
 ---
 

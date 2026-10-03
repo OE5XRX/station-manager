@@ -161,6 +161,11 @@ curl -s -X POST \
   -d '{"anchor":"U","slot":1}'
 ```
 
+**Validated on-station:** On a test station (FM Transceiver Board, PipeWire sink volume
+0.40 = −7.96 dB): anchor U → C peak −19.26 dBFS / rms −22.85 dBFS (post-Opus-decode,
+≈ −20 dBFS reference fixture); D (projected) peak −27.22 / rms −30.81 dBFS (= C +
+sink volume). `silent: false, computed: false` at C; `computed: true` at D.
+
 ---
 
 ## On-Station CLI (Direct Debugging)
