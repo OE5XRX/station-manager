@@ -6,6 +6,7 @@ status/secret fields are read-only or absent. No ``fields="__all__"``.
 
 from rest_framework import serializers
 
+from apps.deployments.models import Deployment
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
@@ -94,4 +95,18 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = RolloutSequenceEntry
         fields = ["id", "sequence", "tag", "position"]
+        read_only_fields = ["id"]
+
+
+class DeploymentCreateSerializer(serializers.ModelSerializer):
+    """Create-only serializer for triggering a single-station deployment.
+
+    Safe inputs only: image_release, target_station, strategy, phase_config.
+    Everything else (target_type, status, created_by, target_tag) is server-set
+    or absent — client values are silently discarded.
+    """
+
+    class Meta:
+        model = Deployment
+        fields = ["id", "image_release", "target_station", "strategy", "phase_config"]
         read_only_fields = ["id"]

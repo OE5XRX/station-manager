@@ -7,6 +7,7 @@ Create-scope: enforced in perform_create. Every mutation audits token origin.
 """
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
@@ -17,6 +18,7 @@ from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
 from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import (
+    DeploymentCreateSerializer,
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
     RolloutSequenceEntryWriteSerializer,
@@ -26,6 +28,11 @@ from apps.api.write_serializers import (
     StationPhotoWriteSerializer,
     StationTagWriteSerializer,
     StationWriteSerializer,
+)
+from apps.deployments.models import Deployment, DeploymentResult
+from apps.deployments.supersession import (
+    ActiveDeploymentConflictError,
+    supersede_pending_for_station,
 )
 from apps.stations.models import StationAuditLog, StationLogEntry, StationPhoto
 from apps.stations.signals import discard_deleting_station
@@ -480,3 +487,70 @@ class RolloutSequenceEntryViewSet(
             message=f"RolloutSequenceEntry {instance.pk} deleted",
         )
         instance.delete()
+
+
+class DeploymentViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    read_views.DeploymentViewSet,
+):
+    """Create-only (trigger) endpoint for Deployments.
+
+    POST  /deployments/ — fire a new STATION-targeted deploy.
+    GET   /deployments/ — inherited list (read-only).
+    GET   /deployments/{pk}/ — inherited retrieve (read-only).
+    PATCH/PUT/DELETE — not mixed in → 405.
+
+    Authz: internal OR region-manager of the target station's region.
+    target_type is always forced to STATION; status/created_by/target_type
+    from the client body are ignored (server-set).
+    """
+
+    write_serializer_class = DeploymentCreateSerializer
+
+    def can_write_object(self, user, obj, method):
+        # No object-level writes (no Update/Destroy mixin).
+        # Belt-and-suspenders: deny everything so an accidental UpdateMixin
+        # addition cannot sneak through.
+        return False
+
+    def perform_create(self, serializer):
+        station = serializer.validated_data["target_station"]
+        if not ws.can_trigger_deployment(self.request.user, station):
+            raise PermissionDenied("Not allowed to trigger a deployment for this station.")
+
+        image_release = serializer.validated_data["image_release"]
+        strategy = serializer.validated_data.get("strategy", Deployment.Strategy.IMMEDIATE)
+        phase_config = serializer.validated_data.get("phase_config", {})
+
+        try:
+            with transaction.atomic():
+                dep = Deployment.objects.create(
+                    image_release=image_release,
+                    target_type=Deployment.TargetType.STATION,
+                    target_station=station,
+                    status=Deployment.Status.IN_PROGRESS,
+                    created_by=self.request.user,
+                    strategy=strategy,
+                    phase_config=phase_config,
+                )
+                DeploymentResult.objects.create(
+                    deployment=dep,
+                    station=station,
+                    status=DeploymentResult.Status.PENDING,
+                    previous_version=station.current_os_version or "",
+                )
+                supersede_pending_for_station(station=station, new_deployment=dep)
+        except ActiveDeploymentConflictError as exc:
+            raise DRFValidationError(str(exc))
+
+        audit_station_write(
+            self.request,
+            station=station,
+            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
+            message=f"Deployment #{dep.id} triggered via API for station {station}",
+        )
+        # Set the serializer instance so DRF returns the created object in the
+        # 201 response (CreateModelMixin.create() calls serializer.save() which
+        # we bypassed — set instance directly so get_success_headers works too).
+        serializer.instance = dep
