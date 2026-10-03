@@ -34,11 +34,11 @@ router.register(
     basename="region-assignment",
 )
 router.register(
-    r"rollout-sequences", read_views.RolloutSequenceViewSet, basename="rollout-sequence"
+    r"rollout-sequences", write_views.RolloutSequenceViewSet, basename="rollout-sequence"
 )
 router.register(
     r"rollout-sequence-entries",
-    read_views.RolloutSequenceEntryViewSet,
+    write_views.RolloutSequenceEntryViewSet,
     basename="rollout-sequence-entry",
 )
 router.register(r"deployments", read_views.DeploymentViewSet, basename="deployment")

@@ -6,6 +6,7 @@ status/secret fields are read-only or absent. No ``fields="__all__"``.
 
 from rest_framework import serializers
 
+from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
     RegionAssignment,
@@ -80,3 +81,17 @@ class StationPhotoWriteSerializer(serializers.ModelSerializer):
         model = StationPhoto
         fields = ["id", "station", "image", "caption", "uploaded_by", "uploaded_at"]
         read_only_fields = ["id", "uploaded_by", "uploaded_at"]
+
+
+class RolloutSequenceWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolloutSequence
+        fields = ["id", "singleton_key", "created_at", "updated_at", "updated_by"]
+        read_only_fields = ["id", "created_at", "updated_at", "updated_by"]
+
+
+class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolloutSequenceEntry
+        fields = ["id", "sequence", "tag", "position"]
+        read_only_fields = ["id"]

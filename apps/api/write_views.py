@@ -19,6 +19,8 @@ from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import (
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
+    RolloutSequenceEntryWriteSerializer,
+    RolloutSequenceWriteSerializer,
     StationAssignmentWriteSerializer,
     StationLogEntryWriteSerializer,
     StationPhotoWriteSerializer,
@@ -415,5 +417,66 @@ class StationPhotoViewSet(
             station=instance.station,
             event_type=StationAuditLog.EventType.DELETED,
             message=f"StationPhoto deleted on {instance.station}",
+        )
+        instance.delete()
+
+
+class RolloutSequenceViewSet(
+    ScopedWriteViewSet,
+    UpdateModelMixin,
+    read_views.RolloutSequenceViewSet,
+):
+    """Update-only for the singleton RolloutSequence (global, region-mgr/staff)."""
+
+    write_serializer_class = RolloutSequenceWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_rollouts(user)
+
+    def perform_update(self, serializer):
+        seq = serializer.save(updated_by=self.request.user)
+        audit_config_write(
+            self.request,
+            message=f"RolloutSequence {seq.pk} updated",
+        )
+
+
+class RolloutSequenceEntryViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.RolloutSequenceEntryViewSet,
+):
+    """Full CRUD for RolloutSequenceEntry (global, region-mgr/staff)."""
+
+    write_serializer_class = RolloutSequenceEntryWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_rollouts(user)
+
+    def _guard_create(self):
+        if not ws.can_write_rollouts(self.request.user):
+            raise PermissionDenied("RolloutSequenceEntry writes require region-manager or staff.")
+
+    def perform_create(self, serializer):
+        self._guard_create()
+        entry = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"RolloutSequenceEntry {entry.pk} created",
+        )
+
+    def perform_update(self, serializer):
+        entry = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"RolloutSequenceEntry {entry.pk} updated",
+        )
+
+    def perform_destroy(self, instance):
+        audit_config_write(
+            self.request,
+            message=f"RolloutSequenceEntry {instance.pk} deleted",
         )
         instance.delete()
