@@ -58,3 +58,35 @@ def test_station_tag_create_audits(api_topology, bearer):
         event_type=AccountAuditLog.EventType.CONFIG_CHANGED
     ).latest("created_at")
     assert "via API token" in log.message
+
+
+def test_region_delete_audits(api_topology, bearer):
+    """Staff delete of a region records an API REGION_DELETED audit row with token origin.
+
+    NB: a post_delete signal on Region also emits a REGION_DELETED row
+    ("deleted: <name>"), so filter on the API message ("via API token")
+    to isolate the row this write path produced rather than the newest.
+    """
+    from apps.accounts.models import AccountAuditLog
+    from apps.stations.models import Region
+
+    t = api_topology
+    victim = Region.objects.create(name="Doomed", slug="doomed")
+    detail = reverse("api:region-detail", args=[victim.pk])
+    resp = bearer(t["staff"]).delete(detail)
+    assert resp.status_code == 204
+    log = AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.REGION_DELETED,
+        message__contains="via API token",
+    ).latest("created_at")
+    assert "Region doomed deleted" in log.message
+
+
+def test_station_tag_delete_staff_only(api_topology, bearer, make_station_tag):
+    """Non-internal users get 403 on StationTag DELETE; staff gets 204."""
+    tag = make_station_tag("UHF")
+    detail = reverse("api:station-tag-detail", args=[tag.pk])
+    t = api_topology
+    assert bearer(t["region_mgr"]).delete(detail).status_code == 403
+    assert bearer(t["station_user"]).delete(detail).status_code == 403
+    assert bearer(t["staff"]).delete(detail).status_code == 204

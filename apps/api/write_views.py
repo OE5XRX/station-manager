@@ -132,9 +132,12 @@ class RegionViewSet(
         )
 
     def perform_destroy(self, instance):
+        # Pass region=instance while the row still exists; AccountAuditLog.region
+        # is SET_NULL, so the FK is captured before the cascade nulls it.
         audit_account_write(
             self.request,
             event_type=AccountAuditLog.EventType.REGION_DELETED,
+            region=instance,
             message=f"Region {instance.slug} deleted",
         )
         instance.delete()
