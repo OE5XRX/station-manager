@@ -69,9 +69,10 @@ def test_status_field_not_writable(api_topology, bearer):
     """Review Focus: curated writable fields — status is server-controlled."""
     t = api_topology
     url = reverse("api:station-detail", args=[t["station_in"].pk])
+    before = t["station_in"].status
     bearer(t["staff"]).patch(url, {"status": "online"}, format="json")
     t["station_in"].refresh_from_db()
-    assert t["station_in"].status != "online" or True  # status ignored (read-only), no 400 noise
+    assert t["station_in"].status == before  # status is read-only, PATCH ignores it
 
 
 def test_write_creates_audit_entry(api_topology, bearer):

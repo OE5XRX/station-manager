@@ -15,6 +15,7 @@ from apps.api.audit import audit_station_write
 from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import StationWriteSerializer
 from apps.stations.models import StationAuditLog
+from apps.stations.signals import discard_deleting_station
 
 
 class ScopedWriteViewSet:
@@ -79,4 +80,12 @@ class StationViewSet(
             event_type=StationAuditLog.EventType.DELETED,
             message=f"Station {instance.callsign or instance.name} deleted",
         )
-        instance.delete()
+        # The pre_delete signal adds this pk to a delete-tracking thread-local
+        # that cascade sub-signals consult; the post_delete signal clears it.
+        # If delete() raises, post_delete never fires — discard here so the
+        # set can't leak into a later request on the same (pooled) thread.
+        pk = instance.pk
+        try:
+            instance.delete()
+        finally:
+            discard_deleting_station(pk)

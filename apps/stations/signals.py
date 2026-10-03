@@ -56,12 +56,22 @@ def _on_station_pre_delete(sender, instance, **kwargs):
     _deleting_stations.ids.add(instance.pk)
 
 
+def discard_deleting_station(pk):
+    """Remove a station pk from the delete-tracking thread-local.
+
+    Called by the Station post_delete signal on the happy path, and by the
+    API ``perform_destroy`` in a finally block so the set never leaks if
+    ``station.delete()`` raises (post_delete does not fire on failure).
+    """
+    ids = getattr(_deleting_stations, "ids", None)
+    if ids is not None:
+        ids.discard(pk)
+
+
 @receiver(post_delete, sender=Station)
 def _on_station_post_delete(sender, instance, **kwargs):
     """Clean up the thread-local tracker after station deletion completes."""
-    ids = getattr(_deleting_stations, "ids", None)
-    if ids is not None:
-        ids.discard(instance.pk)
+    discard_deleting_station(instance.pk)
 
 
 # --- StationAssignment ---
