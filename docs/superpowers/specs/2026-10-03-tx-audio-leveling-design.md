@@ -71,6 +71,7 @@ Degradation: if any element is unavailable at runtime (image built without it) o
 - The SA818 supports `AT+SETFILTER=<pre-emphasis>,<HPF>,<LPF>` (each 0/1). The firmware already implements it (`sa818_at_set_filters`, `sa818_at.h` flags) **but only as a debug shell command** (`sa818 at filters …`); it is **not a module capability** and is **never set at boot**, so it runs at the SA818 power-on default and the agent cannot control it.
 - Add a **`FilterCap`** to `subsys/module/devices/sa818/sa818_module.cpp` — one `Setting` subclass + one `g_caps[]` entry (the documented "add a capability = one subclass + one registry entry" pattern) — exposing the three filter flags in `module describe` so the agent/station-manager can set them. Working-state shadow in `Sa818Context` like the other caps (not persisted in FW; the agent owns persistence).
 - The existing `sa818 at filters` debug shell stays — it is the **manual calibration tool** (§6).
+- **FW stays role-agnostic.** The firmware exposes the filter capability with no notion of users/roles (its `CLAUDE.md`: keep platform/access/persistence out of FW). Who may change it is a **platform** concern — see §4a.
 
 ### 3.5 TX modulation meter (the path back to the operator) (`station-manager`)
 - While TX is active, the agent computes the post-DSP level at **D** (pre-SA818) + the limiter gain-reduction periodically (~5–10 Hz) and pushes it over the existing audio WS. Reuses the dBFS metric from #153.
@@ -82,12 +83,27 @@ Degradation: if any element is unavailable at runtime (image built without it) o
 ## 4. Control plane (hybrid)
 
 Two parameter kinds:
-- **Policy** (same for all stations): band-pass corners, gate threshold-margin/hang/release, compressor ratio/threshold/attack/release, limiter behaviour, browser fixed-gain, SA818 filter flags default. Lives as **defaults in the agent/image config** (`station_agent` config + WirePlumber in `linux-image`). Rarely touched.
+- **Policy** (same for all stations): band-pass corners, gate threshold-margin/hang/release, compressor ratio/threshold/attack/release, limiter behaviour, browser fixed-gain. Lives as **defaults in the agent/image config** (`station_agent` config + WirePlumber in `linux-image`). Rarely touched.
 - **Calibration** (per board/SA818 — a hardware property): **one number** — the input-gain / limiter-ceiling that maps to the target FM deviation at this board's SA818. Lives as a **new nullable field on the `Station` model** in station-manager, pushed to the agent via the **existing heartbeat response**; the agent applies it when it (re)starts the TX bridge. **Fallback to the policy default** when unset.
 
 **Safety on the calibration value:** when unset or out of a safe range it is **clamped**, and the default errs toward **under-deviation** (quieter) rather than over-deviation. An uncalibrated station must **never** over-deviate/splatter.
 
 MVP keeps it to the one calibration number (not a full per-station parameter set) — YAGNI.
+
+The SA818 **filters** are NOT a policy/image default and NOT the calibration number — they are a role-gated capability, see §4a.
+
+---
+
+## 4a. Role-aware capabilities (`write_role`) — how filters reach the GUI
+
+The SA818 filters (and, generically, any capability that is calibration/policy rather than a per-QSO operator control) are surfaced through the **same per-module capability path** as PTT/frequency/power — no separate admin page, no divergence — but made **role-aware**:
+
+- **Protocol extension (platform layer, NOT firmware):** the station-manager annotates each described capability with a **`write_role`** (e.g. `operator` (default), `station_manager`, `staff`, `admin`). The firmware `describe` stays role-agnostic; the server attaches `write_role` from a **central policy map** (`capability-name [× module-type] → min-role`) with sensible defaults — **filters → `staff`**. Per-station override is a later YAGNI extension. Capabilities with no entry default to `operator` (today's behaviour → PTT/freq/power unchanged).
+- **Role-aware render (`_module_card.html` + widgets):** every capability renders in the module card as today. If the viewer's role **< `write_role`** → the dispatch widget renders **read-only/disabled** (value visible, not editable). If **≥ `write_role`** → editable. (The `_bool`/`_number`/`_enum` widgets gain a read-only variant.) So an operator **sees** the filter state but cannot change it; a staff user can.
+- **Server-side enforcement (not just UI):** the capability-set endpoint/consumer **must** re-check `write_role` against the requesting user before forwarding the set to the agent. Read-only rendering is cosmetic; the authz check at the set path is the real gate. 403 on under-privileged set.
+- **Persistence (calibration must survive restarts):** a capability-set is transient live module state and the FW persists nothing. For filters (calibration), the server **persists the chosen state per station** and the agent **re-applies it on reconnect / TX-bridge start** via `module execute`. The `write_role` governs *who may change it*; this persistence governs *that it stays*. (The agent applies filters from persisted station state, not only from a live operator action.)
+
+This generalises to a reusable role-aware capability layer; filters are its first consumer.
 
 ---
 
@@ -146,6 +162,6 @@ A short runbook doc captures this so a new board can be recalibrated reproducibl
 | `FW-RemoteStation` | New `FilterCap` (SA818 pre-emphasis/HPF/LPF) in `sa818_module.cpp` → `module describe`/`execute`. |
 | `linux-image` | WirePlumber: FM TX sink default 0.40 → unity. |
 | `station-manager` (browser) | `getUserMedia` NS/AGC/EC off + fixed capture `GainNode`. |
-| `station-manager` (agent) | `build_tx_argv`: band-pass → gate → compressor → makeup → limiter (gst `audiodynamic`/`volume`); apply per-station calibration; graceful degradation. |
-| `station-manager` (server) | `Station` calibration field (+migration) pushed via heartbeat; TX modulation meter over audio WS. |
-| `station-manager` (UI) | `_audio_panel.html` live hub bar + "limiting" indicator. |
+| `station-manager` (agent) | `build_tx_argv`: band-pass → gate → compressor → makeup → limiter (gst `audiodynamic`/`volume`); apply per-station calibration; apply persisted SA818 filters via `module execute` on reconnect/TX-start; graceful degradation. |
+| `station-manager` (server) | `Station` calibration field (+migration) pushed via heartbeat; TX modulation meter over audio WS; **capability `write_role` policy map + server-side set enforcement**; per-station filter-state persistence + re-apply. |
+| `station-manager` (UI) | **Role-aware capability render** (read-only when viewer role < `write_role`) in `_module_card.html` + `_bool`/`_number`/`_enum` widgets; `_audio_panel.html` live hub bar + "limiting" indicator. |
