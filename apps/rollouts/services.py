@@ -5,15 +5,35 @@ mutating entries, so concurrent API / UI calls serialize through a single gate.
 They also renumber remaining positions to maintain a 0-based, gap-free ordering
 and stamp updated_by / updated_at on the parent in the same transaction.
 
-Both the UI views (apps/rollouts/views.py) and the API viewset
-(apps/api/write_views.py) delegate to these functions so there is exactly
-one source of truth for the protocol.
+These functions back the API write path (apps/api/write_views.py).  The UI
+views (apps/rollouts/views.py) retain their own parallel implementation;
+shared extraction is a tracked follow-up.
 """
 
 from django.db import transaction
 from django.db.models import Max
 
 from .models import RolloutSequence, RolloutSequenceEntry
+
+# PositiveSmallIntegerField upper bound
+_POSITION_MAX = 32767
+
+
+def _calc_offset(max_current: int, n: int) -> int:
+    """Return the phase-1 offset for the two-phase position move.
+
+    The offset is chosen so that ``max_current + offset`` stays within the
+    PositiveSmallIntegerField bound (32767).  Raises ``ValueError`` if the
+    sequence is too large to reorder safely (mirrors the UI guard in
+    SequenceReorderView).
+    """
+    offset = max(max_current, n) + 1
+    if max_current + offset > _POSITION_MAX:
+        raise ValueError(
+            f"Sequence too large to reorder safely: max position {max_current} + "
+            f"offset {offset} = {max_current + offset} exceeds {_POSITION_MAX}."
+        )
+    return offset
 
 
 def touch_sequence(sequence: RolloutSequence, by_user) -> None:
@@ -109,7 +129,7 @@ def move_entry(entry: RolloutSequenceEntry, new_position: int, by_user) -> None:
         existing = {e.pk: e for e in sequence.entries.select_for_update()}
         n = len(existing)
         max_current = max((e.position for e in existing.values()), default=0)
-        offset = max(max_current, n) + 1
+        offset = _calc_offset(max_current, n)
 
         # Phase 1: shift all to temporary positions to avoid constraint collisions
         for e in existing.values():

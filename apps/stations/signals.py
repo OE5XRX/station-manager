@@ -32,6 +32,8 @@ row references the deleted pk, which is not in scope of the collector's
 SET_NULL pass).
 """
 
+from django.core.files.storage import default_storage
+from django.db import transaction
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
@@ -42,6 +44,7 @@ from apps.stations.models import (
     Station,
     StationAssignment,
     StationAuditLog,
+    StationPhoto,
 )
 
 # --- StationAssignment ---
@@ -236,3 +239,33 @@ def _on_region_delete(sender, instance, **kwargs):
         region=None,  # FK is gone after delete
         message=f"deleted: {instance.name}",
     )
+
+
+# --- StationPhoto blob cleanup ---
+
+
+@receiver(post_delete, sender=StationPhoto)
+def _on_station_photo_delete(sender, instance, **kwargs):
+    """Delete the image blob from storage when a StationPhoto row is removed.
+
+    Fires on BOTH direct API delete (StationPhotoViewSet.perform_destroy) AND
+    station cascade delete (Station.delete() → CASCADE → StationPhoto.delete()).
+    Guards against empty/missing image names and swallows storage errors so
+    that a transient storage failure never breaks the DB-level delete.
+
+    ``transaction.on_commit`` ensures the blob is only removed after the
+    enclosing transaction (or savepoint, for nested atomics) commits
+    successfully, preventing orphaned blobs from a rolled-back delete.
+    """
+    blob_name = instance.image.name if instance.image else None
+    if not blob_name:
+        return
+
+    def _delete():
+        try:
+            if default_storage.exists(blob_name):
+                default_storage.delete(blob_name)
+        except Exception:  # pragma: no cover — best-effort, never break a mutation
+            pass
+
+    transaction.on_commit(_delete)

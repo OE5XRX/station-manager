@@ -569,22 +569,29 @@ class RolloutSequenceEntryViewSet(
         entry = serializer.instance
         new_position = serializer.validated_data.get("position")
         if new_position is not None and new_position != entry.position:
-            # Non-position fields (e.g. tag) must be saved BEFORE the two-phase
-            # move so no field change is silently dropped.  Both writes happen
-            # inside the same atomic+select_for_update block via move_entry,
-            # which stamps the parent too.
-            non_position_fields = {
-                k: v for k, v in serializer.validated_data.items() if k != "position"
-            }
-            if non_position_fields:
-                for field, value in non_position_fields.items():
-                    setattr(entry, field, value)
-                entry.save(update_fields=list(non_position_fields.keys()))
-            # Reorder via locked two-phase move (mirrors SequenceReorderView's
-            # two-phase protocol: shift all to temp positions, then assign final).
-            rollout_services.move_entry(
-                entry=entry, new_position=new_position, by_user=self.request.user
-            )
+            # Wrap the entire position+field update in ONE transaction so that
+            # a non-position field save (e.g. tag) and the two-phase position
+            # move are atomic.  move_entry opens its own transaction.atomic()
+            # which becomes a savepoint inside this outer one — that is fine.
+            # Lock the parent sequence first (before the field save) so the
+            # lock order matches move_entry's own select_for_update, preventing
+            # a potential deadlock if two concurrent PATCHes race.
+            from apps.rollouts.models import RolloutSequence
+
+            with transaction.atomic():
+                RolloutSequence.objects.select_for_update().filter(pk=entry.sequence_id).first()
+                non_position_fields = {
+                    k: v for k, v in serializer.validated_data.items() if k != "position"
+                }
+                if non_position_fields:
+                    for field, value in non_position_fields.items():
+                        setattr(entry, field, value)
+                    entry.save(update_fields=list(non_position_fields.keys()))
+                # Reorder via locked two-phase move (mirrors SequenceReorderView's
+                # two-phase protocol: shift all to temp positions, then assign final).
+                rollout_services.move_entry(
+                    entry=entry, new_position=new_position, by_user=self.request.user
+                )
             entry.refresh_from_db()
             serializer.instance = entry
         else:
@@ -1096,9 +1103,10 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
 
         # Duplicate-job guard (mirrors QuickQueueView's guard semantics):
         # reject with 409 if this (tag, machine, channel) is already imported
-        # OR has an active (PENDING/RUNNING) import job.  Concurrent/repeated
-        # requests would otherwise overwrite the same stable S3 keys.
-        if ImageRelease.all_objects.filter(tag=tag, machine=machine, channel=channel).exists():
+        # (non-archived) OR has an active (PENDING/RUNNING) import job.
+        # Use the default manager (excludes archived) so an archived release
+        # CAN be re-imported after archiving — all_objects would block it.
+        if ImageRelease.objects.filter(tag=tag, machine=machine, channel=channel).exists():
             err = APIException(
                 detail=(
                     f"Image {tag}/{machine}/{channel} is already imported. "

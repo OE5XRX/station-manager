@@ -266,12 +266,37 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
                 pk=self.instance.pk
             )
         else:
-            # On create, sequence comes from the incoming data.
-            sequence = self.initial_data.get("sequence") or (
-                self.validated_data.get("sequence") if hasattr(self, "_validated_data") else None
-            )
-            if sequence is None:
-                # Can't validate without sequence; rely on service / DB constraint.
+            # On create, sequence comes from the validated field data (attrs).
+            # Using initial_data['sequence'] directly risks a ValueError/500 if
+            # the client sent a non-numeric PK — DRF's PrimaryKeyRelatedField
+            # will have already added a field error for the bad value, so by the
+            # time validate_tag runs the field error is queued but attrs may not
+            # contain 'sequence'.  Access attrs instead; if it's absent the field
+            # validation failed and DRF will return a 400 anyway.
+            sequence = self.initial_data.get("_resolved_sequence")  # never set
+            # Prefer the already-validated value from attrs passed to validate().
+            # validate_tag is called by DRF as a field-level validator BEFORE
+            # the cross-field validate() method, so we can't get attrs here
+            # directly.  Instead, attempt a safe lookup via the field's
+            # run_validators path: read the sibling field's current_value from
+            # the serializer's intermediate state.
+            # The reliable approach: peek at the PrimaryKeyRelatedField's value
+            # from initial_data but guard against non-integer values.
+            raw = self.initial_data.get("sequence")
+            if raw is None:
+                return value
+            try:
+                sequence_pk = int(raw)
+            except (TypeError, ValueError):
+                # Non-numeric PK → DRF's PrimaryKeyRelatedField will reject it
+                # with a 400; skip the tag-uniqueness check here.
+                return value
+            from apps.rollouts.models import RolloutSequence
+
+            try:
+                sequence = RolloutSequence.objects.get(pk=sequence_pk)
+            except RolloutSequence.DoesNotExist:
+                # Bad FK — DRF field validation will return a 400.
                 return value
             qs = RolloutSequenceEntry.objects.filter(sequence=sequence, tag=value)
         if qs.exists():
@@ -289,11 +314,29 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
         # The position constraint is enforced atomically by the service layer.
         validators = []
 
-    def to_internal_value(self, data):
-        """Make ``sequence`` read-only on update: strip it from incoming data."""
-        if self.instance is not None and "sequence" in data:
-            data = {k: v for k, v in data.items() if k != "sequence"}
-        return super().to_internal_value(data)
+    def get_fields(self):
+        """Make ``sequence`` conditionally read-only on update.
+
+        On create (``self.instance is None``) ``sequence`` is writable and
+        required — the caller must specify which sequence the entry belongs to.
+
+        On update (``self.instance is not None``) ``sequence`` is read-only:
+        DRF will not treat it as required and any client-supplied value is
+        silently ignored.  This means a full PUT that includes ``sequence`` in
+        its payload works correctly (no "This field is required" error), and a
+        PATCH that tries to reparent the entry to a different sequence is also
+        silently ignored — reparenting is meaningless because RolloutSequence
+        is a singleton.
+
+        The old approach (stripping ``sequence`` in ``to_internal_value``)
+        broke full PUT: DRF evaluated the ``required=True`` constraint on the
+        stripped field, returning a 400 even when the client correctly included
+        the (read-only-on-update) field.
+        """
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields["sequence"].read_only = True
+        return fields
 
 
 class AlertRuleWriteSerializer(serializers.ModelSerializer):
