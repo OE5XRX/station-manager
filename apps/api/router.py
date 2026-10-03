@@ -3,7 +3,7 @@
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.routers import APIRootView, DefaultRouter
 
-from apps.api import read_views
+from apps.api import read_views, write_views
 from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.permissions import TopologyScopedPermission
 
@@ -20,34 +20,48 @@ class ScopedDefaultRouter(DefaultRouter):
 
 
 router = ScopedDefaultRouter()
-router.register(r"stations", read_views.StationViewSet, basename="station")
-router.register(r"regions", read_views.RegionViewSet, basename="region")
-router.register(r"station-tags", read_views.StationTagViewSet, basename="station-tag")
+router.register(r"stations", write_views.StationViewSet, basename="station")
+router.register(r"regions", write_views.RegionViewSet, basename="region")
+router.register(r"station-tags", write_views.StationTagViewSet, basename="station-tag")
 router.register(
-    r"station-assignments", read_views.StationAssignmentViewSet, basename="station-assignment"
+    r"station-assignments",
+    write_views.StationAssignmentViewSet,
+    basename="station-assignment",
 )
 router.register(
-    r"region-assignments", read_views.RegionAssignmentViewSet, basename="region-assignment"
+    r"region-assignments",
+    write_views.RegionAssignmentViewSet,
+    basename="region-assignment",
 )
 router.register(
-    r"rollout-sequences", read_views.RolloutSequenceViewSet, basename="rollout-sequence"
+    r"rollout-sequences", write_views.RolloutSequenceViewSet, basename="rollout-sequence"
 )
 router.register(
     r"rollout-sequence-entries",
-    read_views.RolloutSequenceEntryViewSet,
+    write_views.RolloutSequenceEntryViewSet,
     basename="rollout-sequence-entry",
 )
-router.register(r"deployments", read_views.DeploymentViewSet, basename="deployment")
+router.register(r"deployments", write_views.DeploymentViewSet, basename="deployment")
 router.register(
     r"deployment-results", read_views.DeploymentResultViewSet, basename="deployment-result"
 )
-router.register(r"alert-rules", read_views.AlertRuleViewSet, basename="alert-rule")
+router.register(r"alert-rules", write_views.AlertRuleViewSet, basename="alert-rule")
 router.register(r"alerts", read_views.AlertViewSet, basename="alert")
 router.register(
-    r"provisioning-jobs", read_views.ProvisioningJobViewSet, basename="provisioning-job"
+    r"provisioning-jobs", write_views.ProvisioningJobViewSet, basename="provisioning-job"
 )
-router.register(r"images", read_views.ImageReleaseViewSet, basename="image")
+router.register(r"images", write_views.ImageReleaseViewSet, basename="image")
 router.register(
     r"image-import-jobs", read_views.ImageImportJobViewSet, basename="image-import-job"
 )
-router.register(r"users", read_views.UserViewSet, basename="user")
+router.register(r"users", write_views.UserViewSet, basename="user")
+router.register(
+    r"station-log-entries",
+    write_views.StationLogEntryViewSet,
+    basename="station-log-entry",
+)
+router.register(
+    r"station-photos",
+    write_views.StationPhotoViewSet,
+    basename="station-photo",
+)
