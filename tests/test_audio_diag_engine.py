@@ -117,3 +117,176 @@ def test_on_diag_command_refuses_while_tx_active(monkeypatch):
     assert res["request_id"] == "rf1"
     assert "error" in res
     assert "TX active" in res["error"]
+
+
+# ---------------------------------------------------------------------------
+# Anchor U: non-blocking orchestration, busy guards, routing, teardown
+# ---------------------------------------------------------------------------
+
+
+class _FakeDiagBridge:
+    def __init__(self):
+        self.fed = []
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+
+    def feed_opus(self, p):
+        self.fed.append(p)
+
+    def read_measurement(self, nbytes, timeout):
+        return b"\x00\x10" * (nbytes // 2)
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeFactoryWithDiag:
+    def __init__(self, diag):
+        self._diag = diag
+
+    def make_rx(self, *a, **k):
+        raise AssertionError("unused")
+
+    def make_tx(self, *a, **k):
+        class _B:
+            def start(self):
+                pass
+
+            def feed_opus(self, p):
+                pass
+
+            def stop(self):
+                pass
+
+        return _B()
+
+    def make_diag_u(self, node, rate):
+        return self._diag
+
+
+class _FakeBackendWithTx:
+    def list_audio_slots(self):
+        return [0]
+
+    def resolve_node(self, slot, direction):
+        return "tx.node"
+
+    def tx_sink_node(self, slot):
+        return "sink.node"
+
+    def get_volume(self, node):
+        return 0.40
+
+
+def _engine_with_diag(diag):
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _FakeBackendWithTx(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_FakeFactoryWithDiag(diag),
+    )
+    return eng, emitted
+
+
+def test_u_diag_is_nonblocking_and_emits_result():
+    from station_agent.audio import diagnostics, frame
+
+    diag = _FakeDiagBridge()
+    eng, emitted = _engine_with_diag(diag)
+
+    async def scenario():
+        ret = await eng.on_diag_command(
+            {"request_id": "r1", "anchor": "U", "slot": 0, "signal": {}}
+        )
+        assert ret is None  # non-blocking: no synchronous result
+        assert diag.started is True
+        # feed a reference frame via the normal media path
+        f = frame.pack_frame(
+            stream_ref=diagnostics.DIAG_STREAM_REF,
+            seq=0,
+            ts=0,
+            flags=0,
+            payload=b"\xfc\xff",
+        )
+        await eng.on_media_frame(f)
+        assert diag.fed == [b"\xfc\xff"]
+        # let the background measurement task finish
+        await eng._diag_task
+        assert diag.stopped is True
+        res = [m for m in emitted if m.get("type") == "diag_result"]
+        assert res and res[0]["request_id"] == "r1" and res[0]["anchor"] == "U"
+        assert {t["point"] for t in res[0]["taps"]} == {"C", "D"}
+
+    asyncio.run(scenario())
+
+
+def test_u_refused_when_tx_active_is_busy():
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+
+    async def scenario():
+        eng._tx = {"bridge": object(), "slot": 0, "module": "fm"}  # simulate PTT up
+        ret = await eng.on_diag_command(
+            {"request_id": "r2", "anchor": "U", "slot": 0, "signal": {}}
+        )
+        assert ret["busy"] is True and "TX active" in ret["error"]
+        assert diag.started is False
+
+    asyncio.run(scenario())
+
+
+def test_second_u_while_running_is_busy():
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+
+    async def scenario():
+        await eng.on_diag_command({"request_id": "r3", "anchor": "U", "slot": 0, "signal": {}})
+        ret = await eng.on_diag_command(
+            {"request_id": "r4", "anchor": "U", "slot": 0, "signal": {}}
+        )
+        assert ret["busy"] is True
+        await eng._diag_task
+
+    asyncio.run(scenario())
+
+
+def test_diag_ref_frame_ignored_when_no_diag_active():
+    from station_agent.audio import diagnostics, frame
+
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+
+    async def scenario():
+        f = frame.pack_frame(
+            stream_ref=diagnostics.DIAG_STREAM_REF, seq=0, ts=0, flags=0, payload=b"x"
+        )
+        await eng.on_media_frame(f)  # no diag running → silently ignored, no crash
+        assert diag.fed == []
+
+    asyncio.run(scenario())
+
+
+def test_stop_tears_down_inflight_diag():
+    import threading
+
+    diag = _FakeDiagBridge()
+    eng, _ = _engine_with_diag(diag)
+
+    async def scenario():
+        # make the measurement block so the run is still in-flight at stop()
+        gate = threading.Event()
+        diag.read_measurement = lambda n, t: (gate.wait(5), b"\x00\x10" * (n // 2))[1]
+        await eng.on_diag_command({"request_id": "r5", "anchor": "U", "slot": 0, "signal": {}})
+        await eng.stop()
+        gate.set()
+        assert diag.stopped is True
+
+    asyncio.run(scenario())
