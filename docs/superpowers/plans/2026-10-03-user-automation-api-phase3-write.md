@@ -745,7 +745,7 @@ class RegionViewSet(
         )
         instance.delete()
 ```
-StationTagViewSet mirrors create/update/delete with `can_write_station_tag`, no DB audit (logging only) per the Interfaces decision.
+StationTagViewSet mirrors create/update/delete with `can_write_station_tag`, auditing each write via `audit_config_write(request, message=...)` → CONFIG_CHANGED DB row (per the Interfaces + preflight ruling; not logging-only).
 
 - [ ] **Step 5: Re-point router** `regions` → `write_views.RegionViewSet`, `station-tags` → `write_views.StationTagViewSet`. Add imports for the new serializers + `AccountAuditLog` in write_views.
 
