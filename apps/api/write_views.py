@@ -10,6 +10,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers as rf_serializers
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -812,6 +814,7 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
     # archive / restore                                                    #
     # ------------------------------------------------------------------ #
 
+    @extend_schema(request=None, responses={200: read_serializers.ImageReleaseSerializer})
     @action(detail=True, methods=["post"], url_path="archive")
     def archive(self, request, pk=None):
         """Soft-delete a release. Idempotent. Staff-only."""
@@ -823,6 +826,7 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
         ser = read_serializers.ImageReleaseSerializer(obj, context={"request": request})
         return Response(ser.data)
 
+    @extend_schema(request=None, responses={200: read_serializers.ImageReleaseSerializer})
     @action(detail=True, methods=["post"], url_path="restore")
     def restore(self, request, pk=None):
         """Undo a previous archive. Idempotent. Staff-only."""
@@ -838,6 +842,20 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
     # available — GitHub releases proxy                                   #
     # ------------------------------------------------------------------ #
 
+    @extend_schema(
+        responses={
+            200: inline_serializer(
+                "GitHubRelease",
+                fields={
+                    "tag": rf_serializers.CharField(),
+                    "html_url": rf_serializers.URLField(),
+                    "is_latest": rf_serializers.BooleanField(),
+                    "asset_names": rf_serializers.ListField(child=rf_serializers.CharField()),
+                },
+                many=True,
+            )
+        }
+    )
     @action(detail=False, methods=["get"], url_path="available")
     def available(self, request):
         """List available GitHub releases. Staff-only."""
@@ -860,6 +878,10 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
     # import — queue an ImageImportJob                                    #
     # ------------------------------------------------------------------ #
 
+    @extend_schema(
+        request=ImageImportInputSerializer,
+        responses={202: read_serializers.ImageImportJobSerializer},
+    )
     @action(detail=False, methods=["post"], url_path="import", url_name="import")
     def import_release(self, request):
         """Queue an ImageImportJob for a given GitHub release tag. Staff-only.

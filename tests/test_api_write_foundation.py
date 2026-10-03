@@ -35,7 +35,7 @@ def test_global_role_predicates(api_topology):
     t = api_topology
     assert ws.can_write_region(t["staff"]) is True
     assert ws.can_write_region(t["region_mgr"]) is False
-    assert ws.can_write_alert_rule(t["region_mgr"]) is True   # region-mgr/staff global
+    assert ws.can_write_alert_rule(t["region_mgr"]) is True  # region-mgr/staff global
     assert ws.can_write_user(t["region_mgr"]) is False
     assert ws.can_trigger_provisioning(t["region_mgr"], t["station_in"]) is False
 

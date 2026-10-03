@@ -329,10 +329,15 @@ def api_topology(db):
     StationAssignment.objects.create(user=station_user, station=station_in, role="maintainer")
     applicant = _user_with_level("api_appl", "x", User.MembershipLevel.APPLICANT)
     return {
-        "region_in": region_in, "region_out": region_out,
-        "station_in": station_in, "station_out": station_out,
-        "admin": admin, "staff": staff, "region_mgr": region_mgr,
-        "station_user": station_user, "applicant": applicant,
+        "region_in": region_in,
+        "region_out": region_out,
+        "station_in": station_in,
+        "station_out": station_out,
+        "admin": admin,
+        "staff": staff,
+        "region_mgr": region_mgr,
+        "station_user": station_user,
+        "applicant": applicant,
     }
 
 
