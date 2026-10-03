@@ -12,7 +12,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
 
-from apps.accounts.models import AccountAuditLog
+from apps.accounts.models import AccountAuditLog, User
 from apps.api import read_views
 from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
@@ -30,6 +30,7 @@ from apps.api.write_serializers import (
     StationPhotoWriteSerializer,
     StationTagWriteSerializer,
     StationWriteSerializer,
+    UserWriteSerializer,
 )
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.deployments.supersession import (
@@ -685,3 +686,71 @@ class ProvisioningJobViewSet(
         # Set instance so DRF returns 201 with the created object (mirrors
         # DeploymentViewSet — we bypassed serializer.save()'s default path).
         serializer.instance = job
+
+
+# Sequential ordering of membership levels for promote/demote direction.
+# Mirrors MEMBERSHIP_ORDER in apps/accounts/views_membership.py.
+_USER_MEMBERSHIP_ORDER = [
+    User.MembershipLevel.APPLICANT,
+    User.MembershipLevel.MEMBER,
+    User.MembershipLevel.STAFF,
+    User.MembershipLevel.ADMIN,
+]
+
+
+class UserViewSet(
+    ScopedWriteViewSet,
+    UpdateModelMixin,
+    read_views.UserViewSet,
+):
+    """Update-only endpoint for User profiles and membership level.
+
+    POST (create) → 405  — user creation via API is out of scope for Phase 3.
+    DELETE (destroy) → 405 — user deletion is a soft/hard-purge admin flow.
+    PATCH/PUT → staff/admin only (is_internal).
+
+    get_queryset is inherited: internal users see all; non-internal see only
+    themselves (but non-internal cannot write anyway — can_write_object gates
+    to can_write_user = is_internal, so they get 403 before reaching DB).
+
+    Audit events:
+      - membership_level changed upward  → MEMBERSHIP_PROMOTED
+      - membership_level changed downward → MEMBERSHIP_DEMOTED
+      - any other field change only       → USER_UPDATED
+    All messages include "via API token <prefix>" via audit_account_write.
+
+    UI guards mirrored from MembershipSetView (apps/accounts/views_membership.py):
+      1. Self-change of membership_level → 400 (validated in UserWriteSerializer).
+      2. Demote-to-applicant when assignments exist → 400 (validated in serializer).
+    """
+
+    write_serializer_class = UserWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_user(user)
+
+    def perform_update(self, serializer):
+        old_level = serializer.instance.membership_level
+        obj = serializer.save()
+        new_level = obj.membership_level
+
+        if new_level != old_level:
+            # Bust cached_property so is_internal/is_admin reflect the new level
+            # within this request (e.g. for any post-save permission checks).
+            User._invalidate_role_cache(obj)
+            old_idx = _USER_MEMBERSHIP_ORDER.index(User.MembershipLevel(old_level))
+            new_idx = _USER_MEMBERSHIP_ORDER.index(User.MembershipLevel(new_level))
+            event_type = (
+                AccountAuditLog.EventType.MEMBERSHIP_PROMOTED
+                if new_idx > old_idx
+                else AccountAuditLog.EventType.MEMBERSHIP_DEMOTED
+            )
+        else:
+            event_type = AccountAuditLog.EventType.USER_UPDATED
+
+        audit_account_write(
+            self.request,
+            event_type=event_type,
+            target_user=obj,
+            message=f"User {obj.username} updated",
+        )
