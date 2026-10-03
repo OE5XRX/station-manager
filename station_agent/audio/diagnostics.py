@@ -30,6 +30,12 @@ REF_SETTLE_MS = 200
 
 MAX_DURATION_MS = 5000
 
+#: Dedicated stream_ref for server-originated U-anchor reference frames. A high
+#: sentinel so it can never collide with a real slotN.rx / op.mic ref (small,
+#: assigned ascending from 0). The engine routes only this ref to the diagnostic
+#: bridge; it is never a live TX stream.
+DIAG_STREAM_REF: int = 0xFFFE
+
 
 def rms_peak_dbfs(pcm: bytes) -> tuple[float | None, float | None, bool]:
     n = len(pcm) // 2
@@ -288,6 +294,48 @@ def _tap(point, rate, rms, peak, silent, window_ms, computed, note=None):
     return d
 
 
+def build_cd_taps(c_rms, c_peak, c_silent, gains: dict, rate: int, window_ms: int) -> list[dict]:
+    """Build the [C, D] tap list from a measured C plus the static sink gain.
+
+    C is the real measurement (``computed=False``); D is projected D = C + sink
+    volume (``computed=True``) per spec §3. Mirrors the rules previously inline in
+    ``run_diagnostic`` so anchor C and anchor U produce an identical schema.
+    """
+    taps = [_tap("C", rate, c_rms, c_peak, c_silent, window_ms, computed=False)]
+    linear = gains.get("sink_volume_linear")
+    sink_db = gains.get("sink_volume_db")
+    if c_silent:
+        taps.append(_tap("D", rate, None, None, True, window_ms, computed=True))
+    elif linear == 0:
+        taps.append(_tap("D", rate, None, None, True, window_ms, computed=True, note="sink muted"))
+    elif sink_db is not None:
+        taps.append(
+            _tap(
+                "D",
+                rate,
+                round(c_rms + sink_db, 2),
+                round(c_peak + sink_db, 2),
+                False,
+                window_ms,
+                computed=True,
+            )
+        )
+    else:
+        taps.append(
+            _tap(
+                "D",
+                rate,
+                None,
+                None,
+                False,
+                window_ms,
+                computed=True,
+                note="sink volume unavailable — D not projected",
+            )
+        )
+    return taps
+
+
 def run_diagnostic(
     *,
     anchor,
@@ -362,45 +410,7 @@ def run_diagnostic(
     win_bytes = int(rate * REF_WINDOW_MS / 1000) * 2
     window = pcm[-win_bytes:] if len(pcm) > win_bytes else pcm
     c_rms, c_peak, c_silent = rms_peak_dbfs(window)
-    taps = [_tap("C", rate, c_rms, c_peak, c_silent, REF_WINDOW_MS, computed=False)]
-
-    linear = gains.get("sink_volume_linear")
-    sink_db = gains.get("sink_volume_db")
-    if c_silent:
-        # No signal at C → D is genuinely silent.
-        taps.append(_tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True))
-    elif linear == 0:
-        # Sink genuinely muted (linear == 0.0) → D is silent (true zero).
-        taps.append(
-            _tap("D", rate, None, None, True, REF_WINDOW_MS, computed=True, note="sink muted")
-        )
-    elif sink_db is not None:
-        # Positive sink volume → project D = C + sink_db.
-        taps.append(
-            _tap(
-                "D",
-                rate,
-                round(c_rms + sink_db, 2),
-                round(c_peak + sink_db, 2),
-                False,
-                REF_WINDOW_MS,
-                computed=True,
-            )
-        )
-    else:
-        # linear is None → sink volume could not be read; D is UNAVAILABLE, not silent.
-        taps.append(
-            _tap(
-                "D",
-                rate,
-                None,
-                None,
-                False,
-                REF_WINDOW_MS,
-                computed=True,
-                note="sink volume unavailable — D not projected",
-            )
-        )
+    taps = build_cd_taps(c_rms, c_peak, c_silent, gains, rate, REF_WINDOW_MS)
 
     return {
         "anchor": anchor,
