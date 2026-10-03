@@ -249,3 +249,116 @@ def test_entry_delete_produces_audit_row(api_topology, bearer):
         message__contains="via API token",
     ).latest("created_at")
     assert "RolloutSequenceEntry" in log.message
+
+
+# ---------------------------------------------------------------------------
+# C1 — locked sequence protocol invariants
+# ---------------------------------------------------------------------------
+
+
+def test_api_create_entry_at_occupied_position_renumbers(api_topology, bearer):
+    """API create at an occupied position must shift rather than 500.
+
+    The service uses add_entry() which appends at max+1 regardless of the
+    client-supplied position (position is ignored/server-assigned). The
+    result must be gap-free.
+    """
+    from apps.rollouts.models import RolloutSequenceEntry
+
+    seq = _get_or_create_sequence()
+    tag_a = _make_tag("c1-occupied-a")
+    tag_b = _make_tag("c1-occupied-b")
+    # Pre-populate position 0
+    RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+
+    url = reverse("api:rollout-sequence-entry-list")
+    # POST a new tag — position=0 is occupied; service must not crash
+    r = bearer(api_topology["region_mgr"]).post(
+        url, {"sequence": seq.pk, "tag": tag_b.pk, "position": 0}, format="json"
+    )
+    assert r.status_code == 201
+    # Positions must be gap-free after create
+    positions = list(seq.entries.order_by("position").values_list("position", flat=True))
+    assert positions == list(range(len(positions))), f"Gaps in positions: {positions}"
+
+
+def test_api_delete_entry_renumbers_and_bumps_parent(api_topology, bearer):
+    """API delete must renumber remaining entries (no gap) and bump parent
+    updated_by / updated_at."""
+    from apps.rollouts.models import RolloutSequenceEntry
+
+    seq = _get_or_create_sequence()
+    tag_a = _make_tag("c1-del-a")
+    tag_b = _make_tag("c1-del-b")
+    tag_c = _make_tag("c1-del-c")
+    entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+    entry_b = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+    _entry_c = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_c, position=2)
+
+    url = reverse("api:rollout-sequence-entry-detail", args=[entry_b.pk])
+    r = bearer(api_topology["region_mgr"]).delete(url)
+    assert r.status_code == 204
+
+    # Remaining entries must be 0-based contiguous
+    positions = list(seq.entries.order_by("position").values_list("position", flat=True))
+    assert positions == list(range(len(positions))), f"Gap after delete: {positions}"
+
+    # Parent updated_by must be the API actor
+    seq.refresh_from_db()
+    assert seq.updated_by == api_topology["region_mgr"]
+
+    # entry_a is still present (position may have shifted)
+    assert seq.entries.filter(pk=entry_a.pk).exists()
+
+
+def test_api_delete_entry_parent_updated_by_reflects_actor(api_topology, bearer):
+    """updated_by on the parent RolloutSequence is set to the API actor on delete."""
+    from apps.rollouts.models import RolloutSequenceEntry
+
+    seq = _get_or_create_sequence()
+    tag = _make_tag("c1-actor-tag")
+    entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+    url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
+    bearer(api_topology["staff"]).delete(url)
+    seq.refresh_from_db()
+    assert seq.updated_by == api_topology["staff"]
+
+
+def test_api_create_entry_bumps_parent_updated_by(api_topology, bearer):
+    """API create must set parent updated_by to the API actor."""
+    seq = _get_or_create_sequence()
+    tag = _make_tag("c1-create-bump-tag")
+    url = reverse("api:rollout-sequence-entry-list")
+    r = bearer(api_topology["region_mgr"]).post(
+        url, {"sequence": seq.pk, "tag": tag.pk, "position": 0}, format="json"
+    )
+    assert r.status_code == 201
+    seq.refresh_from_db()
+    assert seq.updated_by == api_topology["region_mgr"]
+
+
+def test_api_reorder_entry_leaves_positions_gap_free(api_topology, bearer):
+    """API PATCH (reorder) to an occupied position must resolve via two-phase
+    move and leave the sequence gap-free."""
+    from apps.rollouts.models import RolloutSequenceEntry
+
+    seq = _get_or_create_sequence()
+    tag_a = _make_tag("c1-reorder-a")
+    tag_b = _make_tag("c1-reorder-b")
+    entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+    entry_b = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+
+    # PATCH entry_b to position=0 (occupied by entry_a) → two-phase move
+    url = reverse("api:rollout-sequence-entry-detail", args=[entry_b.pk])
+    r = bearer(api_topology["region_mgr"]).patch(url, {"position": 0}, format="json")
+    assert r.status_code == 200
+
+    positions = list(seq.entries.order_by("position").values_list("position", flat=True))
+    assert positions == list(range(len(positions))), f"Gap after reorder: {positions}"
+
+    # entry_b should now be at position 0
+    entry_b.refresh_from_db()
+    assert entry_b.position == 0
+    # entry_a should have been pushed to position 1
+    entry_a.refresh_from_db()
+    assert entry_a.position == 1

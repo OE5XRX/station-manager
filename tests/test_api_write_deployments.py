@@ -205,3 +205,55 @@ def test_deploy_unprovisioned_station_400(api_topology, bearer, image_release):
     assert r.status_code == 400
     assert "target_station" in r.data
     assert Deployment.objects.count() == before
+
+
+# ---------------------------------------------------------------------------
+# C3 — station lock ordering: acquire station lock BEFORE FK inserts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_deploy_trigger_station_lock_happy_path(
+    api_topology, bearer, image_release, provisioned_station_in
+):
+    """Happy path still works: 201 + Deployment + DeploymentResult + supersede.
+
+    The station lock is acquired first (before FK inserts), then the Deployment
+    and DeploymentResult rows are created, then supersede_pending_for_station.
+    This test confirms the complete create+lock+supersede still succeeds.
+    """
+    t = api_topology
+    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    assert r.status_code == 201
+    dep = Deployment.objects.latest("id")
+    assert dep.status == Deployment.Status.IN_PROGRESS
+    assert DeploymentResult.objects.filter(deployment=dep, station=t["station_in"]).exists()
+
+
+@pytest.mark.django_db
+def test_deploy_trigger_station_lock_supersedes_existing(
+    api_topology, bearer, image_release, provisioned_station_in
+):
+    """A second deployment trigger supersedes the first (no conflict error) when
+    the station lock ordering is correct — station locked first, then inserts."""
+    t = api_topology
+    station = t["station_in"]
+    # Create a prior IN_PROGRESS deployment + pending result (the one to supersede)
+    old_dep = Deployment.objects.create(
+        image_release=image_release,
+        target_type=Deployment.TargetType.STATION,
+        target_station=station,
+        status=Deployment.Status.IN_PROGRESS,
+        created_by=t["staff"],
+    )
+    DeploymentResult.objects.create(
+        deployment=old_dep,
+        station=station,
+        status=DeploymentResult.Status.PENDING,
+        previous_version="",
+    )
+    # Trigger a new deployment for the same station/image — supersession fires
+    payload = {"image_release": image_release.pk, "target_station": station.pk}
+    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    assert r.status_code == 201

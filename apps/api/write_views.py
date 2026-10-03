@@ -50,7 +50,8 @@ from apps.images import github_releases
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning.models import ProvisioningJob
 from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
-from apps.stations.models import StationAuditLog, StationLogEntry, StationPhoto
+from apps.rollouts import services as rollout_services
+from apps.stations.models import Station, StationAuditLog, StationLogEntry, StationPhoto
 
 
 class ScopedWriteViewSet:
@@ -524,14 +525,35 @@ class RolloutSequenceEntryViewSet(
 
     def perform_create(self, serializer):
         self._guard_create()
-        entry = serializer.save()
+        sequence = serializer.validated_data["sequence"]
+        tag = serializer.validated_data["tag"]
+        # Route through the locked service so concurrent creates serialize and
+        # positions remain gap-free (mirrors SequenceAddView's locked protocol).
+        entry = rollout_services.add_entry(sequence=sequence, tag=tag, by_user=self.request.user)
+        if entry is None:
+            raise DRFValidationError({"tag": "This tag is already in the sequence."})
+        # Expose the created entry on the serializer so DRF can build the 201
+        # response without trying to call serializer.save() again.
+        serializer.instance = entry
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} created",
         )
 
     def perform_update(self, serializer):
-        entry = serializer.save()
+        entry = serializer.instance
+        new_position = serializer.validated_data.get("position")
+        if new_position is not None and new_position != entry.position:
+            # Reorder via locked two-phase move (mirrors SequenceReorderView's
+            # two-phase protocol: shift all to temp positions, then assign final).
+            rollout_services.move_entry(
+                entry=entry, new_position=new_position, by_user=self.request.user
+            )
+            entry.refresh_from_db()
+            serializer.instance = entry
+        else:
+            # No position change — save other fields normally (tag update etc.)
+            entry = serializer.save()
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} updated",
@@ -542,7 +564,9 @@ class RolloutSequenceEntryViewSet(
             self.request,
             message=f"RolloutSequenceEntry {instance.pk} deleted",
         )
-        instance.delete()
+        # Route through the locked service so delete + renumber + parent stamp
+        # are atomic (mirrors SequenceRemoveView's locked protocol).
+        rollout_services.remove_entry(entry=instance, by_user=self.request.user)
 
 
 class AlertRuleViewSet(
@@ -659,6 +683,26 @@ class DeploymentViewSet(
 
         try:
             with transaction.atomic():
+                # Acquire the station row lock BEFORE any FK-bearing inserts.
+                #
+                # On PostgreSQL, inserting a Deployment or DeploymentResult with
+                # a target_station/station FK takes an implicit key-share lock on
+                # the Station row to enforce referential integrity. If two
+                # concurrent triggers each INSERT first and then both call
+                # supersede_pending_for_station() (which needs an UPDATE lock),
+                # they deadlock upgrading key-share → update. Locking the station
+                # row explicitly at the top of the block prevents this: the second
+                # caller blocks at the SELECT FOR UPDATE until the first commits,
+                # so only one caller ever reaches the INSERT phase at a time.
+                #
+                # UpgradeStationView (apps/rollouts/views.py) does not lock the
+                # station row first — it has the same latent deadlock risk under
+                # concurrent triggers, but it is a human-driven UI path where
+                # concurrency is rare. The API is the automation surface where
+                # concurrent requests are the norm, so we fix it here and note
+                # the UI parity gap.
+                Station.objects.select_for_update().filter(pk=station.pk).first()
+
                 dep = Deployment.objects.create(
                     image_release=image_release,
                     target_type=Deployment.TargetType.STATION,
@@ -719,17 +763,28 @@ class ProvisioningJobViewSet(
         if not ws.can_trigger_provisioning(self.request.user, station):
             raise PermissionDenied("Not allowed to trigger a provisioning job for this station.")
 
-        # Input-validation parity with the UI trigger (CreateProvisioningJobView):
-        # reject if an active job (PENDING/RUNNING/READY) already exists for the
-        # station — prevents duplicate provisioning bundles being queued.
-        if ProvisioningJob.objects.filter(
-            station=station, status__in=ACTIVE_PROVISIONING_STATUSES
-        ).exists():
-            raise DRFValidationError(
-                {"station": "This station already has an active provisioning job."}
-            )
+        # Serialize the duplicate-active-job check + INSERT on the Station row
+        # so two concurrent automation requests both seeing "no active job" cannot
+        # both create PENDING jobs (select → insert race). The lock on the Station
+        # row is the natural serialization point: every provisioning job references
+        # the same station FK, so locking the station gates ALL concurrent triggers.
+        with transaction.atomic():
+            # Lock the station row so any concurrent trigger for the same station
+            # must wait — the check+create is now effectively atomic.
+            Station.objects.select_for_update().filter(pk=station.pk).first()
 
-        job = serializer.save(requested_by=self.request.user)
+            # Input-validation parity with the UI trigger (CreateProvisioningJobView):
+            # reject if an active job (PENDING/RUNNING/READY) already exists for the
+            # station — prevents duplicate provisioning bundles being queued.
+            if ProvisioningJob.objects.filter(
+                station=station, status__in=ACTIVE_PROVISIONING_STATUSES
+            ).exists():
+                raise DRFValidationError(
+                    {"station": "This station already has an active provisioning job."}
+                )
+
+            job = serializer.save(requested_by=self.request.user)
+
         audit_station_write(
             self.request,
             station=station,
@@ -894,7 +949,15 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
                     "tag": rf_serializers.CharField(),
                     "html_url": rf_serializers.URLField(),
                     "is_latest": rf_serializers.BooleanField(),
-                    "asset_names": rf_serializers.ListField(child=rf_serializers.CharField()),
+                    "importable_variants": rf_serializers.ListField(
+                        child=inline_serializer(
+                            "ImportableVariant",
+                            fields={
+                                "machine": rf_serializers.CharField(),
+                                "channel": rf_serializers.CharField(),
+                            },
+                        )
+                    ),
                 },
                 many=True,
             )
@@ -902,20 +965,41 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
     )
     @action(detail=False, methods=["get"], url_path="available")
     def available(self, request):
-        """List available GitHub releases. Staff-only."""
+        """List GitHub releases that have at least one importable variant. Staff-only.
+
+        Only releases with a complete asset triple (wic.bz2 + .sha256 + .bundle)
+        for at least one machine/channel combination are returned. This mirrors
+        the importable-row derivation in GitHubReleasesPartialView so automation
+        can feed available/ output straight into import/.
+
+        Each entry exposes ``importable_variants`` — a list of
+        ``{"machine": ..., "channel": ...}`` dicts — so callers know exactly
+        what can be passed to the import/ endpoint.
+        """
         if not ws.can_manage_images(request.user):
             raise PermissionDenied("Image management requires staff/admin.")
         repo = getattr(settings, "LINUX_IMAGE_REPO", _LINUX_IMAGE_REPO_DEFAULT)
         releases = github_releases.fetch_releases(repo, limit=_GITHUB_RELEASES_LIMIT)
-        data = [
-            {
-                "tag": r.tag,
-                "html_url": r.html_url,
-                "is_latest": r.is_latest,
-                "asset_names": sorted(r.asset_names),
-            }
-            for r in releases
-        ]
+
+        machines = [ImageRelease.Machine.QEMU, ImageRelease.Machine.RPI]
+        data = []
+        for r in releases:
+            variants = []
+            for m in machines:
+                for channel in sorted(r.channels_for(m.value)):
+                    variants.append({"machine": m.value, "channel": channel})
+            # Only include releases that have at least one importable variant
+            # (mirrors GitHubReleasesPartialView's per-release row filtering).
+            if not variants:
+                continue
+            data.append(
+                {
+                    "tag": r.tag,
+                    "html_url": r.html_url,
+                    "is_latest": r.is_latest,
+                    "importable_variants": variants,
+                }
+            )
         return Response(data)
 
     # ------------------------------------------------------------------ #
@@ -953,6 +1037,37 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
             raise DRFValidationError(
                 {"tag": f"Tag '{tag}' not found in available GitHub releases."}
             )
+
+        # Duplicate-job guard (mirrors QuickQueueView's guard semantics):
+        # reject with 409 if this (tag, machine, channel) is already imported
+        # OR has an active (PENDING/RUNNING) import job.  Concurrent/repeated
+        # requests would otherwise overwrite the same stable S3 keys.
+        if ImageRelease.all_objects.filter(tag=tag, machine=machine, channel=channel).exists():
+            err = APIException(
+                detail=(
+                    f"Image {tag}/{machine}/{channel} is already imported. "
+                    "Archive it first to re-import."
+                )
+            )
+            err.status_code = http_status.HTTP_409_CONFLICT
+            raise err
+
+        active_import_statuses = [
+            ImageImportJob.Status.PENDING,
+            ImageImportJob.Status.RUNNING,
+        ]
+        existing_job = ImageImportJob.objects.filter(
+            tag=tag, machine=machine, channel=channel, status__in=active_import_statuses
+        ).first()
+        if existing_job:
+            err = APIException(
+                detail=(
+                    f"An active import job for {tag}/{machine}/{channel} already exists "
+                    f"(job #{existing_job.pk}, status={existing_job.status})."
+                )
+            )
+            err.status_code = http_status.HTTP_409_CONFLICT
+            raise err
 
         job = ImageImportJob.objects.create(
             tag=tag,

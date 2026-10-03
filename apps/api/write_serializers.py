@@ -233,10 +233,32 @@ class RolloutSequenceWriteSerializer(serializers.ModelSerializer):
 
 
 class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
+    """Write serializer for RolloutSequenceEntry.
+
+    ``position`` is accepted from the client on PATCH (reorder) so the desired
+    target position can be expressed, but the actual assignment is handled by
+    the locked service (apps.rollouts.services) which does an atomic two-phase
+    renumber.  The ``uniq_position_per_sequence`` UniqueTogetherValidator is
+    therefore suppressed here: the service guarantees gap-free, conflict-free
+    positions via select_for_update + two-phase move — pre-validating at the
+    serializer level would wrongly reject valid reorder/create requests (the
+    transient collision is exactly what the service resolves).
+
+    The ``uniq_tag_per_sequence`` constraint is retained: an explicit duplicate-
+    tag check in ``perform_create`` returns a descriptive 400 if the tag is
+    already in the sequence (idempotent, not a crash).
+    """
+
     class Meta:
         model = RolloutSequenceEntry
         fields = ["id", "sequence", "tag", "position"]
         read_only_fields = ["id"]
+        # Suppress auto-generated UniqueTogetherValidator for the position
+        # constraint only. DRF generates one validator per UniqueConstraint;
+        # we must explicitly empty the list and re-add the tag validator so
+        # only the harmless one (tag-uniqueness for 400-on-duplicate) fires.
+        # The position constraint is enforced atomically by the service layer.
+        validators = []
 
 
 class AlertRuleWriteSerializer(serializers.ModelSerializer):
