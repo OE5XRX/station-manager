@@ -14,9 +14,11 @@ import logging as _logging
 import math
 import os as _os
 import re as _re
+import socket
 import struct
 import subprocess as _subprocess
 
+from station_agent.audio import rtp as _rtp
 from station_agent.audio import selftest as _selftest
 
 _log = _logging.getLogger(__name__)
@@ -430,3 +432,83 @@ def _terminate_proc(proc) -> None:
                 proc.kill()
     except Exception as exc:  # noqa: BLE001
         _log.debug("diag: terminate failed: %s", exc)
+
+
+def _default_udp_socket() -> socket.socket:
+    return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+
+class MeasuredTxBridge:
+    """Anchor-U diagnostic TX bridge: receives op.mic Opus frames over UDP loopback,
+    injects them into *tx_node* (output_MONO = C), and taps the post-decode PCM via an
+    fdsink measurement pipe. Non-blocking — ``feed_opus`` is called from the WS loop as
+    reference frames arrive; the captured PCM is read separately via ``read_measurement``.
+
+    RF SAFETY: writes only to the PipeWire sink; never keys the SA818.
+    """
+
+    def __init__(
+        self,
+        tx_node: str,
+        port: int,
+        rate: int,
+        *,
+        spawn=_default_spawn,
+        read_measfd=_default_read_measfd,
+        socket_factory=None,
+        ssrc: int = 0x5852_5841,
+    ):
+        self._node = tx_node
+        self._port = port
+        self._rate = rate
+        self._spawn = spawn
+        self._read_measfd = read_measfd
+        self._socket_factory = socket_factory or _default_udp_socket
+        self._ssrc = ssrc
+        self._proc = None
+        self._sock = None
+        self._read_fd = None
+        self._seq = 0
+        self._ts = 0
+
+    def start(self) -> None:
+        self._sock = self._socket_factory()
+        make_argv = lambda mfd: build_measured_tx_argv(  # noqa: E731
+            self._node, self._port, self._rate, meas_fd=mfd
+        )
+        self._proc, self._read_fd = self._spawn(make_argv)
+
+    def feed_opus(self, payload: bytes) -> None:
+        if self._sock is None:
+            _log.debug("diag-bridge: feed before start; dropping")
+            return
+        datagram = _rtp.wrap_rtp(payload, seq=self._seq, ts=self._ts, ssrc=self._ssrc, pt=_RTP_PT)
+        try:
+            self._sock.sendto(datagram, (_LOOPBACK, self._port))
+        except OSError as exc:
+            _log.debug("diag-bridge: sendto failed: %s", exc)
+        self._seq = (self._seq + 1) & 0xFFFF
+        self._ts = (self._ts + 960) & 0xFFFFFFFF  # RTP 48 kHz clock, 20 ms frame
+
+    def read_measurement(self, nbytes: int, timeout: float) -> bytes:
+        if self._read_fd is None:
+            return b""
+        pcm = self._read_measfd(self._read_fd, nbytes, timeout)
+        self._read_fd = None  # read_measfd closes it
+        return pcm
+
+    def stop(self) -> None:
+        _terminate_proc(self._proc)
+        self._proc = None
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        if self._read_fd is not None:
+            try:
+                _os.close(self._read_fd)
+            except OSError:
+                pass
+            self._read_fd = None
