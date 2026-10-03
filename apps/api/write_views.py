@@ -590,26 +590,37 @@ class RolloutSequenceEntryViewSet(
             # Lock the parent sequence first (before the field save) so the
             # lock order matches move_entry's own select_for_update, preventing
             # a potential deadlock if two concurrent PATCHes race.
-            with transaction.atomic():
-                RolloutSequence.objects.select_for_update().filter(pk=entry.sequence_id).first()
-                non_position_fields = {
-                    k: v for k, v in serializer.validated_data.items() if k != "position"
-                }
-                if non_position_fields:
-                    for field, value in non_position_fields.items():
-                        setattr(entry, field, value)
-                    entry.save(update_fields=list(non_position_fields.keys()))
-                # Reorder via locked two-phase move (mirrors SequenceReorderView's
-                # two-phase protocol: shift all to temp positions, then assign final).
-                # R4c: catch ValueError (offset overflow) and translate to 400.
-                try:
-                    rollout_services.move_entry(
-                        entry=entry, new_position=new_position, by_user=self.request.user
-                    )
-                except ValueError as exc:
-                    raise DRFValidationError(
-                        {"position": "sequence too large to reorder"}
-                    ) from exc
+            # R6a: the same (sequence, tag) unique race that R5d fixed in the
+            # tag-only branch below applies here too — a position+tag PATCH saves
+            # tag via entry.save(), and validate_tag ran before the lock, so two
+            # concurrent PATCHes setting the same new tag both pass validation and
+            # the second hits the DB constraint.  Wrap the atomic block in the
+            # same IntegrityError → 400 catch so it is handled symmetrically.
+            try:
+                with transaction.atomic():
+                    RolloutSequence.objects.select_for_update().filter(
+                        pk=entry.sequence_id
+                    ).first()
+                    non_position_fields = {
+                        k: v for k, v in serializer.validated_data.items() if k != "position"
+                    }
+                    if non_position_fields:
+                        for field, value in non_position_fields.items():
+                            setattr(entry, field, value)
+                        entry.save(update_fields=list(non_position_fields.keys()))
+                    # Reorder via locked two-phase move (mirrors SequenceReorderView's
+                    # two-phase protocol: shift all to temp positions, then assign final).
+                    # R4c: catch ValueError (offset overflow) and translate to 400.
+                    try:
+                        rollout_services.move_entry(
+                            entry=entry, new_position=new_position, by_user=self.request.user
+                        )
+                    except ValueError as exc:
+                        raise DRFValidationError(
+                            {"position": "sequence too large to reorder"}
+                        ) from exc
+            except IntegrityError as exc:
+                raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
             entry.refresh_from_db()
             serializer.instance = entry
         else:

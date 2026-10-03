@@ -432,3 +432,66 @@ class TestR5dEntryTagIntegrityError400:
         assert "tag" in r.data or "detail" in r.data or "non_field_errors" in r.data, (
             f"Response must contain 'tag', 'detail', or 'non_field_errors', got: {r.data}"
         )
+
+
+# ---------------------------------------------------------------------------
+# R6a — rollout entry position+tag PATCH tag-uniqueness IntegrityError → 400
+# ---------------------------------------------------------------------------
+class TestR6aPositionTagIntegrityError400:
+    """R6a (independent review round 1): the (sequence, tag) unique race that
+    R5d fixed in the tag-only PATCH branch applies symmetrically to the
+    position+tag branch.
+
+    A PATCH that changes BOTH position and tag takes the position branch, which
+    writes tag via ``entry.save(update_fields=[...])`` (not serializer.save()).
+    validate_tag runs before the select_for_update lock, so two concurrent
+    PATCHes setting the same new tag both pass validation and the second hits
+    the DB unique constraint.  The branch must translate that IntegrityError to
+    a 400/409, not let it surface as a 500.
+    """
+
+    def test_forced_integrity_error_on_position_tag_update_returns_400_not_500(
+        self, api_topology, bearer, monkeypatch
+    ):
+        """Force IntegrityError during a position+tag PATCH → API must return 400/409."""
+        from django.db import IntegrityError
+
+        from apps.rollouts.models import RolloutSequenceEntry
+
+        seq = _get_or_create_sequence("r6a-postag-ie")
+        tag_a = _make_tag("r6a-postag-tag-a")
+        tag_b = _make_tag("r6a-postag-tag-b")
+        tag_new = _make_tag("r6a-postag-tag-new")  # not in sequence — passes validate_tag
+
+        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+
+        # Monkeypatch the model save to raise IntegrityError on the tag write,
+        # simulating the race: validate_tag passes, but the DB write collides on
+        # the (sequence, tag) unique constraint.  The position branch's
+        # entry.save(update_fields=['tag']) is the collision point.
+        orig_save = RolloutSequenceEntry.save
+
+        def _raising_save(self_, *args, **kwargs):
+            if "tag" in (kwargs.get("update_fields") or []):
+                raise IntegrityError(
+                    "UNIQUE constraint failed: "
+                    "rollouts_rolloutsequenceentry.sequence_id, "
+                    "rollouts_rolloutsequenceentry.tag_id"
+                )
+            return orig_save(self_, *args, **kwargs)
+
+        monkeypatch.setattr(RolloutSequenceEntry, "save", _raising_save)
+
+        url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
+        # position changes (0 -> 1) AND tag changes -> takes the position branch.
+        r = bearer(api_topology["region_mgr"]).patch(
+            url, {"position": 1, "tag": tag_new.pk}, format="json"
+        )
+        assert r.status_code in (400, 409), (
+            f"IntegrityError on position+tag update must produce 400/409, got "
+            f"{r.status_code}: {r.data if hasattr(r, 'data') else '(no data)'}"
+        )
+        assert "tag" in r.data or "detail" in r.data or "non_field_errors" in r.data, (
+            f"Response must surface the tag collision, got: {r.data}"
+        )
