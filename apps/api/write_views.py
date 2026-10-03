@@ -707,11 +707,19 @@ class UserViewSet(
 
     POST (create) → 405  — user creation via API is out of scope for Phase 3.
     DELETE (destroy) → 405 — user deletion is a soft/hard-purge admin flow.
-    PATCH/PUT → staff/admin only (is_internal).
+    PATCH/PUT → staff/admin only (is_internal); see level-aware target rules.
 
-    get_queryset is inherited: internal users see all; non-internal see only
-    themselves (but non-internal cannot write anyway — can_write_object gates
-    to can_write_user = is_internal, so they get 403 before reaching DB).
+    get_queryset is overridden to exclude soft-deleted users (mirrors the UI's
+    ``deleted_at__isnull=True``): a PATCH on a soft-deleted user → 404. Internal
+    users see all active users; non-internal see only themselves (and cannot
+    write anyway — can_write_object gates writes).
+
+    Authorization model (mirrors the UI):
+      - Write access requires is_internal (staff/admin).
+      - A non-admin (staff) may edit ONLY non-internal targets
+        (members/applicants) and may NOT change membership_level at all.
+      - An admin may edit anyone including membership_level.
+      - email is read-only (account-takeover vector) — serializer-enforced.
 
     Audit events:
       - membership_level changed upward  → MEMBERSHIP_PROMOTED
@@ -720,14 +728,28 @@ class UserViewSet(
     All messages include "via API token <prefix>" via audit_account_write.
 
     UI guards mirrored from MembershipSetView (apps/accounts/views_membership.py):
-      1. Self-change of membership_level → 400 (validated in UserWriteSerializer).
-      2. Demote-to-applicant when assignments exist → 400 (validated in serializer).
+      1. membership_level changes require an admin actor → 403 (serializer).
+      2. Self-change of membership_level → 400 (validated in serializer).
+      3. Demote-to-applicant when assignments exist → 400 (validated in serializer).
     """
 
     write_serializer_class = UserWriteSerializer
 
+    def get_queryset(self):
+        # Mirror the UI: soft-deleted users are off-limits to mutation. Narrow
+        # the inherited scope to the active slice so PATCH on a soft-deleted
+        # user → 404 (invisible), never a mutation on a dead row.
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
     def can_write_object(self, user, obj, method):
-        return ws.can_write_user(user)
+        if not ws.can_write_user(user):
+            return False
+        # Level-aware target protection: a non-admin (staff) must not mutate a
+        # staff/admin target. Only admins may touch internal users. This blocks
+        # a staff user from editing peers' or admins' profiles entirely.
+        if not user.is_admin and obj.is_internal:
+            return False
+        return True
 
     def perform_update(self, serializer):
         old_level = serializer.instance.membership_level

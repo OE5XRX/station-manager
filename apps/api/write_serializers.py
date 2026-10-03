@@ -5,6 +5,7 @@ status/secret fields are read-only or absent. No ``fields="__all__"``.
 """
 
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.accounts.models import User
@@ -22,29 +23,27 @@ from apps.stations.models import (
     StationTag,
 )
 
-# Ordered membership levels for promote/demote direction determination.
-# Mirrors MEMBERSHIP_ORDER in apps/accounts/views_membership.py.
-_MEMBERSHIP_ORDER = [
-    User.MembershipLevel.APPLICANT,
-    User.MembershipLevel.MEMBER,
-    User.MembershipLevel.STAFF,
-    User.MembershipLevel.ADMIN,
-]
-
 
 class UserWriteSerializer(serializers.ModelSerializer):
     """Curated update-only serializer for User.
 
     Writable: profile fields + membership_level.
-    Read-only: id, username, date_joined (stable identifiers).
+    Read-only: id, username, date_joined (stable identifiers) + email.
     Absent entirely (never writable): password, is_staff, is_superuser,
     is_active, last_login, deleted_at, deleted_by, groups, user_permissions.
 
-    Validation mirrors UI guards from MembershipSetView:
+    ``email`` is deliberately read-only: cross-user email mutation bypasses the
+    self-service email-verification flow and enables account takeover (set the
+    admin's email → hijack via password-reset). The UI never sets email
+    cross-user; email changes go only through the verification flow. The field
+    stays in ``fields`` so it still appears in responses.
+
+    Validation mirrors UI guards (MembershipSetView = AdminRequiredMixin):
+      - membership_level changes require an ADMIN actor (403).
       - self-change of membership_level is blocked (400).
       - demote-to-applicant blocked when user has assignments (400).
     The request is injected via context so the serializer can compare
-    request.user with instance for the self-change guard.
+    request.user with instance and check actor role.
     """
 
     class Meta:
@@ -69,7 +68,8 @@ class UserWriteSerializer(serializers.ModelSerializer):
             "longitude",
             "locator",
         ]
-        read_only_fields = ["id", "username", "date_joined"]
+        # email is read-only: cross-user email set = account-takeover vector.
+        read_only_fields = ["id", "username", "date_joined", "email"]
 
     def validate(self, attrs):
         instance = self.instance
@@ -80,8 +80,16 @@ class UserWriteSerializer(serializers.ModelSerializer):
         if new_level is None or new_level == instance.membership_level:
             return attrs
 
-        # Self-change guard (mirrors MembershipSetView: target.pk == request.user.pk → 400).
         request = self.context.get("request")
+
+        # Actor-must-be-admin guard for ANY membership change (mirrors the UI's
+        # AdminRequiredMixin on MembershipSetView). A staff (is_internal but not
+        # is_admin) user may edit profile fields but may NOT change membership.
+        # 403 (PermissionDenied), not 400 — this is an authorization failure.
+        if request is not None and not request.user.is_admin:
+            raise PermissionDenied("Only admins may change membership level.")
+
+        # Self-change guard (mirrors MembershipSetView: target.pk == request.user.pk → 400).
         if request is not None and request.user.pk == instance.pk:
             raise DRFValidationError(
                 {"membership_level": "Cannot change your own membership level."}
