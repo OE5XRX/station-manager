@@ -439,3 +439,78 @@ def test_two_different_rids_yield_different_diag_refs():
     refs = {diag_ref_for_request(uuid.uuid4().hex) for _ in range(20)}
     # With 15 random bits, 20 draws should not all collide.
     assert len(refs) > 1, "different rids must (almost always) yield different diag_refs"
+
+
+# ---------------------------------------------------------------------------
+# Finding A (copilot round 5) — streaming stops when reply arrives (bounded tail)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_streaming_stops_when_reply_arrives(audio_agent_auth, monkeypatch):
+    """The U reference stream must be cancelled as soon as the diag_result arrives.
+
+    Strategy: zero REF_FRAME_INTERVAL_S so the stream loop is fast; the fake agent
+    replies after a short delay.  The test asserts that the run returns the report
+    (streaming stopped), and that no pending-task / coroutine-never-awaited warnings
+    are raised (the stream task is properly cancelled and awaited in the finally block).
+
+    We also count the total streamed frames and assert it is bounded — i.e. the agent
+    replies before the full 243-frame loop finishes, and the frame count reflects that.
+    """
+    monkeypatch.setattr(_orch_module, "REF_FRAME_INTERVAL_S", 0)
+    # Patch REF_REPEAT to a larger value so 3×81=243 frames would take noticeably
+    # longer than the agent's reply delay if not cancelled.
+    monkeypatch.setattr(_orch_module, "REF_REPEAT", 50)  # would be 50×81=4050 frames
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-stop", callsign="OE1STP", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        ref_frame_count: list[int] = [0]
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.ref_media":
+                ref_frame_count[0] += 1
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_agent_reply():
+                """Accept the diag_command (wait past settle), reply quickly after settle."""
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                # Wait past settle window so orchestrator starts streaming.
+                await asyncio.sleep(REF_STREAM_SETTLE_S + 0.05)
+                report = dict(_SAMPLE_AGENT_REPORT)
+                report["anchor"] = "U"
+                report["request_id"] = rid
+                await agent.send_to(text_data=json.dumps(report))
+
+            agent_task = asyncio.ensure_future(fake_agent_reply())
+            result = await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # Run must return successfully.
+        assert "stages" in result or "anchor" in result
+        # With REF_REPEAT=50 and REF_FRAME_INTERVAL_S=0 the stream loop would send 4050
+        # frames if not cancelled; assert it stopped well before that.
+        assert ref_frame_count[0] < 4050, (
+            f"Streaming must stop when reply arrives; got {ref_frame_count[0]} frames "
+            f"(uncancelled would be 4050)"
+        )
+        # Some frames must have been streamed (the agent waited past the settle window).
+        assert ref_frame_count[0] > 0, "At least some reference frames must have been streamed"
+
+    asyncio.run(scenario())

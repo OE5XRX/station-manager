@@ -79,6 +79,13 @@ class AudioEngine:
         self._dead_man_token: object | None = None
         self._tot: asyncio.Task | None = None
         self.tx_route: dict | None = None
+        # Tracks whether the server has PTT active, independently of whether the audio TX
+        # bridge is up.  Set to True as soon as mic_state(active=True) is received — even
+        # if the bridge fails to start — so the RF interlock in on_diag_command can refuse
+        # diagnostic injection regardless of _tx state.  Cleared only when the server sends
+        # mic_state(active=False); safety timers (dead-man, TOT) do NOT clear this because
+        # they only tear down the audio bridge, not the carrier/PTT.
+        self._mic_active: bool = False
         # Serialises clear-refs + _safe_stop inside _teardown_diag so the
         # "cleared but bridge not yet stopped" window is never observable to
         # a concurrent on_mic_state / stop that also acquires this lock.
@@ -173,11 +180,18 @@ class AudioEngine:
     # --- TX (mic → module) -------------------------------------------------
     async def on_mic_state(self, *, active: bool, tx_slot, tx_module) -> None:
         if not active:
+            self._mic_active = False
             await self._teardown_tx()
             return
         if not isinstance(tx_slot, int) or isinstance(tx_slot, bool):
             logger.warning("engine: mic_state with non-int tx_slot %r — ignoring", tx_slot)
             return
+        # Mark PTT active BEFORE any lookups or early returns so that every code path in
+        # the active=True branch — including failures in resolve_node or bridge.start() —
+        # leaves _mic_active=True.  The diagnostic RF interlock checks this flag, not _tx,
+        # so that a failed bridge start cannot open a window for diagnostic injection while
+        # PTT is asserted.
+        self._mic_active = True
         # RF safety: always pass through _teardown_diag (lock-guarded) before starting
         # TX so any in-flight diagnostic bridge is fully stopped before the TX bridge
         # starts — even if the bridge stop is slow (up to 3 s _safe_stop).  This closes
@@ -252,12 +266,16 @@ class AudioEngine:
             return {**base, "error": f"unsupported anchor {anchor!r}"}
         if not isinstance(slot, int) or isinstance(slot, bool):
             return {**base, "error": "slot must be an int"}
-        # RF safety + exclusivity: refuse while a TX bridge (PTT/mic) is up.
-        if self._tx is not None:
+        # RF safety + exclusivity: refuse while PTT is active OR a TX bridge is up.
+        # _mic_active is set as soon as mic_state(active=True) arrives — even when the audio
+        # bridge fails to start (_tx stays None).  Interlocking on _tx alone would miss the
+        # window where PTT is asserted but the bridge never came up, allowing a diagnostic to
+        # inject a tone into a keyed transmitter.
+        if self._tx is not None or self._mic_active:
             return {
                 **base,
                 "busy": True,
-                "error": "refused: TX active — diagnostic inject would reach a keyed transmitter",
+                "error": "refused: TX active (PTT keyed) — tone inject would RF-emit",
             }
         # Mutual exclusion: only one diagnostic (any anchor) at a time.
         if self._diag is not None:

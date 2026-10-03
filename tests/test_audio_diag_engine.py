@@ -561,3 +561,173 @@ def test_tx_start_waits_for_diag_bridge_stop():
         await eng._teardown_tx()
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Finding B (copilot round 5) — _mic_active: PTT intent tracked independently
+# of the audio TX bridge
+# ---------------------------------------------------------------------------
+
+
+class _NullResolveBackend(_FakeBackendWithTx):
+    """resolve_node always returns None — bridge can never start."""
+
+    def resolve_node(self, slot, direction):
+        return None
+
+
+def test_mic_active_set_even_when_resolve_node_returns_none():
+    """_mic_active must be True after mic_state(active=True) even when resolve_node
+    returns None (bridge never starts, _tx stays None).
+
+    This is the core invariant for the RF-safety hole: if PTT is asserted but the
+    audio bridge fails to start, _tx=None was previously causing on_diag_command to
+    see no TX active and allow a diagnostic inject into a keyed transmitter.
+    """
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _NullResolveBackend(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_FakeFactoryWithDiag(_FakeDiagBridge()),
+    )
+
+    async def scenario():
+        await eng.start()
+        assert eng._mic_active is False
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+        # resolve_node returned None → bridge never started → _tx is None
+        assert eng._tx is None, "_tx must be None when resolve_node returns None"
+        # but _mic_active must still be True — PTT is asserted
+        assert eng._mic_active is True, "_mic_active must be True even when bridge failed to start"
+
+    asyncio.run(scenario())
+
+
+def test_diag_refused_when_mic_active_but_tx_bridge_absent_anchor_c(monkeypatch):
+    """Anchor C: diagnostic must be refused with busy=True when _mic_active=True even
+    when _tx is None (bridge never started because resolve_node returned None).
+
+    This is the RF-safety regression guard for Finding B: the old interlock only checked
+    _tx, so a failed bridge start left a window for diagnostic injection on a keyed TX.
+    """
+    from station_agent.audio import diagnostics
+
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _NullResolveBackend(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_FakeFactoryWithDiag(_FakeDiagBridge()),
+    )
+
+    def _must_not_run(**kw):
+        raise AssertionError("run_diagnostic must NOT be called while PTT is active")
+
+    monkeypatch.setattr(diagnostics, "run_diagnostic", _must_not_run)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+        assert eng._tx is None  # bridge failed to start
+        assert eng._mic_active is True
+
+        ret = await eng.on_diag_command(
+            {"anchor": "C", "slot": 0, "request_id": "b_c1", "signal": {}}
+        )
+        assert ret is not None
+        assert ret["busy"] is True
+        assert "TX active" in ret["error"]
+
+    asyncio.run(scenario())
+
+
+def test_diag_refused_when_mic_active_but_tx_bridge_absent_anchor_u():
+    """Anchor U: diagnostic must be refused with busy=True when _mic_active=True even
+    when _tx is None (bridge never started).
+    """
+    diag = _FakeDiagBridge()
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _NullResolveBackend(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_FakeFactoryWithDiag(diag),
+    )
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+        assert eng._tx is None  # bridge failed to start
+        assert eng._mic_active is True
+
+        ret = await eng.on_diag_command(
+            {"anchor": "U", "slot": 0, "request_id": "b_u1", "signal": {}}
+        )
+        assert ret is not None
+        assert ret["busy"] is True
+        assert "TX active" in ret["error"]
+        assert diag.started is False, "diagnostic bridge must not start while PTT active"
+
+    asyncio.run(scenario())
+
+
+def test_mic_active_cleared_on_ptt_release_allows_diagnostic(monkeypatch):
+    """After mic_state(active=False), _mic_active is cleared and a diagnostic is accepted.
+
+    Verifies the full PTT-asserted → PTT-released → diagnostic-accepted cycle.
+    """
+    from station_agent.audio import diagnostics
+
+    emitted = []
+
+    async def emit_json(m):
+        emitted.append(m)
+
+    eng = AudioEngine(
+        _NullResolveBackend(),
+        emit_json=emit_json,
+        emit_binary=lambda b: None,
+        bridge_factory=_FakeFactoryWithDiag(_FakeDiagBridge()),
+    )
+
+    accepted = []
+
+    monkeypatch.setattr(
+        diagnostics,
+        "run_diagnostic",
+        lambda **kw: (accepted.append(True), {"anchor": "C", "taps": [], "static_gains": {}})[1],
+    )
+
+    async def scenario():
+        await eng.start()
+        # Assert PTT.
+        await eng.on_mic_state(active=True, tx_slot=0, tx_module="fm")
+        assert eng._mic_active is True
+
+        # Release PTT.
+        await eng.on_mic_state(active=False, tx_slot=None, tx_module=None)
+        assert eng._mic_active is False, "_mic_active must be False after PTT release"
+
+        # Diagnostic must now be accepted.
+        ret = await eng.on_diag_command(
+            {"anchor": "C", "slot": 0, "request_id": "b_r1", "signal": {}}
+        )
+        assert ret is not None
+        assert ret.get("busy") is None or ret.get("busy") is False
+        assert "TX active" not in ret.get("error", "")
+        assert accepted, "run_diagnostic must have been called after PTT release"
+
+    asyncio.run(scenario())
