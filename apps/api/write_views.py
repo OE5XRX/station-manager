@@ -20,10 +20,12 @@ from apps.api.write_serializers import (
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
     StationAssignmentWriteSerializer,
+    StationLogEntryWriteSerializer,
+    StationPhotoWriteSerializer,
     StationTagWriteSerializer,
     StationWriteSerializer,
 )
-from apps.stations.models import StationAuditLog
+from apps.stations.models import StationAuditLog, StationLogEntry, StationPhoto
 from apps.stations.signals import discard_deleting_station
 
 
@@ -301,5 +303,117 @@ class RegionAssignmentViewSet(
             target_user=instance.user,
             region=instance.region,
             message=f"RegionAssignment for {instance.user} on {instance.region} deleted",
+        )
+        instance.delete()
+
+
+class StationLogEntryViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.ScopedReadOnlyViewSet,
+):
+    """CRUD for StationLogEntry, scoped to the user's accessible stations."""
+
+    serializer_class = StationLogEntryWriteSerializer
+    write_serializer_class = StationLogEntryWriteSerializer
+
+    def get_queryset(self):
+        return StationLogEntry.objects.filter(
+            station__in=ws.accessible_stations(self.request.user)
+        ).order_by("-created_at")
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_station_content(user, obj.station)
+
+    def perform_create(self, serializer):
+        station = serializer.validated_data["station"]
+        if not ws.can_write_station_content(self.request.user, station):
+            raise PermissionDenied("Not allowed to create a log entry for this station.")
+        entry = serializer.save(created_by=self.request.user)
+        audit_station_write(
+            self.request,
+            station=entry.station,
+            event_type=StationAuditLog.EventType.CREATED,
+            message=f"StationLogEntry '{entry.title}' created on {entry.station}",
+        )
+
+    def perform_update(self, serializer):
+        # `station` is writable: re-validate the NEW target station before saving,
+        # else a station-user could move a log entry to an out-of-scope station.
+        new_station = serializer.validated_data.get("station", serializer.instance.station)
+        if not ws.can_write_station_content(self.request.user, new_station):
+            raise PermissionDenied("Not allowed to move this log entry to that station.")
+        entry = serializer.save()
+        audit_station_write(
+            self.request,
+            station=entry.station,
+            event_type=StationAuditLog.EventType.UPDATED,
+            message=f"StationLogEntry '{entry.title}' updated on {entry.station}",
+        )
+
+    def perform_destroy(self, instance):
+        audit_station_write(
+            self.request,
+            station=instance.station,
+            event_type=StationAuditLog.EventType.DELETED,
+            message=f"StationLogEntry '{instance.title}' deleted on {instance.station}",
+        )
+        instance.delete()
+
+
+class StationPhotoViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.ScopedReadOnlyViewSet,
+):
+    """CRUD for StationPhoto, scoped to the user's accessible stations."""
+
+    serializer_class = StationPhotoWriteSerializer
+    write_serializer_class = StationPhotoWriteSerializer
+
+    def get_queryset(self):
+        return StationPhoto.objects.filter(
+            station__in=ws.accessible_stations(self.request.user)
+        ).order_by("-uploaded_at")
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_station_content(user, obj.station)
+
+    def perform_create(self, serializer):
+        station = serializer.validated_data["station"]
+        if not ws.can_write_station_content(self.request.user, station):
+            raise PermissionDenied("Not allowed to upload a photo for this station.")
+        photo = serializer.save(uploaded_by=self.request.user)
+        audit_station_write(
+            self.request,
+            station=photo.station,
+            event_type=StationAuditLog.EventType.CREATED,
+            message=f"StationPhoto uploaded on {photo.station}",
+        )
+
+    def perform_update(self, serializer):
+        # `station` is writable: re-validate the NEW target station before saving,
+        # else a station-user could move a photo to an out-of-scope station.
+        new_station = serializer.validated_data.get("station", serializer.instance.station)
+        if not ws.can_write_station_content(self.request.user, new_station):
+            raise PermissionDenied("Not allowed to move this photo to that station.")
+        photo = serializer.save()
+        audit_station_write(
+            self.request,
+            station=photo.station,
+            event_type=StationAuditLog.EventType.UPDATED,
+            message=f"StationPhoto updated on {photo.station}",
+        )
+
+    def perform_destroy(self, instance):
+        audit_station_write(
+            self.request,
+            station=instance.station,
+            event_type=StationAuditLog.EventType.DELETED,
+            message=f"StationPhoto deleted on {instance.station}",
         )
         instance.delete()

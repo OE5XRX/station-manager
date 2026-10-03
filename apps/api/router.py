@@ -55,3 +55,13 @@ router.register(
     r"image-import-jobs", read_views.ImageImportJobViewSet, basename="image-import-job"
 )
 router.register(r"users", read_views.UserViewSet, basename="user")
+router.register(
+    r"station-log-entries",
+    write_views.StationLogEntryViewSet,
+    basename="station-log-entry",
+)
+router.register(
+    r"station-photos",
+    write_views.StationPhotoViewSet,
+    basename="station-photo",
+)
