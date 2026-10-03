@@ -17,10 +17,13 @@ from channels.testing import WebsocketCommunicator
 from apps.audio.orchestrator import (
     AgentNotConnected,
     DiagnosticTimeout,
+    StationBusy,
     run_headless_diagnostic,
 )
 from apps.stations.models import Station
 from config.asgi import application
+from station_agent.audio import frame as audio_frame
+from station_agent.audio.diagnostics import DIAG_STREAM_REF
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -150,5 +153,108 @@ def test_orchestrator_missing_station():
         with pytest.raises(AgentNotConnected):
             # Use a pk that can't exist.
             await run_headless_diagnostic(999_999_999, "C", _SAMPLE_SIGNAL)
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Test: U-anchor reference frames use DIAG_STREAM_REF
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_u_frames_use_diag_stream_ref(audio_agent_auth):
+    """Every audio.ref_media frame streamed during a U diagnostic must carry
+    stream_ref == DIAG_STREAM_REF (not the old OP_MIC_DIAG_REF stub of 0).
+
+    Strategy: intercept channel-layer group_send calls to capture audio.ref_media
+    payloads without involving the WebSocket consumer (so we don't accidentally
+    cancel it via receive_output timeout).  A real agent communicator still handles
+    the diag_command / diag_result round-trip.
+    """
+    from channels.layers import get_channel_layer
+
+    station = Station.objects.create(name="orch-uref", callsign="OE1URF", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        captured_ref_frames: list[bytes] = []
+        _original_group_send = layer.group_send
+
+        async def spy_group_send(group, message):
+            if message.get("type") == "audio.ref_media":
+                captured_ref_frames.append(message["data"])
+            await _original_group_send(group, message)
+
+        layer.group_send = spy_group_send
+
+        try:
+            agent = _agent_comm(station.id)
+            connected, _ = await agent.connect()
+            assert connected is True
+
+            async def fake_agent_reply():
+                """Drain the diag_command, then send back a diag_result."""
+                msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+                assert msg["type"] == "diag_command"
+                rid = msg["request_id"]
+                report = dict(_SAMPLE_AGENT_REPORT)
+                report["anchor"] = "U"
+                report["request_id"] = rid
+                await agent.send_to(text_data=json.dumps(report))
+
+            agent_task = asyncio.ensure_future(fake_agent_reply())
+            await run_headless_diagnostic(station.id, "U", _SAMPLE_SIGNAL)
+            await agent_task
+            await agent.disconnect()
+        finally:
+            layer.group_send = _original_group_send
+
+        # Every captured ref frame must parse with stream_ref == DIAG_STREAM_REF.
+        assert len(captured_ref_frames) > 0, "No audio.ref_media frames were streamed"
+        for data in captured_ref_frames:
+            parsed = audio_frame.parse_frame(data)
+            assert parsed.stream_ref == DIAG_STREAM_REF, (
+                f"Expected stream_ref={DIAG_STREAM_REF:#06x}, got {parsed.stream_ref:#06x}"
+            )
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Test: busy reply raises StationBusy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_busy_reply_raises_station_busy(audio_agent_auth):
+    """Agent reply with busy=True → orchestrator raises StationBusy."""
+    station = Station.objects.create(name="orch-busy", callsign="OE1BSY", status="online")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        connected, _ = await agent.connect()
+        assert connected is True
+
+        async def fake_busy_reply():
+            """Drain the diag_command, send a busy report."""
+            msg = await asyncio.wait_for(agent.receive_json_from(), timeout=3.0)
+            assert msg["type"] == "diag_command"
+            rid = msg["request_id"]
+            # Reply with a busy envelope (anchor C has no binary ref frames).
+            busy_report = {
+                "type": "diag_result",
+                "request_id": rid,
+                "busy": True,
+                "error": "refused: TX active",
+            }
+            await agent.send_to(text_data=json.dumps(busy_report))
+
+        agent_task = asyncio.ensure_future(fake_busy_reply())
+        with pytest.raises(StationBusy):
+            await run_headless_diagnostic(station.id, "C", _SAMPLE_SIGNAL)
+        await agent_task
+
+        await agent.disconnect()
 
     asyncio.run(scenario())

@@ -4,9 +4,10 @@ Drives one diagnostic run over the channel layer without a live browser
 WebSocket.  The caller sends a diag_command to the agent group, optionally
 streams a U-anchor reference, and awaits the correlated diag_result reply.
 
-Note: anchor U (server-originated reference) is an on-station follow-up and is
-currently rejected at the REST endpoint (400); CI covers the control/transport
-flow and anchor C is the validated production path.
+Both anchor U (upstream, op.mic path) and anchor C (capture tap, downstream)
+are supported.  Anchor U streams a reference signal to the agent group using
+the dedicated :data:`~station_agent.audio.diagnostics.DIAG_STREAM_REF` sentinel
+so the agent routes those frames only to the active diagnostic bridge.
 """
 
 from __future__ import annotations
@@ -19,13 +20,11 @@ from channels.layers import get_channel_layer
 
 from apps.audio.constants import agent_group
 from apps.audio.diagnostics import build_run_report, iter_media_frames, load_reference_frames
+from station_agent.audio.diagnostics import DIAG_STREAM_REF
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-#: Numeric stream_ref used when injecting the U-anchor op.mic reference.
-OP_MIC_DIAG_REF: int = 0
 
 #: Number of times to loop the reference frame list for anchor-U injection.
 REF_REPEAT: int = 3
@@ -42,6 +41,14 @@ class AgentNotConnected(Exception):  # noqa: N818
 
 class DiagnosticTimeout(Exception):  # noqa: N818
     """Raised when the agent does not reply within the timeout window."""
+
+
+class StationBusy(Exception):  # noqa: N818
+    """Raised when the agent refuses a diagnostic because the station is busy.
+
+    The station is considered busy when a TX is active or another diagnostic is
+    already in flight.  The REST layer maps this to HTTP 409 Conflict.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +125,7 @@ async def run_headless_diagnostic(
     # 4. For anchor U: stream the reference frames after sending the command.
     if anchor == "U":
         frames = load_reference_frames()
-        for data in iter_media_frames(frames, stream_ref=OP_MIC_DIAG_REF, repeat=REF_REPEAT):
+        for data in iter_media_frames(frames, stream_ref=DIAG_STREAM_REF, repeat=REF_REPEAT):
             await layer.group_send(
                 agent_group(station_id),
                 {"type": "audio.ref_media", "data": data},
@@ -132,6 +139,8 @@ async def run_headless_diagnostic(
 
     # 6. Surface agent-side errors without calling build_run_report.
     agent_report = envelope["msg"]
+    if agent_report.get("busy"):
+        raise StationBusy()
     if agent_report.get("error"):
         return {"anchor": anchor, "error": agent_report["error"]}
 
