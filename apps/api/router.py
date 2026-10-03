@@ -24,10 +24,14 @@ router.register(r"stations", write_views.StationViewSet, basename="station")
 router.register(r"regions", write_views.RegionViewSet, basename="region")
 router.register(r"station-tags", write_views.StationTagViewSet, basename="station-tag")
 router.register(
-    r"station-assignments", read_views.StationAssignmentViewSet, basename="station-assignment"
+    r"station-assignments",
+    write_views.StationAssignmentViewSet,
+    basename="station-assignment",
 )
 router.register(
-    r"region-assignments", read_views.RegionAssignmentViewSet, basename="region-assignment"
+    r"region-assignments",
+    write_views.RegionAssignmentViewSet,
+    basename="region-assignment",
 )
 router.register(
     r"rollout-sequences", read_views.RolloutSequenceViewSet, basename="rollout-sequence"

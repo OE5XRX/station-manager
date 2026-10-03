@@ -6,7 +6,9 @@ Object-level write authz: TopologyScopedWritePermission -> can_write_object.
 Create-scope: enforced in perform_create. Every mutation audits token origin.
 """
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
 
 from apps.accounts.models import AccountAuditLog
@@ -15,7 +17,9 @@ from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
 from apps.api.write_permissions import TopologyScopedWritePermission
 from apps.api.write_serializers import (
+    RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
+    StationAssignmentWriteSerializer,
     StationTagWriteSerializer,
     StationWriteSerializer,
 )
@@ -178,5 +182,109 @@ class StationTagViewSet(
         audit_config_write(
             self.request,
             message=f"StationTag {instance.slug} deleted",
+        )
+        instance.delete()
+
+
+def _save_assignment(serializer, *, actor):
+    """Call serializer.save(assigned_by=actor), converting any Django
+    ValidationError raised by _ApplicantForbiddenMixin.full_clean() into a
+    DRF ValidationError so the API returns 400 instead of 500.
+    """
+    try:
+        return serializer.save(assigned_by=actor)
+    except DjangoValidationError as exc:
+        raise DRFValidationError(
+            exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+        )
+
+
+class StationAssignmentViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.StationAssignmentViewSet,
+):
+    write_serializer_class = StationAssignmentWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_station_assignment(user, obj.station)
+
+    def perform_create(self, serializer):
+        station = serializer.validated_data["station"]
+        if not ws.can_write_station_assignment(self.request.user, station):
+            raise PermissionDenied("Not allowed to create an assignment for this station.")
+        assignment = _save_assignment(serializer, actor=self.request.user)
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            target_user=assignment.user,
+            message=f"StationAssignment for {assignment.user} on {assignment.station} created",
+        )
+
+    def perform_update(self, serializer):
+        assignment = _save_assignment(serializer, actor=self.request.user)
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
+            target_user=assignment.user,
+            message=f"StationAssignment for {assignment.user} on {assignment.station} updated",
+        )
+
+    def perform_destroy(self, instance):
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_REVOKED,
+            target_user=instance.user,
+            message=f"StationAssignment for {instance.user} on {instance.station} deleted",
+        )
+        instance.delete()
+
+
+class RegionAssignmentViewSet(
+    ScopedWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.RegionAssignmentViewSet,
+):
+    write_serializer_class = RegionAssignmentWriteSerializer
+
+    def can_write_object(self, user, obj, method):
+        return ws.can_write_region_assignment(user)
+
+    def _guard_write(self):
+        if not ws.can_write_region_assignment(self.request.user):
+            raise PermissionDenied("Region assignment writes require staff/admin.")
+
+    def perform_create(self, serializer):
+        self._guard_write()
+        assignment = _save_assignment(serializer, actor=self.request.user)
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_CREATED,
+            target_user=assignment.user,
+            region=assignment.region,
+            message=f"RegionAssignment for {assignment.user} on {assignment.region} created",
+        )
+
+    def perform_update(self, serializer):
+        assignment = _save_assignment(serializer, actor=self.request.user)
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_CREATED,
+            target_user=assignment.user,
+            region=assignment.region,
+            message=f"RegionAssignment for {assignment.user} on {assignment.region} updated",
+        )
+
+    def perform_destroy(self, instance):
+        audit_account_write(
+            self.request,
+            event_type=AccountAuditLog.EventType.REGION_ASSIGNMENT_REVOKED,
+            target_user=instance.user,
+            region=instance.region,
+            message=f"RegionAssignment for {instance.user} on {instance.region} deleted",
         )
         instance.delete()
