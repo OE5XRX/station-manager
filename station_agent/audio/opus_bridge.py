@@ -9,7 +9,8 @@ boundary that yields exactly one packet per read:
                             ! rtpopuspay ! udpsink        → agent strip_rtp → on_opus()
     TX (WS → inject module): agent feed_opus → wrap_rtp → udpsink(to gst)
                             → udpsrc ! rtpjitterbuffer ! rtpopusdepay ! opusdec(PLC,FEC)
-                            ! pipewiresink(target=tx_node)
+                            ! [DSP chain: band-pass/gate/comp/makeup, optional pre-limiter
+                              meter tap] ! limiter ! pipewiresink(target=tx_node)
 
 The pipeline argv builders are pure and unit-tested; the process/socket lifecycle uses
 injected ``spawn``/``socket_factory`` seams so tests need no GStreamer, PipeWire, or real
@@ -24,6 +25,7 @@ import subprocess
 import threading
 
 from station_agent.audio import rtp
+from station_agent.audio.tx_dsp import TxDspConfig, limiter_fragment, pre_limiter_fragment
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +69,25 @@ def build_rx_argv(rx_node: str, port: int, rate: int) -> list[str]:
     ]
 
 
-def build_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
+def build_tx_argv(
+    tx_node: str,
+    port: int,
+    rate: int,
+    *,
+    dsp: TxDspConfig | None = None,
+    meter: bool = False,
+) -> list[str]:
     """gst-launch pipeline: UDP ``port`` → RTP jitter buffer → Opus decode (PLC + FEC)
-    → resample → inject into ``tx_node``."""
+    → resample → [DSP chain + meter tap] → inject into ``tx_node``.
+
+    With ``dsp=None, meter=False`` the argv is the plain pass-through pipeline. ``dsp``
+    inserts the F32 band-pass/gate/compressor/makeup chain and, as the LAST stage before
+    the sink, the limiter. ``meter`` adds a leaky pre-limiter tee branch (F32 on stdout)."""
     # No surrounding quotes: this argv element is passed straight to Popen (shell=False), so
     # embedded quotes would be literal and break GStreamer's caps parse. The comma-separated
     # caps string is a single argv token — no shell word-splitting to protect against.
     caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
-    return [
+    head = [
         "gst-launch-1.0",
         "-q",
         "udpsrc",
@@ -98,13 +111,32 @@ def build_tx_argv(tx_node: str, port: int, rate: int) -> list[str]:
         "audioconvert",
         "!",
         "audioresample",
-        "!",
-        f"audio/x-raw,rate={rate},channels=1",
-        "!",
-        "pipewiresink",
-        f"target-object={tx_node}",
-        "sync=false",
     ]
+    sink = ["pipewiresink", f"target-object={tx_node}", "sync=false"]
+    if dsp is None and not meter:
+        return [*head, "!", f"audio/x-raw,rate={rate},channels=1", "!", *sink]
+
+    argv = [*head, "!", f"audio/x-raw,format=F32LE,rate={rate},channels=1"]
+    if dsp is not None:
+        argv += pre_limiter_fragment(dsp)
+    if meter:
+        argv += ["!", "tee", "name=txm", "!", "queue"]
+    if dsp is not None:
+        argv += limiter_fragment(dsp)
+    argv += ["!", "audioconvert", "!", *sink]
+    if meter:
+        argv += [
+            "txm.",
+            "!",
+            "queue",
+            "leaky=downstream",
+            "max-size-buffers=8",
+            "!",
+            "fdsink",
+            "fd=1",
+            "sync=false",
+        ]
+    return argv
 
 
 def _default_spawn(argv: list[str]):
