@@ -19,13 +19,20 @@ sockets. On real HW/sim the defaults spawn the tools shipped in the A-image.
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import logging
 import socket
 import subprocess
 import threading
 
-from station_agent.audio import rtp
-from station_agent.audio.tx_dsp import TxDspConfig, limiter_fragment, pre_limiter_fragment
+from station_agent.audio import rtp, tx_meter
+from station_agent.audio.tx_dsp import (
+    DSP_ELEMENTS,
+    TxDspConfig,
+    limiter_fragment,
+    pre_limiter_fragment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +89,8 @@ def build_tx_argv(
 
     With ``dsp=None, meter=False`` the argv is the plain pass-through pipeline. ``dsp``
     inserts the F32 band-pass/gate/compressor/makeup chain and, as the LAST stage before
-    the sink, the limiter. ``meter`` adds a leaky pre-limiter tee branch (F32 on stdout)."""
+    the sink, the limiter. ``meter`` adds a leaky pre-limiter tee branch (F32 on stdout).
+    ``meter=True`` with ``dsp=None`` yields F32 + tee only (no DSP chain, no limiter)."""
     # No surrounding quotes: this argv element is passed straight to Popen (shell=False), so
     # embedded quotes would be literal and break GStreamer's caps parse. The comma-separated
     # caps string is a single argv token — no shell word-splitting to protect against.
@@ -144,6 +152,48 @@ def _default_spawn(argv: list[str]):
     return subprocess.Popen(  # noqa: S603 — argv is fixed tool + resolved node/port
         argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
+
+
+def _spawn_with_stdout(argv: list[str]):
+    # Meter tap: F32 PCM on stdout. stderr stays DEVNULL (gst -q only prints errors).
+    return subprocess.Popen(  # noqa: S603 — argv is fixed tool + resolved node/port
+        argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+
+
+def _gst_inspect_exists(name: str) -> bool:
+    return (
+        subprocess.run(  # noqa: S603 — fixed tool name, element name from a constant
+            ["gst-inspect-1.0", "--exists", name],  # noqa: S607
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def probe_dsp_available(inspect=None) -> bool:
+    """True iff every DSP element exists. Cached: the image does not change at runtime."""
+    check = inspect or _gst_inspect_exists
+    try:
+        return all(check(el) for el in DSP_ELEMENTS)
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _read_exact(stream, size: int) -> bytes:
+    """Read ``size`` bytes; returns b"" only at EOF (a short final chunk is dropped)."""
+    chunks, got = [], 0
+    while got < size:
+        b = stream.read(size - got)
+        if not b:
+            return b""
+        chunks.append(b)
+        got += len(b)
+    return b"".join(chunks)
 
 
 def _udp_socket() -> socket.socket:
@@ -278,9 +328,13 @@ class TxBridge:
         port: int,
         rate: int,
         *,
-        spawn=_default_spawn,
+        spawn=None,
         socket_factory=_udp_socket,
         ssrc: int = 0x5852_5841,  # "XRXA"
+        dsp: TxDspConfig | None = None,
+        on_meter=None,
+        start_reader: bool = True,
+        startup_grace: float = 0.3,
     ):
         self._node = tx_node
         self._port = port
@@ -288,6 +342,12 @@ class TxBridge:
         self._spawn = spawn
         self._socket_factory = socket_factory
         self._ssrc = ssrc
+        self._dsp = dsp
+        self._on_meter = on_meter
+        self._start_reader = start_reader
+        self._startup_grace = startup_grace
+        self.dsp_mode = "off"  # "off" | "full" | "degraded"
+        self._reader: threading.Thread | None = None
         self._proc = None
         self._sock = None
         self._seq = 0
@@ -295,7 +355,60 @@ class TxBridge:
 
     def start(self) -> None:
         self._sock = self._socket_factory()
-        self._proc = self._spawn(build_tx_argv(self._node, self._port, self._rate))
+        meter = self._on_meter is not None
+        spawn = self._spawn or (_spawn_with_stdout if meter else _default_spawn)
+        cfg = self._dsp
+        self._proc = spawn(build_tx_argv(self._node, self._port, self._rate, dsp=cfg, meter=meter))
+        if cfg is None:
+            self.dsp_mode = "off"
+        elif not cfg.enabled:
+            self.dsp_mode = "degraded"
+        elif self._died_at_startup(self._proc):
+            # Element present but the pipeline failed to construct/link: TX must never
+            # break entirely (spec §3.2) -> plain pass-through, surfaced via the meter.
+            logger.warning("tx-bridge: DSP pipeline exited at startup; falling back")
+            self._dsp = cfg = dataclasses.replace(cfg, enabled=False)
+            self._proc = spawn(
+                build_tx_argv(self._node, self._port, self._rate, dsp=cfg, meter=meter)
+            )
+            self.dsp_mode = "degraded"
+        else:
+            self.dsp_mode = "full"
+        if meter and self._start_reader and getattr(self._proc, "stdout", None) is not None:
+            self._reader = threading.Thread(
+                target=self._meter_loop, name=f"tx-meter-{self._port}", daemon=True
+            )
+            self._reader.start()
+
+    def _died_at_startup(self, proc) -> bool:
+        try:
+            proc.wait(timeout=self._startup_grace)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+
+    def _meter_loop(self) -> None:
+        stream = self._proc.stdout
+        size = tx_meter.chunk_bytes(self._rate)
+        cfg = self._dsp
+        threshold = cfg.limiter_threshold if (cfg is not None and cfg.enabled) else None
+        # N:1 policy value (NOT the gst-native 1/N emitted in the argv); see tx_meter.
+        ratio = cfg.policy.limiter_ratio if cfg is not None else 1.0
+        ceiling = cfg.ceiling_dbfs if cfg is not None else None
+        while True:
+            try:
+                buf = _read_exact(stream, size)
+            except (OSError, ValueError):
+                return  # pipe closed on stop()
+            if not buf:
+                return
+            reading = tx_meter.compute_meter(buf, limiter_threshold=threshold, limiter_ratio=ratio)
+            reading["dsp"] = self.dsp_mode
+            reading["ceiling_dbfs"] = ceiling
+            try:
+                self._on_meter(reading)
+            except Exception:  # noqa: BLE001 — a consumer error must not kill the meter
+                logger.exception("tx-bridge: on_meter callback raised")
 
     def feed_opus(self, payload: bytes) -> None:
         if self._sock is None:
@@ -310,8 +423,18 @@ class TxBridge:
         self._ts = (self._ts + RTP_TS_PER_FRAME) & 0xFFFFFFFF
 
     def stop(self) -> None:
-        _terminate(self._proc)
+        proc = self._proc
+        _terminate(proc)  # process death gives the reader EOF
         self._proc = None
+        if self._reader is not None:
+            self._reader.join(timeout=_STOP_WAIT)
+            self._reader = None
+        stdout = getattr(proc, "stdout", None)
+        if stdout is not None:
+            try:
+                stdout.close()
+            except (OSError, ValueError):
+                pass
         if self._sock is not None:
             try:
                 self._sock.close()

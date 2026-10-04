@@ -119,15 +119,20 @@ def test_gst_ratio_matches_policy_n_to_one():
     cfg = _cfg()
     argv = tx_dsp.pre_limiter_fragment(cfg) + tx_dsp.limiter_fragment(cfg)
 
-    def ratios(mode):
-        return [
-            float(t.split("=")[1])
-            for i, t in enumerate(argv)
-            if t.startswith("ratio=") and f"mode={mode}" in argv[i - 3 : i]
-        ]
+    def compressor_ratios():
+        out = []
+        for i, t in enumerate(argv):
+            if t != "mode=compressor":
+                continue
+            # The stage's args run until the next element separator "!".
+            end = argv.index("!", i) if "!" in argv[i:] else len(argv)
+            out += [float(x.split("=")[1]) for x in argv[i:end] if x.startswith("ratio=")]
+        return out
 
-    assert ratios("compressor")[0] == pytest.approx(1 / cfg.policy.comp_ratio, abs=1e-6)
-    assert ratios("compressor")[1] == pytest.approx(1 / cfg.policy.limiter_ratio, abs=1e-6)
+    ratios = compressor_ratios()
+    assert len(ratios) == 2, ratios
+    assert ratios[0] == pytest.approx(1 / cfg.policy.comp_ratio, abs=1e-6)
+    assert ratios[1] == pytest.approx(1 / cfg.policy.limiter_ratio, abs=1e-6)
 
 
 def test_meter_without_dsp_is_f32_tee_no_limiter():
@@ -138,13 +143,21 @@ def test_meter_without_dsp_is_f32_tee_no_limiter():
 
 
 def _gst_available():
-    if not (shutil.which("gst-launch-1.0") and shutil.which("gst-inspect-1.0")):
-        return False
-    for el in tx_dsp.DSP_ELEMENTS:
-        r = subprocess.run(["gst-inspect-1.0", "--exists", el], capture_output=True, timeout=10)
-        if r.returncode != 0:
+    try:
+        if not (shutil.which("gst-launch-1.0") and shutil.which("gst-inspect-1.0")):
             return False
+        for el in tx_dsp.DSP_ELEMENTS:
+            r = subprocess.run(
+                ["gst-inspect-1.0", "--exists", el], capture_output=True, timeout=10
+            )
+            if r.returncode != 0:
+                return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return True
+
+
+_GST_OK = _gst_available()
 
 
 def _run_chain(cfg, amp):
@@ -177,7 +190,7 @@ def _run_chain(cfg, amp):
     return [s / 32768.0 for s in samples[8000:]]
 
 
-@pytest.mark.skipif(not _gst_available(), reason="gst tools/elements missing")
+@pytest.mark.skipif(not _GST_OK, reason="gst tools/elements missing")
 @pytest.mark.parametrize("ceiling", [-12.0, -3.0])
 @pytest.mark.parametrize("amp", [0.3, 1.0])
 def test_real_gst_limiter_bounds_output_peak(ceiling, amp):
@@ -187,7 +200,7 @@ def test_real_gst_limiter_bounds_output_peak(ceiling, amp):
     assert max(abs(x) for x in out) <= cfg.limiter_threshold * 1.02
 
 
-@pytest.mark.skipif(not _gst_available(), reason="gst tools/elements missing")
+@pytest.mark.skipif(not _GST_OK, reason="gst tools/elements missing")
 def test_real_gst_nominal_input_not_silent():
     out = _run_chain(_cfg(ceiling=-12.0), 0.1)
     peak = max(abs(x) for x in out)
