@@ -21,12 +21,15 @@ def sanitize(msg):
     if not isinstance(msg, dict):
         return None
     slot = msg.get("slot")
-    if isinstance(slot, bool) or not isinstance(slot, int):
+    # No existing slot constant in the codebase; module slots are small ints.
+    if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot <= 63:
         return None
-    if "active" not in msg:
+    active = msg.get("active")
+    # active selects inactive vs active framing: a non-bool value is unroutable.
+    if not isinstance(active, bool):
         return None
-    out = {"v": 1, "type": "tx_meter", "slot": slot, "active": bool(msg.get("active"))}
-    if not out["active"]:
+    out = {"v": 1, "type": "tx_meter", "slot": slot, "active": active}
+    if not active:
         return out
     gr = _num(msg.get("gain_reduction_db"), 0.0, 60.0)
     dsp = msg.get("dsp")
@@ -35,7 +38,7 @@ def sanitize(msg):
             "peak_dbfs": _num(msg.get("peak_dbfs"), -120.0, 0.0),
             "rms_dbfs": _num(msg.get("rms_dbfs"), -120.0, 0.0),
             "gain_reduction_db": 0.0 if gr is None else gr,
-            "limiting": bool(msg.get("limiting")),
+            "limiting": msg.get("limiting") is True,
             "dsp": dsp if isinstance(dsp, str) and dsp in _DSP_MODES else "off",
             "ceiling_dbfs": _num(msg.get("ceiling_dbfs"), -120.0, 0.0),
         }

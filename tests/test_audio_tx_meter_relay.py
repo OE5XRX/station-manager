@@ -1,7 +1,6 @@
 """Server relay of agent tx_meter frames to browsers (sanitized, per-station)."""
 
 import asyncio
-import math
 
 import pytest
 from channels.testing import WebsocketCommunicator
@@ -39,23 +38,29 @@ def test_inactive_frame_minimal():
 
 
 @pytest.mark.parametrize(
-    "field,bad",
+    "field,bad,expected",
     [
-        ("peak_dbfs", float("nan")),
-        ("peak_dbfs", 1e9),
-        ("peak_dbfs", "loud"),
-        ("rms_dbfs", float("inf")),
-        ("gain_reduction_db", -5.0),
-        ("gain_reduction_db", 1e9),
-        ("ceiling_dbfs", "x"),
+        ("peak_dbfs", 1e9, 0.0),
+        ("peak_dbfs", -1e9, -120.0),
+        ("peak_dbfs", float("nan"), None),
+        ("peak_dbfs", float("inf"), None),
+        ("peak_dbfs", "loud", None),
+        ("peak_dbfs", True, None),
+        ("rms_dbfs", 1e9, 0.0),
+        ("rms_dbfs", -1e9, -120.0),
+        ("rms_dbfs", float("nan"), None),
+        ("rms_dbfs", float("inf"), None),
+        ("rms_dbfs", "loud", None),
+        ("rms_dbfs", True, None),
+        ("ceiling_dbfs", 1e9, 0.0),
+        ("ceiling_dbfs", -1e9, -120.0),
+        ("ceiling_dbfs", "x", None),
+        ("gain_reduction_db", 1e9, 60.0),
+        ("gain_reduction_db", -5.0, 0.0),
     ],
 )
-def test_bad_numbers_become_none_or_clamped(field, bad):
-    out = sanitize({**GOOD, field: bad})
-    v = out[field]
-    assert v is None or (isinstance(v, float) and math.isfinite(v) and -120.0 <= v <= 120.0)
-    if field == "gain_reduction_db":
-        assert 0.0 <= v <= 60.0
+def test_bad_numbers_exact(field, bad, expected):
+    assert sanitize({**GOOD, field: bad})[field] == expected
 
 
 def test_unknown_dsp_and_extra_keys_dropped():
@@ -75,14 +80,30 @@ def test_initial_frame_with_none_levels_stays_none():
 
 
 @pytest.mark.parametrize(
-    "bad", [None, [], "x", {"type": "tx_meter"}, {**GOOD, "slot": "1"}, {**GOOD, "slot": True}]
+    "bad",
+    [
+        None,
+        [],
+        "x",
+        {"type": "tx_meter"},
+        {**GOOD, "slot": "1"},
+        {**GOOD, "slot": True},
+        {**GOOD, "slot": 10**30},
+        {**GOOD, "slot": -1},
+        {**GOOD, "slot": 64},
+        {**GOOD, "active": "false"},
+        {**GOOD, "active": 1},
+        {**GOOD, "active": None},
+    ],
 )
 def test_unroutable_frames_rejected(bad):
     assert sanitize(bad) is None
 
 
-def test_limiting_coerced_to_bool():
-    assert sanitize({**GOOD, "limiting": 1})["limiting"] is True
+@pytest.mark.parametrize("val", [1, "yes", "false", None])
+def test_limiting_strict_bool(val):
+    # Deliberate deviation from plan (limiting: 1 -> True): only `is True` counts.
+    assert sanitize({**GOOD, "limiting": val})["limiting"] is False
 
 
 def _agent_comm(station_id):
