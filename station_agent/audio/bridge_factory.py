@@ -11,8 +11,9 @@ from station_agent.audio.opus_bridge import PortAllocator, RxBridge, TxBridge
 
 
 class BridgeFactory:
-    def __init__(self, port_base: int = 47000):
+    def __init__(self, port_base: int = 47000, tx_settings=None):
         self._ports = PortAllocator(base=port_base)
+        self._tx_settings = tx_settings
 
     def make_rx(self, node: str, rate: int, on_opus):
         port = self._ports.acquire()

@@ -12,6 +12,7 @@ from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
 from apps.api.serializers import HealthSerializer, HeartbeatSerializer
 from apps.stations.models import StationInventory
+from apps.stations.tx_audio import effective_ceiling_dbfs
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,12 @@ class HeartbeatView(APIView):
             logger.exception("Failed to broadcast station status via WebSocket.")
 
         return Response(
-            {"status": "ok"},
+            {
+                "status": "ok",
+                "tx_audio": {
+                    "ceiling_dbfs": effective_ceiling_dbfs(station.tx_audio_ceiling_dbfs),
+                    "calibrated": station.tx_audio_ceiling_dbfs is not None,
+                },
+            },
             status=status.HTTP_200_OK,
         )
