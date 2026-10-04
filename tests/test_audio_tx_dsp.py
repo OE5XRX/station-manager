@@ -1,3 +1,4 @@
+import array
 import math
 import shutil
 import subprocess
@@ -46,9 +47,11 @@ def test_full_chain_order_limiter_last_before_sink():
     # stage modes in order: expander (gate), compressor, then hard-knee limiter
     dyn = [i for i, t in enumerate(argv) if t == "audiodynamic"]
     assert "mode=expander" in argv[dyn[0] : dyn[0] + 5]
-    assert "mode=compressor" in argv[dyn[1] : dyn[1] + 5]
+    comp = argv[dyn[1] : dyn[1] + 5]
+    assert "mode=compressor" in comp
+    assert "characteristics=hard-knee" in comp and "ratio=0.333333" in comp
     lim = argv[dyn[2] : dyn[2] + 5]
-    assert "characteristics=hard-knee" in lim and "ratio=1000.0" in lim
+    assert "characteristics=hard-knee" in lim and "ratio=0.001000" in lim
 
 
 def test_band_pass_corners():
@@ -112,21 +115,48 @@ def test_db_to_linear():
     assert math.isclose(tx_dsp.db_to_linear(-20.0), 0.1)
 
 
-@pytest.mark.skipif(shutil.which("gst-launch-1.0") is None, reason="no gst")
-def test_real_gst_accepts_dsp_fragment():
-    for el in tx_dsp.DSP_ELEMENTS:
-        if subprocess.run(["gst-inspect-1.0", "--exists", el]).returncode != 0:
-            pytest.skip(f"{el} not installed")
+def test_gst_ratio_matches_policy_n_to_one():
     cfg = _cfg()
+    argv = tx_dsp.pre_limiter_fragment(cfg) + tx_dsp.limiter_fragment(cfg)
+
+    def ratios(mode):
+        return [
+            float(t.split("=")[1])
+            for i, t in enumerate(argv)
+            if t.startswith("ratio=") and f"mode={mode}" in argv[i - 3 : i]
+        ]
+
+    assert ratios("compressor")[0] == pytest.approx(1 / cfg.policy.comp_ratio, abs=1e-6)
+    assert ratios("compressor")[1] == pytest.approx(1 / cfg.policy.limiter_ratio, abs=1e-6)
+
+
+def test_meter_without_dsp_is_f32_tee_no_limiter():
+    """meter=True, dsp=None: F32 + tee tap, no DSP and no limiter."""
+    argv = build_tx_argv("n", 47000, 16000, dsp=None, meter=True)
+    assert "audio/x-raw,format=F32LE,rate=16000,channels=1" in argv
+    assert "tee" in argv and "audiodynamic" not in argv
+
+
+def _gst_available():
+    if not (shutil.which("gst-launch-1.0") and shutil.which("gst-inspect-1.0")):
+        return False
+    for el in tx_dsp.DSP_ELEMENTS:
+        r = subprocess.run(["gst-inspect-1.0", "--exists", el], capture_output=True, timeout=10)
+        if r.returncode != 0:
+            return False
+    return True
+
+
+def _run_chain(cfg, amp):
     argv = [
         "gst-launch-1.0",
         "-q",
         "audiotestsrc",
-        "num-buffers=20",
-        "!",
-        "audioconvert",
-        "!",
-        "audioresample",
+        "wave=sine",
+        "freq=440",
+        f"volume={amp}",
+        "num-buffers=40",
+        "samplesperbuffer=800",
         "!",
         "audio/x-raw,format=F32LE,rate=16000,channels=1",
         *tx_dsp.pre_limiter_fragment(cfg),
@@ -134,8 +164,31 @@ def test_real_gst_accepts_dsp_fragment():
         "!",
         "audioconvert",
         "!",
-        "fakesink",
+        "audio/x-raw,format=S16LE,rate=16000,channels=1",
+        "!",
+        "fdsink",
+        "fd=1",
     ]
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+    r = subprocess.run(argv, capture_output=True, timeout=20)
     assert r.returncode == 0, r.stderr
-    assert "WARN" not in r.stderr.upper() and "WARNUNG" not in r.stderr.upper()
+    samples = array.array("h")
+    samples.frombytes(r.stdout)
+    # skip the first 10 buffers (settle)
+    return [s / 32768.0 for s in samples[8000:]]
+
+
+@pytest.mark.skipif(not _gst_available(), reason="gst tools/elements missing")
+@pytest.mark.parametrize("ceiling", [-12.0, -3.0])
+@pytest.mark.parametrize("amp", [0.3, 1.0])
+def test_real_gst_limiter_bounds_output_peak(ceiling, amp):
+    cfg = _cfg(ceiling=ceiling)
+    out = _run_chain(cfg, amp)
+    assert out
+    assert max(abs(x) for x in out) <= cfg.limiter_threshold * 1.02
+
+
+@pytest.mark.skipif(not _gst_available(), reason="gst tools/elements missing")
+def test_real_gst_nominal_input_not_silent():
+    out = _run_chain(_cfg(ceiling=-12.0), 0.1)
+    peak = max(abs(x) for x in out)
+    assert 20 * math.log10(max(peak, 1e-9)) > -30.0

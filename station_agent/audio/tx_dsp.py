@@ -62,7 +62,17 @@ class TxDspConfig:
         return self.ceiling_dbfs - p.headroom_db - p.nominal_compressed_peak_dbfs
 
 
+def _gst_ratio(n_to_one: float) -> str:
+    """Policy N:1 ratio -> gst ``audiodynamic`` ratio (1/N), deterministic format."""
+    return f"{1.0 / n_to_one:.6f}"
+
+
 def pre_limiter_fragment(cfg: TxDspConfig) -> list[str]:
+    """Convention: the policy holds human N:1 ratios; gst ``audiodynamic`` computes
+    ``thr + (x - thr) * ratio`` so compression needs ratio = 1/N (ratio > 1 would AMPLIFY).
+    The gate (expander) already has gst-native semantics (ratio=2.0 is passed as-is).
+    The compressor is hard-knee so the static N:1 curve holds (gst soft-knee is near
+    transparent, which would invalidate the makeup derivation)."""
     p = cfg.policy
     if not cfg.enabled:
         return ["!", "volume", f"volume={p.degraded_gain}"]
@@ -78,18 +88,19 @@ def pre_limiter_fragment(cfg: TxDspConfig) -> list[str]:
         *("!", "audiodynamic", "mode=expander", "characteristics=soft-knee"),
         f"ratio={p.gate_ratio}",
         f"threshold={db_to_linear(p.gate_threshold_dbfs):.6f}",
-        *("!", "audiodynamic", "mode=compressor", "characteristics=soft-knee"),
-        f"ratio={p.comp_ratio}",
+        *("!", "audiodynamic", "mode=compressor", "characteristics=hard-knee"),
+        f"ratio={_gst_ratio(p.comp_ratio)}",
         f"threshold={db_to_linear(p.comp_threshold_dbfs):.6f}",
         *("!", "volume", f"volume={db_to_linear(cfg.makeup_db):.6f}"),
     ]
 
 
 def limiter_fragment(cfg: TxDspConfig) -> list[str]:
+    """Hard-knee clipper at the ceiling; gst ratio = 1/limiter_ratio (see pre_limiter_fragment)."""
     if not cfg.enabled:
         return []
     return [
         *("!", "audiodynamic", "mode=compressor", "characteristics=hard-knee"),
-        f"ratio={cfg.policy.limiter_ratio}",
+        f"ratio={_gst_ratio(cfg.policy.limiter_ratio)}",
         f"threshold={cfg.limiter_threshold:.6f}",
     ]
