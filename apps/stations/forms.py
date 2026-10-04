@@ -18,6 +18,7 @@ class StationForm(forms.ModelForm):
             "longitude",
             "altitude",
             "hardware_revision",
+            "tx_audio_ceiling_dbfs",
             "tags",
             "notes",
         )
@@ -32,9 +33,18 @@ class StationForm(forms.ModelForm):
             "longitude": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001"}),
             "altitude": forms.NumberInput(attrs={"class": "form-control"}),
             "hardware_revision": forms.TextInput(attrs={"class": "form-control"}),
+            "tx_audio_ceiling_dbfs": forms.NumberInput(
+                attrs={"class": "form-control", "step": "0.5", "lang": "en"}
+            ),
             "tags": forms.CheckboxSelectMultiple(),
             "notes": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # RF-safety calibration: only Vereins-Staff/Admin may change it.
+        if user is None or not getattr(user, "is_internal", False):
+            self.fields.pop("tx_audio_ceiling_dbfs", None)
 
 
 class StationPhotoForm(forms.ModelForm):

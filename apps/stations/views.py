@@ -168,6 +168,9 @@ class StationCreateView(AdminOrOperatorRequiredMixin, CreateView):
     template_name = "stations/station_form.html"
     form_class = StationForm
 
+    def get_form_kwargs(self):
+        return {**super().get_form_kwargs(), "user": self.request.user}
+
     def get_success_url(self):
         return reverse("stations:station_detail", kwargs={"pk": self.object.pk})
 
@@ -198,6 +201,7 @@ TRACKED_FIELDS = [
     "longitude",
     "altitude",
     "hardware_revision",
+    "tx_audio_ceiling_dbfs",
     "notes",
     "status",
 ]
@@ -207,6 +211,9 @@ class StationUpdateView(AdminOrOperatorRequiredMixin, UpdateView):
     model = Station
     template_name = "stations/station_form.html"
     form_class = StationForm
+
+    def get_form_kwargs(self):
+        return {**super().get_form_kwargs(), "user": self.request.user}
 
     def get_success_url(self):
         return reverse("stations:station_detail", kwargs={"pk": self.object.pk})

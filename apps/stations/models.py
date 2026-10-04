@@ -1,11 +1,13 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.accounts.models import User
+from apps.stations import tx_audio
 
 # Slugs reserved by the rollout machinery (apps.rollouts.grouping) —
 # creating a StationTag with one of these slugs would let a real tag
@@ -105,6 +107,19 @@ class Station(models.Model):
 
     # Hardware
     hardware_revision = models.CharField(_("hardware revision"), max_length=50, blank=True)
+    tx_audio_ceiling_dbfs = models.FloatField(
+        _("TX audio ceiling (dBFS)"),
+        null=True,
+        blank=True,
+        validators=[
+            MinValueValidator(tx_audio.CEILING_MIN_DBFS),
+            MaxValueValidator(tx_audio.CEILING_MAX_DBFS),
+        ],
+        help_text=_(
+            "Per-board calibration: agent limiter ceiling that yields the target FM "
+            "deviation. Empty = conservative default (-12 dBFS)."
+        ),
+    )
     region = models.ForeignKey(
         Region,
         verbose_name=_("region"),
