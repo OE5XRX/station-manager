@@ -20,7 +20,6 @@ sockets. On real HW/sim the defaults spawn the tools shipped in the A-image.
 from __future__ import annotations
 
 import dataclasses
-import functools
 import logging
 import socket
 import subprocess
@@ -174,14 +173,36 @@ def _gst_inspect_exists(name: str) -> bool:
     )
 
 
-@functools.lru_cache(maxsize=4)
+_probe_result: bool | None = None  # memo for the default probe; definitive results only
+
+
+def _reset_probe_cache() -> None:
+    global _probe_result
+    _probe_result = None
+
+
 def probe_dsp_available(inspect=None) -> bool:
-    """True iff every DSP element exists. Cached: the image does not change at runtime."""
-    check = inspect or _gst_inspect_exists
+    """True iff every DSP element exists.
+
+    BLOCKING (spawns gst-inspect-1.0): call from a worker thread, never the asyncio loop.
+    The default probe memoises only DEFINITIVE answers (the image does not change at
+    runtime); a timeout/OSError returns False for this call but is not cached, so a cold
+    boot hiccup cannot leave the station without its limiter until restart. An injected
+    ``inspect`` (tests) is never memoised."""
+    global _probe_result
+    if inspect is None:
+        if _probe_result is not None:
+            return _probe_result
+        check = _gst_inspect_exists
+    else:
+        check = inspect
     try:
-        return all(check(el) for el in DSP_ELEMENTS)
+        result = all(check(el) for el in DSP_ELEMENTS)
     except (OSError, subprocess.SubprocessError):
         return False
+    if inspect is None:
+        _probe_result = result
+    return result
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -335,6 +356,7 @@ class TxBridge:
         on_meter=None,
         start_reader: bool = True,
         startup_grace: float = 0.3,
+        dsp_probe=None,
     ):
         self._node = tx_node
         self._port = port
@@ -346,7 +368,8 @@ class TxBridge:
         self._on_meter = on_meter
         self._start_reader = start_reader
         self._startup_grace = startup_grace
-        self.dsp_mode = "off"  # "off" | "full" | "degraded"
+        self._dsp_probe = dsp_probe or probe_dsp_available
+        self.dsp_mode = "off"  # "off" | "full" | "degraded" | "failed"
         self._reader: threading.Thread | None = None
         self._proc = None
         self._sock = None
@@ -358,6 +381,9 @@ class TxBridge:
         meter = self._on_meter is not None
         spawn = self._spawn or (_spawn_with_stdout if meter else _default_spawn)
         cfg = self._dsp
+        if cfg is not None and cfg.enabled and not self._dsp_probe():
+            # Probe runs here (worker thread via _to_thread), never on the WS loop.
+            self._dsp = cfg = dataclasses.replace(cfg, enabled=False)
         self._proc = spawn(build_tx_argv(self._node, self._port, self._rate, dsp=cfg, meter=meter))
         if cfg is None:
             self.dsp_mode = "off"
@@ -368,17 +394,39 @@ class TxBridge:
             # break entirely (spec §3.2) -> plain pass-through, surfaced via the meter.
             logger.warning("tx-bridge: DSP pipeline exited at startup; falling back")
             self._dsp = cfg = dataclasses.replace(cfg, enabled=False)
+            self._close_stdout(self._proc)  # don't leak the dead process's pipe fd
             self._proc = spawn(
                 build_tx_argv(self._node, self._port, self._rate, dsp=cfg, meter=meter)
             )
             self.dsp_mode = "degraded"
+            if self._died_at_startup(self._proc):
+                logger.error("tx-bridge: TX pipeline failed even without DSP")
+                self.dsp_mode = "failed"
         else:
             self.dsp_mode = "full"
-        if meter and self._start_reader and getattr(self._proc, "stdout", None) is not None:
+        stdout = getattr(self._proc, "stdout", None)
+        if meter and self._start_reader and stdout is not None and self.dsp_mode != "failed":
+            threshold = cfg.limiter_threshold if (cfg is not None and cfg.enabled) else None
+            # N:1 policy value (NOT the gst-native 1/N emitted in the argv); see tx_meter.
+            ratio = cfg.policy.limiter_ratio if cfg is not None else 1.0
+            ceiling = cfg.ceiling_dbfs if cfg is not None else None
+            # Everything the thread needs is passed in: self._proc is None after stop().
             self._reader = threading.Thread(
-                target=self._meter_loop, name=f"tx-meter-{self._port}", daemon=True
+                target=self._meter_loop,
+                args=(stdout, threshold, ratio, self.dsp_mode, ceiling),
+                name=f"tx-meter-{self._port}",
+                daemon=True,
             )
             self._reader.start()
+
+    @staticmethod
+    def _close_stdout(proc) -> None:
+        stdout = getattr(proc, "stdout", None)
+        if stdout is not None:
+            try:
+                stdout.close()
+            except (OSError, ValueError):
+                pass
 
     def _died_at_startup(self, proc) -> bool:
         try:
@@ -387,14 +435,8 @@ class TxBridge:
             return False
         return True
 
-    def _meter_loop(self) -> None:
-        stream = self._proc.stdout
+    def _meter_loop(self, stream, threshold, ratio, dsp_mode, ceiling) -> None:
         size = tx_meter.chunk_bytes(self._rate)
-        cfg = self._dsp
-        threshold = cfg.limiter_threshold if (cfg is not None and cfg.enabled) else None
-        # N:1 policy value (NOT the gst-native 1/N emitted in the argv); see tx_meter.
-        ratio = cfg.policy.limiter_ratio if cfg is not None else 1.0
-        ceiling = cfg.ceiling_dbfs if cfg is not None else None
         while True:
             try:
                 buf = _read_exact(stream, size)
@@ -403,7 +445,7 @@ class TxBridge:
             if not buf:
                 return
             reading = tx_meter.compute_meter(buf, limiter_threshold=threshold, limiter_ratio=ratio)
-            reading["dsp"] = self.dsp_mode
+            reading["dsp"] = dsp_mode
             reading["ceiling_dbfs"] = ceiling
             try:
                 self._on_meter(reading)
@@ -429,12 +471,7 @@ class TxBridge:
         if self._reader is not None:
             self._reader.join(timeout=_STOP_WAIT)
             self._reader = None
-        stdout = getattr(proc, "stdout", None)
-        if stdout is not None:
-            try:
-                stdout.close()
-            except (OSError, ValueError):
-                pass
+        self._close_stdout(proc)
         if self._sock is not None:
             try:
                 self._sock.close()

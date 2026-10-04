@@ -30,8 +30,11 @@ class BridgeFactory:
     def make_tx(self, node: str, rate: int, on_meter=None):
         port = self._ports.acquire()
         ceiling = self._tx_settings.ceiling_dbfs if self._tx_settings else CEILING_DEFAULT_DBFS
-        dsp = TxDspConfig(ceiling_dbfs=ceiling, enabled=self._dsp_probe())
-        return _PortBoundTx(node, port, rate, self._ports, dsp=dsp, on_meter=on_meter)
+        # No subprocess here (runs on the WS loop): availability is probed in TxBridge.start().
+        dsp = TxDspConfig(ceiling_dbfs=ceiling)
+        return _PortBoundTx(
+            node, port, rate, self._ports, dsp=dsp, on_meter=on_meter, dsp_probe=self._dsp_probe
+        )
 
     def make_diag_u(self, node: str, rate: int):
         port = self._ports.acquire()
@@ -52,8 +55,8 @@ class _PortBoundRx(RxBridge):
 
 
 class _PortBoundTx(TxBridge):
-    def __init__(self, node, port, rate, ports, *, dsp=None, on_meter=None):
-        super().__init__(node, port, rate, dsp=dsp, on_meter=on_meter)
+    def __init__(self, node, port, rate, ports, *, dsp=None, on_meter=None, dsp_probe=None):
+        super().__init__(node, port, rate, dsp=dsp, on_meter=on_meter, dsp_probe=dsp_probe)
         self._ports = ports
         self._port_value = port
 
