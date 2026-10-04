@@ -73,6 +73,8 @@ class AudioEngine:
         # Identifies the current TX bridge's meter stream; readings carrying a stale token
         # (torn-down/superseded bridge) are dropped.
         self._tx_meter_token: object | None = None
+        self._meter_pending: tuple[object, dict] | None = None
+        self._meter_task: asyncio.Task | None = None  # strong ref to the in-flight send
         self._diag: dict | None = None  # {"bridge": diag_bridge, "slot": int}
         self._diag_task: asyncio.Task | None = None
         self._dead_man: asyncio.Task | None = None
@@ -219,7 +221,10 @@ class AudioEngine:
         def on_meter(reading: dict, _token=token, _slot=tx_slot) -> None:
             # Reader thread -> loop. The token drops readings from a superseded/torn-down
             # bridge (the reader may emit one last chunk while stop() joins it).
-            loop.call_soon_threadsafe(self._emit_tx_meter, _token, _slot, reading)
+            try:
+                loop.call_soon_threadsafe(self._emit_tx_meter, _token, _slot, reading)
+            except RuntimeError:
+                return  # loop closed (shutdown): don't spam tracebacks at the meter rate
 
         bridge = self._factory.make_tx(node, mic_info.rate, on_meter=on_meter)
         self._tx = {"bridge": bridge, "slot": tx_slot, "module": tx_module}
@@ -467,7 +472,22 @@ class AudioEngine:
         if token is not self._tx_meter_token:
             return
         msg = {"v": 1, "type": "tx_meter", "slot": slot, "active": True, **reading}
-        asyncio.ensure_future(self._emit_json(msg))
+        # Latest-wins coalescing: at most one send in flight; while it is pending only the
+        # newest reading is kept (a slow WS must not queue an unbounded task backlog).
+        self._meter_pending = (token, msg)
+        if self._meter_task is None:
+            self._meter_task = asyncio.ensure_future(self._drain_tx_meter())
+
+    async def _drain_tx_meter(self) -> None:
+        try:
+            while self._meter_pending is not None:
+                token, msg = self._meter_pending
+                self._meter_pending = None
+                if token is not self._tx_meter_token:
+                    continue  # superseded/torn down while waiting
+                await self._emit_json(msg)
+        finally:
+            self._meter_task = None
 
     async def _emit_stream_state(self, stream_id: str, state: str, detail: str) -> None:
         await self._emit_json(

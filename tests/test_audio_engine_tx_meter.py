@@ -60,6 +60,7 @@ def test_initial_frame_surfaces_dsp_mode_even_without_reader():
     async def scenario():
         await eng.start()
         await eng.on_mic_state(active=True, tx_slot=1, tx_module="fm")
+        await asyncio.sleep(0)  # let the initial frame drain before teardown
         await eng.on_mic_state(active=False, tx_slot=None, tx_module=None)
 
     # Fake bridge has no dsp_mode/ceiling_dbfs -> safe defaults.
@@ -94,6 +95,7 @@ def test_initial_frame_reports_bridge_dsp_mode_and_ceiling():
     async def scenario():
         await eng.start()
         await eng.on_mic_state(active=True, tx_slot=1, tx_module="fm")
+        await asyncio.sleep(0)  # let the initial frame drain before teardown
         await eng.on_mic_state(active=False, tx_slot=None, tx_module=None)
 
     asyncio.run(scenario())
@@ -125,3 +127,76 @@ def test_failed_start_emits_no_meter_and_drops_readings():
 
     asyncio.run(scenario())
     assert _meters(sent_json) == []
+
+
+def _reading(peak):
+    return {**READING, "peak_dbfs": peak}
+
+
+def test_meter_emit_is_latest_wins_with_one_in_flight():
+    eng, factory, sent_json, _ = make_engine(nodes=NODES)
+
+    async def scenario():
+        await eng.start()
+        gate = asyncio.Event()
+        sent = []
+        orig = eng._emit_json
+
+        async def slow_emit(msg):
+            if msg.get("type") == "tx_meter" and msg["active"]:
+                sent.append(msg)
+                await gate.wait()
+            else:
+                await orig(msg)
+
+        eng._emit_json = slow_emit
+        await eng.on_mic_state(active=True, tx_slot=1, tx_module="fm")
+        await asyncio.sleep(0)  # initial frame send now blocked in-flight
+        on_meter = factory.last_tx_on_meter
+        for peak in (-30.0, -20.0, -10.0):
+            on_meter(_reading(peak))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert len(sent) == 1  # one in flight, the rest coalesced
+        gate.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return sent
+
+    sent = asyncio.run(scenario())
+    assert [m["peak_dbfs"] for m in sent] == [None, -10.0]
+
+
+def test_superseded_bridge_readings_dropped_same_and_different_slot():
+    for second_slot in (1, 3):
+        nodes = {(1, "tx"): "n1", (3, "tx"): "n3"}
+        eng, factory, sent_json, _ = make_engine(slots=(1, 3), nodes=nodes)
+
+        async def scenario():
+            await eng.start()
+            await eng.on_mic_state(active=True, tx_slot=1, tx_module="fm")
+            on_meter1 = factory.last_tx_on_meter
+            await eng.on_mic_state(active=False, tx_slot=None, tx_module=None)
+            await eng.on_mic_state(active=True, tx_slot=second_slot, tx_module="fm")
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            n = len(_meters(sent_json))
+            on_meter1(READING)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert len(_meters(sent_json)) == n
+            await eng.on_mic_state(active=False, tx_slot=None, tx_module=None)
+
+        asyncio.run(scenario())
+
+
+def test_on_meter_swallows_closed_loop_runtime_error():
+    eng, factory, sent_json, _ = make_engine(nodes=NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=1, tx_module="fm")
+        return factory.last_tx_on_meter
+
+    on_meter = asyncio.run(scenario())  # loop is now closed
+    on_meter(READING)  # must not raise

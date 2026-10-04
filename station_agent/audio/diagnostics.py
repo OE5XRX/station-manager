@@ -23,7 +23,7 @@ import threading
 from station_agent.audio import rtp as _rtp
 from station_agent.audio import selftest as _selftest
 from station_agent.audio.opus_bridge import RTP_TS_PER_FRAME, probe_dsp_available
-from station_agent.audio.tx_dsp import limiter_fragment, pre_limiter_fragment
+from station_agent.audio.tx_dsp import TxDspConfig, limiter_fragment, pre_limiter_fragment
 
 _log = _logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ def build_measured_inject_argv(
 
 
 def build_measured_tx_argv(
-    tx_node: str, port: int, rate: int, *, meas_fd: int = MEAS_FD, dsp=None
+    tx_node: str, port: int, rate: int, *, meas_fd: int = MEAS_FD, dsp: TxDspConfig | None = None
 ) -> list[str]:
     """Build a gst-launch argv that taps a UDP RTP stream into *tx_node* and measures PCM.
 
@@ -509,7 +509,7 @@ class MeasuredTxBridge:
         read_measfd=_default_read_measfd,
         socket_factory=None,
         ssrc: int = 0x5852_5841,
-        dsp=None,
+        dsp: TxDspConfig | None = None,
         dsp_probe=None,
     ):
         self._dsp = dsp
@@ -533,10 +533,9 @@ class MeasuredTxBridge:
         dsp = self._dsp
         if dsp is not None and dsp.enabled and not self._dsp_probe():
             # Probe runs here (worker thread via the engine's _to_thread), never on the WS
-            # loop. DSP elements missing -> measure the plain path, like TxBridge degrades.
+            # loop. DSP elements missing -> measure what TxBridge actually transmits when it
+            # degrades: the disabled config (degraded-gain volume stage), not no config.
             dsp = self._dsp = dataclasses.replace(dsp, enabled=False)
-        # A disabled config means "no DSP in path": measure without the chain.
-        dsp = dsp if (dsp is not None and dsp.enabled) else None
         make_argv = lambda mfd: build_measured_tx_argv(  # noqa: E731
             self._node, self._port, self._rate, meas_fd=mfd, dsp=dsp
         )

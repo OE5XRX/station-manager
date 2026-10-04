@@ -244,6 +244,12 @@ def test_measured_tx_argv_with_dsp_measures_post_limiter():
     argv = build_measured_tx_argv("n", 47000, 16000, dsp=tx_dsp.TxDspConfig(ceiling_dbfs=-12.0))
     dyn = [i for i, t in enumerate(argv) if t == "audiodynamic"]
     assert len(dyn) == 3 and dyn[-1] < argv.index("tee")
+    assert argv.index("audio/x-raw,format=F32LE,rate=16000,channels=1") < argv.index(
+        "audiocheblimit"
+    )
+    # the limiter's last argument is immediately followed by the tee (limiter is last stage)
+    assert argv[dyn[-1] + 5 : dyn[-1] + 7] == ["!", "tee"]
+    assert argv[dyn[-1] + 4].startswith("threshold=")
 
 
 def test_measured_tx_argv_without_dsp_unchanged():
@@ -292,7 +298,10 @@ def test_measured_bridge_degrades_to_plain_when_dsp_unavailable():
     br, seen = _started_argv(tx_dsp.TxDspConfig(ceiling_dbfs=-12.0), lambda: False)
     br.start()
     assert "audiodynamic" not in seen["argv"]
-    assert "tee" in seen["argv"]
+    # measures what TxBridge transmits when degraded: the degraded-gain volume stage
+    gain = tx_dsp.TxDspPolicy().degraded_gain
+    assert f"volume={gain}" in seen["argv"]
+    assert seen["argv"].index(f"volume={gain}") < seen["argv"].index("tee")
 
 
 def test_make_diag_u_runs_no_probe():
