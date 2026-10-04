@@ -76,6 +76,14 @@
         <label class="form-label">{% trans "Hardware revision" %}</label>
         {{ form.hardware_revision }}
       </div>
+      {% if form.tx_audio_ceiling_dbfs %}
+      <div class="form-group">
+        <label class="form-label" for="{{ form.tx_audio_ceiling_dbfs.id_for_label }}">{% trans "TX audio ceiling (dBFS)" %}</label>
+        {{ form.tx_audio_ceiling_dbfs }}
+        <span class="form-hint">{% trans "dBFS" %} &middot; {{ form.tx_audio_ceiling_dbfs.help_text }}</span>
+        {% if form.tx_audio_ceiling_dbfs.errors %}<div class="form-error">{{ form.tx_audio_ceiling_dbfs.errors|join:", " }}</div>{% endif %}
+      </div>
+      {% endif %}
       <div class="form-group">
         <label class="form-label">{% trans "Tags" %}</label>
         {{ form.tags }}

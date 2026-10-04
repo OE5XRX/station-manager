@@ -54,3 +54,43 @@ def test_form_rejects_out_of_range_for_staff(operator_user):
     )
     assert not f.is_valid()
     assert "tx_audio_ceiling_dbfs" in f.errors
+
+
+@pytest.mark.django_db
+def test_form_saves_valid_value_for_staff(operator_user, station_factory):
+    s = station_factory()
+    f = StationForm(
+        data={"name": s.name, "callsign": s.callsign, "tx_audio_ceiling_dbfs": "-9.5"},
+        instance=s,
+        user=operator_user,
+    )
+    assert f.is_valid(), f.errors
+    f.save()
+    s.refresh_from_db()
+    assert s.tx_audio_ceiling_dbfs == -9.5
+
+
+@pytest.mark.django_db
+def test_edit_page_renders_field_for_staff(client, operator_user, station_factory):
+    from django.urls import reverse
+
+    s = station_factory()
+    client.force_login(operator_user)
+    resp = client.get(reverse("stations:station_edit", kwargs={"pk": s.pk}))
+    assert resp.status_code == 200
+    assert 'name="tx_audio_ceiling_dbfs"' in resp.content.decode()
+
+
+@pytest.mark.django_db
+def test_edit_view_post_saves_ceiling_for_staff(client, operator_user, station_factory):
+    from django.urls import reverse
+
+    s = station_factory()
+    client.force_login(operator_user)
+    resp = client.post(
+        reverse("stations:station_edit", kwargs={"pk": s.pk}),
+        data={"name": s.name, "callsign": s.callsign, "tx_audio_ceiling_dbfs": "-9.5"},
+    )
+    assert resp.status_code == 302, resp.content.decode()[:500]
+    s.refresh_from_db()
+    assert s.tx_audio_ceiling_dbfs == -9.5
