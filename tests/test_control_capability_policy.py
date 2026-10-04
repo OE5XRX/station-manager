@@ -82,3 +82,54 @@ def test_applicant_never_outranks_can_use_station(monkeypatch):
     user = _user("applicant", station)
     monkeypatch.setattr(User, "can_administer_station", lambda self, s: True)
     assert cp.viewer_role(user, station) is None
+
+
+# --- Task 8 follow-ups -------------------------------------------------------
+
+
+def test_unranked_write_role_rejected_at_definition():
+    with pytest.raises(ValueError):
+        cp.CapabilityPolicy(write_role="superuser")
+
+
+@pytest.mark.django_db
+def test_unranked_write_role_denies_cleanly_never_raises(monkeypatch):
+    station = Station.objects.create(name="cp4", status="online")
+    user = _user("admin", station)
+    bogus = cp.CapabilityPolicy("staff")
+    object.__setattr__(bogus, "write_role", "superuser")  # bypass __post_init__
+    monkeypatch.setitem(cp.POLICY, ("bogus_cap", None), bogus)
+    assert cp.can_write(user, station, "bogus_cap", "fm") is False
+
+
+@pytest.mark.parametrize("cap", [None, 42, ["filter_hpf"], {"a": 1}])
+def test_policy_for_non_str_capability_is_default(cap):
+    assert cp.policy_for(cap, "fm") == cp.CapabilityPolicy()
+    assert cp.policy_for(cap, ["unhashable"]) == cp.CapabilityPolicy()
+
+
+@pytest.mark.django_db
+def test_admin_and_staff_keep_their_role_on_arbitrary_station():
+    station = Station.objects.create(name="cp5", status="online")
+    assert cp.viewer_role(_user("admin", station), station) == "admin"
+    assert cp.viewer_role(_user("staff", station), station) == "staff"
+
+
+@pytest.mark.django_db
+def test_station_admin_of_different_station_is_operator():
+    station = Station.objects.create(name="cp6", status="online")
+    other = Station.objects.create(name="cp6-other", status="online")
+    user = _user("station_admin", other)
+    assert cp.viewer_role(user, station) == "operator"
+    assert cp.viewer_role(user, other) == "station_manager"
+
+
+@pytest.mark.django_db
+def test_region_manager_of_different_region_is_operator():
+    station = Station.objects.create(name="cp7", status="online")
+    station.region = Region.objects.create(name="Mine", slug="mine")
+    station.save()
+    other = Station.objects.create(name="cp7-other", status="online")
+    user = _user("region_manager", other)
+    assert cp.viewer_role(user, station) == "operator"
+    assert cp.viewer_role(user, other) == "station_manager"

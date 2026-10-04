@@ -98,3 +98,48 @@ class ControlLock(models.Model):
     def __str__(self):
         who = self.holder_id or "FREE"
         return f"lock({self.station_id}/{self.scope})={who}"
+
+
+class PersistedCapability(models.Model):
+    """Server-persisted value of a role-gated calibration capability (spec §4a).
+
+    The FW persists nothing; the server stores the last successfully applied value per
+    (station, slot, module, capability) and re-applies it through the agent whenever an
+    inventory shows the module disagreeing. Only capabilities whose policy has
+    ``persist=True`` are ever written here (see ``apps.control.persistence``).
+    """
+
+    station = models.ForeignKey(
+        "stations.Station",
+        verbose_name=_("station"),
+        on_delete=models.CASCADE,
+        related_name="persisted_capabilities",
+    )
+    # Same type/length as StationModule.slot (inventory slots are keyed as str).
+    slot = models.CharField(_("slot"), max_length=64)
+    module_id = models.CharField(_("module id"), max_length=128)
+    capability = models.CharField(_("capability"), max_length=64)
+    value = models.JSONField(_("value"))
+    updated_by = models.ForeignKey(
+        "accounts.User",
+        verbose_name=_("updated by"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("persisted capability")
+        verbose_name_plural = _("persisted capabilities")
+        ordering = ["station", "slot", "module_id", "capability"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["station", "slot", "module_id", "capability"],
+                name="uniq_persisted_cap",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.station_id}/{self.slot}/{self.module_id}.{self.capability}={self.value!r}"

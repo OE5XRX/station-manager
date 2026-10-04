@@ -7,7 +7,8 @@ import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from . import constants, lock, registry
+from . import capability_policy, constants, lock, persistence, registry
+from .models import StationModule
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             if station is not None:
                 await self._apply_inventory(station, msg.get("slots", []))
+                await self._reapply_persisted(station, msg.get("slots", []))
             await self._broadcast("control.inventory", {"msg": msg})
         elif mtype == "state":
             station = await self._cached_station()
@@ -160,6 +162,24 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     async def _broadcast(self, msg_type, payload):
         await self.channel_layer.group_send(self.group_name, {"type": msg_type, **payload})
 
+    async def _reapply_persisted(self, station, slots):
+        """Drift re-apply (spec §4a): the FW persists nothing, so whenever the reported
+        inventory disagrees with a server-persisted calibration value, send a ``set`` for
+        it straight to this agent. Digital module settings only (never PTT/keying — see
+        ``persistence.reapply_frames``). A failure here must never break the inventory path.
+        """
+        try:
+            frames = await self._reapply_frames(station, slots)
+            for frame in frames:
+                await self.send(text_data=json.dumps(frame))
+                await self._audit_reapply(
+                    station, f"re-apply persisted {frame['capability']}={frame['value']!r}"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("control: persisted-capability re-apply failed")
+
     # -- DB helpers -----------------------------------------------------------
 
     async def _cached_station(self):
@@ -185,6 +205,16 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _apply_inventory(self, station, slots):
         registry.apply_inventory(station, slots)
+
+    @database_sync_to_async
+    def _reapply_frames(self, station, slots):
+        return persistence.reapply_frames(station, slots)
+
+    @database_sync_to_async
+    def _audit_reapply(self, station, message):
+        from apps.stations.models import StationAuditLog
+
+        StationAuditLog.log(station=station, event_type="control_command", message=message)
 
     @database_sync_to_async
     def _apply_state(self, station, slot, module_id, values):
@@ -296,6 +326,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
         self.group_name = f"control_{self.station_id}"
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.pending = {}  # request_id -> asyncio.Task (command timeout)
+        # request_id -> (slot, module, capability, value) of an in-flight set on a
+        # persist-policy capability; persisted only once the agent reports ok.
+        self._persist_pending = {}
         self.user = self.scope.get("user")
         self.station = None  # cached after connect to avoid a DB fetch per frame
 
@@ -350,6 +383,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         # it is pending" on shutdown/reload and cleanup may be left unfinished.
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        self._persist_pending.clear()
         station = await self._cached_station()
         if station is not None and self.user and not self.user.is_anonymous:
             await self._holder_disconnected(station)
@@ -398,8 +432,12 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if not await self._touch_if_holder(station):
             await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
             return
+        allowed, module_type = await self._authorize_command(station, msg)
+        if not allowed:
+            return
         await self._relay(msg)
         request_id = msg.get("request_id")
+        self._remember_persist(request_id, msg, module_type)
         if request_id is not None:
             # A reused request_id must not orphan the previous timeout task —
             # cancel it first, else two timers fire for the same id and the
@@ -439,6 +477,58 @@ class ControlConsumer(AsyncWebsocketConsumer):
             # A malformed value (e.g. a bool/str) is ignored here — it was
             # already relayed to the agent; we just don't crash the socket or
             # corrupt the gate. No bridge broadcast on a no-op.
+
+    async def _authorize_command(self, station, msg):
+        """Server-side ``write_role`` gate (spec §4a) — the real authz check; the read-only
+        UI render is cosmetic. Every capability command a browser can reach the agent with
+        passes through here (``_handle_command`` is the only relay of ``type: command``).
+
+        Any op other than ``get`` is a write. Fail closed: any exception while resolving
+        the module type or the user's role denies the command. Returns
+        ``(allowed, module_type)``.
+        """
+        capability = msg.get("capability")
+        if msg.get("op") == "get":
+            return True, None
+        module_type = None
+        try:
+            module_type = await self._lookup_module_type(
+                station, msg.get("slot"), msg.get("module")
+            )
+            allowed = await self._may_write(station, capability, module_type)
+        except Exception:
+            logger.exception("control: write_role resolution failed; denying command")
+            allowed = False
+        if allowed is True:
+            return True, module_type
+        role = capability_policy.policy_for(capability, module_type).write_role
+        try:
+            await self._audit(
+                station,
+                "control_command",
+                f"{self.user.username} {msg.get('op')} {capability} denied (requires {role})",
+            )
+        except Exception:
+            logger.exception("control: audit of denied command failed")
+        await self._error(msg.get("request_id"), "forbidden", f"Requires role: {role}")
+        return False, module_type
+
+    def _remember_persist(self, request_id, msg, module_type):
+        """Track an in-flight ``set`` on a persist-policy capability so ``control_result``
+        can persist it once the agent reports success (not on send)."""
+        if not (isinstance(request_id, str) or type(request_id) is int):
+            return
+        # A reused request_id must not inherit a stale pending persist.
+        self._persist_pending.pop(request_id, None)
+        capability = msg.get("capability")
+        policy = capability_policy.policy_for(capability, module_type)
+        if msg.get("op") == "set" and policy.persist:
+            self._persist_pending[request_id] = (
+                msg.get("slot"),
+                msg.get("module"),
+                capability,
+                msg.get("value"),
+            )
 
     async def _command_timeout(self, request_id):
         """Fire a timeout error to the browser if no result arrives in time.
@@ -562,7 +652,14 @@ class ControlConsumer(AsyncWebsocketConsumer):
         task = self.pending.pop(rid, None)
         if task is not None:
             task.cancel()
+        entry = (
+            self._persist_pending.pop(rid, None)
+            if isinstance(rid, str) or type(rid) is int
+            else None
+        )
         await self.send(text_data=json.dumps(msg))
+        if entry is not None and msg.get("ok") is True:
+            await self._persist_result(*entry)
 
     async def control_event(self, event):
         await self.send(text_data=json.dumps(event["msg"]))
@@ -620,6 +717,41 @@ class ControlConsumer(AsyncWebsocketConsumer):
             or self.user.is_station_admin(station)
             or self.user.can_administer_station(station)
         )
+
+    @database_sync_to_async
+    def _lookup_module_type(self, station, slot, module):
+        """Registered type of the addressed module, or ``None`` if unknown/malformed.
+        ``None`` still resolves the capability-name policy, so an unknown module id
+        cannot bypass the gate."""
+        if not isinstance(module, str) or not (isinstance(slot, str) or type(slot) is int):
+            return None
+        return (
+            StationModule.objects.filter(station=station, slot=str(slot), module_id=module)
+            .values_list("type", flat=True)
+            .first()
+        )
+
+    @database_sync_to_async
+    def _may_write(self, station, capability, module_type):
+        return capability_policy.can_write(self.user, station, capability, module_type)
+
+    async def _persist_result(self, slot, module, capability, value):
+        try:
+            station = await self._cached_station()
+            if station is None:
+                return
+            if await self._persist(station, slot, module, capability, value):
+                await self._audit(
+                    station,
+                    "control_command",
+                    f"{self.user.username} persisted {capability}={value!r}",
+                )
+        except Exception:
+            logger.exception("control: persisting %s failed", capability)
+
+    @database_sync_to_async
+    def _persist(self, station, slot, module, capability, value):
+        return persistence.persist_if_valid(station, slot, module, capability, value, self.user)
 
     @database_sync_to_async
     def _snapshot(self, station):
