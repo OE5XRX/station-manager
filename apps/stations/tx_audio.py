@@ -15,6 +15,10 @@ CEILING_MAX_DBFS = -3.0
 def effective_ceiling_dbfs(value) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return CEILING_DEFAULT_DBFS
-    if not math.isfinite(value):
+    try:
+        f = float(value)
+    except (OverflowError, ValueError, TypeError):
         return CEILING_DEFAULT_DBFS
-    return float(min(CEILING_MAX_DBFS, max(CEILING_MIN_DBFS, value)))
+    if not math.isfinite(f):
+        return CEILING_DEFAULT_DBFS
+    return min(CEILING_MAX_DBFS, max(CEILING_MIN_DBFS, f))

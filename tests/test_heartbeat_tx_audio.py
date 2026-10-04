@@ -25,12 +25,27 @@ def test_holder_defaults_safe():
         ({"status": "ok"}, -12.0),  # old server: no key -> safe default
         (None, -12.0),
         ("garbage", -12.0),
+        ({"tx_audio": {"ceiling_dbfs": 10**400}}, -12.0),
+        ({"tx_audio": {"ceiling_dbfs": -(10**400)}}, -12.0),
+        ({"tx_audio": {"ceiling_dbfs": True}}, -12.0),
+        ({"tx_audio": {"ceiling_dbfs": float("inf")}}, -12.0),
+        ({"tx_audio": {"ceiling_dbfs": -40}}, -24.0),
+        ({"tx_audio": [1, 2]}, -12.0),
+        ([1, 2], -12.0),
+        (5, -12.0),
     ],
 )
 def test_update_from_heartbeat_is_total(body, expected):
     h = ts.TxAudioSettings()
     h.update_from_heartbeat(body)
     assert h.ceiling_dbfs == expected
+
+
+def test_overflow_resets_previous_value_to_default():
+    h = ts.TxAudioSettings()
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": 10**400}})
+    assert h.ceiling_dbfs == -12.0
 
 
 def test_old_value_replaced_by_default_when_server_drops_it():
@@ -94,10 +109,18 @@ def test_send_heartbeat_survives_non_json_body(monkeypatch):
     assert h.ceiling_dbfs == -12.0
 
 
+def test_send_heartbeat_survives_recursion_error(monkeypatch):
+    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda config=None: {})
+    h = ts.TxAudioSettings()
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
+    assert send_heartbeat(_Client(_Resp(200, RecursionError("deep"))), tx_settings=h) is True
+    assert h.ceiling_dbfs == -12.0
+
+
 def test_agent_and_server_clamps_agree():
     from apps.stations import tx_audio
 
-    for v in (None, -40, -24, -12.3, -3, 0, float("nan"), "x", True):
+    for v in (None, -40, -24, -12.3, -3, 0, float("nan"), "x", True, 10**400, -(10**400)):
         assert ts.clamp_ceiling(v) == tx_audio.effective_ceiling_dbfs(v)
 
 
