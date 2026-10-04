@@ -370,6 +370,7 @@ class TxBridge:
         self._startup_grace = startup_grace
         self._dsp_probe = dsp_probe or probe_dsp_available
         self.dsp_mode = "off"  # "off" | "full" | "degraded" | "failed"
+        self.ceiling_dbfs: float | None = dsp.ceiling_dbfs if dsp is not None else None
         self._reader: threading.Thread | None = None
         self._proc = None
         self._sock = None

@@ -38,7 +38,11 @@ class BridgeFactory:
 
     def make_diag_u(self, node: str, rate: int):
         port = self._ports.acquire()
-        return _PortBoundDiagU(node, port, rate, self._ports)
+        ceiling = self._tx_settings.ceiling_dbfs if self._tx_settings else CEILING_DEFAULT_DBFS
+        # Same DSP config as make_tx; availability probed in MeasuredTxBridge.start()
+        # (worker thread), not here on the WS loop.
+        dsp = TxDspConfig(ceiling_dbfs=ceiling)
+        return _PortBoundDiagU(node, port, rate, self._ports, dsp=dsp, dsp_probe=self._dsp_probe)
 
 
 class _PortBoundRx(RxBridge):
@@ -68,10 +72,10 @@ class _PortBoundTx(TxBridge):
 class _PortBoundDiagU:
     """MeasuredTxBridge wrapper that returns its UDP port to the allocator on stop."""
 
-    def __init__(self, node, port, rate, ports):
+    def __init__(self, node, port, rate, ports, *, dsp=None, dsp_probe=None):
         from station_agent.audio.diagnostics import MeasuredTxBridge
 
-        self._impl = MeasuredTxBridge(node, port, rate)
+        self._impl = MeasuredTxBridge(node, port, rate, dsp=dsp, dsp_probe=dsp_probe)
         self._ports = ports
         self._port = port
 

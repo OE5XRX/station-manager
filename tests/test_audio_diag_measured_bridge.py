@@ -235,3 +235,71 @@ def test_read_measfd_is_sole_closer_of_fd():
     # A following stop() must NOT attempt to close that same fd again.
     br.stop()
     assert closes == [r], f"stop() must not re-close the fd, got closes={closes}"
+
+
+def test_measured_tx_argv_with_dsp_measures_post_limiter():
+    from station_agent.audio import tx_dsp
+    from station_agent.audio.diagnostics import build_measured_tx_argv
+
+    argv = build_measured_tx_argv("n", 47000, 16000, dsp=tx_dsp.TxDspConfig(ceiling_dbfs=-12.0))
+    dyn = [i for i, t in enumerate(argv) if t == "audiodynamic"]
+    assert len(dyn) == 3 and dyn[-1] < argv.index("tee")
+
+
+def test_measured_tx_argv_without_dsp_unchanged():
+    from station_agent.audio.diagnostics import build_measured_tx_argv
+
+    assert "audiodynamic" not in build_measured_tx_argv("n", 47000, 16000)
+
+
+def _started_argv(dsp, probe):
+    from station_agent.audio import diagnostics as d
+
+    seen = {}
+
+    def fake_spawn(make_argv):
+        seen["argv"] = make_argv(9)
+        return object(), None
+
+    br = d.MeasuredTxBridge(
+        "tx.node",
+        47070,
+        16000,
+        spawn=fake_spawn,
+        socket_factory=_FakeSock,
+        dsp=dsp,
+        dsp_probe=probe,
+    )
+    return br, seen
+
+
+def test_measured_bridge_probe_runs_in_start_not_construction():
+    from station_agent.audio import tx_dsp
+
+    calls = []
+    br, seen = _started_argv(
+        tx_dsp.TxDspConfig(ceiling_dbfs=-12.0), lambda: calls.append(1) or True
+    )
+    assert calls == []  # nothing probed at construction (WS loop)
+    br.start()
+    assert calls == [1]
+    assert "audiodynamic" in seen["argv"]
+
+
+def test_measured_bridge_degrades_to_plain_when_dsp_unavailable():
+    from station_agent.audio import tx_dsp
+
+    br, seen = _started_argv(tx_dsp.TxDspConfig(ceiling_dbfs=-12.0), lambda: False)
+    br.start()
+    assert "audiodynamic" not in seen["argv"]
+    assert "tee" in seen["argv"]
+
+
+def test_make_diag_u_runs_no_probe():
+    from station_agent.audio.bridge_factory import BridgeFactory
+
+    calls = []
+    f = BridgeFactory(dsp_probe=lambda: calls.append(1) or True)
+    br = f.make_diag_u("tx.node", 16000)
+    assert calls == []
+    br.stop()
