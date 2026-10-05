@@ -251,6 +251,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     async def _send_reapply(self, station, frames):
         for frame in frames:
+            # Re-checked per frame (after every await): a user ``set`` relayed while an
+            # earlier frame was being sent/audited wins over the re-apply.
+            if (str(frame["slot"]), frame["module"], frame["capability"]) in self._reapply_touched:
+                continue
             await self.send(text_data=json.dumps(frame))
             await self._audit_reapply(
                 station, f"re-apply persisted {frame['capability']}={frame['value']!r}"
@@ -280,11 +284,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if frames is None:
                 self._reapply_pending = armed  # still keyed: re-arm
                 return
-            frames = [
-                dict(f, slot=self._wire_slots.get(f["slot"], f["slot"]))
-                for f in frames
-                if (str(f["slot"]), f["module"], f["capability"]) not in self._reapply_touched
-            ]
+            frames = [dict(f, slot=self._wire_slots.get(f["slot"], f["slot"])) for f in frames]
             await self._send_reapply(station, frames)
         except asyncio.CancelledError:
             raise

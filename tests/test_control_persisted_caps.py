@@ -1026,3 +1026,95 @@ def test_retry_frames_carry_the_agents_int_slot_back():
     c._reapply_pending = c._reapply_gen
     asyncio.run(c._retry_pending_reapply(object()))
     assert [json.loads(t)["slot"] for t in sent] == [1]
+
+
+# -- Review round 3 ---------------------------------------------------------------------
+
+
+def _user_set(capability, rid="user-1"):
+    return {
+        "type": "control.to_agent",
+        "frame": dict(_FRAME, request_id=rid, capability=capability, value=True),
+    }
+
+
+def test_retry_drops_frame_for_cap_user_set_during_send_loop():
+    # A user ``set`` relayed while the re-apply loop is awaiting a send must win: the
+    # touched set is re-checked right before each frame, not only once before the loop.
+    import json
+
+    c, sent = _bare_agent_consumer()
+
+    async def yielding_send(text_data=None, bytes_data=None):
+        sent.append(text_data)
+        await asyncio.sleep(0)
+
+    c.send = yielding_send
+
+    async def current(station):
+        return [dict(_FRAME), dict(_FRAME, capability="filter_lpf")]
+
+    c._current_reapply_frames = current
+
+    async def user():
+        # Scheduled after the retry task: first runs while the retry awaits its first send.
+        await c.control_to_agent(_user_set("filter_lpf"))
+
+    async def scenario():
+        c._reapply_pending = c._reapply_gen
+        await asyncio.gather(c._retry_pending_reapply(object()), user())
+
+    asyncio.run(scenario())
+    frames = [json.loads(t) for t in sent]
+    reapplied = [f["capability"] for f in frames if f["request_id"].startswith("persist-")]
+    assert reapplied == ["filter_hpf"]
+    assert [f["request_id"] for f in frames if not f["request_id"].startswith("persist-")] == [
+        "user-1"
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_current_reapply_frames_skip_offline_modules():
+    from apps.control.consumers import AgentControlConsumer
+
+    station = Station.objects.create(name="fr3-offline", status="online")
+    for module_id, online in (("fm0", True), ("fm1", False)):
+        StationModule.objects.create(
+            station=station,
+            slot="slot0",
+            module_id=module_id,
+            type="fm",
+            capability_descriptor=DESC,
+            last_state={"filter_hpf": True},
+            online=online,
+        )
+        persistence.save(station, "slot0", module_id, "filter_hpf", False, None)
+
+    frames = asyncio.run(AgentControlConsumer()._current_reapply_frames(station))
+    assert [(f["module"], f["capability"]) for f in frames] == [("fm0", "filter_hpf")]
+
+
+def test_new_inventory_clears_user_touched_caps():
+    # A cap the user set before an inventory is re-applied again on a later drift: the
+    # new inventory is a fresh baseline and resets the touched set.
+    import json
+
+    c, sent = _bare_agent_consumer()
+
+    async def keyed(station, slots):
+        return None
+
+    async def current(station):
+        return [dict(_FRAME)]
+
+    c._reapply_frames = keyed
+    c._current_reapply_frames = current
+
+    async def scenario():
+        await c.control_to_agent(_user_set("filter_hpf"))
+        sent.clear()
+        await c._reapply_persisted(object(), [])  # keyed: deferred, arms the retry
+        await c._retry_pending_reapply(object())
+
+    asyncio.run(scenario())
+    assert [json.loads(t)["capability"] for t in sent] == ["filter_hpf"]
