@@ -5,13 +5,14 @@
      data-module="{{ m.module_id }}"
      data-cap="{{ cap.name }}"
      data-kind="action"
-     data-type="{{ cap.type }}">
-  <label class="cp-widget-label">{{ cap.name }}</label>
+     data-type="{{ cap.type }}"
+     {% if not access.writable %}data-readonly="true"{% endif %}>
+  <label class="cp-widget-label">{{ cap.name }}{% include "control/widgets/_cap_lock.html" %}</label>
   <button type="button"
           class="cp-btn cp-btn--action"
-          :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') || isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+          {% if access.writable %}:disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') || isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"{% else %}disabled aria-disabled="true"{% endif %}
           :class="{ 'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') }"
-          @click="doAction('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
+          {% if access.writable %}@click="doAction('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"{% endif %}
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     <span class="cp-btn-label">{{ cap.name }}</span>
     <span class="cp-btn-spinner" aria-hidden="true"

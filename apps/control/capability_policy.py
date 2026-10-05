@@ -10,7 +10,17 @@ from __future__ import annotations
 
 import dataclasses
 
+from django.utils.translation import gettext_lazy as _
+
 ROLE_RANK = {"operator": 1, "station_manager": 2, "staff": 3, "admin": 4}
+
+# Human-readable, translatable names for the badge shown on read-only widgets.
+ROLE_LABELS = {
+    "operator": _("operator"),
+    "station_manager": _("station manager"),
+    "staff": _("staff"),
+    "admin": _("admin"),
+}
 
 
 @dataclasses.dataclass(frozen=True)

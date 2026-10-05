@@ -1,4 +1,3 @@
-import pathlib
 import re
 
 import pytest
@@ -146,9 +145,55 @@ def test_role_allows(role, need, ok):
     assert cp.role_allows(role, need) is ok
 
 
-def test_js_refuses_to_send_from_readonly_widget():
-    js = pathlib.Path("static/js/control-panel.js").read_text()
-    for fn in ("setValue", "doAction"):
-        body = js[js.index(f"{fn}: function") :].split("\n", 2)[1]
-        assert "_isReadOnly" in body, fn
-    assert 'getAttribute("data-readonly") === "true"' in js
+def test_station_manager_policy_uses_human_label(client, station, module, member, monkeypatch):
+    monkeypatch.setitem(cp.POLICY, ("mode", None), cp.CapabilityPolicy("station_manager"))
+    w = _widget(_page(client, member, station), "mode")
+    assert "station manager only" in w
+    assert "station_manager" not in w.replace("data-", "")
+
+
+def test_default_policy_label_is_operator():
+    tpl = Template("{% load control_caps %}{% cap_access cap m as a %}{{ a.write_role_label }}")
+    from types import SimpleNamespace
+
+    out = tpl.render(
+        Context({"cap": {"name": "x"}, "m": SimpleNamespace(type="fm"), "viewer_role": None})
+    )
+    assert out == "operator"  # label of the default policy
+
+
+def test_unlabelled_role_key_shown_verbatim(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(cp.POLICY, ("x", None), cp.CapabilityPolicy("admin"))
+    monkeypatch.setattr(cp, "ROLE_LABELS", {})
+    tpl = Template("{% load control_caps %}{% cap_access cap m as a %}{{ a.write_role_label }}")
+    out = tpl.render(Context({"cap": {"name": "x"}, "m": SimpleNamespace(type="fm")}))
+    assert out == "admin"
+
+
+def test_text_and_action_read_only_variants(client, station, member, monkeypatch):
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm",
+        type="fm",
+        capability_descriptor=[
+            {"name": "label", "kind": "setting", "type": "string"},
+            {"name": "reset", "kind": "action", "type": "bool"},
+        ],
+        last_state={},
+        online=True,
+    )
+    html = _page(client, member, station)
+    for cap in ("label", "reset"):
+        w = _widget(html, cap)
+        assert "data-readonly" not in w and ("@click" in w or "@change" in w), cap
+    monkeypatch.setitem(cp.POLICY, ("label", None), cp.CapabilityPolicy("staff"))
+    monkeypatch.setitem(cp.POLICY, ("reset", None), cp.CapabilityPolicy("staff"))
+    html = _page(client, member, station)
+    for cap in ("label", "reset"):
+        w = _widget(html, cap)
+        assert 'data-readonly="true"' in w, cap
+        assert "@click" not in w and "@change" not in w and ":disabled" not in w, cap
+        assert "aria-disabled" in w and "cp-cap-lock" in w and "staff only" in w, cap

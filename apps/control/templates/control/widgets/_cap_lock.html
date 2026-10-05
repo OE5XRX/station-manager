@@ -1,0 +1,1 @@
+{% load i18n %}{% if not access.writable %} <span class="cp-cap-lock" title="{% blocktrans with role=access.write_role_label %}Changeable by {{ role }} only{% endblocktrans %}">{% blocktrans with role=access.write_role_label %}{{ role }} only{% endblocktrans %}</span>{% endif %}

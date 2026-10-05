@@ -9,7 +9,7 @@
      data-type="bool"
      {% if not access.writable %}data-readonly="true"{% endif %}>
   <label class="cp-widget-label cp-bool-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
-    {{ cap.name }}{% if not access.writable %} <span class="cp-cap-lock" title="{% blocktrans with role=access.write_role %}Changeable by {{ role }} only{% endblocktrans %}">{% blocktrans with role=access.write_role %}{{ role }} only{% endblocktrans %}</span>{% endif %}
+    {{ cap.name }}{% include "control/widgets/_cap_lock.html" %}
   </label>
   <button type="button"
           id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"

@@ -16,7 +16,7 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
      {% if cap.step %}data-step="{{ cap.step }}"{% endif %}{% endlocalize %}
      {% if not access.writable %}data-readonly="true"{% endif %}>
   <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
-    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}{% if not access.writable %} <span class="cp-cap-lock" title="{% blocktrans with role=access.write_role %}Changeable by {{ role }} only{% endblocktrans %}">{% blocktrans with role=access.write_role %}{{ role }} only{% endblocktrans %}</span>{% endif %}
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}{% include "control/widgets/_cap_lock.html" %}
   </label>
   <div class="cp-number-row">
     <button type="button" class="cp-step cp-step--dec"

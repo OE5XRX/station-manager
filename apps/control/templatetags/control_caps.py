@@ -26,4 +26,7 @@ def cap_access(context, cap, module):
     return {
         "writable": capability_policy.role_allows(role, policy.write_role),
         "write_role": policy.write_role,
+        "write_role_label": capability_policy.ROLE_LABELS.get(
+            policy.write_role, policy.write_role
+        ),
     }
