@@ -53,9 +53,17 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.sweep_task = None
         self.station = None  # cached after connect to avoid a DB fetch per frame
-        # Last inventory whose drift re-apply was skipped because the station was keyed;
-        # retried once PTT is released (see _retry_pending_reapply).
-        self._reapply_pending_slots = None
+        # Deferred drift re-apply (skipped because the station was keyed), retried once PTT
+        # is released (see _retry_pending_reapply). ``_reapply_pending`` holds the
+        # inventory generation that armed it (None = nothing pending); the retry re-derives
+        # frames from CURRENT state, never from the keyed-time snapshot.
+        self._reapply_pending = None
+        self._reapply_gen = 0
+        # (slot, module, capability) a browser ``set`` was relayed for since the last
+        # inventory: a deliberate user write the deferred retry must not race.
+        self._reapply_touched = set()
+        # str(slot) -> slot exactly as the agent reports it (an int slot must go back as int).
+        self._wire_slots = {}
 
         from urllib.parse import parse_qs
 
@@ -112,10 +120,6 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         except json.JSONDecodeError:
             return
         mtype = msg.get("type")
-        if mtype != "inventory" and self._reapply_pending_slots is not None:
-            station = await self._cached_station()
-            if station is not None:
-                await self._retry_pending_reapply(station)
         if mtype == "inventory":
             station = await self._cached_station()
             if station is not None:
@@ -134,12 +138,31 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         elif mtype == "event":
             await self._broadcast("control.event", {"msg": msg})
         # Unknown types are ignored (forward-compat).
+        # Deferred re-apply retry runs AFTER the frame was processed, so it sees the module
+        # state this very frame carried (an inventory frame does its own check above).
+        if mtype != "inventory" and self._reapply_pending is not None:
+            station = await self._cached_station()
+            if station is not None:
+                await self._retry_pending_reapply(station)
 
     # -- server -> agent (channel handler) ------------------------------------
 
     async def control_to_agent(self, event):
         """A ControlConsumer relayed a §7 downstream frame -> send to agent."""
-        await self.send(text_data=json.dumps(event["frame"]))
+        frame = event["frame"]
+        self._note_user_set(frame)
+        await self.send(text_data=json.dumps(frame))
+
+    def _note_user_set(self, frame):
+        """Remember a relayed browser ``set`` so a deferred re-apply leaves that capability
+        alone: the user's write (and its own persistence on the ok result) is authoritative,
+        and neither the DB nor ``last_state`` reflects it until result/state come back."""
+        if not isinstance(frame, dict) or frame.get("op") != "set":
+            return
+        slot, module, cap = frame.get("slot"), frame.get("module"), frame.get("capability")
+        if (isinstance(slot, str) or type(slot) is int) and isinstance(module, str):
+            if isinstance(cap, str):
+                self._reapply_touched.add((str(slot), module, cap))
 
     # -- broadcasts we must ignore when echoed back to our own group ----------
 
@@ -198,37 +221,75 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         it straight to this agent. Digital module settings only (never PTT/keying — see
         ``persistence.reapply_frames``). A failure here must never break the inventory path.
 
-        While the station is keyed the re-apply is deferred, not dropped: ``slots`` is kept
-        as pending and retried by :meth:`_retry_pending_reapply` once PTT is released.
+        While the station is keyed the re-apply is deferred, not dropped: it is armed as
+        pending and retried by :meth:`_retry_pending_reapply` once PTT is released.
         """
+        # A fresh inventory is a fresh baseline: supersedes any pending/in-flight retry.
+        self._reapply_gen += 1
+        gen = self._reapply_gen
+        self._reapply_touched.clear()
+        if isinstance(slots, list):
+            self._wire_slots = {
+                str(e["slot"]): e["slot"]
+                for e in slots
+                if isinstance(e, dict)
+                and (isinstance(e.get("slot"), str) or type(e.get("slot")) is int)
+            }
         try:
             frames = await self._reapply_frames(station, slots)
             if frames is None:
-                self._reapply_pending_slots = slots
+                if self._reapply_gen == gen:
+                    self._reapply_pending = gen
                 return
-            self._reapply_pending_slots = None
-            for frame in frames:
-                await self.send(text_data=json.dumps(frame))
-                await self._audit_reapply(
-                    station, f"re-apply persisted {frame['capability']}={frame['value']!r}"
-                )
+            if self._reapply_gen == gen:
+                self._reapply_pending = None
+            await self._send_reapply(station, frames)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("control: persisted-capability re-apply failed")
 
+    async def _send_reapply(self, station, frames):
+        for frame in frames:
+            await self.send(text_data=json.dumps(frame))
+            await self._audit_reapply(
+                station, f"re-apply persisted {frame['capability']}={frame['value']!r}"
+            )
+
     async def _retry_pending_reapply(self, station):
         """Retry a re-apply that was skipped while keyed. The agent only sends inventory on
         connect / slot-set change, so without this a skip would never be retried. Driven by
         the sweep tick (covers explicit PTT clear, lock loss AND silent dead-man expiry) and
-        by any subsequent agent frame (telemetry → low latency). The pending snapshot is
-        taken before the first await so concurrent triggers can't double-send; if still
-        keyed it is re-armed. Bounded: frames go out once per skipped inventory."""
-        slots = self._reapply_pending_slots
-        if slots is None:
+        by any subsequent agent frame (telemetry → low latency), after that frame was
+        processed. Bounded: frames go out once per skipped inventory.
+
+        Frames are re-derived from CURRENT state — persisted rows vs the module's
+        ``last_state`` (kept current by inventory + state frames) — never replayed from the
+        keyed-time snapshot, and capabilities the user ``set`` since the inventory are left
+        alone (their own write wins). The pending marker is claimed before the first await
+        so concurrent triggers can't double-send; if still keyed it is re-armed only when no
+        newer inventory check superseded it."""
+        armed = self._reapply_pending
+        if armed is None:
             return
-        self._reapply_pending_slots = None
-        await self._reapply_persisted(station, slots)
+        self._reapply_pending = None
+        try:
+            frames = await self._current_reapply_frames(station)
+            if self._reapply_gen != armed:
+                return  # a newer inventory already checked (or re-armed) drift
+            if frames is None:
+                self._reapply_pending = armed  # still keyed: re-arm
+                return
+            frames = [
+                dict(f, slot=self._wire_slots.get(f["slot"], f["slot"]))
+                for f in frames
+                if (str(f["slot"]), f["module"], f["capability"]) not in self._reapply_touched
+            ]
+            await self._send_reapply(station, frames)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("control: deferred persisted-capability re-apply failed")
 
     # -- DB helpers -----------------------------------------------------------
 
@@ -264,6 +325,22 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         # whose dead-man expired is NOT keyed). ``None`` = deferred, caller re-arms a retry.
         if audio_gate.ptt_keyed(station):
             return None
+        return persistence.reapply_frames(station, slots)
+
+    @database_sync_to_async
+    def _current_reapply_frames(self, station):
+        """Drift frames from current state: persisted rows vs registry ``last_state`` of
+        the online modules. ``None`` while keyed (caller re-arms)."""
+        from apps.audio import gate as audio_gate
+
+        from . import serializers
+
+        if audio_gate.ptt_keyed(station):
+            return None
+        slots = [
+            {"slot": e["slot"], "modules": [m for m in e["modules"] if m.get("online")]}
+            for e in serializers.snapshot(station)
+        ]
         return persistence.reapply_frames(station, slots)
 
     @database_sync_to_async

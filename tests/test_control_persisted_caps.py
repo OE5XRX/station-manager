@@ -710,3 +710,319 @@ def test_expired_ptt_is_treated_as_released(control_agent_auth):
         return frame
 
     assert asyncio.run(scenario())["capability"] == "filter_hpf"
+
+
+# -- Review round 2: deferred re-apply re-derives from CURRENT state ---------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapply_retry_does_not_clobber_user_set_after_release(control_agent_auth):
+    # Skipped while keyed (DB False vs module True). After release the holder sets the
+    # cap to True: the agent answers result ok + state True. The retry must NOT replay the
+    # stale keyed-time snapshot and send ``set False`` after the user's write.
+    station = _keyed_station("fr2-user-set")
+    staff = _staff("fr2-us")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())
+        assert await agent.receive_nothing(timeout=0.3)
+        await _clear_ptt(station)
+        browser = _browser(staff, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("u2", value=True))
+        cmd = await _until(agent, lambda m: m.get("type") == "command")
+        assert cmd["request_id"] == "u2"
+        await agent.send_json_to(
+            {"v": V, "type": "result", "request_id": "u2", "ok": True, "value": True}
+        )
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "state",
+                "slot": "slot0",
+                "module": "fm0",
+                "values": {"filter_hpf": True},
+            }
+        )
+        await _until(browser, lambda m: m.get("type") == "result")
+        await agent.send_json_to(_telemetry())
+        silent = await agent.receive_nothing(timeout=0.5)
+        await browser.disconnect()
+        await agent.disconnect()
+        return silent
+
+    assert asyncio.run(scenario()) is True
+    assert PersistedCapability.objects.get(station=station).value is True
+    assert not StationAuditLog.objects.filter(
+        station=station, message__contains="re-apply persisted"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapply_retry_skips_cap_with_user_set_in_flight(control_agent_auth):
+    # Deterministic variant: the user's set is relayed to the agent but no result has
+    # arrived (so neither DB nor last_state reflect it yet). The retry must leave that
+    # capability alone instead of racing the user's write with the old persisted value.
+    station = _keyed_station("fr2-inflight")
+    staff = _staff("fr2-if")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())
+        assert await agent.receive_nothing(timeout=0.3)
+        await _clear_ptt(station)
+        browser = _browser(staff, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("u3", value=True))
+        cmd = await _until(agent, lambda m: m.get("type") == "command")
+        assert cmd["request_id"] == "u3"
+        await agent.send_json_to(_telemetry())
+        silent = await agent.receive_nothing(timeout=0.5)
+        await browser.disconnect()
+        await agent.disconnect()
+        return silent
+
+    assert asyncio.run(scenario()) is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapply_retry_uses_current_persisted_value_not_snapshot(control_agent_auth):
+    # The persisted value changes between skip and retry (and the module now reports a
+    # different state): the retry derives from the DB + current module state.
+    from channels.db import database_sync_to_async
+
+    station = _keyed_station("fr2-current")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())  # module True vs DB False → skipped
+        assert await agent.receive_nothing(timeout=0.3)
+        # Module now reports False, DB now holds True (e.g. persisted by another path).
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "state",
+                "slot": "slot0",
+                "module": "fm0",
+                "values": {"filter_hpf": False},
+            }
+        )
+        assert await agent.receive_nothing(timeout=0.3)
+        await database_sync_to_async(persistence.save)(
+            station, "slot0", "fm0", "filter_hpf", True, None
+        )
+        await _clear_ptt(station)
+        await agent.send_json_to(_telemetry())
+        frame = await _until(agent, lambda m: m.get("type") == "command")
+        await agent.disconnect()
+        return frame
+
+    frame = asyncio.run(scenario())
+    assert (frame["capability"], frame["value"], frame["slot"]) == ("filter_hpf", True, "slot0")
+
+
+# -- unit-level: claim-before-await + no stale re-arm ---------------------------------
+
+
+def _bare_agent_consumer():
+    from apps.control.consumers import AgentControlConsumer
+
+    c = AgentControlConsumer()
+    c._reapply_pending = None
+    c._reapply_gen = 0
+    c._reapply_touched = set()
+    c._wire_slots = {}
+    sent = []
+
+    async def send(text_data=None, bytes_data=None):
+        sent.append(text_data)
+
+    async def audit(station, message):
+        pass
+
+    c.send = send
+    c._audit_reapply = audit
+    return c, sent
+
+
+_FRAME = {
+    "v": 1,
+    "type": "command",
+    "request_id": "persist-1-x",
+    "slot": "slot0",
+    "module": "fm0",
+    "capability": "filter_hpf",
+    "op": "set",
+    "value": False,
+}
+
+
+def test_concurrent_retries_send_exactly_one_batch():
+    c, sent = _bare_agent_consumer()
+
+    async def current(station):
+        await asyncio.sleep(0)  # yield: the other retry runs while this one awaits
+        await asyncio.sleep(0)
+        return [dict(_FRAME), dict(_FRAME, capability="filter_lpf")]
+
+    c._current_reapply_frames = current
+
+    async def scenario():
+        c._reapply_pending = c._reapply_gen
+        await asyncio.gather(
+            c._retry_pending_reapply(object()), c._retry_pending_reapply(object())
+        )
+
+    asyncio.run(scenario())
+    assert len(sent) == 2  # one batch of two frames, not two batches
+    assert c._reapply_pending is None
+
+
+def test_sweep_retry_does_not_overwrite_newer_pending():
+    c, sent = _bare_agent_consumer()
+    release = None
+
+    async def still_keyed(station):
+        await release.wait()
+        return None
+
+    async def keyed_inventory(station, slots):
+        return None
+
+    c._current_reapply_frames = still_keyed
+    c._reapply_frames = keyed_inventory
+
+    async def scenario():
+        nonlocal release
+        release = asyncio.Event()
+        c._reapply_pending = c._reapply_gen  # old skip
+        old = c._reapply_pending
+        retry = asyncio.create_task(c._retry_pending_reapply(object()))
+        await asyncio.sleep(0)
+        # Newer inventory arrives (still keyed) while the sweep retry is in flight.
+        await c._reapply_persisted(object(), [])
+        newer = c._reapply_pending
+        assert newer is not None and newer != old
+        release.set()
+        await retry
+        return newer
+
+    newer = asyncio.run(scenario())
+    assert c._reapply_pending == newer
+    assert sent == []
+
+
+def test_sweep_retry_does_not_rearm_after_newer_inventory_resolved():
+    c, sent = _bare_agent_consumer()
+    release = None
+
+    async def still_keyed(station):
+        await release.wait()
+        return None
+
+    async def unkeyed_no_drift(station, slots):
+        return []
+
+    c._current_reapply_frames = still_keyed
+    c._reapply_frames = unkeyed_no_drift
+
+    async def scenario():
+        nonlocal release
+        release = asyncio.Event()
+        c._reapply_pending = c._reapply_gen
+        retry = asyncio.create_task(c._retry_pending_reapply(object()))
+        await asyncio.sleep(0)
+        await c._reapply_persisted(object(), [])  # newer inventory: checked, nothing pending
+        release.set()
+        await retry
+
+    asyncio.run(scenario())
+    assert c._reapply_pending is None
+
+
+# -- persist-time lock-holder re-check (no lock broadcast delivered) ---------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_holder_changed_in_db_without_lock_event_does_not_persist(control_agent_auth):
+    from channels.db import database_sync_to_async
+
+    from apps.control.models import ControlLock
+
+    station = _fm_station("fr2-holder")
+    a, b = _staff("fr2-ha"), _staff("fr2-hb")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(a, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("h1"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        # Lock moves to B in the DB only — no control.lock broadcast reaches A's consumer,
+        # so A's _persist_pending still holds h1. Only the persist-time re-check can stop it.
+        await database_sync_to_async(
+            lambda: ControlLock.objects.filter(station=station).update(holder=b)
+        )()
+        await agent.send_json_to(_ok("h1"))
+        await _until(browser, lambda m: m.get("type") == "result")
+        await asyncio.sleep(0.2)
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not PersistedCapability.objects.filter(station=station).exists()
+    assert not StationAuditLog.objects.filter(
+        station=station, message__contains="persisted"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapply_retry_runs_after_the_triggering_frame_is_applied(control_agent_auth):
+    # Skipped while keyed (module True vs DB False). After release the first agent frame is
+    # a state frame showing the module already at the persisted value: the retry must see
+    # that frame's state (runs after it is applied) and send nothing.
+    station = _keyed_station("fr2-after-frame")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())
+        assert await agent.receive_nothing(timeout=0.3)
+        await _clear_ptt(station)
+        await agent.send_json_to(
+            {
+                "v": V,
+                "type": "state",
+                "slot": "slot0",
+                "module": "fm0",
+                "values": {"filter_hpf": False},
+            }
+        )
+        silent = await agent.receive_nothing(timeout=0.5)
+        await agent.disconnect()
+        return silent
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_retry_frames_carry_the_agents_int_slot_back():
+    import json
+
+    c, sent = _bare_agent_consumer()
+    c._wire_slots = {"1": 1}
+
+    async def current(station):
+        return [dict(_FRAME, slot="1")]  # registry keys slots as str
+
+    c._current_reapply_frames = current
+    c._reapply_pending = c._reapply_gen
+    asyncio.run(c._retry_pending_reapply(object()))
+    assert [json.loads(t)["slot"] for t in sent] == [1]

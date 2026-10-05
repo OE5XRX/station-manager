@@ -93,6 +93,13 @@ jobs:
         with:
           python-version: "3.14"
 
+      # Pinned so the JS logic suites (tests/js/*.mjs, run via pytest) see the
+      # same Node major locally and in CI instead of whatever the runner image
+      # happens to ship.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
       - name: Cache pip
         uses: actions/cache@v6
         with:

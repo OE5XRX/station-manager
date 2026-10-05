@@ -159,9 +159,15 @@ await ok("enableMic inserts a unity capture GainNode between source and worklet"
   window.AudioEncoder = function () {
     return { configure() {}, close() {}, state: "configured" };
   };
-  globalThis.navigator = {
-    mediaDevices: { getUserMedia: () => Promise.resolve({ getTracks: () => [] }) },
-  };
+  // Node >= 21 exposes `navigator` as a getter-only global; plain
+  // assignment throws in ESM strict mode, so redefine the property.
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      mediaDevices: { getUserMedia: () => Promise.resolve({ getTracks: () => [] }) },
+    },
+    configurable: true,
+    writable: true,
+  });
 
   const c = factory();
   c._workletUrl = "/static/js/mic-worklet.js";
