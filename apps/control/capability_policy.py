@@ -42,8 +42,19 @@ def policy_for(capability: str, module_type: str | None) -> CapabilityPolicy:
     if not isinstance(capability, str):
         return _DEFAULT
     if not isinstance(module_type, str):
-        module_type = None
+        return _strictest_for(capability)
     return POLICY.get((capability, module_type)) or POLICY.get((capability, None)) or _DEFAULT
+
+
+def _strictest_for(capability: str) -> CapabilityPolicy:
+    """Unknown module type (unregistered module id / malformed type): the strictest
+    ``write_role`` of ANY entry for this capability name, ``persist`` if any entry
+    persists — so an unregistered module can never loosen a type-specific policy."""
+    entries = [p for (cap, _type), p in POLICY.items() if cap == capability]
+    if not entries:
+        return _DEFAULT
+    role = max((p.write_role for p in entries), key=lambda r: ROLE_RANK.get(r, 0))
+    return CapabilityPolicy(write_role=role, persist=any(p.persist for p in entries))
 
 
 def viewer_role(user, station) -> str | None:

@@ -133,3 +133,18 @@ def test_region_manager_of_different_region_is_operator():
     user = _user("region_manager", other)
     assert cp.viewer_role(user, station) == "operator"
     assert cp.viewer_role(user, other) == "station_manager"
+
+
+def test_unknown_module_type_uses_strictest_entry_for_name(monkeypatch):
+    monkeypatch.setitem(cp.POLICY, ("power", "fm"), cp.CapabilityPolicy("admin"))
+    monkeypatch.setitem(cp.POLICY, ("power", "hf"), cp.CapabilityPolicy("staff", persist=True))
+    p = cp.policy_for("power", None)
+    assert p.write_role == "admin" and p.persist is True
+    # A known (str) type still resolves exactly / by name.
+    assert cp.policy_for("power", "fm").write_role == "admin"
+    assert cp.policy_for("power", "vhf").write_role == "operator"
+    # Non-str module type is treated as unknown → strictest.
+    assert cp.policy_for("power", ["x"]).write_role == "admin"
+    # Name-only entries are unchanged.
+    assert cp.policy_for("filter_hpf", None).write_role == "staff"
+    assert cp.policy_for("frequency", None) == cp.CapabilityPolicy()

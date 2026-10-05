@@ -12,6 +12,13 @@ from .models import StationModule
 
 logger = logging.getLogger(__name__)
 
+_AUDIT_FIELD_MAX = 64
+
+
+def _clip(value):
+    """Bound attacker-controlled frame fields before they reach the audit log."""
+    return str(value)[:_AUDIT_FIELD_MAX]
+
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
     """Agent-facing control WebSocket. Path: ws/agent/control/<station_id>/.
@@ -208,6 +215,12 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _reapply_frames(self, station, slots):
+        from apps.audio import gate as audio_gate
+
+        # Never touch module settings while the station is keyed; the next inventory
+        # after TX ends re-checks drift (no TX-end hook needed — re-apply is idempotent).
+        if audio_gate.get_state(station).get("ptt_active"):
+            return []
         return persistence.reapply_frames(station, slots)
 
     @database_sync_to_async
@@ -506,7 +519,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self._audit(
                 station,
                 "control_command",
-                f"{self.user.username} {msg.get('op')} {capability} denied (requires {role})",
+                f"{self.user.username} {_clip(msg.get('op'))} {_clip(capability)} "
+                f"on {_clip(msg.get('slot'))}/{_clip(msg.get('module'))} "
+                f"denied (requires {role})",
             )
         except Exception:
             logger.exception("control: audit of denied command failed")
@@ -665,6 +680,10 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_lock(self, event):
+        # Lost (or never held) the lock → this consumer's in-flight results must never
+        # persist: a new holder may reuse the same request_id.
+        if not (self.user and event["lock"].get("holder_id") == self.user.id):
+            self._persist_pending.clear()
         await self._push_lock(event["lock"])
 
     async def control_agent_offline(self, event):
@@ -751,6 +770,12 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _persist(self, station, slot, module, capability, value):
+        # Re-check at persist time (the lock broadcast may not have arrived yet): only the
+        # current holder, still allowed to write this capability, may persist.
+        if _lock_with_holder(station).holder_id != self.user.id:
+            return False
+        if not capability_policy.can_write(self.user, station, capability, None):
+            return False
         return persistence.persist_if_valid(station, slot, module, capability, value, self.user)
 
     @database_sync_to_async

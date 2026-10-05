@@ -333,3 +333,215 @@ def test_admin_is_registered_read_only():
     ma = dj_admin.site._registry[PersistedCapability]
     assert ma.has_add_permission(None) is False
     assert ma.has_change_permission(None) is False
+
+
+# -- Fix round 1: persist binding / state confusion ----------------------------
+
+
+def _set_frame(rid, capability="filter_hpf", value=False, slot="slot0"):
+    return {
+        "type": "command",
+        "request_id": rid,
+        "slot": slot,
+        "module": "fm0",
+        "capability": capability,
+        "op": "set",
+        "value": value,
+    }
+
+
+def _ok(rid, ok=True):
+    frame = {"v": V, "type": "result", "request_id": rid, "ok": ok}
+    if ok:
+        frame["value"] = False
+    else:
+        frame["error"] = {"code": "timeout", "msg": ""}
+    return frame
+
+
+async def _acquire(browser):
+    await browser.send_json_to({"type": "lock_acquire"})
+    await _until(browser, lambda m: m.get("type") == "lock" and m.get("state") == "held")
+
+
+def _fm_station(name, slot="slot0"):
+    station = Station.objects.create(name=name, status="online")
+    StationModule.objects.create(
+        station=station, slot=slot, module_id="fm0", type="fm", capability_descriptor=DESC
+    )
+    return station
+
+
+def _staff(name):
+    return User.objects.create(username=name, membership_level=User.MembershipLevel.STAFF)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_result_for_unknown_or_mismatched_request_id_does_not_persist(control_agent_auth):
+    station = _fm_station("fr-mismatch")
+    staff = _staff("fr-mm")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(staff, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("r1"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        # ok for an id that was never sent, then a failed result for the real one.
+        await agent.send_json_to(_ok("r2"))
+        await _until(browser, lambda m: m.get("type") == "result" and m["request_id"] == "r2")
+        await agent.send_json_to(_ok("r1", ok=False))
+        await _until(browser, lambda m: m.get("type") == "result" and m["request_id"] == "r1")
+        # A late duplicate ok for r1 after the entry was consumed must not persist either.
+        await agent.send_json_to(_ok("r1"))
+        await _until(browser, lambda m: m.get("type") == "result" and m["request_id"] == "r1")
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not PersistedCapability.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_result_after_lock_loss_does_not_persist(control_agent_auth):
+    station = _fm_station("fr-lockloss")
+    a = _staff("fr-a")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(a, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("r5"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        await browser.send_json_to({"type": "lock_release"})
+        await _until(browser, lambda m: m.get("type") == "lock" and m.get("state") == "free")
+        await agent.send_json_to(_ok("r5"))
+        await _until(browser, lambda m: m.get("type") == "result")
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not PersistedCapability.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reused_request_id_by_new_holder_never_persists_old_holders_value(control_agent_auth):
+    # Staff A has r5 (filter_hpf=False) in flight, loses the lock; new holder B reuses r5
+    # for an operator-level command. B's ok must not persist A's value — on A's consumer
+    # (result delivered to another consumer) nor on B's.
+    station = _fm_station("fr-reuse")
+    a, b = _staff("fr-ra"), _staff("fr-rb")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        ba = _browser(a, station.id)
+        assert (await ba.connect())[0] is True
+        bb = _browser(b, station.id)
+        assert (await bb.connect())[0] is True
+        await _acquire(ba)
+        await ba.send_json_to(_set_frame("r5"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        await ba.send_json_to({"type": "lock_release"})
+        await _until(ba, lambda m: m.get("type") == "lock" and m.get("state") == "free")
+        await _acquire(bb)
+        await bb.send_json_to(_set_frame("r5", capability="frequency", value=145500))
+        await _until(agent, lambda m: m.get("type") == "command")
+        await agent.send_json_to(_ok("r5"))
+        await _until(ba, lambda m: m.get("type") == "result")
+        await _until(bb, lambda m: m.get("type") == "result")
+        await ba.disconnect()
+        await bb.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not PersistedCapability.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_result_on_non_sender_consumer_does_not_persist(control_agent_auth):
+    # A staff viewer receives the broadcast ok for the holder's request but has no
+    # pending entry → only the sender persists, attributed to the sender.
+    station = _fm_station("fr-viewer")
+    holder, viewer = _staff("fr-h"), _staff("fr-v")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        bv = _browser(viewer, station.id)
+        assert (await bv.connect())[0] is True
+        bh = _browser(holder, station.id)
+        assert (await bh.connect())[0] is True
+        await _acquire(bh)
+        await bh.send_json_to(_set_frame("r7"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        await agent.send_json_to(_ok("r7"))
+        await _until(bv, lambda m: m.get("type") == "result")
+        await _until(bh, lambda m: m.get("type") == "result")
+        await bv.disconnect()
+        await bh.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    rows = list(PersistedCapability.objects.filter(station=station))
+    assert len(rows) == 1 and rows[0].updated_by_id == holder.id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_int_slot_end_to_end_persist(control_agent_auth):
+    # Real agent wire shape may carry an int slot; registry keys slots as str.
+    station = _fm_station("fr-intslot", slot="1")
+    staff = _staff("fr-int")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(staff, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("i1", slot=1))
+        cmd = await _until(agent, lambda m: m.get("type") == "command")
+        assert cmd["slot"] == 1
+        await agent.send_json_to(_ok("i1"))
+        await _until(browser, lambda m: m.get("type") == "result")
+        await browser.disconnect()
+        # Drift on an int-slot inventory → re-apply frame carries the int slot back.
+        await agent.send_json_to(
+            {"v": V, "type": "inventory", "slots": _inv({"filter_hpf": True}, slot=1)}
+        )
+        frame = await _until(agent, lambda m: m.get("type") == "command")
+        await agent.disconnect()
+        return frame
+
+    frame = asyncio.run(scenario())
+    row = PersistedCapability.objects.get(station=station)
+    assert (row.slot, row.value) == ("1", False)
+    assert frame["slot"] == 1 and frame["value"] is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_no_reapply_while_ptt_active(control_agent_auth):
+    from apps.audio import gate as audio_gate
+
+    station = Station.objects.create(name="fr-ptt", status="online")
+    persistence.save(station, "slot0", "fm0", "filter_hpf", False, None)
+    audio_gate.set_ptt(station, "slot0", "fm0", ttl=60)
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(
+            {"v": V, "type": "inventory", "slots": _inv({"filter_hpf": True}, slot="slot0")}
+        )
+        silent = await agent.receive_nothing(timeout=0.4)
+        await agent.disconnect()
+        return silent
+
+    assert asyncio.run(scenario()) is True
+    assert not StationAuditLog.objects.filter(
+        station=station, message__contains="re-apply persisted"
+    ).exists()

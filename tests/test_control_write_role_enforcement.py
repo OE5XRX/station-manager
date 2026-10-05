@@ -197,3 +197,47 @@ def test_not_holding_lock_is_still_not_locked(control_agent_auth):
     station, staff = _setup(User.MembershipLevel.STAFF, "we11")
     kind, frame = _run(station, staff, _cmd("filter_hpf"), acquire=False)
     assert kind == "error" and frame["error"]["code"] == "not_locked"
+
+
+# -- Fix round 1 ---------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_int_slot_end_to_end_deny(control_agent_auth):
+    station = Station.objects.create(name="we-int", status="online")
+    member = User.objects.create(username="u-we-int", membership_level=User.MembershipLevel.MEMBER)
+    StationModule.objects.create(
+        station=station, slot="1", module_id="fm0", type="fm", capability_descriptor=DESC
+    )
+    kind, frame = _run(station, member, _cmd("filter_hpf", slot=1))
+    assert kind == "error" and frame == FORBIDDEN_STAFF
+    kind, frame = _run(station, member, _cmd("frequency", 145500, slot=1))
+    assert kind == "relayed" and frame["slot"] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unregistered_module_gets_strictest_type_specific_policy(control_agent_auth, monkeypatch):
+    # Only a type-specific entry exists; an unregistered module id (type unknown) must
+    # not fall back to the looser default.
+    monkeypatch.setitem(
+        capability_policy.POLICY, ("power", "fm"), capability_policy.CapabilityPolicy("admin")
+    )
+    station, staff = _setup(User.MembershipLevel.STAFF, "we-strict")
+    kind, frame = _run(station, staff, _cmd("power", 5, module="ghost"))
+    assert kind == "error"
+    assert frame["error"] == {"code": "forbidden", "msg": "Requires role: admin"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_denied_audit_message_truncates_attacker_strings(control_agent_auth):
+    station, member = _setup(User.MembershipLevel.MEMBER, "we-trunc")
+    long_cap = "filter_hpf" + "X" * 5000
+    monkey = capability_policy.CapabilityPolicy("staff")
+    capability_policy.POLICY[(long_cap, None)] = monkey
+    try:
+        kind, _ = _run(station, member, _cmd(long_cap, op="Y" * 5000))
+    finally:
+        del capability_policy.POLICY[(long_cap, None)]
+    assert kind == "error"
+    log = StationAuditLog.objects.get(station=station, message__contains="denied")
+    assert len(log.message) < 300
