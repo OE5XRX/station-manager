@@ -107,6 +107,8 @@
       _micStream: null,         // MediaStream from getUserMedia
       _micSource: null,         // MediaStreamAudioSourceNode (on _micCtx)
       _micWorkletNode: null,    // AudioWorkletNode (oe5xrx-mic, on _micCtx)
+      _micCaptureGain: null,    // fixed capture gain: _micSource → gain → worklet
+      txMeter: A.txMeterView(null), // reactive TX modulation meter (agent tx_meter)
       _micSink: null,           // muted gain → destination, so the worklet is pulled
       _micAnalyser: null,       // AnalyserNode tapping _micSource for the input meter
       _micMeterSink: null,      // muted gain → destination, pulls the analyser branch
@@ -241,6 +243,7 @@
         ws.addEventListener("close", function (ev) {
           self._closeCode = ev.code || null;
           self.conn = "closed";
+          self.txMeter = A.txMeterView(null);
           self._scheduleReconnect();
         });
 
@@ -323,6 +326,9 @@
             break;
           case "error":
             this._onError(msg);
+            break;
+          case "tx_meter":
+            this.txMeter = A.txMeterView(msg);
             break;
           case "link_stats":
             // Server relay counters for this connection (downlink/uplink frames).
@@ -912,11 +918,7 @@
           .then(function () {
             self._workletLoaded = true;
             return navigator.mediaDevices.getUserMedia({
-              audio: {
-                channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true,
-              },
+              audio: A.micCaptureConstraints(),
             });
           })
           .then(function (stream) {
@@ -934,7 +936,15 @@
               micCtx,
               "oe5xrx-mic"
             );
-            self._micSource.connect(self._micWorkletNode);
+            // Fixed capture gain (native DSP is off, see micCaptureConstraints).
+            // NOTE: the input meter + sidetone tap the RAW mic (pre-gain,
+            // pre-encode). They do NOT prove the transmitted level - the
+            // authoritative TX level is the tx_meter from the agent (post-DSP).
+            // The T1 tap (worklet input) includes this fixed capture gain.
+            self._micCaptureGain = micCtx.createGain();
+            self._micCaptureGain.gain.value = A.captureGainLinear();
+            self._micSource.connect(self._micCaptureGain);
+            self._micCaptureGain.connect(self._micWorkletNode);
             // A source→worklet branch with no path to the destination is never
             // rendered — process() never runs, so no mic chunks/uplink. Pull the
             // worklet through a MUTED gain into the destination (gain 0 = no
@@ -1322,6 +1332,14 @@
           } catch (_) {}
           this._micWorkletNode = null;
         }
+
+        if (this._micCaptureGain) {
+          try {
+            this._micCaptureGain.disconnect();
+          } catch (_) {}
+          this._micCaptureGain = null;
+        }
+        this.txMeter = A.txMeterView(null);
 
         if (this._micSink) {
           try {

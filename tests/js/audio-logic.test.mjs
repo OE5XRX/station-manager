@@ -313,4 +313,66 @@ ok("duplicates and too-late frames are dropped", () => {
   assert.equal(A.jitterPush(s, { seq: 3, frame: "late" }).accepted, false);
 });
 
+// --- Browser capture (DSP off + fixed gain) and TX hub meter view ---------
+ok("micCaptureConstraints is exactly mono with all native DSP off", () => {
+  assert.deepEqual(A.micCaptureConstraints(), {
+    channelCount: 1,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  });
+});
+ok("captureGainLinear matches MIC_CAPTURE_GAIN_DB", () => {
+  assert.ok(Math.abs(A.captureGainLinear() - Math.pow(10, A.MIC_CAPTURE_GAIN_DB / 20)) < 1e-9);
+});
+ok("txMeterView: at the ceiling is a full bar and carries limiting", () => {
+  const v = A.txMeterView({ type: "tx_meter", active: true, peak_dbfs: -12, ceiling_dbfs: -12,
+                            gain_reduction_db: 4, limiting: true, dsp: "full" });
+  assert.strictEqual(v.hubFrac, 1);
+  assert.strictEqual(v.limiting, true);
+  assert.strictEqual(v.grDb, 4);
+  assert.strictEqual(v.degraded, false);
+  assert.strictEqual(v.failed, false);
+});
+ok("txMeterView: bar spans the 30 dB below the ceiling", () => {
+  const q = A.txMeterView({ active: true, peak_dbfs: -27, ceiling_dbfs: -12, dsp: "degraded" });
+  assert.ok(Math.abs(q.hubFrac - 0.5) < 1e-9);
+  assert.strictEqual(A.txMeterView({ active: true, peak_dbfs: -80, ceiling_dbfs: -12 }).hubFrac, 0);
+  assert.strictEqual(A.txMeterView({ active: true, peak_dbfs: 0, ceiling_dbfs: -12 }).hubFrac, 1);
+});
+ok("txMeterView: degraded for degraded/off, failed only for failed", () => {
+  const f = (dsp) => A.txMeterView({ active: true, peak_dbfs: -20, ceiling_dbfs: -12, dsp });
+  assert.deepEqual([f("degraded").degraded, f("degraded").failed], [true, false]);
+  assert.deepEqual([f("off").degraded, f("off").failed], [true, false]);
+  assert.deepEqual([f("failed").degraded, f("failed").failed], [false, true]);
+  assert.deepEqual([f("full").degraded, f("full").failed], [false, false]);
+});
+ok("txMeterView: first frame (null peak) is active with an empty bar", () => {
+  const s = A.txMeterView({ active: true, peak_dbfs: null, ceiling_dbfs: -12, dsp: "full" });
+  assert.strictEqual(s.active, true);
+  assert.strictEqual(s.hubFrac, 0);
+  assert.strictEqual(s.ceilingDbfs, -12);
+});
+ok("txMeterView: missing/garbage ceiling falls back to -12", () => {
+  assert.strictEqual(A.txMeterView({ active: true, peak_dbfs: -12, dsp: "full" }).hubFrac, 1);
+  for (const c of ["x", NaN, Infinity, null]) {
+    const v = A.txMeterView({ active: true, peak_dbfs: -12, ceiling_dbfs: c, dsp: "full" });
+    assert.strictEqual(v.hubFrac, 1);
+    assert.strictEqual(v.ceilingDbfs, -12);
+  }
+});
+ok("txMeterView: inactive/garbage input is a safe empty view", () => {
+  for (const junk of [null, undefined, "x", {}, { active: false }, { active: false, dsp: "failed" }]) {
+    const j = A.txMeterView(junk);
+    assert.strictEqual(j.active, false);
+    assert.strictEqual(j.hubFrac, 0);
+    assert.strictEqual(j.limiting, false);
+    assert.strictEqual(j.degraded, false);
+    assert.strictEqual(j.failed, false);
+  }
+  const g = A.txMeterView({ active: true, peak_dbfs: "x", gain_reduction_db: "y" });
+  assert.ok(g.hubFrac >= 0 && g.hubFrac <= 1 && !Number.isNaN(g.hubFrac));
+  assert.strictEqual(g.grDb, 0);
+});
+
 console.log("\n" + passed + " assertions passed");

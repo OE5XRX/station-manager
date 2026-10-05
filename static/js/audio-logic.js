@@ -489,6 +489,39 @@
     return out;
   }
 
+  /* Browser capture: native DSP OFF (spec 3.1). The VAD noise suppressor gated
+     word-ends; AGC/EC fought the agent DSP, which is now the single level
+     authority. */
+  var MIC_CAPTURE_GAIN_DB = 6;
+  function micCaptureConstraints() {
+    return { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  }
+  function captureGainLinear() { return dbfsToAmplitude(MIC_CAPTURE_GAIN_DB); }
+
+  /* TX hub meter view-model from a sanitized server "tx_meter" frame.
+     The bar spans the 30 dB below the limiter ceiling; full = at the ceiling.
+     A missing/garbage ceiling falls back to the policy default (-12 dBFS). */
+  var TX_METER_SPAN_DB = 30;
+  var TX_CEILING_DEFAULT_DBFS = -12;
+  function _finite(x) { return typeof x === "number" && isFinite(x); }
+  function txMeterView(msg) {
+    var off = { active: false, hubFrac: 0, peakDbfs: null, grDb: 0, limiting: false,
+                degraded: false, failed: false, ceilingDbfs: null };
+    if (!msg || typeof msg !== "object" || !msg.active) return off;
+    var ceiling = _finite(msg.ceiling_dbfs) ? msg.ceiling_dbfs : TX_CEILING_DEFAULT_DBFS;
+    var peak = _finite(msg.peak_dbfs) ? msg.peak_dbfs : null;
+    var frac = peak === null ? 0 : (peak - (ceiling - TX_METER_SPAN_DB)) / TX_METER_SPAN_DB;
+    frac = Math.max(0, Math.min(1, frac));
+    return {
+      active: true, hubFrac: frac, peakDbfs: peak,
+      grDb: _finite(msg.gain_reduction_db) ? msg.gain_reduction_db : 0,
+      limiting: !!msg.limiting,
+      degraded: msg.dsp === "degraded" || msg.dsp === "off",
+      failed: msg.dsp === "failed",
+      ceilingDbfs: ceiling,
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
@@ -700,5 +733,9 @@
     dbfsToAmplitude: dbfsToAmplitude,
     buildTapReport: buildTapReport,
     captureConstraintsFromSettings: captureConstraintsFromSettings,
+    MIC_CAPTURE_GAIN_DB: MIC_CAPTURE_GAIN_DB,
+    micCaptureConstraints: micCaptureConstraints,
+    captureGainLinear: captureGainLinear,
+    txMeterView: txMeterView,
   };
 });
