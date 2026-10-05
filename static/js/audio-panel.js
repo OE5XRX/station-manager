@@ -140,6 +140,8 @@
 
       // Periodic RX link-stats refresh (setInterval handle).
       _linkTimer: null,
+      _txMeterAt: null,         // Date.now() of the last tx_meter frame
+      _txMeterTimer: null,      // staleness watchdog interval
 
       // ---------------------------------------------------------------------
       // init
@@ -192,6 +194,17 @@
         this._linkTimer = window.setInterval(function () {
           self._refreshLinkStats();
         }, 1000);
+
+        // Staleness watchdog: tx_meter frames arrive ~8 Hz; if the agent drops
+        // mid-TX the last "active" frame must not freeze on screen.
+        this._txMeterTimer = window.setInterval(function () {
+          if (
+            self.txMeter.active &&
+            A.txMeterStale(self._txMeterAt, Date.now(), 1000)
+          ) {
+            self.txMeter = A.txMeterView(null);
+          }
+        }, 250);
       },
 
       destroy: function () {
@@ -329,6 +342,7 @@
             break;
           case "tx_meter":
             this.txMeter = A.txMeterView(msg);
+            this._txMeterAt = Date.now();
             break;
           case "link_stats":
             // Server relay counters for this connection (downlink/uplink frames).
@@ -386,6 +400,10 @@
       _onStreamState: function (msg) {
         // Reactive per-stream state map for UI badges (Task 8 renders live/idle/error).
         this.streamState[msg.stream_id] = msg.state || "idle";
+        // The server emits idle/"agent disconnected" when the agent drops.
+        if (msg.detail === "agent disconnected") {
+          this.txMeter = A.txMeterView(null);
+        }
       },
 
       _onError: function (msg) {
@@ -827,6 +845,13 @@
             window.clearInterval(this._linkTimer);
           } catch (_) {}
           this._linkTimer = null;
+        }
+
+        if (this._txMeterTimer !== null) {
+          try {
+            window.clearInterval(this._txMeterTimer);
+          } catch (_) {}
+          this._txMeterTimer = null;
         }
 
         // Mic cleanup.

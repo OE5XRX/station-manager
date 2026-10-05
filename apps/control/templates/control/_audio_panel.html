@@ -329,7 +329,7 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
       {% comment %}TX modulation meter: what is actually transmitted (post-DSP in
       the agent), not the mic. Full bar = at the per-station limiter ceiling.
       Read-only operator feedback; the mic meter above does not prove this.{% endcomment %}
-      <div x-show="txMeter.active" x-cloak data-tx-meter class="mt-2">
+      <div x-show="micEnabled && txMeter.active" x-cloak data-tx-meter class="mt-2">
         <div class="d-flex align-items-center gap-2">
           <span class="cp-widget-label" style="font-size:9px;white-space:nowrap;margin-bottom:0;flex-shrink:0;">
             {% trans "TX modulation" %}
@@ -346,8 +346,9 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
                  :style="'width:' + Math.round(txMeter.hubFrac * 100) + '%'">
             </div>
           </div>
-          <span class="pill pill-accent" style="font-size:9px;" x-show="txMeter.limiting" x-cloak
-                aria-live="polite">
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-2);min-width:48px;text-align:right;font-variant-numeric:tabular-nums;"
+                x-text="txMeter.peakDbfs === null ? '—' : txMeter.peakDbfs.toFixed(1) + ' dBFS'"></span>
+          <span class="pill pill-accent" style="font-size:9px;" x-show="txMeter.limiting" x-cloak>
             {% trans "Limiting" %}
             <span style="font-variant-numeric:tabular-nums;" x-text="'-' + Math.abs(txMeter.grDb).toFixed(1) + ' dB'"></span>
           </span>
@@ -356,10 +357,11 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
             {% trans "DSP off" %}
           </span>
         </div>
-        <div class="pill pill-error mt-1" x-show="txMeter.failed" x-cloak role="alert"
-             style="font-size:11px;">
-          {% trans "TX audio pipeline failed" %}
-        </div>
+        <template x-if="txMeter.failed">
+          <div class="pill pill-error mt-1" role="alert" style="font-size:11px;">
+            {% trans "TX audio pipeline failed" %}
+          </div>
+        </template>
       </div>
 
       {% comment %}TX-path diagnostic — counts each stage of the uplink so a stall

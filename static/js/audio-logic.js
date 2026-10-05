@@ -492,7 +492,10 @@
   /* Browser capture: native DSP OFF (spec 3.1). The VAD noise suppressor gated
      word-ends; AGC/EC fought the agent DSP, which is now the single level
      authority. */
-  var MIC_CAPTURE_GAIN_DB = 6;
+  // Unity: the GainNode stays in the graph as the calibration knob (loudness is
+  // the agent compressor/makeup's job; +dB hard-clips hot mics at S16LE before the
+  // agent limiter). Raise only after on-station calibration.
+  var MIC_CAPTURE_GAIN_DB = 0;
   function micCaptureConstraints() {
     return { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
   }
@@ -501,6 +504,13 @@
   /* TX hub meter view-model from a sanitized server "tx_meter" frame.
      The bar spans the 30 dB below the limiter ceiling; full = at the ceiling.
      A missing/garbage ceiling falls back to the policy default (-12 dBFS). */
+  /* True when the last tx_meter frame (ms timestamp) is older than maxAgeMs, so
+     the UI can drop a frozen "active" meter after the agent vanishes mid-TX. */
+  function txMeterStale(lastAtMs, nowMs, maxAgeMs) {
+    if (!_finite(lastAtMs) || !_finite(nowMs)) return false;
+    return nowMs - lastAtMs > (_finite(maxAgeMs) ? maxAgeMs : 1000);
+  }
+
   var TX_METER_SPAN_DB = 30;
   var TX_CEILING_DEFAULT_DBFS = -12;
   function _finite(x) { return typeof x === "number" && isFinite(x); }
@@ -737,5 +747,6 @@
     micCaptureConstraints: micCaptureConstraints,
     captureGainLinear: captureGainLinear,
     txMeterView: txMeterView,
+    txMeterStale: txMeterStale,
   };
 });

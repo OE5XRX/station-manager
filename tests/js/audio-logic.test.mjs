@@ -322,6 +322,18 @@ ok("micCaptureConstraints is exactly mono with all native DSP off", () => {
     autoGainControl: false,
   });
 });
+ok("capture gain is unity until calibrated on-station", () => {
+  assert.strictEqual(A.MIC_CAPTURE_GAIN_DB, 0);
+  assert.strictEqual(A.captureGainLinear(), 1);
+});
+ok("txMeterStale: stale only after maxAge without a frame", () => {
+  assert.strictEqual(A.txMeterStale(1000, 1500), false);
+  assert.strictEqual(A.txMeterStale(1000, 2000), false); // exactly 1 s: not yet
+  assert.strictEqual(A.txMeterStale(1000, 2001), true);
+  assert.strictEqual(A.txMeterStale(1000, 1300, 200), true);
+  assert.strictEqual(A.txMeterStale(null, 5000), false); // never received: nothing to expire
+  assert.strictEqual(A.txMeterStale("x", 5000), false);
+});
 ok("captureGainLinear matches MIC_CAPTURE_GAIN_DB", () => {
   assert.ok(Math.abs(A.captureGainLinear() - Math.pow(10, A.MIC_CAPTURE_GAIN_DB / 20)) < 1e-9);
 });
