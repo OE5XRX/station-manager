@@ -3,7 +3,7 @@ from django.views.generic import DetailView
 
 from apps.stations.models import Station
 
-from . import serializers
+from . import capability_policy, serializers
 
 
 class StationControlView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
@@ -40,5 +40,7 @@ class StationControlView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
         ctx["can_admin"] = (
             u.is_admin or u.is_station_admin(station) or u.can_administer_station(station)
         )
+        # Resolved once per request; the cap_access tag reads it (None = read-only).
+        ctx["viewer_role"] = capability_policy.viewer_role(u, station)
         ctx["ptt_default_key"] = " "
         return ctx

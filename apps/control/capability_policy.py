@@ -77,11 +77,12 @@ def viewer_role(user, station) -> str | None:
     return "operator"
 
 
+def role_allows(role: str | None, write_role: str) -> bool:
+    """Does ``role`` (from :func:`viewer_role`) satisfy ``write_role``? Fails closed."""
+    have = ROLE_RANK.get(role) if role is not None else None
+    need = ROLE_RANK.get(write_role)
+    return have is not None and need is not None and have >= need
+
+
 def can_write(user, station, capability: str, module_type: str | None) -> bool:
-    role = viewer_role(user, station)
-    if role is None:
-        return False
-    required = ROLE_RANK.get(policy_for(capability, module_type).write_role)
-    if required is None:
-        return False  # unranked role (should be impossible, see __post_init__): deny
-    return ROLE_RANK[role] >= required
+    return role_allows(viewer_role(user, station), policy_for(capability, module_type).write_role)

@@ -1179,3 +1179,24 @@
   color: var(--ink-2);
   opacity: 0.12;
 }
+
+/* Role-gated capability (write_role above the viewer's role): rendered but inert. */
+.cp-widget[data-readonly="true"] {
+  opacity: 0.75;
+}
+
+.cp-cap-lock {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--line, currentColor);
+  border-radius: var(--radius-xs);
+  font-size: 0.8em;
+  font-weight: 400;
+  color: var(--ink-3);
+  vertical-align: baseline;
+}
+
+.cp-widget[data-readonly="true"] :disabled {
+  cursor: not-allowed;
+}

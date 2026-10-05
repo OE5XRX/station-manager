@@ -583,7 +583,16 @@
       // ---------------------------------------------------------------------
       // Commands
       // ---------------------------------------------------------------------
+      // Cosmetic defence-in-depth: a role-gated widget renders data-readonly="true"
+      // (server rendered, statically disabled). Never send from one even if called
+      // programmatically; the server-side write_role gate remains the real enforcement.
+      _isReadOnly: function (slot, module, cap) {
+        var el = this._widgetEl(slot, module, cap);
+        return !!el && el.getAttribute("data-readonly") === "true";
+      },
+
       setValue: function (slot, module, cap, rawValue) {
+        if (this._isReadOnly(slot, module, cap)) return;
         var wkey = L.widgetKey(slot, module, cap);
         delete this.errors[wkey];
         var type = this._capType(slot, module, cap);
@@ -614,6 +623,7 @@
       },
 
       doAction: function (slot, module, cap) {
+        if (this._isReadOnly(slot, module, cap)) return;
         this._sendCommand(slot, module, cap, "do", true, L.widgetKey(slot, module, cap));
       },
 
