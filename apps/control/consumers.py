@@ -20,6 +20,21 @@ def _clip(value):
     return str(value)[:_AUDIT_FIELD_MAX]
 
 
+def _fresh_user(user):
+    """Re-read ``user`` from the DB (sync). The scope user is loaded once at connect and
+    its role properties are cached, so a demotion/deactivation would otherwise only take
+    effect on reconnect. Missing or inactive row → ``None`` (callers deny)."""
+    pk = getattr(user, "pk", None)
+    if pk is None:
+        return None
+    from apps.accounts.models import User
+
+    fresh = User.objects.filter(pk=pk).first()
+    if fresh is None or not fresh.is_active:
+        return None
+    return fresh
+
+
 class AgentControlConsumer(AsyncWebsocketConsumer):
     """Agent-facing control WebSocket. Path: ws/agent/control/<station_id>/.
 
@@ -38,6 +53,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.sweep_task = None
         self.station = None  # cached after connect to avoid a DB fetch per frame
+        # Last inventory whose drift re-apply was skipped because the station was keyed;
+        # retried once PTT is released (see _retry_pending_reapply).
+        self._reapply_pending_slots = None
 
         from urllib.parse import parse_qs
 
@@ -94,6 +112,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         except json.JSONDecodeError:
             return
         mtype = msg.get("type")
+        if mtype != "inventory" and self._reapply_pending_slots is not None:
+            station = await self._cached_station()
+            if station is not None:
+                await self._retry_pending_reapply(station)
         if mtype == "inventory":
             station = await self._cached_station()
             if station is not None:
@@ -159,6 +181,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         await self._bridge_gate(station)
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
+                    await self._retry_pending_reapply(station)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -174,9 +197,16 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         inventory disagrees with a server-persisted calibration value, send a ``set`` for
         it straight to this agent. Digital module settings only (never PTT/keying — see
         ``persistence.reapply_frames``). A failure here must never break the inventory path.
+
+        While the station is keyed the re-apply is deferred, not dropped: ``slots`` is kept
+        as pending and retried by :meth:`_retry_pending_reapply` once PTT is released.
         """
         try:
             frames = await self._reapply_frames(station, slots)
+            if frames is None:
+                self._reapply_pending_slots = slots
+                return
+            self._reapply_pending_slots = None
             for frame in frames:
                 await self.send(text_data=json.dumps(frame))
                 await self._audit_reapply(
@@ -186,6 +216,19 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             raise
         except Exception:
             logger.exception("control: persisted-capability re-apply failed")
+
+    async def _retry_pending_reapply(self, station):
+        """Retry a re-apply that was skipped while keyed. The agent only sends inventory on
+        connect / slot-set change, so without this a skip would never be retried. Driven by
+        the sweep tick (covers explicit PTT clear, lock loss AND silent dead-man expiry) and
+        by any subsequent agent frame (telemetry → low latency). The pending snapshot is
+        taken before the first await so concurrent triggers can't double-send; if still
+        keyed it is re-armed. Bounded: frames go out once per skipped inventory."""
+        slots = self._reapply_pending_slots
+        if slots is None:
+            return
+        self._reapply_pending_slots = None
+        await self._reapply_persisted(station, slots)
 
     # -- DB helpers -----------------------------------------------------------
 
@@ -217,10 +260,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     def _reapply_frames(self, station, slots):
         from apps.audio import gate as audio_gate
 
-        # Never touch module settings while the station is keyed; the next inventory
-        # after TX ends re-checks drift (no TX-end hook needed — re-apply is idempotent).
-        if audio_gate.get_state(station).get("ptt_active"):
-            return []
+        # Never touch module settings while the station is keyed (expiry-aware: a PTT row
+        # whose dead-man expired is NOT keyed). ``None`` = deferred, caller re-arms a retry.
+        if audio_gate.ptt_keyed(station):
+            return None
         return persistence.reapply_frames(station, slots)
 
     @database_sync_to_async
@@ -752,7 +795,10 @@ class ControlConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _may_write(self, station, capability, module_type):
-        return capability_policy.can_write(self.user, station, capability, module_type)
+        user = _fresh_user(self.user)
+        if user is None:
+            return False
+        return capability_policy.can_write(user, station, capability, module_type)
 
     async def _persist_result(self, slot, module, capability, value):
         try:
@@ -774,7 +820,8 @@ class ControlConsumer(AsyncWebsocketConsumer):
         # current holder, still allowed to write this capability, may persist.
         if _lock_with_holder(station).holder_id != self.user.id:
             return False
-        if not capability_policy.can_write(self.user, station, capability, None):
+        user = _fresh_user(self.user)
+        if user is None or not capability_policy.can_write(user, station, capability, None):
             return False
         return persistence.persist_if_valid(station, slot, module, capability, value, self.user)
 

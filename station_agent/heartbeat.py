@@ -131,7 +131,7 @@ def send_heartbeat(http_client: HttpClient, config=None, tx_settings=None) -> bo
             try:
                 body = response.json()
             except Exception:  # noqa: BLE001 - e.g. RecursionError on hostile JSON
-                logger.warning("Heartbeat response body unparseable; using default TX ceiling")
+                logger.warning("Heartbeat response body unparseable; TX ceiling not raised")
                 body = None
             tx_settings.update_from_heartbeat(body)
         return True

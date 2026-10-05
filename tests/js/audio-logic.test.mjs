@@ -387,4 +387,33 @@ ok("txMeterView: inactive/garbage input is a safe empty view", () => {
   assert.strictEqual(g.grDb, 0);
 });
 
+// --- Review round 1: watchdog decays LEVELS only; DSP status stays sticky ----------
+ok("txMeterDecay: zeroes levels but keeps failed/degraded/ceiling/active", () => {
+  const failed = A.txMeterView({ active: true, peak_dbfs: -14, ceiling_dbfs: -18,
+                                 gain_reduction_db: 3, limiting: true, dsp: "failed" });
+  const d = A.txMeterDecay(failed);
+  assert.deepEqual(d, { active: true, hubFrac: 0, peakDbfs: null, grDb: 0, limiting: false,
+                        degraded: false, failed: true, ceilingDbfs: -18 });
+  const deg = A.txMeterDecay(A.txMeterView({ active: true, peak_dbfs: -20, ceiling_dbfs: -12,
+                                             dsp: "off" }));
+  assert.strictEqual(deg.degraded, true);
+  assert.strictEqual(deg.active, true);
+  assert.strictEqual(deg.hubFrac, 0);
+});
+ok("txMeterDecay: does not mutate its input", () => {
+  const v = A.txMeterView({ active: true, peak_dbfs: -12, ceiling_dbfs: -12, limiting: true });
+  A.txMeterDecay(v);
+  assert.strictEqual(v.hubFrac, 1);
+  assert.strictEqual(v.limiting, true);
+});
+ok("txMeterDecay: already-decayed view is returned as-is (no reactive churn)", () => {
+  const d = A.txMeterDecay(A.txMeterView({ active: true, peak_dbfs: -12, dsp: "failed" }));
+  assert.strictEqual(A.txMeterDecay(d), d);
+});
+ok("txMeterDecay: inactive/garbage input is the safe empty view", () => {
+  for (const junk of [null, undefined, "x", {}, A.txMeterView(null)]) {
+    assert.deepEqual(A.txMeterDecay(junk), A.txMeterView(null));
+  }
+});
+
 console.log("\n" + passed + " assertions passed");

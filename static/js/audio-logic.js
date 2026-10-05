@@ -532,6 +532,25 @@
     };
   }
 
+  /* Staleness decay for the TX meter: zero only the LEVEL fields (bar, peak,
+     gain reduction, limiting). The DSP status (failed/degraded), ceiling and
+     active flag stay sticky - "failed" arrives as a single status frame and a
+     degraded chain is silent during DTX, so they must not vanish with the
+     levels. They clear only on an explicit active:false frame, mic close, WS
+     close or agent disconnect (handled by the panel). Pure; returns the same
+     object when already decayed so Alpine sees no change. */
+  function txMeterDecay(view) {
+    if (!view || typeof view !== "object" || !view.active) return txMeterView(null);
+    if (view.hubFrac === 0 && view.peakDbfs === null && view.grDb === 0 && !view.limiting) {
+      return view;
+    }
+    return {
+      active: true, hubFrac: 0, peakDbfs: null, grDb: 0, limiting: false,
+      degraded: !!view.degraded, failed: !!view.failed,
+      ceilingDbfs: _finite(view.ceilingDbfs) ? view.ceilingDbfs : null,
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
@@ -747,6 +766,7 @@
     micCaptureConstraints: micCaptureConstraints,
     captureGainLinear: captureGainLinear,
     txMeterView: txMeterView,
+    txMeterDecay: txMeterDecay,
     txMeterStale: txMeterStale,
   };
 });

@@ -94,3 +94,22 @@ def test_edit_view_post_saves_ceiling_for_staff(client, operator_user, station_f
     assert resp.status_code == 302, resp.content.decode()[:500]
     s.refresh_from_db()
     assert s.tx_audio_ceiling_dbfs == -9.5
+
+
+@pytest.mark.django_db
+def test_edit_view_ceiling_change_is_audited(client, operator_user, station_factory):
+    from django.urls import reverse
+
+    from apps.stations.models import StationAuditLog
+
+    s = station_factory()
+    client.force_login(operator_user)
+    resp = client.post(
+        reverse("stations:station_edit", kwargs={"pk": s.pk}),
+        data={"name": s.name, "callsign": s.callsign, "tx_audio_ceiling_dbfs": "-18"},
+    )
+    assert resp.status_code == 302, resp.content.decode()[:500]
+    log = StationAuditLog.objects.get(station=s, event_type=StationAuditLog.EventType.UPDATED)
+    assert "tx_audio_ceiling_dbfs" in log.message
+    assert "tx_audio_ceiling_dbfs" in log.changes
+    assert log.user_id == operator_user.id

@@ -112,3 +112,18 @@ def test_write_creates_audit_entry(api_topology, bearer):
         station=t["station_in"], event_type=StationAuditLog.EventType.UPDATED
     ).latest("created_at")
     assert "via API token" in log.message
+
+
+@pytest.mark.parametrize("who", ["staff", "admin", "region_mgr"])
+def test_tx_audio_ceiling_not_writable_via_api(api_topology, bearer, who):
+    """Calibration is an RF-safety bound set only via the audited station edit view —
+    the write API must silently ignore it (value unchanged, no 4xx needed)."""
+    t = api_topology
+    st = t["station_in"]
+    st.tx_audio_ceiling_dbfs = -18.0
+    st.save(update_fields=["tx_audio_ceiling_dbfs"])
+    url = reverse("api:station-detail", args=[st.pk])
+    r = bearer(t[who]).patch(url, {"tx_audio_ceiling_dbfs": -3.0}, format="json")
+    assert r.status_code == 200
+    st.refresh_from_db()
+    assert st.tx_audio_ceiling_dbfs == -18.0

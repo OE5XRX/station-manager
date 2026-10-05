@@ -545,3 +545,168 @@ def test_no_reapply_while_ptt_active(control_agent_auth):
     assert not StationAuditLog.objects.filter(
         station=station, message__contains="re-apply persisted"
     ).exists()
+
+
+# -- Review round 1: persist-time role re-check against a fresh user row --------
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"membership_level": User.MembershipLevel.MEMBER},
+        {"is_active": False},
+    ],
+)
+def test_demoted_before_ok_result_does_not_persist(control_agent_auth, change):
+    from channels.db import database_sync_to_async
+
+    station = _fm_station(f"fr-demote-{list(change)[0]}")
+    staff = _staff(f"fr-dm-{list(change)[0]}")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(staff, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("d1"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        # Demote/deactivate in the DB after the send, before the agent's ok.
+        await database_sync_to_async(lambda: User.objects.filter(pk=staff.pk).update(**change))()
+        await agent.send_json_to(_ok("d1"))
+        await _until(browser, lambda m: m.get("type") == "result")
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not PersistedCapability.objects.filter(station=station).exists()
+    assert not StationAuditLog.objects.filter(
+        station=station, message__contains="persisted"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_can_write_false_at_persist_time_does_not_persist(control_agent_auth, monkeypatch):
+    from apps.control import capability_policy
+
+    station = _fm_station("fr-cw-false")
+    staff = _staff("fr-cw")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(staff, station.id)
+        assert (await browser.connect())[0] is True
+        await _acquire(browser)
+        await browser.send_json_to(_set_frame("c1"))
+        await _until(agent, lambda m: m.get("type") == "command")
+        # Command was authorized; from now on can_write says no (persist-time re-check).
+        monkeypatch.setattr(capability_policy, "can_write", lambda *a, **k: False)
+        await agent.send_json_to(_ok("c1"))
+        await _until(browser, lambda m: m.get("type") == "result")
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not PersistedCapability.objects.filter(station=station).exists()
+    assert not StationAuditLog.objects.filter(
+        station=station, message__contains="persisted"
+    ).exists()
+
+
+# -- Review round 1: re-apply skipped during PTT is retried once PTT is released --------
+
+
+def _drift_inventory():
+    return {"v": V, "type": "inventory", "slots": _inv({"filter_hpf": True}, slot="slot0")}
+
+
+def _telemetry():
+    return {"v": V, "type": "state", "slot": "slot0", "module": "fm0", "values": {"rssi": -90}}
+
+
+def _keyed_station(name, ttl=60):
+    from apps.audio import gate as audio_gate
+
+    station = Station.objects.create(name=name, status="online")
+    persistence.save(station, "slot0", "fm0", "filter_hpf", False, None)
+    audio_gate.set_ptt(station, "slot0", "fm0", ttl=ttl)
+    return station
+
+
+async def _clear_ptt(station):
+    from channels.db import database_sync_to_async
+
+    from apps.audio import gate as audio_gate
+
+    await database_sync_to_async(audio_gate.clear_ptt)(station)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapply_skipped_during_ptt_is_sent_once_after_release(control_agent_auth):
+    station = _keyed_station("fr-ptt-retry")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())
+        assert await agent.receive_nothing(timeout=0.3)
+        # Still keyed: a telemetry frame must not trigger the retry.
+        await agent.send_json_to(_telemetry())
+        assert await agent.receive_nothing(timeout=0.3)
+        await _clear_ptt(station)
+        # First agent frame after release → the pending re-apply goes out ...
+        await agent.send_json_to(_telemetry())
+        frame = await _until(agent, lambda m: m.get("type") == "command")
+        # ... exactly once.
+        await agent.send_json_to(_telemetry())
+        assert await agent.receive_nothing(timeout=0.3)
+        await agent.disconnect()
+        return frame
+
+    frame = asyncio.run(scenario())
+    assert (frame["op"], frame["capability"], frame["value"]) == ("set", "filter_hpf", False)
+    assert (
+        StationAuditLog.objects.filter(
+            station=station, message__contains="re-apply persisted"
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapply_retry_fires_from_sweep_tick_without_agent_frames(control_agent_auth, monkeypatch):
+    from apps.control import constants
+
+    monkeypatch.setattr(constants, "LOCK_SWEEP_INTERVAL_SECONDS", 0.05)
+    station = _keyed_station("fr-ptt-sweep")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())
+        assert await agent.receive_nothing(timeout=0.3)
+        await _clear_ptt(station)
+        frame = await _until(agent, lambda m: m.get("type") == "command")
+        assert await agent.receive_nothing(timeout=0.3)
+        await agent.disconnect()
+        return frame
+
+    assert asyncio.run(scenario())["capability"] == "filter_hpf"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_expired_ptt_is_treated_as_released(control_agent_auth):
+    # ptt_active is still True in the row but the dead-man expiry has passed → not keyed.
+    station = _keyed_station("fr-ptt-expired", ttl=-1)
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_drift_inventory())
+        frame = await _until(agent, lambda m: m.get("type") == "command")
+        await agent.disconnect()
+        return frame
+
+    assert asyncio.run(scenario())["capability"] == "filter_hpf"

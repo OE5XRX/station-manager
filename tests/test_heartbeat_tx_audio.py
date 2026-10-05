@@ -41,14 +41,57 @@ def test_update_from_heartbeat_is_total(body, expected):
     assert h.ceiling_dbfs == expected
 
 
-def test_overflow_resets_previous_value_to_default():
+def test_overflow_never_louder_than_default():
+    # Unusable value → min(current, default): a louder -6 falls back to the -12 default.
     h = ts.TxAudioSettings()
     h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
     h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": 10**400}})
     assert h.ceiling_dbfs == -12.0
 
 
-def test_old_value_replaced_by_default_when_server_drops_it():
+def test_overflow_keeps_quieter_calibration():
+    # Spec §4 fail-safe toward under-deviation: a calibrated -20 must NOT be raised to -12
+    # just because one heartbeat body was unusable.
+    h = ts.TxAudioSettings()
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -20.0}})
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": 10**400}})
+    assert h.ceiling_dbfs == -20.0
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        "garbage",
+        5,
+        [1, 2],
+        {"status": "ok"},
+        {"tx_audio": None},
+        {"tx_audio": [1, 2]},
+        {"tx_audio": {"ceiling_dbfs": "x"}},
+        {"tx_audio": {"ceiling_dbfs": True}},
+        {"tx_audio": {"ceiling_dbfs": float("nan")}},
+        {"tx_audio": {"ceiling_dbfs": float("inf")}},
+        {"tx_audio": {"ceiling_dbfs": -(10**400)}},
+    ],
+)
+def test_unusable_body_never_raises_a_quieter_ceiling(bad):
+    h = ts.TxAudioSettings()
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -20.0}})
+    h.update_from_heartbeat(bad)
+    assert h.ceiling_dbfs == -20.0
+
+
+def test_valid_server_value_is_authoritative_both_directions():
+    h = ts.TxAudioSettings()
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -20.0}})
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
+    assert h.ceiling_dbfs == -6.0  # louder valid value applied as-is
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -18.0}})
+    assert h.ceiling_dbfs == -18.0  # quieter valid value applied as-is
+
+
+def test_old_value_falls_back_to_default_when_louder_and_server_drops_it():
     h = ts.TxAudioSettings()
     h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
     h.update_from_heartbeat({"status": "ok"})
@@ -114,7 +157,15 @@ def test_send_heartbeat_survives_recursion_error(monkeypatch):
     h = ts.TxAudioSettings()
     h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
     assert send_heartbeat(_Client(_Resp(200, RecursionError("deep"))), tx_settings=h) is True
-    assert h.ceiling_dbfs == -12.0
+    assert h.ceiling_dbfs == -12.0  # -6 is louder than the default → min(-6, -12)
+
+
+def test_send_heartbeat_unparseable_body_keeps_quieter_calibration(monkeypatch):
+    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda config=None: {})
+    h = ts.TxAudioSettings()
+    h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -20.0}})
+    assert send_heartbeat(_Client(_Resp(200, RecursionError("deep"))), tx_settings=h) is True
+    assert h.ceiling_dbfs == -20.0
 
 
 def test_agent_and_server_clamps_agree():

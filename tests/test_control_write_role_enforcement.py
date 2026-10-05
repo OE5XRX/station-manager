@@ -241,3 +241,70 @@ def test_denied_audit_message_truncates_attacker_strings(control_agent_auth):
     assert kind == "error"
     log = StationAuditLog.objects.get(station=station, message__contains="denied")
     assert len(log.message) < 300
+
+
+# -- Review round 1: role re-checked against a FRESH user row (no stale scope user) ----
+
+
+def _run_after_db_change(station, user, frame, mutate):
+    """Acquire the lock as ``user``, then apply ``mutate`` to the DB row (the scope user
+    instance stays stale), then send ``frame``. Returns the same outcome tuple as _run."""
+    from channels.db import database_sync_to_async
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(user, station.id)
+        assert (await browser.connect())[0] is True
+        await browser.send_json_to({"type": "lock_acquire"})
+        await _until(browser, lambda m: m.get("type") == "lock" and m.get("state") == "held")
+        # Warm the cached role properties on the scope instance, then change the DB row.
+        assert user.is_internal is True
+        await database_sync_to_async(mutate)()
+        await browser.send_json_to(frame)
+        if await agent.receive_nothing(timeout=0.5):
+            outcome = ("error", await _until(browser, lambda m: m.get("type") == "error"))
+        else:
+            outcome = ("relayed", await agent.receive_json_from(timeout=2))
+        await browser.disconnect()
+        await agent.disconnect()
+        return outcome
+
+    return asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_demoted_mid_connection_is_forbidden_on_next_set(control_agent_auth):
+    station, staff = _setup(User.MembershipLevel.STAFF, "we-demote")
+
+    def demote():
+        User.objects.filter(pk=staff.pk).update(membership_level=User.MembershipLevel.MEMBER)
+
+    kind, frame = _run_after_db_change(station, staff, _cmd("filter_hpf"), demote)
+    assert kind == "error"
+    assert frame == FORBIDDEN_STAFF
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deactivated_mid_connection_is_forbidden_on_next_set(control_agent_auth):
+    station, staff = _setup(User.MembershipLevel.STAFF, "we-deact")
+
+    def deactivate():
+        User.objects.filter(pk=staff.pk).update(is_active=False)
+
+    kind, frame = _run_after_db_change(station, staff, _cmd("filter_hpf"), deactivate)
+    assert kind == "error"
+    assert frame["error"]["code"] == "forbidden"
+
+
+@pytest.mark.django_db
+def test_fresh_user_denies_missing_or_inactive_row():
+    # A vanished / deactivated row must deny (fail closed), never fall back to the
+    # stale connect-time scope user.
+    active = User.objects.create(username="fu-a", membership_level=User.MembershipLevel.STAFF)
+    inactive = User.objects.create(username="fu-i", is_active=False)
+    ghost = User(pk=987654, username="fu-ghost")
+    assert control_consumers._fresh_user(active).pk == active.pk
+    assert control_consumers._fresh_user(inactive) is None
+    assert control_consumers._fresh_user(ghost) is None
+    assert control_consumers._fresh_user(None) is None

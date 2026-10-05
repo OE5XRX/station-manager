@@ -205,3 +205,33 @@ def test_real_gst_nominal_input_not_silent():
     out = _run_chain(_cfg(ceiling=-12.0), 0.1)
     peak = max(abs(x) for x in out)
     assert 20 * math.log10(max(peak, 1e-9)) > -30.0
+
+
+def _smoke_argv_from_production(cfg):
+    """The production ``build_tx_argv(dsp=cfg, meter=True)`` pipeline with only its
+    endpoints swapped: the udpsrc→opusdec→resample head is replaced by a bounded
+    audiotestsrc producing the same F32 caps, and the pipewiresink by a fakesink. Every
+    stage in between (DSP chain, meter tee + leaky queue, limiter, convert, meter fdsink)
+    is taken verbatim from production — no production code is changed."""
+    prod = build_tx_argv("n", 47000, 16000, dsp=cfg, meter=True)
+    caps = "audio/x-raw,format=F32LE,rate=16000,channels=1"
+    body = prod[prod.index(caps) + 1 :]
+    sink = body.index("pipewiresink")
+    assert body[sink : sink + 3] == ["pipewiresink", "target-object=n", "sync=false"]
+    body[sink : sink + 3] = ["fakesink", "sync=false"]
+    src = ["audiotestsrc", "wave=sine", "freq=440", "volume=0.5", "num-buffers=40"]
+    return ["gst-launch-1.0", "-q", *src, "samplesperbuffer=800", "!", caps, *body]
+
+
+@pytest.mark.skipif(not _GST_OK, reason="gst tools/elements missing")
+@pytest.mark.parametrize("enabled", [True, False])
+def test_real_gst_full_tx_pipeline_with_meter_tap_runs_to_eos(enabled):
+    argv = _smoke_argv_from_production(_cfg(ceiling=-12.0, enabled=enabled))
+    assert "tee" in argv and "fakesink" in argv and "udpsrc" not in argv
+    r = subprocess.run(argv, capture_output=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    # The leaky pre-limiter meter branch delivers F32 samples on stdout.
+    meter = array.array("f")
+    meter.frombytes(r.stdout[: len(r.stdout) // 4 * 4])
+    assert len(meter) > 0
+    assert all(math.isfinite(x) for x in meter)

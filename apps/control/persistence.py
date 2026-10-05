@@ -1,7 +1,15 @@
 """Per-station persistence + drift re-apply for role-gated calibration capabilities
 (spec §4a). The FW persists nothing; the server stores the chosen value and, whenever an
-agent inventory shows the module disagreeing (reconnect, module reboot, SA818 power-cycle),
-sends a ``set`` through the agent. Idempotent: no drift → no frames.
+agent ``inventory`` frame shows the module disagreeing, sends a ``set`` through the agent.
+Idempotent: no drift → no frames.
+
+What actually triggers a re-apply check: the agent emits ``inventory`` only on (re)connect
+and when periodic re-discovery finds a different slot/module set (identity/descriptors;
+module *state* is not compared) — plus the deferred retry when a check was skipped because
+the station was keyed (retried after PTT release, see
+``AgentControlConsumer._retry_pending_reapply``). Known gap: a module reboot or SA818
+power-cycle that leaves the discovered slot/module set unchanged emits no inventory, so the
+lost calibration is not re-applied until the next agent reconnect or inventory change.
 
 Safety: only capabilities whose policy has ``persist=True`` are stored or re-applied, only
 as ``op: "set"`` on a non-readonly ``setting`` present in the module's *current* descriptor,

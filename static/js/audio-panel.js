@@ -195,16 +195,21 @@
           self._refreshLinkStats();
         }, 1000);
 
-        // Staleness watchdog: tx_meter frames arrive ~8 Hz; if the agent drops
-        // mid-TX the last "active" frame must not freeze on screen.
+        // Staleness watchdog: tx_meter frames arrive ~8 Hz; stale LEVELS must
+        // not freeze on screen (see _txMeterTick).
         this._txMeterTimer = window.setInterval(function () {
-          if (
-            self.txMeter.active &&
-            A.txMeterStale(self._txMeterAt, Date.now(), 1000)
-          ) {
-            self.txMeter = A.txMeterView(null);
-          }
+          self._txMeterTick(Date.now());
         }, 250);
+      },
+
+      // One watchdog tick: once tx_meter frames stop for >1 s, decay only the
+      // level fields. The DSP status (failed / "DSP off") stays sticky - failed
+      // mode sends a single status frame and degraded is silent during DTX - until
+      // an explicit active:false frame, mic close, WS close or agent disconnect.
+      _txMeterTick: function (nowMs) {
+        if (!this.txMeter.active || !A.txMeterStale(this._txMeterAt, nowMs, 1000)) return;
+        var decayed = A.txMeterDecay(this.txMeter);
+        if (decayed !== this.txMeter) this.txMeter = decayed;
       },
 
       destroy: function () {
