@@ -7,9 +7,32 @@ import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from . import constants, lock, registry
+from . import capability_policy, constants, lock, persistence, registry
+from .models import StationModule
 
 logger = logging.getLogger(__name__)
+
+_AUDIT_FIELD_MAX = 64
+
+
+def _clip(value):
+    """Bound attacker-controlled frame fields before they reach the audit log."""
+    return str(value)[:_AUDIT_FIELD_MAX]
+
+
+def _fresh_user(user):
+    """Re-read ``user`` from the DB (sync). The scope user is loaded once at connect and
+    its role properties are cached, so a demotion/deactivation would otherwise only take
+    effect on reconnect. Missing or inactive row → ``None`` (callers deny)."""
+    pk = getattr(user, "pk", None)
+    if pk is None:
+        return None
+    from apps.accounts.models import User
+
+    fresh = User.objects.filter(pk=pk).first()
+    if fresh is None or not fresh.is_active:
+        return None
+    return fresh
 
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
@@ -30,6 +53,17 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.sweep_task = None
         self.station = None  # cached after connect to avoid a DB fetch per frame
+        # Deferred drift re-apply (skipped because the station was keyed), retried once PTT
+        # is released (see _retry_pending_reapply). ``_reapply_pending`` holds the
+        # inventory generation that armed it (None = nothing pending); the retry re-derives
+        # frames from CURRENT state, never from the keyed-time snapshot.
+        self._reapply_pending = None
+        self._reapply_gen = 0
+        # (slot, module, capability) a browser ``set`` was relayed for since the last
+        # inventory: a deliberate user write the deferred retry must not race.
+        self._reapply_touched = set()
+        # str(slot) -> slot exactly as the agent reports it (an int slot must go back as int).
+        self._wire_slots = {}
 
         from urllib.parse import parse_qs
 
@@ -90,6 +124,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             if station is not None:
                 await self._apply_inventory(station, msg.get("slots", []))
+                await self._reapply_persisted(station, msg.get("slots", []))
             await self._broadcast("control.inventory", {"msg": msg})
         elif mtype == "state":
             station = await self._cached_station()
@@ -103,12 +138,31 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         elif mtype == "event":
             await self._broadcast("control.event", {"msg": msg})
         # Unknown types are ignored (forward-compat).
+        # Deferred re-apply retry runs AFTER the frame was processed, so it sees the module
+        # state this very frame carried (an inventory frame does its own check above).
+        if mtype != "inventory" and self._reapply_pending is not None:
+            station = await self._cached_station()
+            if station is not None:
+                await self._retry_pending_reapply(station)
 
     # -- server -> agent (channel handler) ------------------------------------
 
     async def control_to_agent(self, event):
         """A ControlConsumer relayed a §7 downstream frame -> send to agent."""
-        await self.send(text_data=json.dumps(event["frame"]))
+        frame = event["frame"]
+        self._note_user_set(frame)
+        await self.send(text_data=json.dumps(frame))
+
+    def _note_user_set(self, frame):
+        """Remember a relayed browser ``set`` so a deferred re-apply leaves that capability
+        alone: the user's write (and its own persistence on the ok result) is authoritative,
+        and neither the DB nor ``last_state`` reflects it until result/state come back."""
+        if not isinstance(frame, dict) or frame.get("op") != "set":
+            return
+        slot, module, cap = frame.get("slot"), frame.get("module"), frame.get("capability")
+        if (isinstance(slot, str) or type(slot) is int) and isinstance(module, str):
+            if isinstance(cap, str):
+                self._reapply_touched.add((str(slot), module, cap))
 
     # -- broadcasts we must ignore when echoed back to our own group ----------
 
@@ -150,6 +204,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         await self._bridge_gate(station)
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
+                    await self._retry_pending_reapply(station)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -159,6 +214,82 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     async def _broadcast(self, msg_type, payload):
         await self.channel_layer.group_send(self.group_name, {"type": msg_type, **payload})
+
+    async def _reapply_persisted(self, station, slots):
+        """Drift re-apply (spec §4a): the FW persists nothing, so whenever the reported
+        inventory disagrees with a server-persisted calibration value, send a ``set`` for
+        it straight to this agent. Digital module settings only (never PTT/keying — see
+        ``persistence.reapply_frames``). A failure here must never break the inventory path.
+
+        While the station is keyed the re-apply is deferred, not dropped: it is armed as
+        pending and retried by :meth:`_retry_pending_reapply` once PTT is released.
+        """
+        # A fresh inventory is a fresh baseline: supersedes any pending/in-flight retry.
+        self._reapply_gen += 1
+        gen = self._reapply_gen
+        self._reapply_touched.clear()
+        if isinstance(slots, list):
+            self._wire_slots = {
+                str(e["slot"]): e["slot"]
+                for e in slots
+                if isinstance(e, dict)
+                and (isinstance(e.get("slot"), str) or type(e.get("slot")) is int)
+            }
+        try:
+            frames = await self._reapply_frames(station, slots)
+            if frames is None:
+                if self._reapply_gen == gen:
+                    self._reapply_pending = gen
+                return
+            if self._reapply_gen == gen:
+                self._reapply_pending = None
+            await self._send_reapply(station, frames)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("control: persisted-capability re-apply failed")
+
+    async def _send_reapply(self, station, frames):
+        for frame in frames:
+            # Re-checked per frame (after every await): a user ``set`` relayed while an
+            # earlier frame was being sent/audited wins over the re-apply.
+            if (str(frame["slot"]), frame["module"], frame["capability"]) in self._reapply_touched:
+                continue
+            await self.send(text_data=json.dumps(frame))
+            await self._audit_reapply(
+                station, f"re-apply persisted {frame['capability']}={frame['value']!r}"
+            )
+
+    async def _retry_pending_reapply(self, station):
+        """Retry a re-apply that was skipped while keyed. The agent only sends inventory on
+        connect / slot-set change, so without this a skip would never be retried. Driven by
+        the sweep tick (covers explicit PTT clear, lock loss AND silent dead-man expiry) and
+        by any subsequent agent frame (telemetry → low latency), after that frame was
+        processed. Bounded: frames go out once per skipped inventory.
+
+        Frames are re-derived from CURRENT state — persisted rows vs the module's
+        ``last_state`` (kept current by inventory + state frames) — never replayed from the
+        keyed-time snapshot, and capabilities the user ``set`` since the inventory are left
+        alone (their own write wins). The pending marker is claimed before the first await
+        so concurrent triggers can't double-send; if still keyed it is re-armed only when no
+        newer inventory check superseded it."""
+        armed = self._reapply_pending
+        if armed is None:
+            return
+        self._reapply_pending = None
+        try:
+            frames = await self._current_reapply_frames(station)
+            if self._reapply_gen != armed:
+                return  # a newer inventory already checked (or re-armed) drift
+            if frames is None:
+                self._reapply_pending = armed  # still keyed: re-arm
+                return
+            frames = [dict(f, slot=self._wire_slots.get(f["slot"], f["slot"])) for f in frames]
+            await self._send_reapply(station, frames)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("control: deferred persisted-capability re-apply failed")
 
     # -- DB helpers -----------------------------------------------------------
 
@@ -185,6 +316,38 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _apply_inventory(self, station, slots):
         registry.apply_inventory(station, slots)
+
+    @database_sync_to_async
+    def _reapply_frames(self, station, slots):
+        from apps.audio import gate as audio_gate
+
+        # Never touch module settings while the station is keyed (expiry-aware: a PTT row
+        # whose dead-man expired is NOT keyed). ``None`` = deferred, caller re-arms a retry.
+        if audio_gate.ptt_keyed(station):
+            return None
+        return persistence.reapply_frames(station, slots)
+
+    @database_sync_to_async
+    def _current_reapply_frames(self, station):
+        """Drift frames from current state: persisted rows vs registry ``last_state`` of
+        the online modules. ``None`` while keyed (caller re-arms)."""
+        from apps.audio import gate as audio_gate
+
+        from . import serializers
+
+        if audio_gate.ptt_keyed(station):
+            return None
+        slots = [
+            {"slot": e["slot"], "modules": [m for m in e["modules"] if m.get("online")]}
+            for e in serializers.snapshot(station)
+        ]
+        return persistence.reapply_frames(station, slots)
+
+    @database_sync_to_async
+    def _audit_reapply(self, station, message):
+        from apps.stations.models import StationAuditLog
+
+        StationAuditLog.log(station=station, event_type="control_command", message=message)
 
     @database_sync_to_async
     def _apply_state(self, station, slot, module_id, values):
@@ -296,6 +459,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
         self.group_name = f"control_{self.station_id}"
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.pending = {}  # request_id -> asyncio.Task (command timeout)
+        # request_id -> (slot, module, capability, value) of an in-flight set on a
+        # persist-policy capability; persisted only once the agent reports ok.
+        self._persist_pending = {}
         self.user = self.scope.get("user")
         self.station = None  # cached after connect to avoid a DB fetch per frame
 
@@ -350,6 +516,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         # it is pending" on shutdown/reload and cleanup may be left unfinished.
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        self._persist_pending.clear()
         station = await self._cached_station()
         if station is not None and self.user and not self.user.is_anonymous:
             await self._holder_disconnected(station)
@@ -398,8 +565,12 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if not await self._touch_if_holder(station):
             await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
             return
+        allowed, module_type = await self._authorize_command(station, msg)
+        if not allowed:
+            return
         await self._relay(msg)
         request_id = msg.get("request_id")
+        self._remember_persist(request_id, msg, module_type)
         if request_id is not None:
             # A reused request_id must not orphan the previous timeout task —
             # cancel it first, else two timers fire for the same id and the
@@ -439,6 +610,60 @@ class ControlConsumer(AsyncWebsocketConsumer):
             # A malformed value (e.g. a bool/str) is ignored here — it was
             # already relayed to the agent; we just don't crash the socket or
             # corrupt the gate. No bridge broadcast on a no-op.
+
+    async def _authorize_command(self, station, msg):
+        """Server-side ``write_role`` gate (spec §4a) — the real authz check; the read-only
+        UI render is cosmetic. Every capability command a browser can reach the agent with
+        passes through here (``_handle_command`` is the only relay of ``type: command``).
+
+        Any op other than ``get`` is a write. Fail closed: any exception while resolving
+        the module type or the user's role denies the command. Returns
+        ``(allowed, module_type)``.
+        """
+        capability = msg.get("capability")
+        if msg.get("op") == "get":
+            return True, None
+        module_type = None
+        try:
+            module_type = await self._lookup_module_type(
+                station, msg.get("slot"), msg.get("module")
+            )
+            allowed = await self._may_write(station, capability, module_type)
+        except Exception:
+            logger.exception("control: write_role resolution failed; denying command")
+            allowed = False
+        if allowed is True:
+            return True, module_type
+        role = capability_policy.policy_for(capability, module_type).write_role
+        try:
+            await self._audit(
+                station,
+                "control_command",
+                f"{self.user.username} {_clip(msg.get('op'))} {_clip(capability)} "
+                f"on {_clip(msg.get('slot'))}/{_clip(msg.get('module'))} "
+                f"denied (requires {role})",
+            )
+        except Exception:
+            logger.exception("control: audit of denied command failed")
+        await self._error(msg.get("request_id"), "forbidden", f"Requires role: {role}")
+        return False, module_type
+
+    def _remember_persist(self, request_id, msg, module_type):
+        """Track an in-flight ``set`` on a persist-policy capability so ``control_result``
+        can persist it once the agent reports success (not on send)."""
+        if not (isinstance(request_id, str) or type(request_id) is int):
+            return
+        # A reused request_id must not inherit a stale pending persist.
+        self._persist_pending.pop(request_id, None)
+        capability = msg.get("capability")
+        policy = capability_policy.policy_for(capability, module_type)
+        if msg.get("op") == "set" and policy.persist:
+            self._persist_pending[request_id] = (
+                msg.get("slot"),
+                msg.get("module"),
+                capability,
+                msg.get("value"),
+            )
 
     async def _command_timeout(self, request_id):
         """Fire a timeout error to the browser if no result arrives in time.
@@ -562,12 +787,23 @@ class ControlConsumer(AsyncWebsocketConsumer):
         task = self.pending.pop(rid, None)
         if task is not None:
             task.cancel()
+        entry = (
+            self._persist_pending.pop(rid, None)
+            if isinstance(rid, str) or type(rid) is int
+            else None
+        )
         await self.send(text_data=json.dumps(msg))
+        if entry is not None and msg.get("ok") is True:
+            await self._persist_result(*entry)
 
     async def control_event(self, event):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_lock(self, event):
+        # Lost (or never held) the lock → this consumer's in-flight results must never
+        # persist: a new holder may reuse the same request_id.
+        if not (self.user and event["lock"].get("holder_id") == self.user.id):
+            self._persist_pending.clear()
         await self._push_lock(event["lock"])
 
     async def control_agent_offline(self, event):
@@ -620,6 +856,51 @@ class ControlConsumer(AsyncWebsocketConsumer):
             or self.user.is_station_admin(station)
             or self.user.can_administer_station(station)
         )
+
+    @database_sync_to_async
+    def _lookup_module_type(self, station, slot, module):
+        """Registered type of the addressed module, or ``None`` if unknown/malformed.
+        ``None`` still resolves the capability-name policy, so an unknown module id
+        cannot bypass the gate."""
+        if not isinstance(module, str) or not (isinstance(slot, str) or type(slot) is int):
+            return None
+        return (
+            StationModule.objects.filter(station=station, slot=str(slot), module_id=module)
+            .values_list("type", flat=True)
+            .first()
+        )
+
+    @database_sync_to_async
+    def _may_write(self, station, capability, module_type):
+        user = _fresh_user(self.user)
+        if user is None:
+            return False
+        return capability_policy.can_write(user, station, capability, module_type)
+
+    async def _persist_result(self, slot, module, capability, value):
+        try:
+            station = await self._cached_station()
+            if station is None:
+                return
+            if await self._persist(station, slot, module, capability, value):
+                await self._audit(
+                    station,
+                    "control_command",
+                    f"{self.user.username} persisted {capability}={value!r}",
+                )
+        except Exception:
+            logger.exception("control: persisting %s failed", capability)
+
+    @database_sync_to_async
+    def _persist(self, station, slot, module, capability, value):
+        # Re-check at persist time (the lock broadcast may not have arrived yet): only the
+        # current holder, still allowed to write this capability, may persist.
+        if _lock_with_holder(station).holder_id != self.user.id:
+            return False
+        user = _fresh_user(self.user)
+        if user is None or not capability_policy.can_write(user, station, capability, None):
+            return False
+        return persistence.persist_if_valid(station, slot, module, capability, value, self.user)
 
     @database_sync_to_async
     def _snapshot(self, station):

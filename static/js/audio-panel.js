@@ -107,6 +107,8 @@
       _micStream: null,         // MediaStream from getUserMedia
       _micSource: null,         // MediaStreamAudioSourceNode (on _micCtx)
       _micWorkletNode: null,    // AudioWorkletNode (oe5xrx-mic, on _micCtx)
+      _micCaptureGain: null,    // fixed capture gain: _micSource → gain → worklet
+      txMeter: A.txMeterView(null), // reactive TX modulation meter (agent tx_meter)
       _micSink: null,           // muted gain → destination, so the worklet is pulled
       _micAnalyser: null,       // AnalyserNode tapping _micSource for the input meter
       _micMeterSink: null,      // muted gain → destination, pulls the analyser branch
@@ -138,6 +140,8 @@
 
       // Periodic RX link-stats refresh (setInterval handle).
       _linkTimer: null,
+      _txMeterAt: null,         // Date.now() of the last tx_meter frame
+      _txMeterTimer: null,      // staleness watchdog interval
 
       // ---------------------------------------------------------------------
       // init
@@ -190,6 +194,22 @@
         this._linkTimer = window.setInterval(function () {
           self._refreshLinkStats();
         }, 1000);
+
+        // Staleness watchdog: tx_meter frames arrive ~8 Hz; stale LEVELS must
+        // not freeze on screen (see _txMeterTick).
+        this._txMeterTimer = window.setInterval(function () {
+          self._txMeterTick(Date.now());
+        }, 250);
+      },
+
+      // One watchdog tick: once tx_meter frames stop for >1 s, decay only the
+      // level fields. The DSP status (failed / "DSP off") stays sticky - failed
+      // mode sends a single status frame and degraded is silent during DTX - until
+      // an explicit active:false frame, mic close, WS close or agent disconnect.
+      _txMeterTick: function (nowMs) {
+        if (!this.txMeter.active || !A.txMeterStale(this._txMeterAt, nowMs, 1000)) return;
+        var decayed = A.txMeterDecay(this.txMeter);
+        if (decayed !== this.txMeter) this.txMeter = decayed;
       },
 
       destroy: function () {
@@ -241,6 +261,7 @@
         ws.addEventListener("close", function (ev) {
           self._closeCode = ev.code || null;
           self.conn = "closed";
+          self.txMeter = A.txMeterView(null);
           self._scheduleReconnect();
         });
 
@@ -324,6 +345,10 @@
           case "error":
             this._onError(msg);
             break;
+          case "tx_meter":
+            this.txMeter = A.txMeterView(msg);
+            this._txMeterAt = Date.now();
+            break;
           case "link_stats":
             // Server relay counters for this connection (downlink/uplink frames).
             this.serverStats = msg.server || null;
@@ -380,6 +405,10 @@
       _onStreamState: function (msg) {
         // Reactive per-stream state map for UI badges (Task 8 renders live/idle/error).
         this.streamState[msg.stream_id] = msg.state || "idle";
+        // The server emits idle/"agent disconnected" when the agent drops.
+        if (msg.detail === "agent disconnected") {
+          this.txMeter = A.txMeterView(null);
+        }
       },
 
       _onError: function (msg) {
@@ -823,6 +852,13 @@
           this._linkTimer = null;
         }
 
+        if (this._txMeterTimer !== null) {
+          try {
+            window.clearInterval(this._txMeterTimer);
+          } catch (_) {}
+          this._txMeterTimer = null;
+        }
+
         // Mic cleanup.
         this._disableMicInternal(false /* don't send mic_close if WS already closing */);
 
@@ -912,11 +948,7 @@
           .then(function () {
             self._workletLoaded = true;
             return navigator.mediaDevices.getUserMedia({
-              audio: {
-                channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true,
-              },
+              audio: A.micCaptureConstraints(),
             });
           })
           .then(function (stream) {
@@ -934,7 +966,15 @@
               micCtx,
               "oe5xrx-mic"
             );
-            self._micSource.connect(self._micWorkletNode);
+            // Fixed capture gain (native DSP is off, see micCaptureConstraints).
+            // NOTE: the input meter + sidetone tap the RAW mic (pre-gain,
+            // pre-encode). They do NOT prove the transmitted level - the
+            // authoritative TX level is the tx_meter from the agent (post-DSP).
+            // The T1 tap (worklet input) includes this fixed capture gain.
+            self._micCaptureGain = micCtx.createGain();
+            self._micCaptureGain.gain.value = A.captureGainLinear();
+            self._micSource.connect(self._micCaptureGain);
+            self._micCaptureGain.connect(self._micWorkletNode);
             // A source→worklet branch with no path to the destination is never
             // rendered — process() never runs, so no mic chunks/uplink. Pull the
             // worklet through a MUTED gain into the destination (gain 0 = no
@@ -1322,6 +1362,14 @@
           } catch (_) {}
           this._micWorkletNode = null;
         }
+
+        if (this._micCaptureGain) {
+          try {
+            this._micCaptureGain.disconnect();
+          } catch (_) {}
+          this._micCaptureGain = null;
+        }
+        this.txMeter = A.txMeterView(null);
 
         if (this._micSink) {
           try {

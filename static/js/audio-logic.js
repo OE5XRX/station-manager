@@ -489,6 +489,68 @@
     return out;
   }
 
+  /* Browser capture: native DSP OFF (spec 3.1). The VAD noise suppressor gated
+     word-ends; AGC/EC fought the agent DSP, which is now the single level
+     authority. */
+  // Unity: the GainNode stays in the graph as the calibration knob (loudness is
+  // the agent compressor/makeup's job; +dB hard-clips hot mics at S16LE before the
+  // agent limiter). Raise only after on-station calibration.
+  var MIC_CAPTURE_GAIN_DB = 0;
+  function micCaptureConstraints() {
+    return { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  }
+  function captureGainLinear() { return dbfsToAmplitude(MIC_CAPTURE_GAIN_DB); }
+
+  /* TX hub meter view-model from a sanitized server "tx_meter" frame.
+     The bar spans the 30 dB below the limiter ceiling; full = at the ceiling.
+     A missing/garbage ceiling falls back to the policy default (-12 dBFS). */
+  /* True when the last tx_meter frame (ms timestamp) is older than maxAgeMs, so
+     the UI can drop a frozen "active" meter after the agent vanishes mid-TX. */
+  function txMeterStale(lastAtMs, nowMs, maxAgeMs) {
+    if (!_finite(lastAtMs) || !_finite(nowMs)) return false;
+    return nowMs - lastAtMs > (_finite(maxAgeMs) ? maxAgeMs : 1000);
+  }
+
+  var TX_METER_SPAN_DB = 30;
+  var TX_CEILING_DEFAULT_DBFS = -12;
+  function _finite(x) { return typeof x === "number" && isFinite(x); }
+  function txMeterView(msg) {
+    var off = { active: false, hubFrac: 0, peakDbfs: null, grDb: 0, limiting: false,
+                degraded: false, failed: false, ceilingDbfs: null };
+    if (!msg || typeof msg !== "object" || !msg.active) return off;
+    var ceiling = _finite(msg.ceiling_dbfs) ? msg.ceiling_dbfs : TX_CEILING_DEFAULT_DBFS;
+    var peak = _finite(msg.peak_dbfs) ? msg.peak_dbfs : null;
+    var frac = peak === null ? 0 : (peak - (ceiling - TX_METER_SPAN_DB)) / TX_METER_SPAN_DB;
+    frac = Math.max(0, Math.min(1, frac));
+    return {
+      active: true, hubFrac: frac, peakDbfs: peak,
+      grDb: _finite(msg.gain_reduction_db) ? msg.gain_reduction_db : 0,
+      limiting: !!msg.limiting,
+      degraded: msg.dsp === "degraded" || msg.dsp === "off",
+      failed: msg.dsp === "failed",
+      ceilingDbfs: ceiling,
+    };
+  }
+
+  /* Staleness decay for the TX meter: zero only the LEVEL fields (bar, peak,
+     gain reduction, limiting). The DSP status (failed/degraded), ceiling and
+     active flag stay sticky - "failed" arrives as a single status frame and a
+     degraded chain is silent during DTX, so they must not vanish with the
+     levels. They clear only on an explicit active:false frame, mic close, WS
+     close or agent disconnect (handled by the panel). Pure; returns the same
+     object when already decayed so Alpine sees no change. */
+  function txMeterDecay(view) {
+    if (!view || typeof view !== "object" || !view.active) return txMeterView(null);
+    if (view.hubFrac === 0 && view.peakDbfs === null && view.grDb === 0 && !view.limiting) {
+      return view;
+    }
+    return {
+      active: true, hubFrac: 0, peakDbfs: null, grDb: 0, limiting: false,
+      degraded: !!view.degraded, failed: !!view.failed,
+      ceilingDbfs: _finite(view.ceilingDbfs) ? view.ceilingDbfs : null,
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Seq math — u16 wrap-aware
   // ---------------------------------------------------------------------------
@@ -700,5 +762,11 @@
     dbfsToAmplitude: dbfsToAmplitude,
     buildTapReport: buildTapReport,
     captureConstraintsFromSettings: captureConstraintsFromSettings,
+    MIC_CAPTURE_GAIN_DB: MIC_CAPTURE_GAIN_DB,
+    micCaptureConstraints: micCaptureConstraints,
+    captureGainLinear: captureGainLinear,
+    txMeterView: txMeterView,
+    txMeterDecay: txMeterDecay,
+    txMeterStale: txMeterStale,
   };
 });

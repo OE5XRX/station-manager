@@ -600,6 +600,9 @@ class StationAgent:
         control_thread.start()
 
         # Start audio client in a background thread if enabled
+        from .audio.tx_settings import TxAudioSettings
+
+        tx_settings = TxAudioSettings()
         audio_client = None
         audio_thread = None
         if audio_present:
@@ -608,7 +611,10 @@ class StationAgent:
 
             logger.info("Audio channel enabled")
             audio_client = AudioClient(
-                config, bridge_factory=BridgeFactory(port_base=config.audio_udp_port_base)
+                config,
+                bridge_factory=BridgeFactory(
+                    port_base=config.audio_udp_port_base, tx_settings=tx_settings
+                ),
             )
             audio_thread = threading.Thread(
                 target=audio_client.run, name="audio-client", daemon=True
@@ -620,7 +626,7 @@ class StationAgent:
         # Main heartbeat loop
         heartbeat_count = 0
         while not self._shutdown.is_set():
-            send_heartbeat(http_client, config=config)
+            send_heartbeat(http_client, config=config, tx_settings=tx_settings)
             heartbeat_count += 1
 
             # Check for OTA updates at the configured interval

@@ -326,6 +326,44 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
               x-text="Math.round(micLevel * 100) + '%'"></span>
       </div>
 
+      {% comment %}TX modulation meter: what is actually transmitted (post-DSP in
+      the agent), not the mic. Full bar = at the per-station limiter ceiling.
+      Read-only operator feedback; the mic meter above does not prove this.{% endcomment %}
+      <div x-show="micEnabled && txMeter.active" x-cloak data-tx-meter class="mt-2">
+        <div class="d-flex align-items-center gap-2">
+          <span class="cp-widget-label" style="font-size:9px;white-space:nowrap;margin-bottom:0;flex-shrink:0;">
+            {% trans "TX modulation" %}
+          </span>
+          <div class="cp-meter-track"
+               role="meter"
+               aria-label="{% trans "TX modulation" %}"
+               :aria-valuenow="Math.round(txMeter.hubFrac * 100)"
+               aria-valuemin="0"
+               aria-valuemax="100"
+               style="flex:1;max-width:220px;height:8px;">
+            <div class="cp-meter-fill"
+                 :class="txMeter.limiting ? 'is-peak' : ''"
+                 :style="'width:' + Math.round(txMeter.hubFrac * 100) + '%'">
+            </div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--ink-2);min-width:48px;text-align:right;font-variant-numeric:tabular-nums;"
+                x-text="txMeter.peakDbfs === null ? '—' : txMeter.peakDbfs.toFixed(1) + ' dBFS'"></span>
+          <span class="pill pill-accent" style="font-size:9px;" x-show="txMeter.limiting" x-cloak>
+            {% trans "Limiting" %}
+            <span style="font-variant-numeric:tabular-nums;" x-text="'-' + Math.abs(txMeter.grDb).toFixed(1) + ' dB'"></span>
+          </span>
+          <span class="pill pill-warn" style="font-size:9px;" x-show="txMeter.degraded" x-cloak
+                title="{% trans "Agent DSP unavailable on this image: pass-through, no limiter" %}">
+            {% trans "DSP off" %}
+          </span>
+        </div>
+        <template x-if="txMeter.failed">
+          <div class="pill pill-error mt-1" role="alert" style="font-size:11px;">
+            {% trans "TX audio pipeline failed" %}
+          </div>
+        </template>
+      </div>
+
       {% comment %}TX-path diagnostic — counts each stage of the uplink so a stall
       is localised at a glance: wkl (worklet chunks) 0 ⇒ worklet not running;
       enc (encoded) 0 ⇒ encoder silent; tx (frames sent) 0 while enc climbs ⇒

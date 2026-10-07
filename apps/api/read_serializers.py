@@ -52,6 +52,7 @@ class StationSerializer(serializers.ModelSerializer):
             "longitude",
             "altitude",
             "hardware_revision",
+            "tx_audio_ceiling_dbfs",
             "region",
             "tags",
             "notes",
@@ -66,6 +67,7 @@ class StationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = ["tx_audio_ceiling_dbfs"]
 
 
 class StationTelemetrySerializer(serializers.ModelSerializer):

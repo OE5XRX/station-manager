@@ -93,6 +93,13 @@ jobs:
         with:
           python-version: "3.14"
 
+      # Pinned so the JS logic suites (tests/js/*.mjs, run via pytest) see the
+      # same Node major locally and in CI instead of whatever the runner image
+      # happens to ship.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
       - name: Cache pip
         uses: actions/cache@v6
         with:
@@ -101,10 +108,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install system deps (guestfish for provisioning tests)
+      - name: Install system deps (guestfish for provisioning tests, GStreamer for TX DSP tests)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-generic
+          sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-generic \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
           # Ubuntu ships kernels with 0600 perms; libguestfs's supermin needs read access.
           # Guard the glob so CI does not fail on runner images where
           # the kernel lives somewhere else (or no file matches).

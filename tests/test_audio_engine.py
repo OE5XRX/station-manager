@@ -51,13 +51,15 @@ class FakeFactory:
     def __init__(self):
         self.rx = []
         self.tx = []
+        self.last_tx_on_meter = None
 
     def make_rx(self, node, rate, on_opus):
         b = FakeRx(node, rate, on_opus)
         self.rx.append(b)
         return b
 
-    def make_tx(self, node, rate):
+    def make_tx(self, node, rate, on_meter=None):
+        self.last_tx_on_meter = on_meter
         b = FakeTx(node, rate)
         self.tx.append(b)
         return b

@@ -182,6 +182,22 @@ def get_wire_state(station) -> dict:
     }
 
 
+def _keyed(gate) -> bool:
+    """Expiry-aware PTT check: active AND a dead-man expiry that has not yet passed.
+    A row with ``ptt_active`` but an expired (or missing) expiry is NOT keyed."""
+    if not gate.ptt_active:
+        return False
+    if gate.ptt_expires_at is None:
+        return False
+    return timezone.now() < gate.ptt_expires_at
+
+
+def ptt_keyed(station) -> bool:
+    """True iff the station is currently keyed (same expiry rule as :func:`mic_allowed`)."""
+    gate = AudioGate.objects.filter(station=station).first()
+    return gate is not None and _keyed(gate)
+
+
 def mic_allowed(station, user) -> bool:
     """True iff user holds the ControlLock AND PTT is active AND not expired.
 
@@ -201,10 +217,4 @@ def mic_allowed(station, user) -> bool:
         gate = AudioGate.objects.get(station=station)
     except AudioGate.DoesNotExist:
         return False
-    if not gate.ptt_active:
-        return False
-    if gate.ptt_expires_at is None:
-        return False
-    if timezone.now() >= gate.ptt_expires_at:
-        return False
-    return True
+    return _keyed(gate)

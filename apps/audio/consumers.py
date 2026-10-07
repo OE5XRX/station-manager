@@ -18,7 +18,7 @@ import time
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from . import constants, gate, subscriptions
+from . import constants, gate, subscriptions, tx_meter
 
 # Channels group names must match ^[a-zA-Z\d\-_.]+$ and be <100 chars.
 # We further restrict stream_ids to [a-zA-Z\d\-_.]{1,80} to keep group names
@@ -143,6 +143,14 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
             reply_channel = self._diag_replies.pop(rid, None) if rid else None
             if reply_channel:
                 await self.channel_layer.send(reply_channel, {"type": "diag.reply", "msg": msg})
+        elif mtype == "tx_meter":
+            # Never relay raw: whitelist/clamp, then fan out on this station's
+            # browser group only (same path as stream_state/streams).
+            clean = tx_meter.sanitize(msg)
+            if clean is not None:
+                await self.channel_layer.group_send(
+                    self.browser_group, {"type": "audio.tx_meter", "msg": clean}
+                )
         # Unknown types ignored (forward-compat).
 
     async def _handle_advertise(self, msg):
@@ -720,6 +728,10 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
     async def audio_stream_state(self, event):
         """Stream state changed -> relay to browser."""
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def audio_tx_meter(self, event):
+        """Sanitized TX modulation meter frame -> relay to browser."""
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def audio_gate(self, event):

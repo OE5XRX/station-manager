@@ -10,6 +10,7 @@ ALSA/UAC2 edge (D); carrier keying is a separate control-plane action.
 
 from __future__ import annotations
 
+import dataclasses
 import logging as _logging
 import math
 import os as _os
@@ -21,7 +22,8 @@ import threading
 
 from station_agent.audio import rtp as _rtp
 from station_agent.audio import selftest as _selftest
-from station_agent.audio.opus_bridge import RTP_TS_PER_FRAME
+from station_agent.audio.opus_bridge import RTP_TS_PER_FRAME, probe_dsp_available
+from station_agent.audio.tx_dsp import TxDspConfig, limiter_fragment, pre_limiter_fragment
 
 _log = _logging.getLogger(__name__)
 
@@ -139,14 +141,26 @@ def build_measured_inject_argv(
 
 
 def build_measured_tx_argv(
-    tx_node: str, port: int, rate: int, *, meas_fd: int = MEAS_FD
+    tx_node: str, port: int, rate: int, *, meas_fd: int = MEAS_FD, dsp: TxDspConfig | None = None
 ) -> list[str]:
     """Build a gst-launch argv that taps a UDP RTP stream into *tx_node* and measures PCM.
 
     ``meas_fd`` is the pipe write-end fd the child will write to; see
     :func:`build_measured_inject_argv` for the rationale.
+
+    With ``dsp`` (a :class:`TxDspConfig`) the production TX DSP chain (band-pass/gate/
+    compressor/makeup + final limiter) sits before the tee, so both the sink and the
+    measurement tap see the post-limiter (D) signal.
     """
     caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
+    dsp_args: list[str] = []
+    if dsp is not None:
+        dsp_args = [
+            "!",
+            f"audio/x-raw,format=F32LE,rate={rate},channels=1",
+            *pre_limiter_fragment(dsp),
+            *limiter_fragment(dsp),
+        ]
     return [
         "gst-launch-1.0",
         "-q",
@@ -168,6 +182,7 @@ def build_measured_tx_argv(
         "audioresample",
         "!",
         f"audio/x-raw,rate={rate},channels=1",
+        *dsp_args,
         "!",
         "tee",
         "name=t",
@@ -494,7 +509,11 @@ class MeasuredTxBridge:
         read_measfd=_default_read_measfd,
         socket_factory=None,
         ssrc: int = 0x5852_5841,
+        dsp: TxDspConfig | None = None,
+        dsp_probe=None,
     ):
+        self._dsp = dsp
+        self._dsp_probe = dsp_probe or probe_dsp_available
         self._node = tx_node
         self._port = port
         self._rate = rate
@@ -511,8 +530,14 @@ class MeasuredTxBridge:
 
     def start(self) -> None:
         self._sock = self._socket_factory()
+        dsp = self._dsp
+        if dsp is not None and dsp.enabled and not self._dsp_probe():
+            # Probe runs here (worker thread via the engine's _to_thread), never on the WS
+            # loop. DSP elements missing -> measure what TxBridge actually transmits when it
+            # degrades: the disabled config (degraded-gain volume stage), not no config.
+            dsp = self._dsp = dataclasses.replace(dsp, enabled=False)
         make_argv = lambda mfd: build_measured_tx_argv(  # noqa: E731
-            self._node, self._port, self._rate, meas_fd=mfd
+            self._node, self._port, self._rate, meas_fd=mfd, dsp=dsp
         )
         self._proc, self._read_fd = self._spawn(make_argv)
 

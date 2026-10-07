@@ -1,3 +1,4 @@
+{% load control_caps %}{% cap_access cap m as access %}
 {% comment %}
 Dispatch partial — maps cap.kind / cap.type / cap.name to the correct widget partial.
 PTT is detected by cap.kind=="action" AND cap.name=="ptt" (platform-level capability).

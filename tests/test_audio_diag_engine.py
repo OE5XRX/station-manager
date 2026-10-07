@@ -498,7 +498,7 @@ def test_tx_start_waits_for_diag_bridge_stop():
         def make_rx(self, *a, **k):
             raise AssertionError("unused")
 
-        def make_tx(self, node, rate):
+        def make_tx(self, node, rate, on_meter=None):
             timeline.append("make_tx_called")
 
             class _SimpleTx:

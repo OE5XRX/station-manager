@@ -5,7 +5,8 @@
      data-module="{{ m.module_id }}"
      data-cap="{{ cap.name }}"
      data-kind="{{ cap.kind }}"
-     data-type="{{ cap.type }}">
+     data-type="{{ cap.type }}"
+     {% if not access.writable %}data-readonly="true"{% endif %}>
   {% if cap.readonly %}
   {% comment %}Readonly value is a <span> (not labelable) — plain label, no for={% endcomment %}
   <span class="cp-widget-label">
@@ -18,15 +19,15 @@
   </span>
   {% else %}
   <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
-    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}{% include "control/widgets/_cap_lock.html" %}
   </label>
   <input id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
          class="cp-readout cp-readout--text"
          type="text"
          :value="displayValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
-         :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+         {% if access.writable %}:disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"{% else %}disabled aria-disabled="true"{% endif %}
          :class="{ 'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') }"
-         @change="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', $event.target.value)"
+         {% if access.writable %}@change="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', $event.target.value)"{% endif %}
          aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
   <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
         class="cp-widget-error"

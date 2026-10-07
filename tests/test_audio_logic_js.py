@@ -13,22 +13,27 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEST_FILE = REPO_ROOT / "tests" / "js" / "audio-logic.test.mjs"
+TEST_FILES = [
+    REPO_ROOT / "tests" / "js" / "audio-logic.test.mjs",
+    # Behavioural: TX-meter dispatch/watchdog + capture-gain wiring in audio-panel.js.
+    REPO_ROOT / "tests" / "js" / "audio-panel-txmeter.test.mjs",
+]
 
 
-def test_audio_logic_js():
+@pytest.mark.parametrize("test_file", TEST_FILES, ids=lambda p: p.name)
+def test_audio_logic_js(test_file):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH — JS pure-logic suite skipped")
-    assert TEST_FILE.exists(), f"missing {TEST_FILE}"
+    assert test_file.exists(), f"missing {test_file}"
     result = subprocess.run(
-        [node, str(TEST_FILE)],
+        [node, str(test_file)],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert result.returncode == 0, (
-        f"audio-logic.test.mjs failed (exit {result.returncode})\n"
+        f"{test_file.name} failed (exit {result.returncode})\n"
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )

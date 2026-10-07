@@ -88,7 +88,8 @@ class FakeFactory:
         self.rx.append(b)
         return b
 
-    def make_tx(self, node, rate):
+    def make_tx(self, node, rate, on_meter=None):
+        self.last_tx_on_meter = on_meter
         b = FakeTx(node, rate)
         self.tx.append(b)
         return b

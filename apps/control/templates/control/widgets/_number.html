@@ -13,14 +13,15 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
      data-type="{{ cap.type }}"
      {% localize off %}{% for r in cap.ranges %}{% if forloop.first %}data-min="{{ r.min }}"{% endif %}{% endfor %}
      {% for r in cap.ranges %}{% if forloop.last %}data-max="{{ r.max }}"{% endif %}{% endfor %}
-     {% if cap.step %}data-step="{{ cap.step }}"{% endif %}{% endlocalize %}>
+     {% if cap.step %}data-step="{{ cap.step }}"{% endif %}{% endlocalize %}
+     {% if not access.writable %}data-readonly="true"{% endif %}>
   <label class="cp-widget-label" for="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
-    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}
+    {{ cap.name }}{% if cap.unit %} <span class="cp-unit">{{ cap.unit }}</span>{% endif %}{% include "control/widgets/_cap_lock.html" %}
   </label>
   <div class="cp-number-row">
     <button type="button" class="cp-step cp-step--dec"
-            :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
-            @click="stepValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}',-1)"
+            {% if access.writable %}:disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"{% else %}disabled aria-disabled="true"{% endif %}
+            {% if access.writable %}@click="stepValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}',-1)"{% endif %}
             aria-label="{% trans 'Decrease' %} {{ cap.name }}">&#8722;</button>
     <input id="cp-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"
            class="cp-readout cp-readout--number"
@@ -31,13 +32,13 @@ data attribute to avoid a Python-repr vs JSON mismatch that would break JSON.par
            {% for r in cap.ranges %}{% if forloop.first %}min="{{ r.min }}"{% endif %}{% endfor %}
            {% for r in cap.ranges %}{% if forloop.last %}max="{{ r.max }}"{% endif %}{% endfor %}{% endlocalize %}
            :value="displayValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}')"
-           :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+           {% if access.writable %}:disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"{% else %}disabled aria-disabled="true"{% endif %}
            :class="{ 'is-pending': isPending('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') }"
-           @change="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', $event.target.value)"
+           {% if access.writable %}@change="setValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}', $event.target.value)"{% endif %}
            aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     <button type="button" class="cp-step cp-step--inc"
-            :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
-            @click="stepValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}',1)"
+            {% if access.writable %}:disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"{% else %}disabled aria-disabled="true"{% endif %}
+            {% if access.writable %}@click="stepValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}',1)"{% endif %}
             aria-label="{% trans 'Increase' %} {{ cap.name }}">&#43;</button>
   </div>
   <span id="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}"

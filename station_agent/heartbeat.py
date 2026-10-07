@@ -107,13 +107,14 @@ def collect_system_info(config=None) -> dict:
     }
 
 
-def send_heartbeat(http_client: HttpClient, config=None) -> bool:
+def send_heartbeat(http_client: HttpClient, config=None, tx_settings=None) -> bool:
     """Send a heartbeat to the Station Manager server.
 
     Args:
         http_client: Authenticated HTTP client.
         config: Optional AgentConfig. Forwarded to ``collect_system_info`` so
             that slot discovery is enabled/disabled per configuration.
+        tx_settings: Optional ``TxAudioSettings`` fed from the response body.
 
     Returns:
         True if the heartbeat was sent successfully, False otherwise.
@@ -126,6 +127,13 @@ def send_heartbeat(http_client: HttpClient, config=None) -> bool:
 
     if response.status_code == 200:
         logger.info("Heartbeat sent successfully")
+        if tx_settings is not None:
+            try:
+                body = response.json()
+            except Exception:  # noqa: BLE001 - e.g. RecursionError on hostile JSON
+                logger.warning("Heartbeat response body unparseable; TX ceiling not raised")
+                body = None
+            tx_settings.update_from_heartbeat(body)
         return True
     else:
         logger.warning(
