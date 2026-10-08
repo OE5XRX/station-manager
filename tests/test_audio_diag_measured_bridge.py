@@ -331,6 +331,9 @@ def test_gst_argv_builders_never_emit_consecutive_caps():
     argvs = [
         build_measured_tx_argv("n", 47000, 16000),
         build_measured_tx_argv("n", 47000, 16000, dsp=cfg),
+        build_measured_tx_argv(
+            "n", 47000, 16000, dsp=tx_dsp.TxDspConfig(ceiling_dbfs=-12.0, enabled=False)
+        ),
         opus_bridge.build_tx_argv("n", 47000, 16000),
         opus_bridge.build_tx_argv("n", 47000, 16000, dsp=cfg),
         opus_bridge.build_tx_argv("n", 47000, 16000, dsp=cfg, meter=True),
@@ -345,5 +348,8 @@ def test_measured_tx_argv_with_dsp_has_single_f32_caps_before_dsp():
     from station_agent.audio.diagnostics import build_measured_tx_argv
 
     argv = build_measured_tx_argv("n", 47000, 16000, dsp=tx_dsp.TxDspConfig(ceiling_dbfs=-12.0))
-    assert argv.count("audio/x-raw,format=F32LE,rate=16000,channels=1") == 1
+    f32 = "audio/x-raw,format=F32LE,rate=16000,channels=1"
+    assert argv.count(f32) == 1
+    # the F32 caps directly follows audioresample, before the first DSP element
+    assert argv.index(f32) == argv.index("audioresample") + 2
     assert "audio/x-raw,rate=16000,channels=1" not in argv
