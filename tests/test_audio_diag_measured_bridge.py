@@ -312,3 +312,38 @@ def test_make_diag_u_runs_no_probe():
     br = f.make_diag_u("tx.node", 16000)
     assert calls == []
     br.stop()
+
+
+def _consecutive_caps(argv):
+    """Indices where two caps strings sit back-to-back (``caps ! caps``) with no element."""
+    is_caps = [t.startswith("audio/x-raw") for t in argv]
+    return [
+        i for i in range(len(argv) - 2) if is_caps[i] and argv[i + 1] == "!" and is_caps[i + 2]
+    ]
+
+
+def test_gst_argv_builders_never_emit_consecutive_caps():
+    """``caps ! caps`` is a gst-launch parse error ('no element "audio"')."""
+    from station_agent.audio import opus_bridge, tx_dsp
+    from station_agent.audio.diagnostics import build_measured_tx_argv
+
+    cfg = tx_dsp.TxDspConfig(ceiling_dbfs=-12.0)
+    argvs = [
+        build_measured_tx_argv("n", 47000, 16000),
+        build_measured_tx_argv("n", 47000, 16000, dsp=cfg),
+        opus_bridge.build_tx_argv("n", 47000, 16000),
+        opus_bridge.build_tx_argv("n", 47000, 16000, dsp=cfg),
+        opus_bridge.build_tx_argv("n", 47000, 16000, dsp=cfg, meter=True),
+        opus_bridge.build_tx_argv("n", 47000, 16000, meter=True),
+    ]
+    for argv in argvs:
+        assert _consecutive_caps(argv) == [], argv
+
+
+def test_measured_tx_argv_with_dsp_has_single_f32_caps_before_dsp():
+    from station_agent.audio import tx_dsp
+    from station_agent.audio.diagnostics import build_measured_tx_argv
+
+    argv = build_measured_tx_argv("n", 47000, 16000, dsp=tx_dsp.TxDspConfig(ceiling_dbfs=-12.0))
+    assert argv.count("audio/x-raw,format=F32LE,rate=16000,channels=1") == 1
+    assert "audio/x-raw,rate=16000,channels=1" not in argv

@@ -153,14 +153,13 @@ def build_measured_tx_argv(
     measurement tap see the post-limiter (D) signal.
     """
     caps = f"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload={_RTP_PT}"
+    # With DSP the single post-resample caps pins F32LE (like opus_bridge.build_tx_argv);
+    # two consecutive caps strings with no element between them are a gst-launch parse error.
+    rate_caps = f"audio/x-raw,rate={rate},channels=1"
     dsp_args: list[str] = []
     if dsp is not None:
-        dsp_args = [
-            "!",
-            f"audio/x-raw,format=F32LE,rate={rate},channels=1",
-            *pre_limiter_fragment(dsp),
-            *limiter_fragment(dsp),
-        ]
+        rate_caps = f"audio/x-raw,format=F32LE,rate={rate},channels=1"
+        dsp_args = [*pre_limiter_fragment(dsp), *limiter_fragment(dsp)]
     return [
         "gst-launch-1.0",
         "-q",
@@ -181,7 +180,7 @@ def build_measured_tx_argv(
         "!",
         "audioresample",
         "!",
-        f"audio/x-raw,rate={rate},channels=1",
+        rate_caps,
         *dsp_args,
         "!",
         "tee",
