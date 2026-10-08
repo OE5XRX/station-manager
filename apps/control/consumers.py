@@ -7,8 +7,8 @@ import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from . import capability_policy, constants, lock, persistence, registry
-from .models import StationModule
+from . import agent_presence, capability_policy, constants, lock, persistence, registry
+from .models import AgentConnection, StationModule
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     Relays §7 frames verbatim, updates the registry, and owns the lock sweep
     timer. A station runs a single agent process holding one persistent
-    Control-WS, so in practice there is one connection per station — but that
-    is a deployment invariant, not enforced here (matching the tunnel
-    AgentTerminalConsumer). A brief overlap during an agent reconnect is
-    tolerated: both connections share the agent group and the registry/lock
-    state is authoritative in the DB.
+    Control-WS, so in practice there is one connection per station. A reconnect
+    overlaps its predecessor (the server may notice the old socket died only after
+    the new one connected and sent inventory): both share the agent group, and only
+    the CURRENT connection (``agent_presence``) runs the offline/lock/PTT teardown
+    on disconnect — a stale one must not wipe the live connection's state.
     """
 
     async def connect(self):
@@ -53,6 +53,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self.agent_group_name = f"control_{self.station_id}_agent"
         self.sweep_task = None
         self.station = None  # cached after connect to avoid a DB fetch per frame
+        self._claimed = False  # True once this connection was made the current one
         # Deferred drift re-apply (skipped because the station was keyed), retried once PTT
         # is released (see _retry_pending_reapply). ``_reapply_pending`` holds the
         # inventory generation that armed it (None = nothing pending); the retry re-derives
@@ -81,6 +82,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
         await self.channel_layer.group_add(self.agent_group_name, self.channel_name)
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self._claim(station)
+        self._claimed = True
         await self.accept()
         self.sweep_task = asyncio.create_task(self._sweep_loop())
 
@@ -94,8 +97,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             self.sweep_task = None
 
         try:
-            station = await self._cached_station()
-            if station is not None:
+            station = self.station if getattr(self, "_claimed", False) else None
+            # Stale (superseded by a reconnect) or never authenticated: tear down only
+            # this channel, never the station state the live connection owns.
+            if station is not None and await self._release(station):
                 await self._mark_offline(station)
                 freed = await self._force_free(station)
                 if freed:
@@ -312,6 +317,14 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             return Station.objects.get(pk=self.station_id)
         except Station.DoesNotExist:
             return None
+
+    @database_sync_to_async
+    def _claim(self, station):
+        agent_presence.claim(station, AgentConnection.Kind.CONTROL, self.channel_name)
+
+    @database_sync_to_async
+    def _release(self, station):
+        return agent_presence.release(station, AgentConnection.Kind.CONTROL, self.channel_name)
 
     @database_sync_to_async
     def _apply_inventory(self, station, slots):

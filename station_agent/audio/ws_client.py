@@ -139,7 +139,7 @@ class AudioClient:
                         break
                     await self._dispatch(message)
             except websockets.exceptions.ConnectionClosed as exc:
-                logger.info("Audio: WebSocket closed (code=%s)", exc.code)
+                logger.info("Audio: WebSocket closed: %s", exc)
             finally:
                 await self._engine.stop()
                 self._engine = None

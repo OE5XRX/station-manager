@@ -174,7 +174,7 @@ class ControlClient:
                         continue
                     await broker.handle(parsed)
             except websockets.exceptions.ConnectionClosed as exc:
-                logger.info("Control: WebSocket closed (code=%s)", exc.code)
+                logger.info("Control: WebSocket closed: %s", exc)
             finally:
                 rediscovery.cancel()
                 try:
