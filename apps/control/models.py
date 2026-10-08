@@ -143,3 +143,40 @@ class PersistedCapability(models.Model):
 
     def __str__(self):
         return f"{self.station_id}/{self.slot}/{self.module_id}.{self.capability}={self.value!r}"
+
+
+class AgentConnection(models.Model):
+    """The CURRENT agent WebSocket per (station, kind) — the stale-disconnect guard.
+
+    An agent reconnect overlaps its predecessor: through the tunnel the server often
+    notices the old socket is dead only after the new one connected and sent inventory.
+    Each agent consumer claims this row on connect (last writer wins) and runs its
+    station-wide teardown on disconnect only if it can still release the row as its own
+    (compare-and-delete). Lives in the DB, not process memory, because the old and new
+    connection may be served by different ASGI workers. See ``apps.control.agent_presence``.
+    """
+
+    class Kind(models.TextChoices):
+        CONTROL = "control", _("control")
+        AUDIO = "audio", _("audio")
+        TERMINAL = "terminal", _("terminal")
+
+    station = models.ForeignKey(
+        "stations.Station",
+        verbose_name=_("station"),
+        on_delete=models.CASCADE,
+        related_name="agent_connections",
+    )
+    kind = models.CharField(_("kind"), max_length=16, choices=Kind.choices)
+    channel_name = models.CharField(_("channel name"), max_length=255)
+    connected_at = models.DateTimeField(_("connected at"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("agent connection")
+        verbose_name_plural = _("agent connections")
+        constraints = [
+            models.UniqueConstraint(fields=["station", "kind"], name="uniq_agent_connection"),
+        ]
+
+    def __str__(self):
+        return f"{self.station_id}/{self.kind}={self.channel_name}"

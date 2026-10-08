@@ -83,12 +83,16 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         # a bad-sig connect could clear an active operator's PTT gate.
         self.station = station
         await self.channel_layer.group_add(self.agent_group, self.channel_name)
+        await self._claim(station)
         await self.accept()
 
     async def disconnect(self, close_code):
         try:
             station = self.station
-            if station is not None:
+            # Only the CURRENT agent connection tears down: a stale one (the server
+            # noticed it died only after the agent already reconnected) must not
+            # clear the live session's PTT or idle its streams.
+            if station is not None and await self._release(station):
                 await self._clear_ptt(station)
                 # Broadcast the cleared gate state so browser _gate_cache
                 # does not stay stale (ptt_active=True) after the agent drops.
@@ -377,6 +381,20 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _clear_ptt(self, station):
         gate.clear_ptt(station)
+
+    @database_sync_to_async
+    def _claim(self, station):
+        from apps.control import agent_presence
+        from apps.control.models import AgentConnection
+
+        agent_presence.claim(station, AgentConnection.Kind.AUDIO, self.channel_name)
+
+    @database_sync_to_async
+    def _release(self, station):
+        from apps.control import agent_presence
+        from apps.control.models import AgentConnection
+
+        return agent_presence.release(station, AgentConnection.Kind.AUDIO, self.channel_name)
 
     @database_sync_to_async
     def _sub_count(self, station, stream_id):
