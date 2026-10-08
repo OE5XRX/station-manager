@@ -8,10 +8,20 @@ from .models import AgentConnection
 
 
 def claim(station, kind, channel_name):
-    """Make ``channel_name`` the current agent connection (newest connect wins)."""
+    """Make ``channel_name`` the current agent connection (newest connect wins).
+
+    Returns True if it superseded a still-registered connection, i.e. the agent
+    reconnected before the server noticed the old socket died.
+    """
+    previous = (
+        AgentConnection.objects.filter(station=station, kind=kind)
+        .values_list("channel_name", flat=True)
+        .first()
+    )
     AgentConnection.objects.update_or_create(
         station=station, kind=kind, defaults={"channel_name": channel_name}
     )
+    return previous is not None and previous != channel_name
 
 
 def release(station, kind, channel_name):

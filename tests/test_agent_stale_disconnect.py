@@ -109,8 +109,9 @@ def test_control_stale_disconnect_after_reconnect_keeps_live_state(control_agent
 
         # The server notices the old socket is dead only now.
         await old.disconnect()
-        assert "control.agent_offline" not in await _drain_types(layer, spy)
-        assert "control.lock" not in await _drain_types(layer, spy, timeout=0.05)
+        types = await _drain_types(layer, spy)
+        assert "control.agent_offline" not in types
+        assert "control.lock" not in types
 
         def _live_state():
             return (
@@ -266,13 +267,65 @@ def test_terminal_stale_disconnect_does_not_close_browser_sessions(terminal_agen
 
         old = _comm("terminal", station.id)
         assert (await old.connect())[0] is True
+        assert await _drain_types(layer, spy) == []
         new = _comm("terminal", station.id)
         assert (await new.connect())[0] is True
+        # The agent restarted its shell on reconnect: tell browsers, keep them attached.
+        assert await _drain_types(layer, spy) == ["terminal_shell_closed"]
 
         await old.disconnect()
         assert "terminal_closed" not in await _drain_types(layer, spy)
 
         await new.disconnect()
         assert "terminal_closed" in await _drain_types(layer, spy)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_rejected_handshake_does_not_close_browser_sessions(monkeypatch):
+    from apps.control.models import AgentConnection
+    from apps.tunnel import consumers
+
+    async def _deny(self, station, params):
+        return False
+
+    monkeypatch.setattr(consumers.AgentTerminalConsumer, "_verify_agent", _deny)
+    station = Station.objects.create(name="stale-t2", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "browser-spy-stale-t2"
+        await layer.group_add(f"terminal_{station.id}", spy)
+
+        bad = _comm("terminal", station.id)
+        connected, _ = await bad.connect()
+        assert connected is False
+        assert await _drain_types(layer, spy) == []
+
+    asyncio.run(scenario())
+
+    assert not AgentConnection.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_agent_survives_its_own_shell_closed_echo(terminal_agent_auth):
+    """The agent consumer is in the browser group too, so the terminal_shell_closed it
+    broadcasts comes back to it — that must not crash the agent connection."""
+    station = Station.objects.create(name="stale-t3", status="online")
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "browser-spy-stale-t3"
+        await layer.group_add(f"terminal_{station.id}", spy)
+
+        agent = _comm("terminal", station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to({"type": "closed", "reason": "exit"})
+        assert await _drain_types(layer, spy) == ["terminal_shell_closed"]
+        assert await agent.receive_nothing(timeout=0.3) is True
+        await agent.send_json_to({"type": "output", "data": "still alive"})
+        assert await _drain_types(layer, spy) == ["terminal_output"]
+        await agent.disconnect()
 
     asyncio.run(scenario())

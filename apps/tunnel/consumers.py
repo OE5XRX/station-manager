@@ -310,8 +310,17 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
         # Also join the main group to receive browser group messages if needed
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         self.station = station
-        await self._claim(station)
+        superseded = await self._claim(station)
         await self.accept()
+        if superseded:
+            # The agent dropped and reconnected before we noticed: it stopped the old
+            # shell on the drop, so the browsers' session is gone. Tell them (the stale
+            # connection's late disconnect won't), but keep them attached — the agent
+            # respawns a shell on demand.
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "terminal_shell_closed", "reason": "agent reconnected, shell restarted"},
+            )
 
     async def disconnect(self, close_code):
         try:
@@ -387,6 +396,10 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
         """Ignore own output messages relayed back through the group."""
         pass
 
+    async def terminal_shell_closed(self, event):
+        """Ignore shell-closed notices relayed back through the group."""
+        pass
+
     async def terminal_closed(self, event):
         """Ignore closed messages relayed back through the group."""
         pass
@@ -398,7 +411,7 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
         from apps.control import agent_presence
         from apps.control.models import AgentConnection
 
-        agent_presence.claim(station, AgentConnection.Kind.TERMINAL, self.channel_name)
+        return agent_presence.claim(station, AgentConnection.Kind.TERMINAL, self.channel_name)
 
     @database_sync_to_async
     def _release(self, station):
