@@ -364,7 +364,7 @@ class TerminalClient:
                         break
                     await self._handle_message(message)
             except websockets.exceptions.ConnectionClosed as exc:
-                logger.info("Terminal: WebSocket closed (code=%s)", exc.code)
+                logger.info("Terminal: WebSocket closed: %s", exc)
             finally:
                 await self._cancel_reader()
                 await self._stop_shell()
