@@ -32,7 +32,7 @@ def test_old_list_url_redirects_to_own_detail_tab(client, member_user):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("user_fixture", ["member_user", "applicant_user", "admin_user"])
+@pytest.mark.parametrize("user_fixture", ["member_user", "admin_user"])
 def test_tab_on_own_detail_page(request, client, user_fixture):
     user = request.getfixturevalue(user_fixture)
     PersonalAccessToken.issue(user, name="my-ci-token")
@@ -115,3 +115,14 @@ def test_revoke_own_token(client, member_user):
     assert resp["Location"].endswith("#api-tokens")
     mine.refresh_from_db()
     assert mine.revoked_at is not None
+
+
+@pytest.mark.django_db
+def test_applicant_has_no_tab_and_cannot_create_token(client, applicant_user):
+    """The API rejects applicants, so the UI must not offer (or accept) tokens."""
+    client.force_login(applicant_user)
+    resp = client.get(reverse("accounts:user_detail", kwargs={"pk": applicant_user.pk}))
+    assert b'data-tab="api-tokens"' not in resp.content
+    resp = client.post(reverse("accounts:api_tokens"), {"name": "x"})
+    assert resp.status_code == 403
+    assert not PersonalAccessToken.objects.filter(user=applicant_user).exists()

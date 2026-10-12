@@ -61,7 +61,7 @@
       <div class="summary-key">{% trans "Provisioned with" %}</div>
       <div class="summary-val mono">
         {% if station.current_image_release %}
-          <a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a> {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}
+          {% if user.is_admin %}<a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a>{% else %}{{ station.current_image_release.tag }}{% endif %} {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}
         {% else %}
           —
         {% endif %}

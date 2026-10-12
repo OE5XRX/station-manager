@@ -1,11 +1,13 @@
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 
+from apps.accounts.models import User
 from apps.api.models import PersonalAccessToken
 
 
@@ -24,6 +26,10 @@ class ApiTokenListView(LoginRequiredMixin, View):
         return redirect(api_tokens_tab_url(request.user))
 
     def post(self, request):
+        # Mirror TopologyScopedPermission: applicants cannot use the API, so
+        # they must not mint tokens either.
+        if request.user.membership_level == User.MembershipLevel.APPLICANT:
+            raise PermissionDenied
         name = (request.POST.get("name") or "").strip()
         max_length = PersonalAccessToken._meta.get_field("name").max_length
         if not name:

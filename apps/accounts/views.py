@@ -1271,7 +1271,11 @@ class UserDetailView(LoginRequiredMixin, DetailView):
         ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
         # API tokens are strictly personal: only on your own page, also for admins
         # (whose own page resolves to the ADMIN audience, not SELF).
-        ctx["is_own_page"] = self.request.user.pk == self.object.pk
+        # Applicants are excluded: the API rejects them (TopologyScopedPermission).
+        ctx["is_own_page"] = (
+            self.request.user.pk == self.object.pk
+            and self.request.user.membership_level != User.MembershipLevel.APPLICANT
+        )
         if ctx["is_own_page"]:
             from apps.api.models import PersonalAccessToken
 

@@ -101,3 +101,22 @@ class TestControlPanelButton:
     def test_applicant_still_sees_station_detail(self, client, applicant_user, station):
         """Applicants dürfen Stationen ansehen — nur nicht steuern."""
         _get(client, applicant_user, reverse("stations:station_detail", args=[station.pk]))
+
+
+@pytest.mark.django_db
+class TestImageReleaseLink:
+    @pytest.mark.parametrize(
+        "user_fixture, linked",
+        [("admin_user", True), ("member_user", False), ("applicant_user", False)],
+    )
+    def test_images_link_only_for_admins(
+        self, request, client, station, image_release, user_fixture, linked
+    ):
+        station.current_image_release = image_release
+        station.save()
+        html = _get(
+            client,
+            request.getfixturevalue(user_fixture),
+            reverse("stations:station_detail", args=[station.pk]),
+        )
+        assert (reverse("images:list") in html) is linked
