@@ -311,6 +311,22 @@ def test_repeated_mic_state_same_route_keeps_tx_bridge_running():
     assert not any(m.get("type") == "tx_meter" and m.get("active") is False for m in sent_json)
 
 
+def test_mic_state_restarts_crashed_tx_bridge():
+    """Idempotence must not keep a dead bridge: a keepalive restarts a crashed TX."""
+    nodes = {(2, "tx"): "n.tx"}
+    eng, factory, _, _ = make_engine(slots=(2,), nodes=nodes, dead_man=10.0)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        factory.tx[0].is_alive = lambda: False  # gst process died
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+
+    asyncio.run(scenario())
+    assert len(factory.tx) == 2
+    assert factory.tx[0].stopped and not factory.tx[1].stopped
+
+
 def test_mic_state_route_change_restarts_tx_bridge():
     nodes = {(2, "tx"): "n2.tx", (3, "tx"): "n3.tx"}
     eng, factory, _, _ = make_engine(slots=(2, 3), nodes=nodes, dead_man=10.0)

@@ -210,11 +210,13 @@ class AudioEngine:
         # Keep the running bridge; do NOT re-arm the TOT (it bounds
         # this bridge run; a keepalive after a TOT/dead-man teardown starts a fresh run — the
         # server-side PTT policy owns any overall limit) and do NOT pet the dead-man
-        # (that tracks media, not keepalives).
+        # (that tracks media, not keepalives). A crashed bridge (is_alive() False) is NOT kept:
+        # the keepalive restarts it, as before idempotence.
         if (
             self._tx is not None
             and self._tx["slot"] == tx_slot
             and self._tx["module"] == tx_module
+            and getattr(self._tx["bridge"], "is_alive", lambda: True)()
         ):
             return
         mic_info = self.registry.get(OP_MIC)
