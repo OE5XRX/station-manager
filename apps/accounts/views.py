@@ -1269,6 +1269,13 @@ class UserDetailView(LoginRequiredMixin, DetailView):
         ctx["is_self_view"] = aud in (Audience.SELF, Audience.APPLICANT)
         ctx["is_member_view"] = aud == Audience.MEMBER
         ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
+        # API tokens are strictly personal: only on your own page, also for admins
+        # (whose own page resolves to the ADMIN audience, not SELF).
+        ctx["is_own_page"] = self.request.user.pk == self.object.pk
+        if ctx["is_own_page"]:
+            from apps.api.models import PersonalAccessToken
+
+            ctx["api_tokens"] = PersonalAccessToken.objects.filter(user=self.object)
 
         if aud == Audience.ADMIN:
             ctx.update(self._admin_context_data())

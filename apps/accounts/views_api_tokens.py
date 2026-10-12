@@ -1,3 +1,4 @@
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -8,20 +9,19 @@ from django.views import View
 from apps.api.models import PersonalAccessToken
 
 
-class ApiTokenListView(LoginRequiredMixin, View):
-    template_name = "accounts/api_tokens.html"
+def api_tokens_tab_url(user):
+    """Token management lives as a tab on the user's own detail page."""
+    return reverse("accounts:user_detail", kwargs={"pk": user.pk}) + "#api-tokens"
 
+
+class ApiTokenListView(LoginRequiredMixin, View):
     def get(self, request):
-        tokens = PersonalAccessToken.objects.filter(user=request.user)
-        return render(request, self.template_name, {"tokens": tokens})
+        # Old standalone page; kept as a redirect so bookmarks keep working.
+        return redirect(api_tokens_tab_url(request.user))
 
     def _render_error(self, request, message):
-        tokens = PersonalAccessToken.objects.filter(user=request.user)
-        return render(
-            request,
-            self.template_name,
-            {"tokens": tokens, "error": message},
-        )
+        messages.error(request, message)
+        return redirect(api_tokens_tab_url(request.user))
 
     def post(self, request):
         name = (request.POST.get("name") or "").strip()
@@ -51,4 +51,4 @@ class ApiTokenRevokeView(LoginRequiredMixin, View):
         if token.revoked_at is None:
             token.revoked_at = timezone.now()
             token.save(update_fields=["revoked_at"])
-        return redirect(reverse("accounts:api_tokens"))
+        return redirect(api_tokens_tab_url(request.user))

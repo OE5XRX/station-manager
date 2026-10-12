@@ -34,6 +34,7 @@
       </svg>
       <span class="label">{% trans "Modules" %}</span>
     </a>
+    {% if user.is_admin %}
     <a href="{% url 'monitoring:alert_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'monitoring' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'monitoring' %}aria-current="page"{% endif %}>
@@ -43,6 +44,7 @@
       <span class="label">{% trans "Alerts" %}</span>
       {% if active_alerts_count %}<span class="nav-tag">{{ active_alerts_count }}</span>{% endif %}
     </a>
+    {% endif %}
     <a href="{% url 'accounts:notification_settings' %}"
        class="nav-item{% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name == 'notification_settings' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name == 'notification_settings' %}aria-current="page"{% endif %}>
@@ -52,16 +54,9 @@
       </svg>
       <span class="label">{% trans "Notifications" %}</span>
     </a>
-    <a href="{% url 'accounts:api_tokens' %}"
-       class="nav-item{% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name == 'api_tokens' %} active{% endif %}"
-       {% if request.resolver_match.namespace == 'accounts' and request.resolver_match.url_name == 'api_tokens' %}aria-current="page"{% endif %}>
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="8" cy="15" r="4"/><path d="M12 11l9-9"/><path d="M17 6l2 2"/><path d="M19 4l2 2"/>
-      </svg>
-      <span class="label">{% trans "API-Tokens" %}</span>
-    </a>
   </div>
 
+  {% if user.is_internal %}
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Fleet Updates" %}</div>
     <a href="{% url 'deployments:deployment_list' %}"
@@ -91,6 +86,7 @@
     </a>
     {% endif %}
   </div>
+  {% endif %}
 
   {% if user.is_admin %}
   <div class="nav-section">

@@ -110,6 +110,8 @@ class StationDetailView(LoginRequiredMixin, DetailView):
         if raw_private_key:
             context["show_raw_private_key"] = True
             context["raw_private_key"] = raw_private_key
+        # Mirrors StationControlView.test_func so the button never links to a 403.
+        context["can_use_station"] = self.request.user.can_use_station(self.object)
         # Provisioning section (admin only)
         if self.request.user.is_admin:
             context["image_releases"] = ImageRelease.objects.order_by(
