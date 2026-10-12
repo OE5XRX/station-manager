@@ -165,3 +165,15 @@ def test_port_allocator_assigns_distinct_ports():
     assert a != b
     alloc.release(a)
     assert alloc.acquire() == a  # released port is reused
+
+
+def test_tx_bridge_is_alive_tracks_process_lifecycle():
+    proc = FakeProc()
+    br = ob.TxBridge("n.tx", 47004, 8000, spawn=lambda a: proc, socket_factory=lambda: FakeSock())
+    assert br.is_alive() is False  # before start
+    br.start()
+    assert br.is_alive() is True
+    proc.poll = lambda: 1  # gst process exited
+    assert br.is_alive() is False
+    br.stop()
+    assert br.is_alive() is False  # after stop
