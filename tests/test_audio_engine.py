@@ -330,16 +330,21 @@ def test_repeated_mic_state_does_not_extend_tot():
     """The TOT is an absolute ceiling; keepalive mic_state must not re-arm it."""
     nodes = {(2, "tx"): "n.tx"}
     eng, factory, _, _ = make_engine(slots=(2,), nodes=nodes, dead_man=10.0)
-    eng._max_tx_seconds = 0.08
+    eng._max_tx_seconds = 0.2
 
     async def scenario():
         await eng.start()
         await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
-        for _ in range(4):
-            await asyncio.sleep(0.03)
+        for _ in range(2):  # keepalives well inside the TOT window
+            await asyncio.sleep(0.05)
             await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        assert not factory.tx[0].stopped
+        # No further keepalive: the TOT armed at the first mic_state must fire at ~0.2 s
+        # (not ~0.3 s, which re-arming on the keepalives would give). ~100 ms margins.
+        await asyncio.sleep(0.2)
 
     asyncio.run(scenario())
+    assert len(factory.tx) == 1
     assert factory.tx[0].stopped
 
 
