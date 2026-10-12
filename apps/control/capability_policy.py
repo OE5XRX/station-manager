@@ -43,6 +43,9 @@ POLICY: dict[tuple[str, str | None], CapabilityPolicy] = {
     ("filter_pre_emphasis", None): _STAFF_PERSISTED,
     ("filter_hpf", None): _STAFF_PERSISTED,
     ("filter_lpf", None): _STAFF_PERSISTED,
+    # SA818 AF-out volume = RX level into the fm_board ADC for every listener; the SA818
+    # boots back to its default on a power cycle, so it must be persisted and re-applied.
+    ("volume", "fm_transceiver"): _STAFF_PERSISTED,
 }
 
 
