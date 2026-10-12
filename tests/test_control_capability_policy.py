@@ -148,3 +148,17 @@ def test_unknown_module_type_uses_strictest_entry_for_name(monkeypatch):
     # Name-only entries are unchanged.
     assert cp.policy_for("filter_hpf", None).write_role == "staff"
     assert cp.policy_for("frequency", None) == cp.CapabilityPolicy()
+
+
+def test_sa818_volume_is_staff_and_persisted():
+    """SA818 AF-out volume sets the RX level into the ADC for every listener and resets to the
+    SA818 boot default on a power cycle — calibration, not an operator knob: staff + persisted
+    (re-applied by the server after the module comes back)."""
+    p = cp.policy_for("volume", "fm_transceiver")
+    assert p.write_role == "staff" and p.persist is True
+
+
+def test_volume_policy_is_scoped_to_fm_transceiver():
+    """A ``volume`` capability on another known module type keeps the default policy."""
+    p = cp.policy_for("volume", "audio_router")
+    assert p.write_role == "operator" and p.persist is False

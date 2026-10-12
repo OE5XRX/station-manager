@@ -1118,3 +1118,54 @@ def test_new_inventory_clears_user_touched_caps():
 
     asyncio.run(scenario())
     assert [json.loads(t)["capability"] for t in sent] == ["filter_hpf"]
+
+
+# -- SA818 volume (int setting, fm_transceiver) ---------------------------------
+
+VOLUME_DESC = [
+    # Exactly as the fm_board firmware describes it (prod descriptor, 2026-10-12).
+    {
+        "name": "volume",
+        "kind": "setting",
+        "type": "int",
+        "access": "operator",
+        "ranges": [{"min": 1, "max": 8}],
+    },
+]
+
+
+@pytest.mark.django_db
+def test_sa818_volume_is_reapplied_after_power_cycle(station, staff_user):
+    """The SA818 boots back to volume 4 after a power loss; the server must push the
+    persisted calibration (e.g. 8) back on the next inventory."""
+    persistence.save(station, 1, "fm0", "volume", 8, staff_user)
+    inv = _inv({"volume": 4}, desc=VOLUME_DESC, mtype="fm_transceiver")
+    frames = persistence.reapply_frames(station, inv)
+    assert len(frames) == 1
+    assert frames[0]["capability"] == "volume" and frames[0]["value"] == 8
+    assert frames[0]["op"] == "set"
+    # Already at the calibrated value -> no frame.
+    inv_ok = _inv({"volume": 8}, desc=VOLUME_DESC, mtype="fm_transceiver")
+    assert persistence.reapply_frames(station, inv_ok) == []
+
+
+@pytest.mark.django_db
+def test_sa818_volume_persist_if_valid_accepts_int(station, staff_user):
+    StationModule.objects.create(
+        station=station,
+        slot="1",
+        module_id="fm0",
+        type="fm_transceiver",
+        capability_descriptor=VOLUME_DESC,
+    )
+    for bad in (True, "8", 8.5, None):
+        assert persistence.persist_if_valid(station, 1, "fm0", "volume", bad, staff_user) is False
+    assert persistence.persist_if_valid(station, 1, "fm0", "volume", 8, staff_user) is True
+    assert PersistedCapability.objects.get().value == 8
+
+
+@pytest.mark.django_db
+def test_volume_on_other_module_type_is_never_reapplied(station, staff_user):
+    persistence.save(station, 1, "fm0", "volume", 8, staff_user)
+    inv = _inv({"volume": 4}, desc=VOLUME_DESC, mtype="audio_router")
+    assert persistence.reapply_frames(station, inv) == []
