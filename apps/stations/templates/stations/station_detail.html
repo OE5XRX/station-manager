@@ -39,7 +39,7 @@
       </div>
     </div>
     <div class="page-head-actions">
-      {% if station.modules.exists %}
+      {% if can_use_station and station.modules.exists %}
       <a class="btn btn-sm btn-primary" href="{% url 'control:station_control' station.id %}">{% trans "Control panel" %}</a>
       {% endif %}
       {% if user.is_internal %}
@@ -61,7 +61,7 @@
       <div class="summary-key">{% trans "Provisioned with" %}</div>
       <div class="summary-val mono">
         {% if station.current_image_release %}
-          <a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a> {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}
+          {% if user.is_admin %}<a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a>{% else %}{{ station.current_image_release.tag }}{% endif %} {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}
         {% else %}
           —
         {% endif %}

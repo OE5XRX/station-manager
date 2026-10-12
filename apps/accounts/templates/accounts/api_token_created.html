@@ -6,9 +6,9 @@
 {% block breadcrumbs %}
   <a href="{% url 'dashboard:index' %}">OE5XRX</a>
   <span class="sep">/</span>
-  <a href="{% url 'accounts:profile' %}">{% trans "Profile" %}</a>
+  <a href="{% url 'accounts:user_detail' user.pk %}">{{ user.username }}</a>
   <span class="sep">/</span>
-  <a href="{% url 'accounts:api_tokens' %}">{% trans "API-Tokens" %}</a>
+  <a href="{% url 'accounts:user_detail' user.pk %}#api-tokens">{% trans "API-Tokens" %}</a>
   <span class="sep">/</span>
   <span class="cur">{% trans "Token erstellt" %}</span>
 {% endblock %}
@@ -47,7 +47,7 @@
         </div>
       </div>
       <div class="panel-foot row-gap-8">
-        <a href="{% url 'accounts:api_tokens' %}" class="btn btn-primary">{% trans "Zurück zur Token-Liste" %}</a>
+        <a href="{% url 'accounts:user_detail' user.pk %}#api-tokens" class="btn btn-primary">{% trans "Zurück zur Token-Liste" %}</a>
       </div>
     </section>
 

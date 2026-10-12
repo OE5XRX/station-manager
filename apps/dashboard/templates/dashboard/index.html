@@ -55,9 +55,11 @@
         {% trans "Active alerts" %}
       </div>
       <div class="stat-value {% if active_alerts_count > 0 %}stat-warn{% endif %}">{{ active_alerts_count }}</div>
+      {% if user.is_admin %}
       <div class="stat-meta">
         <a href="{% url 'monitoring:alert_list' %}" class="t-mono">{% trans "view alerts" %} →</a>
       </div>
+      {% endif %}
     </div>
 
     <div class="stat">
@@ -66,7 +68,9 @@
         {% trans "Deployments" %}
       </div>
       <div class="stat-value">{{ deployment_count }}</div>
+      {% if user.is_internal %}
       <div class="stat-meta"><a href="{% url 'deployments:deployment_list' %}" class="t-mono">{% trans "history" %} →</a></div>
+      {% endif %}
     </div>
 
     <div class="stat">
@@ -174,6 +178,7 @@
     </section>
 
     <aside class="stack-gap-14">
+      {% if user.is_internal %}
       <section class="panel">
         <div class="panel-head">
           <div class="panel-title"><span class="dot" style="background:var(--violet)"></span>{% trans "Recent deployments" %}</div>
@@ -200,6 +205,7 @@
           {% endif %}
         </div>
       </section>
+      {% endif %}
 
       <section class="panel">
         <div class="panel-head">
