@@ -290,3 +290,71 @@ def test_stop_tears_down_all_bridges():
 
     asyncio.run(scenario())
     assert factory.rx[0].stopped and factory.tx[0].stopped
+
+
+def test_repeated_mic_state_same_route_keeps_tx_bridge_running():
+    """PTT keepalive re-sends mic_state(active=True) ~1/s for the SAME route. That must
+    be idempotent: no bridge teardown/restart (which drops audio and chops syllables)
+    and no tx_meter active:false flicker in the browser."""
+    nodes = {(2, "tx"): "n.tx"}
+    eng, factory, sent_json, _ = make_engine(slots=(2,), nodes=nodes, dead_man=10.0)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        for _ in range(3):
+            await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+
+    asyncio.run(scenario())
+    assert len(factory.tx) == 1
+    assert not factory.tx[0].stopped
+    assert not any(m.get("type") == "tx_meter" and m.get("active") is False for m in sent_json)
+
+
+def test_mic_state_route_change_restarts_tx_bridge():
+    nodes = {(2, "tx"): "n2.tx", (3, "tx"): "n3.tx"}
+    eng, factory, _, _ = make_engine(slots=(2, 3), nodes=nodes, dead_man=10.0)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        await eng.on_mic_state(active=True, tx_slot=3, tx_module="fm")
+
+    asyncio.run(scenario())
+    assert len(factory.tx) == 2
+    assert factory.tx[0].stopped and factory.tx[0].node == "n2.tx"
+    assert not factory.tx[1].stopped and factory.tx[1].node == "n3.tx"
+
+
+def test_repeated_mic_state_does_not_extend_tot():
+    """The TOT is an absolute ceiling; keepalive mic_state must not re-arm it."""
+    nodes = {(2, "tx"): "n.tx"}
+    eng, factory, _, _ = make_engine(slots=(2,), nodes=nodes, dead_man=10.0)
+    eng._max_tx_seconds = 0.08
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        for _ in range(4):
+            await asyncio.sleep(0.03)
+            await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+
+    asyncio.run(scenario())
+    assert factory.tx[0].stopped
+
+
+def test_mic_state_after_dead_man_restarts_tx():
+    """After a dead-man teardown (media silence), the next keepalive mic_state must
+    bring TX back up."""
+    nodes = {(2, "tx"): "n.tx"}
+    eng, factory, _, _ = make_engine(slots=(2,), nodes=nodes, dead_man=0.05)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+        await asyncio.sleep(0.12)  # dead-man fires
+        await eng.on_mic_state(active=True, tx_slot=2, tx_module="fm")
+
+    asyncio.run(scenario())
+    assert len(factory.tx) == 2
+    assert factory.tx[0].stopped and not factory.tx[1].stopped
