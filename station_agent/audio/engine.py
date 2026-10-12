@@ -204,6 +204,21 @@ class AudioEngine:
         if self._diag is not None:
             logger.info("engine: mic_state active — aborting in-flight diagnostic")
         await self._teardown_diag()
+        # Idempotent re-assert: the server re-sends mic_state(active) on every PTT
+        # keepalive (~1/s). Restarting the bridge for the same route would drop ~a few
+        # hundred ms of audio each second (chopped syllables) and flicker the TX meter.
+        # Keep the running bridge; do NOT re-arm the TOT (it bounds
+        # this bridge run; a keepalive after a TOT/dead-man teardown starts a fresh run — the
+        # server-side PTT policy owns any overall limit) and do NOT pet the dead-man
+        # (that tracks media, not keepalives). A crashed bridge (is_alive() False) is NOT kept:
+        # the keepalive restarts it, as before idempotence.
+        if (
+            self._tx is not None
+            and self._tx["slot"] == tx_slot
+            and self._tx["module"] == tx_module
+            and getattr(self._tx["bridge"], "is_alive", lambda: True)()
+        ):
+            return
         mic_info = self.registry.get(OP_MIC)
         if mic_info is None:
             logger.warning("engine: op.mic not registered — cannot start TX")

@@ -465,6 +465,11 @@ class TxBridge:
         self._seq = (self._seq + 1) & 0xFFFF
         self._ts = (self._ts + RTP_TS_PER_FRAME) & 0xFFFFFFFF
 
+    def is_alive(self) -> bool:
+        """True while the gst process is running (False before start / after crash or stop)."""
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
     def stop(self) -> None:
         proc = self._proc
         _terminate(proc)  # process death gives the reader EOF
