@@ -60,6 +60,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     on disconnect — a stale one must not wipe the live connection's state.
     """
 
+    permission_exempt = "agent: ed25519"
+
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
         self.group_name = f"control_{self.station_id}"

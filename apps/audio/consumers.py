@@ -37,6 +37,8 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
     Pre-accept close (4404/4401) on failure; post-accept on success.
     """
 
+    permission_exempt = "agent: ed25519"
+
     async def connect(self):
         from urllib.parse import parse_qs
 

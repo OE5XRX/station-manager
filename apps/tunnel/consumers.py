@@ -8,6 +8,8 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.db import models
 from django.utils import timezone
 
+from apps.accounts.permissions import AreaConsumerMixin
+
 logger = logging.getLogger(__name__)
 
 MAX_SESSIONS_PER_STATION = 2
@@ -15,12 +17,15 @@ TERMINAL_SESSION_KEEPALIVE_SECONDS = 60
 TERMINAL_SESSION_STALE_TTL_SECONDS = 180  # must exceed the keepalive interval
 
 
-class TerminalConsumer(AsyncWebsocketConsumer):
+class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """Browser-side WebSocket consumer for terminal sessions.
 
     Path: ws/terminal/<station_id>/
     Bridges user keystrokes to the station agent and streams output back.
     """
+
+    area = "terminal"
+    connect_verb = "use"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -39,9 +44,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self._reject(4401, "Not signed in — please sign in again")
             return
 
-        # Root shell -> admin only.
-        if not user.is_admin:
-            await self._reject(4403, "Terminal access is restricted to admins")
+        # Root shell -> terminal.use (forbidden frame + close 4403 on deny).
+        if not await self.area_connect_gate():
             return
 
         station = await self._get_station()
@@ -282,6 +286,8 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
     Path: ws/agent/terminal/<station_id>/
     The station agent connects here and provides shell I/O.
     """
+
+    permission_exempt = "agent: ed25519"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]

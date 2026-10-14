@@ -171,7 +171,11 @@
     function connect() {
       try { ws = new WebSocket(url); } catch (_) { scheduleReconnect(); return; }
       ws.addEventListener("open", function () { retry = 0; setBadge(true); });
-      ws.addEventListener("close", function () { setBadge(false); scheduleReconnect(); });
+      ws.addEventListener("close", function (ev) {
+        setBadge(false);
+        if (ev.code === 4401 || ev.code === 4403) return; // denied: retrying cannot help
+        scheduleReconnect();
+      });
       ws.addEventListener("error", function () { try { ws.close(); } catch (_) {} });
       ws.addEventListener("message", function (ev) {
         var data;
@@ -242,7 +246,10 @@
     function connect() {
       try { ws = new WebSocket(url); } catch (_) { scheduleReconnect(); return; }
       ws.addEventListener("open", function () { retry = 0; });
-      ws.addEventListener("close", scheduleReconnect);
+      ws.addEventListener("close", function (ev) {
+        if (ev.code === 4401 || ev.code === 4403) return; // denied: retrying cannot help
+        scheduleReconnect();
+      });
       ws.addEventListener("error", function () { try { ws.close(); } catch (_) {} });
       ws.addEventListener("message", function (ev) {
         var data;
@@ -336,7 +343,7 @@
             term.write("\r\n" + color("[ closed: " + (payload.reason || "") + " ]", "31") + "\r\n");
           else if (payload.type === "error") {
             userClosed = true;  // an operational reject is not worth retrying
-            term.write("\r\n" + color("[ " + (payload.reason || "rejected") + " ]", "31") + "\r\n");
+            term.write("\r\n" + color("[ " + (payload.message || payload.reason || "rejected") + " ]", "31") + "\r\n");
           }
         } catch (_) {}
       });

@@ -1,25 +1,42 @@
 import json
 import logging
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.layers import get_channel_layer
+
+from apps.accounts.permissions import AreaConsumerMixin, can
 
 logger = logging.getLogger(__name__)
 
 GROUP_NAME = "station_status"
 
 
-class StationStatusConsumer(AsyncWebsocketConsumer):
-    """WebSocket consumer that pushes live station status updates to clients."""
+class StationStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
+    """WebSocket consumer that pushes live station status updates to clients.
+
+    Connect needs ``stations.view``. IP addresses are Staff-only
+    (``stations.manage``): the flag is computed once at connect from a fresh
+    user and ``last_ip_address`` is stripped from frames for everyone else.
+    """
+
+    area = "stations"
+    can_see_ip = False
 
     async def connect(self):
         user = self.scope.get("user")
         if not user or user.is_anonymous:
             await self.close(code=4401)
             return
-        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
+        # Accept first so the forbidden frame reaches the browser.
         await self.accept()
+        if not await self.area_connect_gate():
+            return
+        fresh = await self.fresh_user()
+        self.can_see_ip = fresh is not None and await sync_to_async(can)(
+            fresh, "stations", "manage"
+        )
+        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
 
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
@@ -30,7 +47,10 @@ class StationStatusConsumer(AsyncWebsocketConsumer):
 
     async def station_update(self, event):
         """Handle station_update messages from the channel layer group."""
-        await self.send(text_data=json.dumps(event["data"]))
+        data = event["data"]
+        if not self.can_see_ip:
+            data = {k: v for k, v in data.items() if k != "last_ip_address"}
+        await self.send(text_data=json.dumps(data))
 
 
 def broadcast_station_status(station):
