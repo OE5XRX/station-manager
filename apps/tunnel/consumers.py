@@ -167,6 +167,8 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     async def _still_allowed(self):
         """Fresh terminal.use re-check; on deny tear the shell down and close 4403."""
+        if self.rejected:
+            return False  # already torn down: no second audit row / close
         if await self.area_allows("use", notify=True):
             return True
         self.rejected = True

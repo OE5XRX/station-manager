@@ -234,3 +234,21 @@ def test_rejected_terminal_client_cannot_close_other_users_shell():
             await asyncio.wait_for(layer.receive(spy), timeout=0.3)
 
     asyncio.run(scenario())
+
+
+def test_terminal_still_allowed_short_circuits_when_rejected():
+    """A rejected consumer must not re-check (no second audit row, no second
+    terminal_close / close) — e.g. the keepalive racing a frame-triggered deny."""
+    from apps.tunnel.consumers import TerminalConsumer
+
+    consumer = TerminalConsumer()
+    consumer.rejected = True
+    calls = []
+
+    async def _area_allows(*a, **kw):
+        calls.append(a)
+        return False
+
+    consumer.area_allows = _area_allows
+    assert asyncio.run(consumer._still_allowed()) is False
+    assert calls == []
