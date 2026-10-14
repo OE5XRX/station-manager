@@ -248,9 +248,8 @@ class TestR5cProvisioningJobCreatePreCheck:
     """Non-staff POST to provisioning-jobs must return 403 BEFORE DRF validates
     the payload (info-leak fix: same class as R5b but for ProvisioningJobViewSet).
 
-    FIX: add can_trigger_provisioning_role(user) 1-arg helper in write_scoping +
-    create_requires = staticmethod(ws.can_trigger_provisioning_role) on
-    ProvisioningJobViewSet.
+    FIX (now): ``AreaPermission`` rejects the POST (``provisioning.manage``)
+    before the serializer ever runs.
     """
 
     def test_region_mgr_post_returns_403_not_400(self, api_topology, bearer, image_release):

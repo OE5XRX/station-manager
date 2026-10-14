@@ -6,10 +6,9 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
-from apps.accounts.models import User
 from apps.accounts.permissions import AreaPermission
+from apps.accounts.visibility import audience_for, directory_queryset
 from apps.api.authentication import PersonalAccessTokenAuthentication
-from apps.api.permissions import TopologyScopedPermission
 from apps.api.read_filters import (
     AlertFilter,
     DeploymentFilter,
@@ -296,19 +295,26 @@ class ImageImportJobViewSet(AreaReadOnlyViewSet):
 
 
 class UserViewSet(AreaReadOnlyViewSet):
-    """User profiles: internal (staff/admin) see all; others see only themselves.
+    """User directory (``users.view``; writes ``users.manage``).
 
-    Still on the legacy topology gate until the users migration (Task 12).
+    Returns exactly the set the UI member directory shows the viewer
+    (``visibility.directory_queryset``): Members get active, non-Applicant
+    users; managers every non-deleted user. Fields per target are filtered by
+    ``UserSerializer`` via ``directory_visible_fields``.
     """
 
-    permission_classes = [TopologyScopedPermission]
-
+    area = "users"
     serializer_class = UserSerializer
     search_fields = ["username", "email", "first_name", "last_name"]
     ordering_fields = ["username", "date_joined"]
 
     def get_queryset(self):
-        user = self.request.user
-        if user.is_internal:
-            return User.objects.all().order_by("username")
-        return User.objects.filter(pk=user.pk)
+        return directory_queryset(self.request.user).order_by("username")
+
+    def get_object(self):
+        obj = super().get_object()
+        # Defense in depth: a target the viewer has no audience for is
+        # invisible (404, no existence leak), never a 403 or an empty body.
+        if audience_for(self.request.user, obj) is None:
+            raise NotFound
+        return obj

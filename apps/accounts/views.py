@@ -702,25 +702,23 @@ class UserListView(AreaPermissionMixin, ListView):
 
     def get_queryset(self):
         is_manager = self._is_manager()
-        # Non-managers get the shared directory queryset (active, no
-        # Applicants); managers start from everyone and pick a lifecycle bucket.
-        qs = (
-            User.objects.all() if is_manager else directory_queryset(self.request.user)
-        ).order_by("username")
-
-        # Show-filter: lifecycle bucket (active/inactive/deleted/all).
-        # Default "active" hides soft-deleted AND deactivated users.
-        # Non-managers never see deleted/inactive — hard-pinned to active.
-        show = self.request.GET.get("show", "active") if is_manager else "active"
-
-        if show == "deleted":
-            qs = qs.filter(deleted_at__isnull=False)
-        elif show == "inactive":
-            qs = qs.filter(deleted_at__isnull=True, is_active=False)
-        elif show == "all":
-            pass
+        if is_manager:
+            # Managers start from everyone and pick a lifecycle bucket
+            # (active/inactive/deleted/all). Default "active" hides
+            # soft-deleted AND deactivated users.
+            qs = User.objects.all()
+            show = self.request.GET.get("show", "active")
+            if show == "deleted":
+                qs = qs.filter(deleted_at__isnull=False)
+            elif show == "inactive":
+                qs = qs.filter(deleted_at__isnull=True, is_active=False)
+            elif show != "all":
+                qs = qs.filter(deleted_at__isnull=True, is_active=True)
         else:
-            qs = qs.filter(deleted_at__isnull=True, is_active=True)
+            # Non-managers get the shared directory queryset (active, not
+            # deleted, no Applicants) — the same set the users API returns.
+            qs = directory_queryset(self.request.user)
+        qs = qs.order_by("username")
 
         q = self.request.GET.get("q", "").strip()
         if q:

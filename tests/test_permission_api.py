@@ -184,3 +184,85 @@ def test_options_metadata_advertises_post_for_staff():
     r = _c("staff").options("/api/v1/stations/")
     assert r.status_code == 200
     assert "POST" in r.json().get("actions", {})
+
+
+def test_staff_api_does_not_expose_private_fields():
+    target = User.objects.create_user(
+        username="tgt", password="x", membership_level="member", phone="+43 1", address="Weg 1"
+    )
+    r = _c("staff").get(f"/api/v1/users/{target.pk}/")
+    assert r.status_code == 200
+    body = r.json()
+    assert "phone" not in body and "address" not in body
+    assert "is_admin" not in body and "is_internal" not in body
+
+
+def test_admin_api_sees_private_fields():
+    target = User.objects.create_user(
+        username="tgt2", password="x", membership_level="member", phone="+43 1"
+    )
+    assert _c("admin").get(f"/api/v1/users/{target.pk}/").json()["phone"] == "+43 1"
+
+
+def test_member_does_not_see_applicants():
+    User.objects.create_user(username="app1", password="x", membership_level="applicant")
+    names = [u["username"] for u in _c("member").get("/api/v1/users/").json()["results"]]
+    assert "app1" not in names
+
+
+def test_member_cannot_retrieve_applicant_404():
+    app = User.objects.create_user(username="app2", password="x", membership_level="applicant")
+    assert _c("member").get(f"/api/v1/users/{app.pk}/").status_code == 404
+
+
+def test_applicant_users_api_forbidden():
+    assert _c("applicant").get("/api/v1/users/").status_code == 403
+
+
+def test_staff_cannot_patch_users():
+    target = User.objects.create_user(username="t3", password="x", membership_level="member")
+    r = _c("staff").patch(f"/api/v1/users/{target.pk}/", {"first_name": "X"}, format="json")
+    assert r.status_code == 403 and r.json()["required"] == "users.manage"
+
+
+def test_users_api_list_matches_ui_directory_for_member(client):
+    """The API returns exactly the set the UI directory shows a Member."""
+    from django.urls import reverse
+    from django.utils import timezone
+
+    User.objects.create_user(username="dir-mem", password="x", membership_level="member")
+    User.objects.create_user(username="dir-staff", password="x", membership_level="staff")
+    User.objects.create_user(username="dir-app", password="x", membership_level="applicant")
+    User.objects.create_user(
+        username="dir-inactive", password="x", membership_level="member", is_active=False
+    )
+    User.objects.create_user(
+        username="dir-gone", password="x", membership_level="member", deleted_at=timezone.now()
+    )
+    viewer = User.objects.create_user(
+        username="dir-viewer", password="x", membership_level="member"
+    )
+    client.force_login(viewer)
+    ui = {u.username for u in client.get(reverse("accounts:user_list")).context["users"]}
+    api = APIClient()
+    api.force_authenticate(viewer)
+    api_names = {u["username"] for u in api.get("/api/v1/users/").json()["results"]}
+    assert api_names == ui
+    assert {"dir-mem", "dir-staff", "dir-viewer"} <= api_names
+    assert not {"dir-app", "dir-inactive", "dir-gone"} & api_names
+
+
+def test_admin_users_api_lists_all_non_deleted():
+    """Admins get every non-deleted user: active and inactive, incl. Applicants."""
+    from django.utils import timezone
+
+    User.objects.create_user(username="adm-app", password="x", membership_level="applicant")
+    User.objects.create_user(
+        username="adm-inactive", password="x", membership_level="member", is_active=False
+    )
+    User.objects.create_user(
+        username="adm-gone", password="x", membership_level="member", deleted_at=timezone.now()
+    )
+    names = {u["username"] for u in _c("admin").get("/api/v1/users/").json()["results"]}
+    assert {"adm-app", "adm-inactive"} <= names
+    assert "adm-gone" not in names

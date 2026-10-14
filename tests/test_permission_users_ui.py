@@ -88,8 +88,12 @@ def test_directory_queryset(db):
 
     gone.deleted_at = timezone.now()
     gone.save()
+    dormant = _mk("member", "dormant")
+    dormant.is_active = False
+    dormant.save()
+    # Members: active, not deleted, no Applicants. Managers: every non-deleted.
     assert set(directory_queryset(mem)) == {mem, adm}
-    assert set(directory_queryset(adm)) == {app, mem, adm}
+    assert set(directory_queryset(adm)) == {app, mem, adm, dormant}
 
 
 def test_webpush_subscribe_requires_profile_use(client):

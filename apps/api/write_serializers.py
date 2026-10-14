@@ -5,7 +5,6 @@ status/secret fields are read-only or absent. No ``fields="__all__"``.
 """
 
 from rest_framework import serializers
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.accounts.models import User
@@ -40,8 +39,9 @@ class UserWriteSerializer(serializers.ModelSerializer):
     cross-user; email changes go only through the verification flow. The field
     stays in ``fields`` so it still appears in responses.
 
-    Validation mirrors UI guards (MembershipSetView = AdminRequiredMixin):
-      - membership_level changes require an ADMIN actor (403).
+    Only reachable with ``users.manage`` (``AreaPermission`` on the viewset),
+    so the actor may change membership. Validation mirrors the UI guards of
+    MembershipSetView:
       - self-change of membership_level is blocked (400).
       - demote-to-applicant blocked when user has assignments (400).
     The request is injected via context so the serializer can compare
@@ -83,13 +83,6 @@ class UserWriteSerializer(serializers.ModelSerializer):
             return attrs
 
         request = self.context.get("request")
-
-        # Actor-must-be-admin guard for ANY membership change (mirrors the UI's
-        # AdminRequiredMixin on MembershipSetView). A staff (is_internal but not
-        # is_admin) user may edit profile fields but may NOT change membership.
-        # 403 (PermissionDenied), not 400 — this is an authorization failure.
-        if request is not None and not request.user.is_admin:
-            raise PermissionDenied("Only admins may change membership level.")
 
         # Self-change guard (mirrors MembershipSetView: target.pk == request.user.pk → 400).
         if request is not None and request.user.pk == instance.pk:

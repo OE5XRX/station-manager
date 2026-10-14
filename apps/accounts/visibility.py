@@ -153,14 +153,18 @@ def user_can_view_directory(viewer):
 
 
 def directory_queryset(viewer):
-    """Active users the ``viewer`` may see in the member directory.
+    """Users the ``viewer`` may see in the member directory.
 
-    Shared by the user list and (later) the users API so both shape the
-    directory identically: non-soft-deleted users only (callers add ``is_active`` / lifecycle
-    buckets), and
-    Applicants are hidden unless the viewer can manage users.
+    Single source for the UI user list (``UserListView``) and the users API so
+    both return the same set:
+
+    - Managers (``users.manage``): every non-soft-deleted user — active and
+      deactivated, Applicants included. (The UI list narrows this further with
+      its lifecycle buckets; its default bucket shows the active ones.)
+    - Everyone else: active (``is_active``), non-soft-deleted, non-Applicant
+      users only.
     """
     qs = User.objects.active()
     if not can(viewer, "users", "manage"):
-        qs = qs.exclude(membership_level=User.MembershipLevel.APPLICANT)
+        qs = qs.filter(is_active=True).exclude(membership_level=User.MembershipLevel.APPLICANT)
     return qs

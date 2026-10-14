@@ -7,6 +7,7 @@ from rest_framework import serializers
 
 from apps.accounts.models import User
 from apps.accounts.permissions import can
+from apps.accounts.visibility import directory_visible_fields
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
@@ -333,14 +334,19 @@ class ImageImportJobSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """Read-only user profile.
+    """Read-only user profile, filtered per target like the member directory.
 
     Sensitive fields (password, last_login, is_staff, is_superuser, is_active,
     deleted_at, deleted_by) are structurally absent — not listed in ``fields``.
+    Of the rest, only the keys ``visibility.directory_visible_fields(viewer,
+    target)`` allows are emitted (``id`` always), so e.g. Staff no longer sees
+    every user's address/phone. Without a request the serializer fails closed
+    to ``id`` only.
     """
 
-    is_admin = serializers.BooleanField(read_only=True)
-    is_internal = serializers.BooleanField(read_only=True)
+    # Serializer key -> visibility concept key, where they differ.
+    # ``notify_channel`` is a private preference, grouped with ``language``.
+    _CONCEPT_KEYS = {"date_joined": "date_joined_year", "notify_channel": "language"}
 
     class Meta:
         model = User
@@ -364,6 +370,15 @@ class UserSerializer(serializers.ModelSerializer):
             "locator",
             "is_directory_visible",
             "date_joined",
-            "is_admin",
-            "is_internal",
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        viewer = getattr(request, "user", None)
+        visible = directory_visible_fields(viewer, instance) if viewer is not None else frozenset()
+        return {
+            key: value
+            for key, value in data.items()
+            if key == "id" or self._CONCEPT_KEYS.get(key, key) in visible
+        }
