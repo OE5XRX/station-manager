@@ -8,9 +8,16 @@ from apps.sso.views import AppGrantAuthorizationView
 
 # Only DOT's protocol endpoints are mounted. DOT's management_urlpatterns
 # (applications/, authorized_tokens/) and dcr_urlpatterns are deliberately
-# left out: client management lives in apps.sso (sso.manage).
+# left out: client management lives in apps.sso (sso.manage). The RFC 8628
+# device grant is dropped from base_urlpatterns too: it bypasses the per-app
+# SSO policy (AppGrantAuthorizationView) and no RP uses it.
+_DOT_DEVICE_FLOW = frozenset(
+    {"device-authorization", "device", "device-confirm", "device-grant-status"}
+)
 DOT_PROTOCOL_URLPATTERNS = (
-    dot_urls.metadata_urlpatterns + dot_urls.base_urlpatterns + dot_urls.oidc_urlpatterns
+    dot_urls.metadata_urlpatterns
+    + [p for p in dot_urls.base_urlpatterns if p.name not in _DOT_DEVICE_FLOW]
+    + dot_urls.oidc_urlpatterns
 )
 
 urlpatterns = [

@@ -256,3 +256,35 @@ def test_dot_management_views_are_not_mounted(client, django_user_model, path):
     user = django_user_model.objects.create_user(username="plain", password="x", email="p@x.org")
     client.force_login(user)
     assert client.get(path).status_code in (403, 404)
+
+
+@pytest.mark.parametrize(
+    "name", ["device-authorization", "device", "device-confirm", "device-grant-status"]
+)
+def test_dot_device_flow_is_not_mounted(name):
+    """RFC 8628 device grant bypasses the per-app SSO policy and is unused."""
+    from django.urls import NoReverseMatch, reverse
+
+    from apps.accounts.permissions import EXEMPT_URL_NAMES
+
+    kwargs = {"client_id": "c", "user_code": "u"} if name.endswith(("confirm", "status")) else {}
+    with pytest.raises(NoReverseMatch):
+        reverse(f"oauth2_provider:{name}", kwargs=kwargs)
+    assert f"oauth2_provider:{name}" not in EXEMPT_URL_NAMES
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "path", ["/sso/device-authorization/", "/sso/device/", "/sso/device-confirm/c/u"]
+)
+def test_dot_device_flow_paths_404(client, django_user_model, path):
+    user = django_user_model.objects.create_user(username="plain2", password="x", email="q@x.org")
+    client.force_login(user)
+    assert client.get(path).status_code == 404
+
+
+@pytest.mark.django_db
+def test_server_metadata_omits_device_endpoint(client):
+    r = client.get("/sso/.well-known/oauth-authorization-server")
+    assert r.status_code == 200
+    assert "device_authorization_endpoint" not in r.json()

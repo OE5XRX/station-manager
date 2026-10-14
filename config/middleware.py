@@ -100,12 +100,8 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     #: URI; the view must run to honour that contract.
     #:
     #: Not on this list: OAuth 2.0 Device Authorization Grant
-    #: (RFC 8628) endpoints (``device-authorization/``, ``device/``,
-    #: ``device-confirm/``, ``device-grant-status/``). The grant is
-    #: shipped by ``django-oauth-toolkit`` but is not configured or
-    #: used by any current RP. The principle is "no anonymous surface
-    #: we don't actively use" — add the relevant entries (with a
-    #: companion test) the moment the device flow goes live.
+    #: (RFC 8628) endpoints. ``config/urls.py`` does not mount them at
+    #: all (they bypass the per-app SSO policy and no RP uses them).
     PUBLIC_EXACT_PATHS: Final[frozenset[str]] = frozenset(
         {
             "/i18n/setlang/",
