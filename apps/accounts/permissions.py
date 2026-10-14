@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 from enum import IntEnum
 
+from asgiref.sync import sync_to_async
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
+from rest_framework.permissions import BasePermission
 
 VERBS: tuple[str, ...] = ("view", "use", "manage")
 
@@ -394,3 +397,80 @@ def permission_exempt(reason: str):
         return func
 
     return decorator
+
+
+class AreaPermission(BasePermission):
+    """DRF counterpart of :class:`AreaPermissionMixin`.
+
+    Non-user principals (DeviceKey, anonymous) are refused without an audit
+    entry; users go through :func:`require` (raises ``AreaDenied`` -> JSON 403).
+    """
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False) or not hasattr(user, "membership_level"):
+            return False
+        require(
+            user, view.area, resolve_verb(view, request.method), request=request, channel="api"
+        )
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        return True
+
+
+def ws_denied_frame(exc: AreaDenied, request_id=None) -> dict:
+    frame = {"type": "error", "code": "forbidden", "message": str(exc)}
+    if request_id is not None:
+        frame["request_id"] = request_id
+    return frame
+
+
+def _load_fresh_user(pk):
+    from apps.accounts.models import User
+
+    if pk is None:
+        return None
+    return User.objects.filter(pk=pk).first()
+
+
+class AreaConsumerMixin:
+    """Channels consumer gate: re-reads the user from the DB on every check."""
+
+    area: str | None = None
+    connect_verb: str = "view"
+
+    async def fresh_user(self):
+        user = self.scope.get("user")
+        return await sync_to_async(_load_fresh_user)(getattr(user, "pk", None))
+
+    def _check(self, user, area, verb):
+        client = self.scope.get("client") or (None, None)
+        require(
+            user,
+            area,
+            verb,
+            channel="ws",
+            path=self.scope.get("path", ""),
+            method=f"WS {verb}",
+            ip=client[0],
+        )
+
+    async def area_allows(self, verb, *, area=None, request_id=None, notify=True) -> bool:
+        from django.contrib.auth.models import AnonymousUser
+
+        user = await self.fresh_user() or AnonymousUser()
+        try:
+            await sync_to_async(self._check)(user, area or self.area, verb)
+        except AreaDenied as exc:
+            if notify:
+                await self.send(text_data=json.dumps(ws_denied_frame(exc, request_id)))
+            return False
+        return True
+
+    async def area_connect_gate(self) -> bool:
+        """Call right after ``accept()``; closes with 4403 when denied."""
+        if await self.area_allows(self.connect_verb, notify=True):
+            return True
+        await self.close(code=4403)
+        return False
