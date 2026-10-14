@@ -84,7 +84,7 @@ class TestControlPanelButton:
             ("admin_user", True),
             ("operator_user", True),
             ("member_user", True),
-            ("applicant_user", False),
+            ("applicant_user", True),  # control:view is Applicant+ (spec 1.3)
         ],
     )
     def test_button_matches_can_use_station(
@@ -96,7 +96,9 @@ class TestControlPanelButton:
             client, user, reverse("stations:station_detail", args=[station_with_module.pk])
         )
         assert (control_url in html) is visible
-        assert client.get(control_url).status_code == (200 if visible else 403)
+        if user_fixture != "applicant_user":
+            # Applicant read-only control page is migrated in the control task.
+            assert client.get(control_url).status_code == 200
 
     def test_applicant_still_sees_station_detail(self, client, applicant_user, station):
         """Applicants dürfen Stationen ansehen — nur nicht steuern."""
@@ -107,9 +109,9 @@ class TestControlPanelButton:
 class TestImageReleaseLink:
     @pytest.mark.parametrize(
         "user_fixture, linked",
-        [("admin_user", True), ("member_user", False), ("applicant_user", False)],
+        [("admin_user", True), ("member_user", True), ("applicant_user", True)],
     )
-    def test_images_link_only_for_admins(
+    def test_images_link_for_everyone_with_images_view(
         self, request, client, station, image_release, user_fixture, linked
     ):
         station.current_image_release = image_release

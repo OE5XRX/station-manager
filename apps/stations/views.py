@@ -14,6 +14,7 @@ from django.views.generic import (
     UpdateView,
 )
 
+from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import DeploymentResult
 from apps.images.models import ImageRelease
@@ -42,11 +43,9 @@ def _track_changes(old_instance, new_instance, fields):
 
 
 class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Restrict access to internal users (Vereins-Staff or Vereins-Admin).
+    """Legacy: still imported by other apps; removed in Task 13 of unified-permissions.
 
-    Class name retained for backwards-compat during the PR-1 -> PR-2
-    rollout; the actual check is now ``user.is_internal``
-    (membership_level in {STAFF, ADMIN}), not Django-group membership.
+    Station views in this module use AreaPermissionMixin instead.
     """
 
     def test_func(self):
@@ -58,7 +57,8 @@ class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
 # ---------------------------------------------------------------------------
 
 
-class StationListView(LoginRequiredMixin, ListView):
+class StationListView(AreaPermissionMixin, ListView):
+    area = "stations"
     model = Station
     template_name = "stations/station_list.html"
     context_object_name = "stations"
@@ -87,17 +87,22 @@ class StationListView(LoginRequiredMixin, ListView):
         return context
 
 
-class StationDetailView(LoginRequiredMixin, DetailView):
+class StationDetailView(AreaPermissionMixin, DetailView):
+    area = "stations"
     model = Station
     template_name = "stations/station_detail.html"
     context_object_name = "station"
 
     def get_queryset(self):
+        prefetch = ["tags", "photos", "log_entries"]
+        # The audit tab exposes IP addresses: only query it for managers.
+        if can(self.request.user, "stations", "manage"):
+            prefetch.append("audit_logs")
         return (
             super()
             .get_queryset()
             .select_related("device_key", "inventory", "telemetry", "current_image_release")
-            .prefetch_related("tags", "photos", "log_entries", "audit_logs")
+            .prefetch_related(*prefetch)
         )
 
     def get_context_data(self, **kwargs):
@@ -110,10 +115,9 @@ class StationDetailView(LoginRequiredMixin, DetailView):
         if raw_private_key:
             context["show_raw_private_key"] = True
             context["raw_private_key"] = raw_private_key
-        # Mirrors StationControlView.test_func so the button never links to a 403.
-        context["can_use_station"] = self.request.user.can_use_station(self.object)
-        # Provisioning section (admin only)
-        if self.request.user.is_admin:
+        user = self.request.user
+        # Provisioning section (provisioning:manage)
+        if can(user, "provisioning", "manage"):
             context["image_releases"] = ImageRelease.objects.order_by(
                 "machine", "-is_latest", "-imported_at"
             )
@@ -130,6 +134,8 @@ class StationDetailView(LoginRequiredMixin, DetailView):
                 .order_by("-created_at")
                 .first()
             )
+        # Upgrade card (deployments)
+        if can(user, "deployments", "view"):
             current = self.object.current_image_release
             if current is not None:
                 context["upgrade_target"] = ImageRelease.objects.filter(
@@ -142,6 +148,7 @@ class StationDetailView(LoginRequiredMixin, DetailView):
                 .select_related("deployment__image_release")
                 .order_by("-pk")[:5]
             )
+        if can(user, "topology", "manage"):
             # Topology card.
             context["all_regions"] = Region.objects.order_by("name")
             # Only the columns the topology card actually renders are
@@ -165,7 +172,9 @@ class StationDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
-class StationCreateView(AdminOrOperatorRequiredMixin, CreateView):
+class StationCreateView(AreaPermissionMixin, CreateView):
+    area = "stations"
+    verb = "manage"
     model = Station
     template_name = "stations/station_form.html"
     form_class = StationForm
@@ -209,7 +218,9 @@ TRACKED_FIELDS = [
 ]
 
 
-class StationUpdateView(AdminOrOperatorRequiredMixin, UpdateView):
+class StationUpdateView(AreaPermissionMixin, UpdateView):
+    area = "stations"
+    verb = "manage"
     model = Station
     template_name = "stations/station_form.html"
     form_class = StationForm
@@ -243,7 +254,9 @@ class StationUpdateView(AdminOrOperatorRequiredMixin, UpdateView):
         return context
 
 
-class StationDeleteView(AdminOrOperatorRequiredMixin, DeleteView):
+class StationDeleteView(AreaPermissionMixin, DeleteView):
+    area = "stations"
+    verb = "manage"
     model = Station
     template_name = "stations/station_confirm_delete.html"
     context_object_name = "station"
@@ -254,7 +267,9 @@ class StationDeleteView(AdminOrOperatorRequiredMixin, DeleteView):
         return super().form_valid(form)
 
 
-class StationPhotoUploadView(AdminOrOperatorRequiredMixin, CreateView):
+class StationPhotoUploadView(AreaPermissionMixin, CreateView):
+    area = "stations"
+    verb = "manage"
     form_class = StationPhotoForm
     template_name = "stations/_photo_upload_form.html"
 
@@ -274,7 +289,9 @@ class StationPhotoUploadView(AdminOrOperatorRequiredMixin, CreateView):
         return context
 
 
-class StationLogEntryCreateView(AdminOrOperatorRequiredMixin, CreateView):
+class StationLogEntryCreateView(AreaPermissionMixin, CreateView):
+    area = "stations"
+    verb = "manage"
     form_class = StationLogEntryForm
     template_name = "stations/_log_entry_form.html"
 
@@ -299,7 +316,9 @@ class StationLogEntryCreateView(AdminOrOperatorRequiredMixin, CreateView):
 # ---------------------------------------------------------------------------
 
 
-class StationGenerateKeyView(AdminOrOperatorRequiredMixin, View):
+class StationGenerateKeyView(AreaPermissionMixin, View):
+    area = "stations"
+    verb = "manage"
     """Generate an Ed25519 keypair and link the public key to the station."""
 
     def post(self, request, pk):
@@ -334,7 +353,9 @@ class StationGenerateKeyView(AdminOrOperatorRequiredMixin, View):
         return redirect("stations:station_detail", pk=pk)
 
 
-class StationRevokeKeyView(AdminOrOperatorRequiredMixin, View):
+class StationRevokeKeyView(AreaPermissionMixin, View):
+    area = "stations"
+    verb = "manage"
     """Revoke (delete) the Ed25519 DeviceKey linked to the station."""
 
     def post(self, request, pk):
@@ -363,14 +384,17 @@ class StationRevokeKeyView(AdminOrOperatorRequiredMixin, View):
 # ---------------------------------------------------------------------------
 
 
-class StationTagListView(AdminOrOperatorRequiredMixin, ListView):
+class StationTagListView(AreaPermissionMixin, ListView):
+    area = "stations"
     model = StationTag
     template_name = "stations/tag_list.html"
     context_object_name = "tags"
     paginate_by = 25
 
 
-class StationTagCreateView(AdminOrOperatorRequiredMixin, CreateView):
+class StationTagCreateView(AreaPermissionMixin, CreateView):
+    area = "stations"
+    verb = "manage"
     model = StationTag
     template_name = "stations/tag_form.html"
     form_class = StationTagForm
@@ -386,7 +410,9 @@ class StationTagCreateView(AdminOrOperatorRequiredMixin, CreateView):
         return context
 
 
-class StationTagUpdateView(AdminOrOperatorRequiredMixin, UpdateView):
+class StationTagUpdateView(AreaPermissionMixin, UpdateView):
+    area = "stations"
+    verb = "manage"
     model = StationTag
     template_name = "stations/tag_form.html"
     form_class = StationTagForm
@@ -402,7 +428,9 @@ class StationTagUpdateView(AdminOrOperatorRequiredMixin, UpdateView):
         return context
 
 
-class StationTagDeleteView(AdminOrOperatorRequiredMixin, DeleteView):
+class StationTagDeleteView(AreaPermissionMixin, DeleteView):
+    area = "stations"
+    verb = "manage"
     model = StationTag
     template_name = "stations/tag_confirm_delete.html"
     context_object_name = "tag"

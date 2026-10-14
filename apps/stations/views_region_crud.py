@@ -1,4 +1,4 @@
-"""Region CRUD views (admin-only).
+"""Region CRUD views (topology area: list = view, CRUD = manage).
 
 ListView shows all regions with station counts.
 CreateView + UpdateView use RegionForm.
@@ -19,12 +19,13 @@ from django.views.generic import (
     UpdateView,
 )
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.forms import RegionForm
 from apps.stations.models import Region
 
 
-class RegionListView(AdminRequiredMixin, ListView):
+class RegionListView(AreaPermissionMixin, ListView):
+    area = "topology"
     model = Region
     template_name = "stations/region_list.html"
     context_object_name = "regions"
@@ -34,21 +35,27 @@ class RegionListView(AdminRequiredMixin, ListView):
         return super().get_queryset().annotate(stations_count=Count("stations")).order_by("name")
 
 
-class RegionCreateView(AdminRequiredMixin, CreateView):
+class RegionCreateView(AreaPermissionMixin, CreateView):
+    area = "topology"
+    verb = "manage"
     model = Region
     form_class = RegionForm
     template_name = "stations/region_form.html"
     success_url = reverse_lazy("stations:region_list")
 
 
-class RegionUpdateView(AdminRequiredMixin, UpdateView):
+class RegionUpdateView(AreaPermissionMixin, UpdateView):
+    area = "topology"
+    verb = "manage"
     model = Region
     form_class = RegionForm
     template_name = "stations/region_form.html"
     success_url = reverse_lazy("stations:region_list")
 
 
-class RegionDeleteView(AdminRequiredMixin, DeleteView):
+class RegionDeleteView(AreaPermissionMixin, DeleteView):
+    area = "topology"
+    verb = "manage"
     model = Region
     template_name = "stations/region_confirm_delete.html"
     success_url = reverse_lazy("stations:region_list")

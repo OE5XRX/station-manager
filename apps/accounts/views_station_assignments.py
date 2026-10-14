@@ -31,13 +31,16 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views import View
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.models import Station, StationAssignment
 
 User = get_user_model()
 
 
-class StationAssignmentCreateView(AdminRequiredMixin, View):
+class StationAssignmentCreateView(AreaPermissionMixin, View):
+    area = "topology"
+    verb = "manage"
+
     def post(self, request, user_pk):
         # 2b: refuse mutation on soft-deleted targets. The UI marks the
         # station-assignments card as readonly, but a hand-rolled POST
@@ -148,7 +151,10 @@ class StationAssignmentCreateView(AdminRequiredMixin, View):
         return JsonResponse({"success": True})
 
 
-class StationAssignmentRevokeView(AdminRequiredMixin, View):
+class StationAssignmentRevokeView(AreaPermissionMixin, View):
+    area = "topology"
+    verb = "manage"
+
     def post(self, request, pk):
         assignment = get_object_or_404(StationAssignment, pk=pk)
         assignment.delete()

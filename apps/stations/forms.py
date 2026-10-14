@@ -1,6 +1,8 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from apps.accounts.permissions import can
+
 from .models import Region, Station, StationLogEntry, StationPhoto, StationTag
 
 
@@ -43,7 +45,7 @@ class StationForm(forms.ModelForm):
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
         # RF-safety calibration: only Vereins-Staff/Admin may change it.
-        if user is None or not getattr(user, "is_internal", False):
+        if not can(user, "stations", "manage"):
             self.fields.pop("tx_audio_ceiling_dbfs", None)
 
 

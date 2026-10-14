@@ -10,11 +10,14 @@ from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views import View
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.models import Region, Station
 
 
-class StationSetRegionView(AdminRequiredMixin, View):
+class StationSetRegionView(AreaPermissionMixin, View):
+    area = "topology"
+    verb = "manage"
+
     def post(self, request, pk):
         station = get_object_or_404(Station, pk=pk)
         # Distinguish "explicit clear" (empty string) from "field

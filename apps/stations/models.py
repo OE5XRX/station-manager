@@ -6,7 +6,6 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from apps.accounts.models import User
 from apps.stations import tx_audio
 
 # Slugs reserved by the rollout machinery (apps.rollouts.grouping) —
@@ -533,7 +532,9 @@ class _ApplicantForbiddenMixin:
 
     def clean(self):
         super().clean()
-        if self.user.membership_level == User.MembershipLevel.APPLICANT:
+        from apps.accounts.permissions import Level
+
+        if Level.from_slug(self.user.membership_level) == Level.APPLICANT:
             raise ValidationError(
                 {
                     "user": _(
