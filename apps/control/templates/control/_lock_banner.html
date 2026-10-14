@@ -40,6 +40,7 @@ socket is not open.
     </template>
   </span>
 
+  {% if can.control.use %}
   <div class="cp-lock-actions">
     <button type="button" class="cp-btn cp-btn--action cp-lock-btn"
             x-show="lockState === 'free'"
@@ -61,6 +62,14 @@ socket is not open.
             :disabled="conn !== 'open'"
             @click="preempt()">{% trans "Override" %}</button>
   </div>
+  {% else %}
+  {% comment %}control.view only: watch + listen. No lock affordances at all — the
+  consumer would refuse them anyway (control.use).{% endcomment %}
+  <div class="cp-lock-actions cp-lock-actions--readonly">
+    <span class="cp-lock-readonly-hint">{% blocktrans with level=control_use_label %}You can watch and listen. Operating the station requires {{ level }}.{% endblocktrans %}</span>
+    {% include "includes/readonly_badge.html" %}
+  </div>
+  {% endif %}
 
   {% comment %}Connection indicator — reuses the shared pill/dot chrome.{% endcomment %}
   <span class="pill"
@@ -71,6 +80,7 @@ socket is not open.
   </span>
 </div>
 
+{% if can.control.use %}
 {% comment %}
 Incoming control request — shown to the holder only. Non-blocking: grant hands
 the lock over, dismiss ignores it.
@@ -92,6 +102,7 @@ the lock over, dismiss ignores it.
             @click="dismissRequest()">{% trans "Dismiss" %}</button>
   </div>
 </div>
+{% endif %}
 
 {% comment %}Transient loss notice — auto-dismisses after ~4s (JS timer).{% endcomment %}
 <div class="cp-lock-notice"
@@ -102,6 +113,15 @@ the lock over, dismiss ignores it.
      role="status"
      aria-live="polite">
   {% trans "You no longer have control" %}
+</div>
+
+{% comment %}Transient denial notice — an action was refused (e.g. demoted mid-session);
+the socket stays open. Text is the server's message. Auto-dismisses (JS timer).{% endcomment %}
+<div class="cp-lock-notice cp-deny-notice"
+     x-show="denyNotice"
+     x-cloak
+     role="alert">
+  <span x-text="denyNotice"></span>
 </div>
 
 {% comment %}Agent-offline notice — cleared automatically when the agent reconnects (C1).{% endcomment %}

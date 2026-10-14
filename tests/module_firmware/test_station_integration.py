@@ -21,7 +21,7 @@ def test_station_control_panel_links_to_module_detail(client, station_factory):
         tracked_module=mod,
         online=True,
     )
-    # can_use_station passes for any non-Applicant user.
+    # control.use (lock/PTT controls rendered) is Member+.
     client.force_login(
         User.objects.create_user(
             username="s", password="x", membership_level=User.MembershipLevel.MEMBER

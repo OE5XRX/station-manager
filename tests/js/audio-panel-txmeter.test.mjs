@@ -188,4 +188,18 @@ await ok("enableMic inserts a unity capture GainNode between source and worklet"
   assert.equal(c.txMeter.active, false);
 });
 
+// Error-frame normalisation (spec 2026-10-14 §5.2): permission frames carry
+// `message`, audio frames `detail`.
+await ok("forbidden frame (message) surfaces as micError", () => {
+  const c = factory();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    c._routeJSON({ type: "error", code: "forbidden", message: "Keine Berechtigung" });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(c.micError, "Keine Berechtigung");
+});
+
 console.log("\n" + passed + " assertions passed");

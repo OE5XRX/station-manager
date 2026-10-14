@@ -364,10 +364,12 @@ def test_browser_anon_reject():
 
 @pytest.mark.django_db(transaction=True)
 def test_browser_no_permission_reject():
-    """Applicant can_use_station=False → 4403."""
+    """No control.view (inactive user) → forbidden frame + 4403.
+
+    Applicants are accepted now (control.view = hear RX, spec 2026-10-14 §3.4)."""
     station = Station.objects.create(name="b2", status="online")
     user = User.objects.create(
-        username="applicant_b2", membership_level=User.MembershipLevel.APPLICANT
+        username="gone_b2", membership_level=User.MembershipLevel.MEMBER, is_active=False
     )
 
     async def scenario():
@@ -375,7 +377,24 @@ def test_browser_no_permission_reject():
         connected, _ = await comm.connect()
         assert connected is True
         err = await _drain_until(comm, "error")
-        assert err["code"] == "not_authorized"
+        assert err["code"] == "forbidden"
+        assert (await comm.receive_output())["code"] == 4403
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_browser_applicant_accepted_for_rx():
+    station = Station.objects.create(name="b2a", status="online")
+    user = User.objects.create(
+        username="applicant_b2a", membership_level=User.MembershipLevel.APPLICANT
+    )
+
+    async def scenario():
+        comm = _browser(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+        assert await comm.receive_nothing(timeout=0.3)
         await comm.disconnect()
 
     asyncio.run(scenario())

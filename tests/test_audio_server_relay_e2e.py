@@ -236,7 +236,7 @@ def _load_json(name: str) -> dict:
 
 
 def _make_member(username: str) -> User:
-    """Create a MEMBER user who can_use_station."""
+    """Create a MEMBER user (control.use: lock + mic uplink)."""
     return User.objects.create(username=username, membership_level=User.MembershipLevel.MEMBER)
 
 

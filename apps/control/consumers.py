@@ -7,6 +7,14 @@ import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
+from apps.accounts.permissions import (
+    AreaConsumerMixin,
+    AreaDenied,
+    can_override_station,
+    level_of,
+    ws_denied_frame,
+)
+
 from . import agent_presence, capability_policy, constants, lock, persistence, registry
 from .models import AgentConnection, StationModule
 
@@ -33,6 +41,10 @@ def _fresh_user(user):
     if fresh is None or not fresh.is_active:
         return None
     return fresh
+
+
+# Browser frames that operate the station: each re-checks control.use (fresh user).
+_USE_ACTIONS = frozenset({"lock_acquire", "lock_request", "lock_transfer", "ptt_keepalive"})
 
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
@@ -455,17 +467,23 @@ def _lock_with_holder(station, scope="station"):
     return lock_obj
 
 
-class ControlConsumer(AsyncWebsocketConsumer):
+class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """Browser-facing control WebSocket. Path: ws/control/<station_id>/.
 
-    Access-controlled (can_use_station). Relays holder commands/PTT and lock
-    actions to the agent; pushes state/inventory/result/event + lock status to
-    all viewers.
+    Permissions (spec 2026-10-14 §3.4): connect = ``control.view`` (watch only);
+    lock acquire/request/transfer, PTT keepalive and every non-``get`` command
+    re-check ``control.use`` against a freshly loaded user, so a demotion bites on
+    the next frame instead of on reconnect. Commands additionally need the
+    capability policy's verb (``use``/``manage``); preempt follows
+    ``can_override_station``. Relays holder commands/PTT and lock actions to the
+    agent; pushes state/inventory/result/event + lock status to all viewers.
 
     Audit note: CONTROL_PTT keepalives arrive ~1/sec — auditing every one would
     spam the log. Instead we audit command frames whose capability == "ptt" (i.e.
     the PTT-on command itself). ptt_keepalive frames are NOT audited.
     """
+
+    area = "control"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -488,8 +506,8 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self._reject(4404, "Station not found")
             return
         self.station = station
-        if not await self._can_use(station):
-            await self._reject(4403, "You are not permitted to control this station")
+        # control.view: forbidden frame + close 4403 on deny.
+        if not await self.area_connect_gate():
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
@@ -547,6 +565,13 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if station is None:
             return
 
+        # Operating actions re-check control.use with a fresh user on every frame.
+        # subscribe/unsubscribe and lock_release stay open to every connected viewer
+        # (release only ever affects the caller's own lock).
+        needs_use = mtype in _USE_ACTIONS or (mtype == "command" and msg.get("op") != "get")
+        if needs_use and not await self.area_allows("use", request_id=msg.get("request_id")):
+            return
+
         if mtype == "command":
             await self._handle_command(station, msg)
         elif mtype == "ptt_keepalive":
@@ -558,7 +583,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
             else:
                 await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
         elif mtype in ("subscribe", "unsubscribe"):
-            # Any viewer may subscribe/unsubscribe — access already checked at connect.
+            # Any viewer may subscribe/unsubscribe — control.view checked at connect.
             await self._relay(msg)
         elif mtype == "lock_acquire":
             await self._lock_acquire(station)
@@ -625,12 +650,13 @@ class ControlConsumer(AsyncWebsocketConsumer):
             # corrupt the gate. No bridge broadcast on a no-op.
 
     async def _authorize_command(self, station, msg):
-        """Server-side ``write_role`` gate (spec §4a) — the real authz check; the read-only
-        UI render is cosmetic. Every capability command a browser can reach the agent with
-        passes through here (``_handle_command`` is the only relay of ``type: command``).
+        """Server-side capability gate (``control.<policy verb>``, spec §3.4) — the real
+        authz check; the read-only UI render is cosmetic. Every capability command a
+        browser can reach the agent with passes through here (``_handle_command`` is the
+        only relay of ``type: command``).
 
         Any op other than ``get`` is a write. Fail closed: any exception while resolving
-        the module type or the user's role denies the command. Returns
+        the module type or the user's level denies the command. Returns
         ``(allowed, module_type)``.
         """
         capability = msg.get("capability")
@@ -641,24 +667,40 @@ class ControlConsumer(AsyncWebsocketConsumer):
             module_type = await self._lookup_module_type(
                 station, msg.get("slot"), msg.get("module")
             )
-            allowed = await self._may_write(station, capability, module_type)
+            allowed = await self._may_write(capability, module_type)
         except Exception:
-            logger.exception("control: write_role resolution failed; denying command")
+            logger.exception("control: capability permission check failed; denying command")
             allowed = False
         if allowed is True:
             return True, module_type
-        role = capability_policy.policy_for(capability, module_type).write_role
+        verb = capability_policy.policy_for(capability, module_type).verb
         try:
             await self._audit(
                 station,
                 "control_command",
                 f"{self.user.username} {_clip(msg.get('op'))} {_clip(capability)} "
                 f"on {_clip(msg.get('slot'))}/{_clip(msg.get('module'))} "
-                f"denied (requires {role})",
+                f"denied (requires control.{verb})",
             )
         except Exception:
             logger.exception("control: audit of denied command failed")
-        await self._error(msg.get("request_id"), "forbidden", f"Requires role: {role}")
+        request_id = msg.get("request_id")
+        # Standard forbidden frame + PERMISSION_DENIED audit. If the user does hold the
+        # verb (the denial came from a failed resolution), still deny — fail closed.
+        try:
+            send_generic = await self.area_allows(verb, request_id=request_id)
+        except Exception:
+            logger.exception("control: denial notification failed")
+            send_generic = True
+        if send_generic:
+            frame = {
+                "type": "error",
+                "code": "forbidden",
+                "message": "Command could not be authorized",
+            }
+            if request_id is not None:
+                frame["request_id"] = request_id
+            await self.send(text_data=json.dumps(frame))
         return False, module_type
 
     def _remember_persist(self, request_id, msg, module_type):
@@ -758,8 +800,12 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self._broadcast_lock(station)
 
     async def _lock_preempt(self, station):
-        if not await self._can_administer(station):
-            await self._error(None, "forbidden", "Admin rights required to preempt")
+        if not await self._can_override(station):
+            # Override is an assignment rule, not an area right: plain station-scoped
+            # denial, no PERMISSION_DENIED audit (require() is deliberately not used).
+            user = await self.fresh_user()
+            exc = AreaDenied("control", "manage", level_of(user))
+            await self.send(text_data=json.dumps(ws_denied_frame(exc, None)))
             return
         await self._preempt(station)
         await self._audit(
@@ -857,18 +903,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
             return None
 
     @database_sync_to_async
-    def _can_use(self, station):
-        return (
-            bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
-        )
-
-    @database_sync_to_async
-    def _can_administer(self, station):
-        return (
-            self.user.is_admin
-            or self.user.is_station_admin(station)
-            or self.user.can_administer_station(station)
-        )
+    def _can_override(self, station):
+        user = _fresh_user(self.user)
+        return user is not None and can_override_station(user, station)
 
     @database_sync_to_async
     def _lookup_module_type(self, station, slot, module):
@@ -884,11 +921,11 @@ class ControlConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _may_write(self, station, capability, module_type):
+    def _may_write(self, capability, module_type):
         user = _fresh_user(self.user)
         if user is None:
             return False
-        return capability_policy.can_write(user, station, capability, module_type)
+        return capability_policy.can_write(user, capability, module_type)
 
     async def _persist_result(self, slot, module, capability, value):
         try:
@@ -911,7 +948,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if _lock_with_holder(station).holder_id != self.user.id:
             return False
         user = _fresh_user(self.user)
-        if user is None or not capability_policy.can_write(user, station, capability, None):
+        if user is None or not capability_policy.can_write(user, capability, None):
             return False
         return persistence.persist_if_valid(station, slot, module, capability, value, self.user)
 

@@ -210,6 +210,8 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
       </div>
     </section>
 
+    {% comment %}TX route + microphone need control.use; control.view hears RX only.{% endcomment %}
+    {% if can.control.use %}
     {% comment %}======================================================
     Section: TX route — what I'm transmitting with
     ======================================================{% endcomment %}
@@ -382,6 +384,9 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
               x-text="micTx.reason"></span>
       </div>
     </section>
+    {% else %}
+    <p class="cp-lock-readonly-hint mb-0">{% blocktrans with level=control_use_label %}Receive only. Transmitting requires {{ level }}.{% endblocktrans %}</p>
+    {% endif %}
 
     {% comment %}======================================================
     Section: Link quality — RX smoothness telemetry + server relay counters.

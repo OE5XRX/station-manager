@@ -26,7 +26,8 @@ async def _drain_until(comm, msg_type, tries=6):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_applicant_rejected():
+def test_applicant_connects_read_only():
+    # control.view is Applicant+ (spec 2026-10-14 §1.3): formerly rejected with 4403.
     station = Station.objects.create(name="cc1", status="online")
     user = User.objects.create(username="app1", membership_level=User.MembershipLevel.APPLICANT)
 
@@ -35,9 +36,27 @@ def test_applicant_rejected():
         connected, _ = await comm.connect()
         assert connected is True
         msg = await comm.receive_json_from()
-        assert msg["type"] == "error"
-        assert msg["code"] == 4403
+        assert msg["type"] == "inventory"
         await comm.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_inactive_user_rejected():
+    station = Station.objects.create(name="cc1b", status="online")
+    user = User.objects.create(
+        username="gone1", membership_level=User.MembershipLevel.MEMBER, is_active=False
+    )
+
+    async def scenario():
+        comm = _browser_comm(user, station.id)
+        connected, _ = await comm.connect()
+        assert connected is True
+        msg = await comm.receive_json_from()
+        assert msg["type"] == "error"
+        assert msg["code"] == "forbidden"
+        assert (await comm.receive_output())["code"] == 4403
 
     asyncio.run(scenario())
 

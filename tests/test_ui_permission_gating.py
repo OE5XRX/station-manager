@@ -1,7 +1,7 @@
 """UI-Gating folgt den Backend-Checks: kein Link/Button, der auf eine 403 führt.
 
 Alerts = is_admin (AlertListView), Deployments = deployments:view (Applicant+),
-Control-Panel = can_use_station (StationControlView).
+Control-Panel = control.view (StationControlView; Applicant+ read-only).
 """
 
 import pytest
@@ -87,7 +87,7 @@ class TestControlPanelButton:
             ("applicant_user", True),  # control:view is Applicant+ (spec 1.3)
         ],
     )
-    def test_button_matches_can_use_station(
+    def test_button_matches_control_view(
         self, request, client, station_with_module, user_fixture, visible
     ):
         user = request.getfixturevalue(user_fixture)
@@ -96,9 +96,18 @@ class TestControlPanelButton:
             client, user, reverse("stations:station_detail", args=[station_with_module.pk])
         )
         assert (control_url in html) is visible
-        if user_fixture != "applicant_user":
-            # Applicant read-only control page is migrated in the control task.
-            assert client.get(control_url).status_code == 200
+        page = client.get(control_url)
+        assert page.status_code == 200
+        body = page.content.decode()
+        if user_fixture == "applicant_user":
+            # Read-only: no lock/PTT/mic controls, readonly badge, RX audio available.
+            assert '@click="acquire()"' not in body
+            assert "enableMic()" not in body
+            assert 'data-cap="ptt"' not in body
+            assert "nur lesend" in body
+            assert 'x-data="audioPanel"' in body
+        else:
+            assert '@click="acquire()"' in body
 
     def test_applicant_still_sees_station_detail(self, client, applicant_user, station):
         """Applicants dürfen Stationen ansehen — nur nicht steuern."""

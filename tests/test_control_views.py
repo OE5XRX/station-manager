@@ -24,8 +24,7 @@ def station(db):
 
 @pytest.fixture
 def operator(db):
-    # The control view's gate is can_use_station(), which today only requires a
-    # non-applicant membership level — there is no per-station assignment check.
+    # Operating needs control.use (Member+); there is no per-station assignment check.
     # Keep the fixture minimal so it mirrors the real permission contract; a
     # StationAssignment here would be dead setup that misleads if the contract
     # ever tightens.
@@ -57,11 +56,17 @@ def test_permitted_user_gets_panel(client, station, operator):
     assert b'id="control-panel"' in r.content
 
 
-def test_forbidden_user_gets_403(client, station):
-    other = User.objects.create_user(username="no", password="x")
+def test_applicant_gets_read_only_panel(client, station):
+    # control.view is Applicant+ (spec 2026-10-14 §1.3): formerly 403, now a read-only
+    # panel without lock affordances.
+    other = User.objects.create_user(
+        username="no", password="x", membership_level=User.MembershipLevel.APPLICANT
+    )
     client.force_login(other)
     r = client.get(reverse("control:station_control", args=[station.pk]))
-    assert r.status_code == 403
+    assert r.status_code == 200
+    assert b'@click="acquire()"' not in r.content
+    assert b"cp-lock-readonly-hint" in r.content
 
 
 # ---------------------------------------------------------------------------

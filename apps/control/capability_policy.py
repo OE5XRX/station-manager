@@ -1,7 +1,8 @@
 """Platform-layer capability write policy (spec 2026-10-03 §4a).
 
-Firmware ``describe`` is role-agnostic; the server decides who may change what. A capability
-without an entry keeps today's behaviour (any lock-holding operator). ``persist`` marks
+Firmware ``describe`` is role-agnostic; the server decides who may change what, expressed as
+a ``control`` area verb (spec 2026-10-14 §3.4): ``use`` (default — any lock holder with
+``control.use``) or ``manage`` (calibration). ``persist`` marks
 calibration-type values the server stores per station and re-applies through the agent.
 Per-station overrides are a later extension (YAGNI).
 """
@@ -10,48 +11,40 @@ from __future__ import annotations
 
 import dataclasses
 
-from django.utils.translation import gettext_lazy as _
+from apps.accounts.permissions import can
 
-ROLE_RANK = {"operator": 1, "station_manager": 2, "staff": 3, "admin": 4}
-
-# Human-readable, translatable names for the badge shown on read-only widgets.
-ROLE_LABELS = {
-    "operator": _("operator"),
-    "station_manager": _("station manager"),
-    "staff": _("staff"),
-    "admin": _("admin"),
-}
+# Monotonic: a later verb implies the earlier ones (control.use ⊆ control.manage).
+_VERB_ORDER = ("use", "manage")
 
 
 @dataclasses.dataclass(frozen=True)
 class CapabilityPolicy:
-    write_role: str = "operator"
+    verb: str = "use"
     persist: bool = False
 
     def __post_init__(self):
-        # Fail at definition time: an unranked role could otherwise only be caught by
-        # can_write at request time (where it denies, see below).
-        if self.write_role not in ROLE_RANK:
-            raise ValueError(f"unranked write_role {self.write_role!r}")
+        # Fail at definition time instead of denying at request time.
+        if self.verb not in _VERB_ORDER:
+            raise ValueError(f"capability verb must be use|manage, got {self.verb!r}")
 
 
 _DEFAULT = CapabilityPolicy()
-_STAFF_PERSISTED = CapabilityPolicy(write_role="staff", persist=True)
+_MANAGE_PERSISTED = CapabilityPolicy(verb="manage", persist=True)
 
 POLICY: dict[tuple[str, str | None], CapabilityPolicy] = {
     # SA818 filters (FW FilterCap, FW-RemoteStation #82): calibration, not a per-QSO control.
-    ("filter_pre_emphasis", None): _STAFF_PERSISTED,
-    ("filter_hpf", None): _STAFF_PERSISTED,
-    ("filter_lpf", None): _STAFF_PERSISTED,
+    ("filter_pre_emphasis", None): _MANAGE_PERSISTED,
+    ("filter_hpf", None): _MANAGE_PERSISTED,
+    ("filter_lpf", None): _MANAGE_PERSISTED,
     # SA818 AF-out volume = RX level into the fm_board ADC for every listener; the SA818
     # boots back to its default on a power cycle, so it must be persisted and re-applied.
-    ("volume", "fm_transceiver"): _STAFF_PERSISTED,
+    ("volume", "fm_transceiver"): _MANAGE_PERSISTED,
 }
 
 
-def policy_for(capability: str, module_type: str | None) -> CapabilityPolicy:
+def policy_for(capability, module_type) -> CapabilityPolicy:
     # Malformed frames may carry any JSON value here; never raise on unhashable keys.
-    # A non-str capability keeps today's behaviour (default policy); the agent rejects it.
+    # A non-str capability keeps the default policy; the agent rejects it.
     if not isinstance(capability, str):
         return _DEFAULT
     if not isinstance(module_type, str):
@@ -60,42 +53,16 @@ def policy_for(capability: str, module_type: str | None) -> CapabilityPolicy:
 
 
 def _strictest_for(capability: str) -> CapabilityPolicy:
-    """Unknown module type (unregistered module id / malformed type): the strictest
-    ``write_role`` of ANY entry for this capability name, ``persist`` if any entry
-    persists — so an unregistered module can never loosen a type-specific policy."""
+    """Unknown module type (unregistered module id / malformed type): the strictest verb
+    of ANY entry for this capability name, ``persist`` if any entry persists — so an
+    unregistered module can never loosen a type-specific policy."""
     entries = [p for (cap, _type), p in POLICY.items() if cap == capability]
     if not entries:
         return _DEFAULT
-    role = max((p.write_role for p in entries), key=lambda r: ROLE_RANK.get(r, 0))
-    return CapabilityPolicy(write_role=role, persist=any(p.persist for p in entries))
+    verb = max((p.verb for p in entries), key=_VERB_ORDER.index)
+    return CapabilityPolicy(verb=verb, persist=any(p.persist for p in entries))
 
 
-def viewer_role(user, station) -> str | None:
-    """Highest role on ``station``; ``None`` if the user may not use it (fail closed)."""
-    if user is None or getattr(user, "is_anonymous", True) or not user.is_active:
-        return None
-    # Gate on can_use_station first so no higher rank (e.g. a stray assignment on an
-    # applicant) can ever exceed what can_use_station allows.
-    # COUPLING: today can_use_station is station-independent (membership-level based) and
-    # admins/staff always pass it. If it ever becomes station-dependent, admins/staff must
-    # still keep their role here (see test_admin_and_staff_keep_their_role_on_arbitrary_station).
-    if not user.can_use_station(station):
-        return None
-    if user.is_admin:
-        return "admin"
-    if user.is_internal:
-        return "staff"
-    if user.can_administer_station(station):
-        return "station_manager"
-    return "operator"
-
-
-def role_allows(role: str | None, write_role: str) -> bool:
-    """Does ``role`` (from :func:`viewer_role`) satisfy ``write_role``? Fails closed."""
-    have = ROLE_RANK.get(role) if role is not None else None
-    need = ROLE_RANK.get(write_role)
-    return have is not None and need is not None and have >= need
-
-
-def can_write(user, station, capability: str, module_type: str | None) -> bool:
-    return role_allows(viewer_role(user, station), policy_for(capability, module_type).write_role)
+def can_write(user, capability, module_type) -> bool:
+    """May ``user`` change ``capability``? = ``control.<policy verb>`` (station-independent)."""
+    return can(user, "control", policy_for(capability, module_type).verb)
