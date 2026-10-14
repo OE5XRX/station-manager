@@ -336,6 +336,11 @@ class User(AbstractUser):
         """
         return self.membership_level != self.MembershipLevel.APPLICANT
 
+    def can(self, area, verb):
+        from apps.accounts.permissions import can
+
+        return can(self, area, verb)
+
     @staticmethod
     def _invalidate_role_cache(user):
         """Delete cached ``is_admin`` / ``is_internal`` entries on a User
