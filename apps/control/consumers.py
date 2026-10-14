@@ -248,6 +248,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
                     await self._retry_pending_reapply(station)
+                    await self._purge_stale_telemetry(station)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -257,6 +258,16 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     async def _broadcast(self, msg_type, payload):
         await self.channel_layer.group_send(self.group_name, {"type": msg_type, **payload})
+
+    async def _purge_stale_telemetry(self, station):
+        """Release telemetry demand of browser connections that died without
+        disconnect() (no one else would). Relayed via the agent group so the CURRENT
+        agent connection gets it even while a stale one is still sweeping."""
+        frames = await database_sync_to_async(telemetry_subscriptions.purge_stale)(station)
+        for frame in frames:
+            await self.channel_layer.group_send(
+                self.agent_group_name, {"type": "control.to_agent", "frame": frame}
+            )
 
     async def _reapply_persisted(self, station, slots):
         """Drift re-apply (spec §4a): the FW persists nothing, so whenever the reported
@@ -811,6 +822,17 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             )
         for frame in frames:
             await self._relay(frame)
+
+    async def on_periodic_recheck(self, user):
+        """Still allowed: stamp this connection's telemetry rows as live. A failed
+        stamp must not count as a failed permission re-check (would close the feed)."""
+        station = self.station
+        if station is None:
+            return
+        try:
+            await database_sync_to_async(telemetry_subscriptions.touch)(station, self.channel_name)
+        except Exception:
+            logger.exception("control: telemetry liveness stamp failed")
 
     async def _telemetry_drop_channel(self, station):
         try:

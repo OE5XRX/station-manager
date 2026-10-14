@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -205,6 +206,10 @@ class TelemetrySubscription(models.Model):
     channel_name = models.CharField(_("channel name"), max_length=255)
     interval_ms = models.PositiveIntegerField(_("interval (ms)"))
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    # Liveness stamp: refreshed on subscribe and by the owning ControlConsumer's
+    # periodic re-check. Rows of a connection that died without disconnect()
+    # (SIGTERM/crash) stop being stamped and are purged as stale.
+    last_seen = models.DateTimeField(_("last seen"), default=timezone.now)
 
     class Meta:
         verbose_name = _("telemetry subscription")

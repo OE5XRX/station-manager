@@ -164,6 +164,46 @@ def test_can_override_station(db, station):
     assert can_override_station(member, station) is False
 
 
+def test_can_override_station_negatives(db, station_factory):
+    """Assignments only grant override for THEIR station/region, admin role only,
+    and never without control.use."""
+    from apps.stations.models import Region, RegionAssignment, StationAssignment
+
+    region, other_region = (
+        Region.objects.create(name="R1", slug="r1"),
+        Region.objects.create(name="R2", slug="r2"),
+    )
+    station, other_station, orphan = station_factory(), station_factory(), station_factory()
+    station.region = region
+    station.save(update_fields=["region"])
+    other_station.region = other_region
+    other_station.save(update_fields=["region"])
+    assert orphan.region_id is None
+
+    def member(name):
+        return User.objects.create_user(username=name, password="x", membership_level="member")
+
+    other_sadm = member("osa")
+    StationAssignment.objects.create(user=other_sadm, station=other_station, role="admin")
+    other_rmgr = member("orm")
+    RegionAssignment.objects.create(user=other_rmgr, region=other_region, role="manager")
+    maint = member("mt")
+    StationAssignment.objects.create(user=maint, station=station, role="maintainer")
+    rmgr = member("rm")
+    RegionAssignment.objects.create(user=rmgr, region=region, role="manager")
+    demoted = member("dm")
+    StationAssignment.objects.create(user=demoted, station=station, role="admin")
+    # Assignment saved while a member, then demoted (save() forbids applicant holders).
+    User.objects.filter(pk=demoted.pk).update(membership_level="applicant")
+    demoted.refresh_from_db()
+
+    assert can_override_station(other_sadm, station) is False
+    assert can_override_station(other_rmgr, station) is False
+    assert can_override_station(maint, station) is False
+    assert can_override_station(rmgr, orphan) is False  # station.region is None
+    assert can_override_station(demoted, station) is False
+
+
 def test_matrix_rows_resolved():
     rows = {r.area: r for r in matrix()}
     assert rows["terminal"].view == Level.ADMIN

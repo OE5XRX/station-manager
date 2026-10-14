@@ -8,6 +8,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.db import models
 from django.utils import timezone
 
+from apps.accounts import permissions
 from apps.accounts.permissions import AreaConsumerMixin
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,10 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 await self.keepalive_task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                # A crashed keepalive must not skip the session close / audit /
+                # group_discard below.
+                logger.exception("terminal: keepalive task failed")
             self.keepalive_task = None
 
         if self.session:
@@ -262,14 +267,54 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             self.session.save(update_fields=["last_seen"])
 
     async def _keepalive_loop(self):
-        try:
-            while True:
-                await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+        """Periodic terminal.use re-check + last_seen touch, mirroring
+        ``AreaConsumerMixin._periodic_recheck_loop``: a transient error (e.g. DB
+        down) is retried next tick; after ``RECHECK_MAX_FAILURES`` consecutive
+        failures the shell is torn down (1011) instead of staying open unchecked
+        with a lapsing ``last_seen`` (which would let the stale reap admit an
+        extra session past MAX_SESSIONS_PER_STATION)."""
+        failures = 0
+        while True:
+            await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+            try:
                 if not await self._still_allowed():
                     return
                 await self._touch_session()
-        except asyncio.CancelledError:
-            raise
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failures += 1
+                logger.exception(
+                    "terminal: keepalive re-check failed (%d/%d)",
+                    failures,
+                    permissions.RECHECK_MAX_FAILURES,
+                )
+                if failures < permissions.RECHECK_MAX_FAILURES:
+                    continue  # retry next tick
+                await self._fail_closed()
+                return
+            failures = 0
+
+    async def _fail_closed(self):
+        """Permission could not be re-checked: kill the shell, tell the browser, 1011."""
+        self.rejected = True
+        try:
+            await self.channel_layer.group_send(
+                f"{self.group_name}_agent", {"type": "terminal_close", "data": ""}
+            )
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "error",
+                        "code": "recheck_failed",
+                        "reason": "Permission could not be verified",
+                    }
+                )
+            )
+        except Exception:
+            logger.exception("terminal: fail-closed notification failed")
+        finally:
+            await self.close(code=1011)
 
     @database_sync_to_async
     def _create_session(self, user):

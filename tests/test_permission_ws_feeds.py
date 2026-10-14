@@ -252,3 +252,105 @@ def test_terminal_still_allowed_short_circuits_when_rejected():
     consumer.area_allows = _area_allows
     assert asyncio.run(consumer._still_allowed()) is False
     assert calls == []
+
+
+# -- terminal keepalive survives transient errors, never runs unchecked ----------
+
+
+def _flaky_terminal_recheck(monkeypatch, plan):
+    """Make the keepalive's fresh-user load raise per ``plan`` (True = fail) once armed;
+    exhausted plan = succeed. Connect-time checks run before arming."""
+    from apps.accounts import permissions
+
+    original = permissions.AreaConsumerMixin.fresh_user
+
+    async def fresh_user(self):
+        if plan["armed"] and plan["steps"]:
+            if plan["steps"].pop(0):
+                raise RuntimeError("db connection lost")
+        return await original(self)
+
+    monkeypatch.setattr(permissions.AreaConsumerMixin, "fresh_user", fresh_user)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_keepalive_repeated_failures_close_1011_and_kill_shell(monkeypatch):
+    from apps.tunnel import consumers as tunnel_consumers
+    from apps.tunnel.models import TerminalSession
+
+    monkeypatch.setattr(tunnel_consumers, "TERMINAL_SESSION_KEEPALIVE_SECONDS", 0.05)
+    plan = {"armed": False, "steps": [True] * 1000}
+    _flaky_terminal_recheck(monkeypatch, plan)
+    station = Station.objects.create(name="t-kafail", status="online")
+    admin = _user("term-kafail", User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "agent-spy-kafail"
+        await layer.group_add(f"terminal_{station.id}_agent", spy)
+        comm = _comm(f"/ws/terminal/{station.id}/", admin)
+        assert (await comm.connect())[0] is True
+        assert (await layer.receive(spy))["type"] == "terminal_ensure"
+        plan["armed"] = True
+        frame = await comm.receive_json_from(timeout=2)
+        assert frame["type"] == "error" and frame["code"] == "recheck_failed"
+        assert await comm.receive_output(timeout=2) == {"type": "websocket.close", "code": 1011}
+        assert (await layer.receive(spy))["type"] == "terminal_close"
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+    assert TerminalSession.objects.get(station=station).status == "closed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_keepalive_single_failure_retried_and_counter_resets(monkeypatch):
+    """fail / ok / fail never reaches RECHECK_MAX_FAILURES consecutive: shell stays."""
+    from apps.tunnel import consumers as tunnel_consumers
+
+    monkeypatch.setattr(tunnel_consumers, "TERMINAL_SESSION_KEEPALIVE_SECONDS", 0.05)
+    plan = {"armed": False, "steps": [True, False, True]}
+    _flaky_terminal_recheck(monkeypatch, plan)
+    station = Station.objects.create(name="t-kaflaky", status="online")
+    admin = _user("term-kaflaky", User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        comm = _comm(f"/ws/terminal/{station.id}/", admin)
+        assert (await comm.connect())[0] is True
+        plan["armed"] = True
+        assert await comm.receive_nothing(timeout=0.5)  # recovered, still open
+        assert plan["steps"] == []
+        from asgiref.sync import sync_to_async
+
+        await sync_to_async(_demote)(admin)  # and still checked
+        frame = await comm.receive_json_from(timeout=2)
+        assert frame["code"] == "forbidden"
+        assert await comm.receive_output(timeout=2) == {"type": "websocket.close", "code": 4403}
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_disconnect_survives_crashed_keepalive(monkeypatch):
+    """A keepalive task that died with an exception must not make disconnect()
+    skip the session close (and audit / group_discard)."""
+    from apps.tunnel import consumers as tunnel_consumers
+    from apps.tunnel.models import TerminalSession
+
+    async def boom(self):
+        raise RuntimeError("keepalive crashed")
+
+    monkeypatch.setattr(tunnel_consumers.TerminalConsumer, "_keepalive_loop", boom)
+    station = Station.objects.create(name="t-kacrash", status="online")
+    admin = _user("term-kacrash", User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        comm = _comm(f"/ws/terminal/{station.id}/", admin)
+        assert (await comm.connect())[0] is True
+        assert await comm.receive_nothing(timeout=0.1)
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+    session = TerminalSession.objects.get(station=station)
+    assert session.status == "closed"
+    assert session.close_reason.startswith("disconnect")

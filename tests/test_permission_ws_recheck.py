@@ -207,3 +207,32 @@ def test_single_recheck_failure_is_retried(monkeypatch):
         await comm.disconnect()
 
     asyncio.run(scenario())
+
+
+def test_recheck_failure_counter_resets_after_success(monkeypatch):
+    """fail / ok / fail is never RECHECK_MAX_FAILURES *consecutive* failures: the
+    successful tick resets the counter and the feed stays open (and checked)."""
+    plan = {"armed": False, "steps": [True, False, True]}  # True = this tick fails
+    original = permissions.AreaConsumerMixin.fresh_user
+
+    async def fresh_user(self):
+        if plan["armed"] and plan["steps"] and plan["steps"].pop(0):
+            raise RuntimeError("db connection lost")
+        return await original(self)
+
+    monkeypatch.setattr(permissions.AreaConsumerMixin, "fresh_user", fresh_user)
+    assert permissions.RECHECK_MAX_FAILURES == 2  # fail,fail would close (see above)
+    user = User.objects.create(username="rc-reset", membership_level="applicant")
+
+    async def scenario():
+        comm = _comm("/ws/deployments/status/", user)
+        assert (await comm.connect())[0] is True
+        assert await comm.receive_nothing(timeout=0.1)
+        plan["armed"] = True
+        assert await comm.receive_nothing(timeout=INTERVAL * 8)  # still open
+        assert plan["steps"] == []  # all three ticks ran
+        await _deactivate(user)  # and still checked
+        await _expect_forbidden_close(comm)
+        await comm.disconnect()
+
+    asyncio.run(scenario())

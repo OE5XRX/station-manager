@@ -18,7 +18,7 @@ from channels.testing import WebsocketCommunicator
 
 from apps.accounts.models import User
 from apps.control import telemetry_subscriptions as subs
-from apps.control.models import TelemetrySubscription
+from apps.control.models import StationModule, TelemetrySubscription
 from apps.stations.models import Station
 from config.asgi import application
 
@@ -90,8 +90,14 @@ async def _nothing(layer, spy):
     raise AssertionError(f"unexpected relay: {got}")
 
 
+#: (slot, module) pairs registered on the test station (subscribe validates them).
+_MODULES = ((0, "fm0"), (0, "fm1"), (1, "fm0"), (2, "fm1"))
+
+
 def _setup():
     station = Station.objects.create(name="tref", status="online")
+    for slot, module in _MODULES:
+        StationModule.objects.create(station=station, slot=str(slot), module_id=module)
     op = User.objects.create(username="tref-op", membership_level=User.MembershipLevel.MEMBER)
     viewer = User.objects.create(
         username="tref-app", membership_level=User.MembershipLevel.APPLICANT
@@ -353,3 +359,169 @@ def test_agent_inventory_replays_aggregated_subscriptions(control_agent_auth):
         await b.disconnect()
 
     asyncio.run(scenario())
+
+
+def test_new_capability_at_unchanged_interval_relays_only_the_new_cap():
+    station, op, viewer = _setup()
+
+    async def scenario():
+        layer, spy = await _spy(station)
+        a = await _connect(op, station)
+        b = await _connect(viewer, station)
+        await a.send_json_to(_sub(caps=("rssi",), interval_ms=500))
+        assert await _next(layer, spy) == _expected_sub(["rssi"], 500)
+        await b.send_json_to(_sub(caps=("snr",), interval_ms=500))
+        assert await _next(layer, spy) == _expected_sub(["snr"], 500)
+        assert await _nothing(layer, spy)
+        await a.disconnect()
+        await b.disconnect()
+
+    asyncio.run(scenario())
+
+
+# -- liveness: rows of connections that died without disconnect() -------------------
+
+
+def _age(**filters):
+    """Backdate rows past the stale threshold (their connection stopped stamping)."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    old = timezone.now() - timedelta(seconds=subs.STALE_AFTER_SECONDS + 5)
+    TelemetrySubscription.objects.filter(**filters).update(last_seen=old)
+
+
+def test_stale_rows_are_purged_and_not_replayed_fresh_rows_kept():
+    station, _, _ = _setup()
+    subs.subscribe(station, "dead-chan", 0, "fm0", ["rssi"], 250)
+    subs.subscribe(station, "live-chan", 1, "fm0", ["snr"], 1000)
+    _age(channel_name="dead-chan")
+
+    assert subs.active_subscriptions(station) == [_expected_sub(["snr"], 1000, slot=1)]
+    assert list(TelemetrySubscription.objects.values_list("channel_name", flat=True)) == [
+        "live-chan"
+    ]
+
+
+def test_purge_stale_releases_dead_demand():
+    """A dead fastest subscriber no longer pins the interval; a dead lone one is
+    unsubscribed."""
+    station, _, _ = _setup()
+    subs.subscribe(station, "dead-chan", 0, "fm0", ["rssi"], 250)
+    subs.subscribe(station, "live-chan", 0, "fm0", ["rssi"], 1000)
+    subs.subscribe(station, "dead-chan", 2, "fm1", ["temp"], 500)
+    _age(channel_name="dead-chan")
+
+    frames = subs.purge_stale(station)
+    assert sorted(frames, key=lambda f: f["slot"]) == [
+        _expected_sub(["rssi"], 1000),
+        _unsub(caps=("temp",), slot=2, module="fm1"),
+    ]
+    assert subs.purge_stale(station) == []  # idempotent
+    assert not TelemetrySubscription.objects.filter(channel_name="dead-chan").exists()
+
+
+def test_subscribe_restamps_and_stale_rows_ignored_by_refcount():
+    station, _, _ = _setup()
+    subs.subscribe(station, "dead-chan", 0, "fm0", ["rssi"], 250)
+    _age(channel_name="dead-chan")
+    # The live subscriber's demand is computed without the dead row: the dead
+    # one is released (unsubscribe), then the live one arms the agent at its interval.
+    frames = subs.subscribe(station, "live-chan", 0, "fm0", ["rssi"], 1000)
+    assert frames == [_unsub(), _expected_sub(["rssi"], 1000)]
+    _age(channel_name="live-chan")
+    subs.subscribe(station, "live-chan", 0, "fm1", ["snr"], 1000)  # restamps ALL its rows
+    assert subs.purge_stale(station) == []
+    assert TelemetrySubscription.objects.filter(channel_name="live-chan").count() == 2
+
+
+def test_periodic_recheck_restamps_open_connection(monkeypatch):
+    from apps.accounts import permissions
+
+    monkeypatch.setattr(permissions, "PERIODIC_RECHECK_SECONDS", 0.05)
+    station, _, viewer = _setup()
+
+    async def scenario():
+        from asgiref.sync import sync_to_async
+
+        layer, spy = await _spy(station)
+        b = await _connect(viewer, station)
+        await b.send_json_to(_sub())
+        await _next(layer, spy)
+        await sync_to_async(_age)(module="fm0")
+        await asyncio.sleep(0.3)
+        assert await sync_to_async(subs.purge_stale)(station) == []
+        await b.disconnect()
+
+    asyncio.run(scenario())
+
+
+def test_agent_sweep_relays_purge_of_dead_connection(monkeypatch, control_agent_auth):
+    from apps.control import constants
+
+    monkeypatch.setattr(constants, "LOCK_SWEEP_INTERVAL_SECONDS", 0.05)
+    station, _, _ = _setup()
+    subs.subscribe(station, "dead-chan", 0, "fm0", ["rssi"], 250)
+    _age(channel_name="dead-chan")
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        assert await agent.receive_json_from(timeout=2) == _unsub()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    assert not TelemetrySubscription.objects.exists()
+
+
+# -- only registered addresses / described capabilities, bounded per connection ------
+
+
+def test_unregistered_module_not_recorded_or_relayed():
+    station, _, viewer = _setup()
+
+    async def scenario():
+        layer, spy = await _spy(station)
+        b = await _connect(viewer, station)
+        await b.send_json_to(_sub(module="ghost"))
+        await b.send_json_to(_sub(slot=7))
+        assert await _nothing(layer, spy)
+        await b.disconnect()
+
+    asyncio.run(scenario())
+    assert not TelemetrySubscription.objects.exists()
+
+
+def test_capabilities_narrowed_to_module_descriptor():
+    station, _, _ = _setup()
+    StationModule.objects.filter(station=station, slot="0", module_id="fm0").update(
+        capability_descriptor=[
+            {"name": "rssi", "kind": "telemetry"},
+            {"name": "snr", "kind": "telemetry"},
+        ]
+    )
+    assert subs.subscribe(station, "c1", 0, "fm0", ["bogus", "rssi"], 500) == [
+        _expected_sub(["rssi"], 500)
+    ]
+    assert subs.subscribe(station, "c1", 0, "fm0", ["bogus", "x"], 500) == []
+    assert sorted(TelemetrySubscription.objects.values_list("capability", flat=True)) == ["rssi"]
+
+
+def test_rows_per_connection_are_capped(monkeypatch):
+    monkeypatch.setattr(subs, "MAX_ROWS_PER_CHANNEL", 3)
+    station, _, _ = _setup()
+    frames = subs.subscribe(station, "c1", 0, "fm0", ["a", "b", "c", "d", "e"], 500)
+    assert frames == [_expected_sub(["a", "b", "c"], 500)]
+    assert subs.subscribe(station, "c1", 0, "fm1", ["z"], 500) == []
+    assert TelemetrySubscription.objects.filter(channel_name="c1").count() == 3
+    # Another connection has its own budget.
+    assert subs.subscribe(station, "c2", 0, "fm1", ["z"], 500) == [
+        _expected_sub(["z"], 500, module="fm1")
+    ]
+
+
+def test_stale_threshold_covers_several_recheck_ticks():
+    from apps.accounts import permissions
+
+    assert subs.STALE_AFTER_SECONDS >= 3 * permissions.PERIODIC_RECHECK_SECONDS

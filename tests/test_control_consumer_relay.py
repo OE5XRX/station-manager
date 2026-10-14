@@ -8,6 +8,7 @@ from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 
 from apps.accounts.models import User
+from apps.control.models import StationModule
 from apps.stations.models import Station
 from config.asgi import application
 
@@ -291,6 +292,7 @@ def test_subscribe_relayed_without_lock(control_agent_auth):
     to the agent group even without a lock.
     """
     station = Station.objects.create(name="e2e3", status="online")
+    StationModule.objects.create(station=station, slot="0", module_id="fm0")
     viewer = User.objects.create(username="vsub", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
