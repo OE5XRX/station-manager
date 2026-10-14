@@ -17,7 +17,7 @@ import json
 import logging
 from enum import IntEnum
 
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.db import transaction
@@ -457,6 +457,9 @@ def _load_fresh_user(pk):
 #: :meth:`AreaConsumerMixin.start_periodic_recheck`). Read at runtime, so tests
 #: can monkeypatch it.
 PERIODIC_RECHECK_SECONDS = 60.0
+#: Consecutive failed re-checks (e.g. DB down) after which the feed is closed
+#: (1011) instead of staying open unchecked.
+RECHECK_MAX_FAILURES = 2
 
 
 class AreaConsumerMixin:
@@ -467,8 +470,9 @@ class AreaConsumerMixin:
     _recheck_task: asyncio.Task | None = None
 
     async def fresh_user(self):
+        # database_sync_to_async closes stale/broken DB connections around the call.
         user = self.scope.get("user")
-        return await sync_to_async(_load_fresh_user)(getattr(user, "pk", None))
+        return await database_sync_to_async(_load_fresh_user)(getattr(user, "pk", None))
 
     def start_periodic_recheck(self) -> None:
         """Opt-in for passive feeds: re-check ``connect_verb`` every
@@ -489,20 +493,46 @@ class AreaConsumerMixin:
         """Hook: refresh permission-derived state (still allowed; ``user`` is fresh)."""
 
     async def _periodic_recheck_loop(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(PERIODIC_RECHECK_SECONDS)
+        failures = 0
+        while True:
+            await asyncio.sleep(PERIODIC_RECHECK_SECONDS)
+            try:
                 user = await self.fresh_user()
-                if not await self.area_allows(self.connect_verb, user=user):
-                    # One denial (audited once), then the feed ends: no further checks.
-                    self._recheck_task = None
-                    await self.close(code=4403)
-                    return
-                await self.on_periodic_recheck(user)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("permissions: periodic WS re-check failed")
+                allowed = await self.area_allows(self.connect_verb, user=user)
+                if allowed:
+                    await self.on_periodic_recheck(user)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failures += 1
+                logger.exception(
+                    "permissions: periodic WS re-check failed (%d/%d)",
+                    failures,
+                    RECHECK_MAX_FAILURES,
+                )
+                if failures < RECHECK_MAX_FAILURES:
+                    continue  # retry next tick
+                # Never leave a feed open without a working permission check.
+                self._recheck_task = None
+                try:
+                    await self.send(
+                        text_data=json.dumps(
+                            {
+                                "type": "error",
+                                "code": "recheck_failed",
+                                "message": str(_("Berechtigung konnte nicht geprüft werden.")),
+                            }
+                        )
+                    )
+                finally:
+                    await self.close(code=1011)
+                return
+            failures = 0
+            if not allowed:
+                # One denial (audited once), then the feed ends: no further checks.
+                self._recheck_task = None
+                await self.close(code=4403)
+                return
 
     def _check(self, user, area, verb):
         require(
@@ -525,7 +555,7 @@ class AreaConsumerMixin:
             user = await self.fresh_user()
         user = user or AnonymousUser()
         try:
-            await sync_to_async(self._check)(user, area or self.area, verb)
+            await database_sync_to_async(self._check)(user, area or self.area, verb)
         except AreaDenied as exc:
             if notify:
                 await self.send(text_data=json.dumps(ws_denied_frame(exc, request_id)))

@@ -156,3 +156,54 @@ def test_recheck_task_cancelled_on_disconnect(monkeypatch):
 
     monkeypatch.setattr(DeploymentStatusConsumer, "connect", spy_connect)
     asyncio.run(scenario())
+
+
+def _flaky_fresh_user(monkeypatch, failures):
+    """Patch AreaConsumerMixin.fresh_user to raise ``failures[0]`` more times once armed."""
+    original = permissions.AreaConsumerMixin.fresh_user
+
+    async def fresh_user(self):
+        if failures["armed"] and failures["left"] > 0:
+            failures["left"] -= 1
+            raise RuntimeError("db connection lost")
+        return await original(self)
+
+    monkeypatch.setattr(permissions.AreaConsumerMixin, "fresh_user", fresh_user)
+
+
+def test_recheck_failing_repeatedly_closes_feed(monkeypatch):
+    """Re-review C1: a re-check that keeps failing must not leave the feed open
+    and unchecked — after RECHECK_MAX_FAILURES consecutive errors it closes."""
+    failures = {"armed": False, "left": 10**6}
+    _flaky_fresh_user(monkeypatch, failures)
+    user = User.objects.create(username="rc-fail", membership_level="applicant")
+
+    async def scenario():
+        comm = _comm("/ws/deployments/status/", user)
+        assert (await comm.connect())[0] is True
+        assert await comm.receive_nothing(timeout=0.1)
+        failures["armed"] = True
+        frame = await comm.receive_json_from(timeout=2)
+        assert frame["type"] == "error" and frame["code"] == "recheck_failed"
+        assert await comm.receive_output(timeout=2) == {"type": "websocket.close", "code": 1011}
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+
+
+def test_single_recheck_failure_is_retried(monkeypatch):
+    failures = {"armed": False, "left": 1}
+    _flaky_fresh_user(monkeypatch, failures)
+    user = User.objects.create(username="rc-flaky", membership_level="applicant")
+
+    async def scenario():
+        comm = _comm("/ws/deployments/status/", user)
+        assert (await comm.connect())[0] is True
+        assert await comm.receive_nothing(timeout=0.1)
+        failures["armed"] = True
+        assert await comm.receive_nothing(timeout=INTERVAL * 6)  # recovered, still open
+        await _deactivate(user)  # and still checked
+        await _expect_forbidden_close(comm)
+        await comm.disconnect()
+
+    asyncio.run(scenario())
