@@ -317,9 +317,10 @@ class StationLogEntryCreateView(AreaPermissionMixin, CreateView):
 
 
 class StationGenerateKeyView(AreaPermissionMixin, View):
+    """Generate an Ed25519 keypair and link the public key to the station."""
+
     area = "stations"
     verb = "manage"
-    """Generate an Ed25519 keypair and link the public key to the station."""
 
     def post(self, request, pk):
         station = get_object_or_404(Station, pk=pk)
@@ -354,9 +355,10 @@ class StationGenerateKeyView(AreaPermissionMixin, View):
 
 
 class StationRevokeKeyView(AreaPermissionMixin, View):
+    """Revoke (delete) the Ed25519 DeviceKey linked to the station."""
+
     area = "stations"
     verb = "manage"
-    """Revoke (delete) the Ed25519 DeviceKey linked to the station."""
 
     def post(self, request, pk):
         station = get_object_or_404(Station, pk=pk)

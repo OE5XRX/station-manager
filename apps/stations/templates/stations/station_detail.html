@@ -72,10 +72,12 @@
       <div class="summary-key">{% trans "Agent Version" %}</div>
       <div class="summary-val mono">{{ station.current_agent_version|default:"—" }}</div>
     </div>
+    {% if can.stations.manage %}
     <div class="summary-item">
       <div class="summary-key">{% trans "Last IP" %}</div>
       <div class="summary-val mono" data-station-ip>{{ station.last_ip_address|default:"—" }}</div>
     </div>
+    {% endif %}
     <div class="summary-item">
       <div class="summary-key">{% trans "Coordinates" %}</div>
       <div class="summary-val mono">

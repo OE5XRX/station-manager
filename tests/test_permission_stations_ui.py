@@ -109,3 +109,14 @@ def test_sidebar_lists_tags_and_regions_for_applicant(client):
     html = client.get(reverse("stations:station_list")).content.decode()
     assert reverse("stations:tag_list") in html
     assert reverse("stations:region_list") in html
+
+
+def test_last_ip_hidden_from_applicant_shown_to_staff(client, station):
+    station.last_ip_address = "203.0.113.77"
+    station.save()
+    _login(client, "applicant")
+    url = reverse("stations:station_detail", args=[station.pk])
+    assert "203.0.113.77" not in client.get(url).content.decode()
+    client.logout()
+    _login(client, "staff")
+    assert "203.0.113.77" in client.get(url).content.decode()
