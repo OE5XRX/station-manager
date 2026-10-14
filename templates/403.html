@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Keine Berechtigung" %} · OE5XRX{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <h1 class="page-title">{% trans "Keine Berechtigung" %}</h1>
+    <p class="page-sub">
+      {% if area_denied %}
+        {% blocktrans %}<strong>{{ what }}</strong> erfordert <strong>{{ need }}</strong>, du bist <strong>{{ have }}</strong>.{% endblocktrans %}
+      {% elif message %}
+        {{ message }}
+      {% else %}
+        {% trans "Für diese Aktion fehlt dir die Berechtigung." %}
+      {% endif %}
+    </p>
+    {% if area_denied %}
+      <p class="page-sub">{% trans "Wenn du glaubst, dass das falsch ist, wende dich an einen Admin." %}</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row-gap-8">
+  <a class="btn" href="{{ request.META.HTTP_REFERER|default:'/' }}">{% trans "Zurück" %}</a>
+  <a class="btn btn-primary" href="{% url 'dashboard:index' %}">{% trans "Zur Übersicht" %}</a>
+</div>
+{% endblock %}

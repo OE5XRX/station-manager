@@ -93,6 +93,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.template.context_processors.csp",
                 "django.contrib.auth.context_processors.auth",
+                "apps.accounts.context_processors.permissions",
                 "django.contrib.messages.context_processors.messages",
                 "django.template.context_processors.i18n",
             ],

@@ -48,3 +48,5 @@ if settings.DEBUG:
     urlpatterns = [
         path("__debug__/", include(debug_toolbar.urls)),
     ] + urlpatterns
+
+handler403 = "apps.accounts.views_errors.permission_denied"

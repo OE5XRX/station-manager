@@ -327,3 +327,70 @@ def require(user, area, verb, *, request=None, channel="web", path=None, method=
             ip=ip if ip is not None else _client_ip(request),
         )
     raise exc
+
+
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def resolve_verb(view, method: str) -> str:
+    method = method.upper()
+    verbs = getattr(view, "verbs", None) or {}
+    if method in verbs:
+        return verbs[method]
+    explicit = getattr(view, "verb", None)
+    if explicit:
+        return explicit
+    return "view" if method in SAFE_METHODS else "manage"
+
+
+class AreaPermissionMixin:
+    """Leftmost base of every Django CBV. Declare ``area`` (+ optional ``verb``/``verbs``)."""
+
+    area: str | None = None
+    verb: str | None = None
+    verbs: dict[str, str] | None = None
+
+    def get_area_verb(self) -> tuple[str, str]:
+        return self.area, resolve_verb(self, self.request.method)
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            from django.contrib.auth.views import redirect_to_login
+
+            return redirect_to_login(request.get_full_path())
+        area, verb = self.get_area_verb()
+        require(request.user, area, verb, request=request, channel="web")
+        return super().dispatch(request, *args, **kwargs)
+
+
+def area_permission(area: str, verb: str | None = None):
+    import functools
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                from django.contrib.auth.views import redirect_to_login
+
+                return redirect_to_login(request.get_full_path())
+            used = verb or ("view" if request.method.upper() in SAFE_METHODS else "manage")
+            require(request.user, area, used, request=request, channel="web")
+            return func(request, *args, **kwargs)
+
+        wrapper.area = area
+        wrapper.verb = verb
+        wrapper.area_enforced = True
+        return wrapper
+
+    return decorator
+
+
+def permission_exempt(reason: str):
+    if not reason or not reason.strip():
+        raise ImproperlyConfigured("permission_exempt needs a non-empty reason")
+
+    def decorator(func):
+        func.permission_exempt = reason
+        return func
+
+    return decorator
