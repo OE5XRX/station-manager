@@ -24,40 +24,36 @@ def _dep(topology, *stations):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_region_mgr_sees_deployment_only_if_touches_their_station(topology):  # noqa: F811
+def test_member_sees_all_deployments(topology):  # noqa: F811
+    # No topology scoping: deployments.view (Applicant) shows every deployment.
     dep_out = _dep(topology, topology["station_out"])
-    c = bearer(topology["region_mgr"])
-    assert dep_out.pk not in {d["id"] for d in c.get("/api/v1/deployments/").data["results"]}
     dep_in = _dep(topology, topology["station_in"])
-    ids = {d["id"] for d in c.get("/api/v1/deployments/").data["results"]}
-    assert dep_in.pk in ids
-    # An in-scope result must not retroactively expose out-of-scope deployments.
-    assert dep_out.pk not in ids
+    for role in ("region_mgr", "station_user", "applicant"):
+        ids = {d["id"] for d in bearer(topology[role]).get("/api/v1/deployments/").data["results"]}
+        assert {dep_in.pk, dep_out.pk} <= ids
 
 
 @pytest.mark.django_db
-def test_deployment_results_scoped(topology):  # noqa: F811
+def test_deployment_results_not_scoped(topology):  # noqa: F811
     _dep(topology, topology["station_in"])
     _dep(topology, topology["station_out"])
     c = bearer(topology["region_mgr"])
     resp = c.get("/api/v1/deployment-results/")
     assert resp.status_code == 200
     stations = {r["station"] for r in resp.data["results"]}
-    assert topology["station_out"].pk not in stations
+    assert stations == {topology["station_in"].pk, topology["station_out"].pk}
 
 
 @pytest.mark.django_db
-def test_nested_results_scoped_to_accessible_stations(topology):  # noqa: F811
-    # A broad (target_type=all) deployment touching both an in-scope and an
-    # out-of-scope station must not leak the out-of-scope result through the
-    # nested /results/ action.
+def test_nested_results_show_all_stations(topology):  # noqa: F811
+    # No topology scoping: the nested /results/ action lists every result,
+    # the same for a region manager as for an admin.
     dep = _dep(topology, topology["station_in"], topology["station_out"])
 
     mgr_resp = bearer(topology["region_mgr"]).get(f"/api/v1/deployments/{dep.pk}/results/")
     assert mgr_resp.status_code == 200
     mgr_stations = {r["station"] for r in mgr_resp.data["results"]}
-    assert mgr_stations == {topology["station_in"].pk}
-    assert topology["station_out"].pk not in mgr_stations
+    assert mgr_stations == {topology["station_in"].pk, topology["station_out"].pk}
 
     admin_resp = bearer(topology["admin"]).get(f"/api/v1/deployments/{dep.pk}/results/")
     assert admin_resp.status_code == 200
@@ -73,8 +69,8 @@ def test_deployment_progress_field_present(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_deployment_progress_scoped_to_accessible_stations(topology):  # noqa: F811
-    """region_mgr sees only their station's result in progress; admin sees all."""
+def test_deployment_progress_counts_all_results(topology):  # noqa: F811
+    """Progress counts every result regardless of the caller's assignments."""
     from apps.deployments.models import DeploymentResult
 
     dep = _dep(topology, topology["station_in"], topology["station_out"])
@@ -84,8 +80,8 @@ def test_deployment_progress_scoped_to_accessible_stations(topology):  # noqa: F
     mgr_resp = bearer(topology["region_mgr"]).get(f"/api/v1/deployments/{dep.pk}/")
     assert mgr_resp.status_code == 200
     mgr_progress = mgr_resp.data["progress"]
-    assert mgr_progress["total"] == 1, "region_mgr must only count in-scope result"
-    assert mgr_progress["completed"] == 1
+    assert mgr_progress["total"] == 2, "no topology scoping on progress"
+    assert mgr_progress["completed"] == 2
 
     admin_resp = bearer(topology["admin"]).get(f"/api/v1/deployments/{dep.pk}/")
     assert admin_resp.status_code == 200
@@ -149,13 +145,11 @@ def test_deployment_list_progress_query_count_constant(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_deployment_list_progress_scoped_to_accessible_stations(topology):  # noqa: F811
-    """List-level progress must apply the same scope as the detail endpoint.
+def test_deployment_list_progress_counts_all_results(topology):  # noqa: F811
+    """List-level progress matches the detail endpoint: no topology scoping.
 
-    A target_type=all deployment with one in-scope SUCCESS result and one
-    out-of-scope SUCCESS result:
-    - region_mgr list sees progress.total == 1
-    - admin list sees progress.total == 2
+    A target_type=all deployment with SUCCESS results on two stations:
+    region_mgr and admin both see progress.total == 2.
     """
     from apps.deployments.models import DeploymentResult
 
@@ -167,8 +161,8 @@ def test_deployment_list_progress_scoped_to_accessible_stations(topology):  # no
     mgr_results = mgr_resp.data["results"]
     assert len(mgr_results) == 1
     mgr_progress = mgr_results[0]["progress"]
-    assert mgr_progress["total"] == 1, "region_mgr list must only count in-scope result"
-    assert mgr_progress["completed"] == 1
+    assert mgr_progress["total"] == 2, "no topology scoping on list progress"
+    assert mgr_progress["completed"] == 2
 
     admin_resp = bearer(topology["admin"]).get("/api/v1/deployments/")
     assert admin_resp.status_code == 200

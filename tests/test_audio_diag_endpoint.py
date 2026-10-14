@@ -1,6 +1,7 @@
 """Tests for POST /api/v1/stations/{pk}/audio-diagnostics/ endpoint.
 
-Task 9: orchestrator REST endpoint.
+Task 9: orchestrator REST endpoint. Requires control.manage (Staff); no
+topology scoping — unknown stations are 404.
 Orchestrator is monkeypatched — no real channel layer / agent needed.
 Reuses topology + bearer fixtures from test_api_read_fixtures.
 """
@@ -34,15 +35,15 @@ def _fake_report(anchor="C"):
 
 
 @pytest.mark.django_db
-def test_in_scope_user_gets_report(topology, monkeypatch):  # noqa: F811
-    """station_user (in scope) with anchor C → 200, report echoes anchor."""
+def test_staff_gets_report(topology, monkeypatch):  # noqa: F811
+    """staff (control.manage) with anchor C → 200, report echoes anchor."""
     from apps.audio import orchestrator
 
     async def fake_run(station_id, anchor, signal, *, slot=0, timeout=15.0):
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C"},
@@ -53,15 +54,24 @@ def test_in_scope_user_gets_report(topology, monkeypatch):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_out_of_scope_station_404(topology):  # noqa: F811
-    """station_user posting to station_out (not assigned) → 404."""
+def test_unknown_station_404(topology):  # noqa: F811
+    """staff posting to a non-existent station → 404."""
+    client = bearer(topology["staff"])
+    r = client.post("/api/v1/stations/999999/audio-diagnostics/", {"anchor": "C"}, format="json")
+    assert r.status_code == 404
+
+
+@pytest.mark.django_db
+def test_assigned_member_forbidden(topology):  # noqa: F811
+    """station_user (member, even on its assigned station) lacks control.manage → 403."""
     client = bearer(topology["station_user"])
     r = client.post(
-        f"/api/v1/stations/{topology['station_out'].pk}/audio-diagnostics/",
+        f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C"},
         format="json",
     )
-    assert r.status_code == 404
+    assert r.status_code == 403
+    assert r.json()["required"] == "control.manage"
 
 
 @pytest.mark.django_db
@@ -85,7 +95,7 @@ def test_agent_offline_returns_503(topology, monkeypatch):  # noqa: F811
         raise orchestrator.AgentNotConnected()
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C"},
@@ -104,7 +114,7 @@ def test_timeout_returns_504(topology, monkeypatch):  # noqa: F811
         raise orchestrator.DiagnosticTimeout()
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C"},
@@ -123,7 +133,7 @@ def test_bad_anchor_400(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "Z"},
@@ -141,7 +151,7 @@ def test_bad_slot_type_400(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C", "slot": "bad"},
@@ -159,7 +169,7 @@ def test_bool_slot_400(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C", "slot": True},
@@ -198,7 +208,7 @@ def test_anchor_u_is_accepted_and_runs(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "U"},
@@ -217,7 +227,7 @@ def test_busy_returns_409(topology, monkeypatch):  # noqa: F811
         raise orchestrator.StationBusy()
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "U"},
@@ -236,7 +246,7 @@ def test_anchor_z_still_400(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "Z"},
@@ -254,7 +264,7 @@ def test_non_dict_signal_400(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C", "signal": "loud"},
@@ -272,7 +282,7 @@ def test_unsupported_kind_400(topology, monkeypatch):  # noqa: F811
         return _fake_report(anchor)
 
     monkeypatch.setattr(orchestrator, "run_headless_diagnostic", fake_run)
-    client = bearer(topology["station_user"])
+    client = bearer(topology["staff"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C", "signal": {"kind": "wav"}},

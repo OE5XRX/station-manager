@@ -1304,7 +1304,7 @@ class UserDetailView(AreaPermissionMixin, DetailView):
         ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
         # API tokens are strictly personal: only on your own page, also for admins
         # (whose own page resolves to the ADMIN audience, not SELF).
-        # Applicants are excluded: the API rejects them (TopologyScopedPermission).
+        # Applicants are excluded: api_tokens.use is Member.
         ctx["is_own_page"] = self.request.user.pk == self.object.pk and can(
             self.request.user, "api_tokens", "use"
         )

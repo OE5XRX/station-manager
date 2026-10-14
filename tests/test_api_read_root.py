@@ -2,7 +2,7 @@
 
 The ScopedAPIRootView must carry the same policy as the viewsets:
   - anon → 401
-  - applicant (authenticated, bearer) → 403
+  - applicant (authenticated, bearer) → 200 (dashboard.view = Applicant)
   - member/admin → 200
 """
 
@@ -18,9 +18,9 @@ def test_api_root_anon_is_401(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_api_root_applicant_is_403(topology):  # noqa: F811
+def test_api_root_applicant_is_200(topology):  # noqa: F811
     resp = bearer(topology["applicant"]).get("/api/v1/")
-    assert resp.status_code == 403
+    assert resp.status_code == 200
 
 
 @pytest.mark.django_db

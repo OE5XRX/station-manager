@@ -4,8 +4,8 @@ from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
 
 
 @pytest.mark.django_db
-def test_station_assignment_scope(topology):  # noqa: F811
-    # station_user has an assignment on station_in; must see it, not others'
+def test_station_assignment_no_topology_scope(topology):  # noqa: F811
+    # topology.view is Applicant: every user sees every assignment (like the UI).
     from apps.stations.models import StationAssignment
 
     StationAssignment.objects.create(
@@ -15,7 +15,7 @@ def test_station_assignment_scope(topology):  # noqa: F811
     resp = c.get("/api/v1/station-assignments/")
     assert resp.status_code == 200
     stations = {row["station"] for row in resp.data["results"]}
-    assert topology["station_out"].pk not in stations
+    assert topology["station_out"].pk in stations
     assert topology["station_in"].pk in stations
 
 
@@ -28,8 +28,8 @@ def test_region_assignment_scope_admin_sees_all(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_region_assignment_scope_member(topology):  # noqa: F811
-    # region_mgr manages region_in; must see its assignment, not an out-of-scope one.
+def test_region_assignment_no_topology_scope(topology):  # noqa: F811
+    # No topology scoping: region_mgr sees assignments outside its own region too.
     from apps.stations.models import RegionAssignment
 
     RegionAssignment.objects.create(
@@ -39,12 +39,12 @@ def test_region_assignment_scope_member(topology):  # noqa: F811
     assert resp.status_code == 200
     regions = {row["region"] for row in resp.data["results"]}
     assert topology["region_in"].pk in regions
-    assert topology["region_out"].pk not in regions
+    assert topology["region_out"].pk in regions
 
 
 @pytest.mark.django_db
 def test_station_assignment_scope_region_manager(topology):  # noqa: F811
-    # region_mgr manages region_in → sees station assignments on stations in that region.
+    # region_mgr sees station assignments on every station, not just its region.
     from apps.stations.models import StationAssignment
 
     StationAssignment.objects.create(
@@ -54,9 +54,9 @@ def test_station_assignment_scope_region_manager(topology):  # noqa: F811
     assert resp.status_code == 200
     stations = {row["station"] for row in resp.data["results"]}
     assert topology["station_in"].pk in stations
-    assert topology["station_out"].pk not in stations
 
 
 @pytest.mark.django_db
-def test_assignment_applicant_403(topology):  # noqa: F811
-    assert bearer(topology["applicant"]).get("/api/v1/station-assignments/").status_code == 403
+def test_assignment_applicant_can_read(topology):  # noqa: F811
+    # topology.view = Applicant (spec matrix).
+    assert bearer(topology["applicant"]).get("/api/v1/station-assignments/").status_code == 200

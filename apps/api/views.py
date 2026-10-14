@@ -27,6 +27,7 @@ class HealthCheckView(APIView):
 
     authentication_classes = []
     permission_classes = [AllowAny]
+    permission_exempt = "health"
 
     def get(self, request):
         serializer = HealthSerializer({"status": "ok"})
@@ -44,6 +45,7 @@ class HeartbeatView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
     throttle_scope = "heartbeat"
 
     def post(self, request):

@@ -187,10 +187,10 @@ def test_import_dedup_guard_present(api_topology, bearer, monkeypatch):
         machine="qemux86-64",
         channel="release",
         mark_as_latest=False,
-        requested_by=t["staff"],
+        requested_by=t["admin"],
         status=ImageImportJob.Status.PENDING,
     )
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v3.1", "machine": "qemux86-64", "channel": "release"},
         format="json",
@@ -212,9 +212,9 @@ def test_provisioning_atomic_guard_present(api_topology, bearer, image_release):
         station=t["station_in"],
         image_release=image_release,
         status=ProvisioningJob.Status.PENDING,
-        requested_by=t["staff"],
+        requested_by=t["admin"],
     )
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:provisioning-job-list"),
         {"station": t["station_in"].pk, "image_release": image_release.pk},
         format="json",
@@ -306,9 +306,7 @@ class TestRolloutEntrySequenceReadOnlyOnUpdate:
         entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["region_mgr"]).patch(
-            url, {"sequence": other_seq.pk}, format="json"
-        )
+        r = bearer(api_topology["admin"]).patch(url, {"sequence": other_seq.pk}, format="json")
         # Must not crash (200 or 400 are both acceptable outcomes);
         # the key invariant is that the entry stays on the original sequence.
         assert r.status_code in (200, 400), f"Unexpected status: {r.status_code}"
@@ -336,7 +334,7 @@ class TestRolloutEntryDuplicateTagValidation:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-list")
-        r = bearer(api_topology["region_mgr"]).post(
+        r = bearer(api_topology["admin"]).post(
             url, {"sequence": seq.pk, "tag": tag.pk, "position": 1}, format="json"
         )
         # The service returns None for a duplicate tag and the view returns 400.
@@ -357,7 +355,7 @@ class TestRolloutEntryDuplicateTagValidation:
 
         # Try to PATCH entry_b so it has tag_a (which is taken)
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_b.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"tag": tag_a.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_a.pk}, format="json")
         assert r.status_code == 400, (
             f"Expected 400 for duplicate tag on PATCH, got {r.status_code}"
         )
@@ -431,7 +429,7 @@ class TestRolloutEntryPatchPositionAndTag:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["region_mgr"]).patch(
+        r = bearer(api_topology["admin"]).patch(
             url, {"position": 1, "tag": tag_c.pk}, format="json"
         )
         assert r.status_code == 200, (
@@ -442,7 +440,7 @@ class TestRolloutEntryPatchPositionAndTag:
         assert entry.position == 1, f"Position must be moved to 1, got {entry.position}"
         # Parent sequence updated_by must reflect the actor
         seq.refresh_from_db()
-        assert seq.updated_by == api_topology["region_mgr"]
+        assert seq.updated_by == api_topology["admin"]
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +469,7 @@ class TestImportChannelValidation:
 
         t = api_topology
         before = ImageImportJob.objects.count()
-        r = bearer(t["staff"]).post(
+        r = bearer(t["admin"]).post(
             reverse("api:image-import"),
             {"tag": "v5.0", "machine": "raspberrypi4-64", "channel": "nightly"},
             format="json",
@@ -491,7 +489,7 @@ class TestImportChannelValidation:
         monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
 
         t = api_topology
-        r = bearer(t["staff"]).post(
+        r = bearer(t["admin"]).post(
             reverse("api:image-import"),
             {"tag": "v5.1", "machine": "qemux86-64", "channel": "release"},
             format="json",
@@ -512,7 +510,7 @@ class TestImportChannelValidation:
 
         t = api_topology
         before = ImageImportJob.objects.count()
-        r = bearer(t["staff"]).post(
+        r = bearer(t["admin"]).post(
             reverse("api:image-import"),
             {"tag": "v5.2", "machine": "qemux86-64", "channel": "nightly"},
             format="json",

@@ -1,9 +1,10 @@
 """Writable viewsets for the user/automation API (v1).
 
-Each subclasses its Phase-2 read viewset (inheriting get_queryset scoping,
+Each subclasses its Phase-2 read viewset (inheriting the area, querysets,
 filters, nested read actions) and mixes in the DRF write mixins it needs.
-Object-level write authz: TopologyScopedWritePermission -> can_write_object.
-Create-scope: enforced in perform_create. Every mutation audits token origin.
+Authorization: ``AreaPermission`` (``<area>.manage`` for writes) — no
+per-object or topology checks. Station ``region`` additionally needs
+``topology.manage``. Every mutation audits token origin.
 """
 
 from django.conf import settings
@@ -16,12 +17,13 @@ from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers as rf_serializers
 from rest_framework import status as http_status
 from rest_framework.decorators import action
-from rest_framework.exceptions import APIException, PermissionDenied
+from rest_framework.exceptions import APIException
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
 from rest_framework.response import Response
 
 from apps.accounts.models import AccountAuditLog, User
+from apps.accounts.permissions import AreaPermission, require
 from apps.api import read_serializers, read_views
 from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
@@ -69,15 +71,16 @@ def _delete_storage_file(name: str) -> None:
         pass
 
 
-class ScopedWriteViewSet:
-    """Mixin adding write-serializer switching + object-level write perm.
+class AreaWriteViewSet:
+    """Mixin adding write-serializer switching on top of an area read viewset.
 
     Place BEFORE the read viewset in the MRO. Concrete viewsets add the
     CreateModelMixin/UpdateModelMixin/DestroyModelMixin they actually expose
-    and override can_write_object / perform_* as needed.
+    and override perform_* as needed. Authorization is ``AreaPermission``
+    (writes need ``<area>.manage``), checked before the serializer runs.
     """
 
-    permission_classes = [TopologyScopedWritePermission]
+    permission_classes = [AreaPermission]
     write_serializer_class = None
 
     def get_serializer_class(self):
@@ -85,12 +88,9 @@ class ScopedWriteViewSet:
             return self.write_serializer_class
         return super().get_serializer_class()
 
-    def can_write_object(self, user, obj, method):
-        return False
-
 
 class StationViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
@@ -98,15 +98,24 @@ class StationViewSet(
 ):
     write_serializer_class = StationWriteSerializer
 
-    def can_write_object(self, user, obj, method):
-        if method == "DELETE":
-            return ws.can_delete_station(user, obj)
-        return ws.can_write_station(user, obj)
+    def _require_topology_if_region_changes(self, serializer, instance=None):
+        """Setting/changing ``region`` additionally needs ``topology.manage``.
+
+        Mirrors the UI, where region assignment is its own view in the
+        topology area: stations.manage alone may edit everything else.
+        """
+        if "region" not in serializer.validated_data:
+            return
+        new = serializer.validated_data["region"]
+        old = getattr(instance, "region", None) if instance is not None else None
+        if instance is None and new is None:
+            return
+        if instance is not None and new == old:
+            return
+        require(self.request.user, "topology", "manage", request=self.request, channel="api")
 
     def perform_create(self, serializer):
-        region = serializer.validated_data.get("region")
-        if region is None or not ws.can_create_station_in(self.request.user, region):
-            raise PermissionDenied("Not allowed to create a station in this region.")
+        self._require_topology_if_region_changes(serializer)
         station = serializer.save()
         audit_station_write(
             self.request,
@@ -116,13 +125,7 @@ class StationViewSet(
         )
 
     def perform_update(self, serializer):
-        # `region` is writable: re-validate the NEW target region before saving,
-        # else a region-manager could PATCH a station they manage into a region
-        # they don't (move-via-update privilege escalation). can_write_object
-        # only checked the OLD region.
-        new_region = serializer.validated_data.get("region", serializer.instance.region)
-        if not ws.can_create_station_in(self.request.user, new_region):
-            raise PermissionDenied("Not allowed to move this station to that region.")
+        self._require_topology_if_region_changes(serializer, serializer.instance)
         station = serializer.save()
         audit_station_write(
             self.request,
@@ -167,26 +170,15 @@ class StationViewSet(
 
 
 class RegionViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
     read_views.RegionViewSet,
 ):
     write_serializer_class = RegionWriteSerializer
-    # B5: payload-independent create gate — role check runs in has_permission
-    # before DRF validates the serializer (prevents non-staff probing names).
-    create_requires = staticmethod(ws.can_write_region)
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_region(user)
-
-    def _guard_create(self):
-        if not ws.can_write_region(self.request.user):
-            raise PermissionDenied("Region writes require staff/admin.")
 
     def perform_create(self, serializer):
-        self._guard_create()
         region = serializer.save()
         audit_account_write(
             self.request,
@@ -217,26 +209,15 @@ class RegionViewSet(
 
 
 class StationTagViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
     read_views.StationTagViewSet,
 ):
     write_serializer_class = StationTagWriteSerializer
-    # B5: payload-independent create gate — role check runs in has_permission
-    # before DRF validates the serializer (prevents non-staff probing slugs).
-    create_requires = staticmethod(ws.can_write_station_tag)
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_station_tag(user)
-
-    def _guard_create(self):
-        if not ws.can_write_station_tag(self.request.user):
-            raise PermissionDenied("StationTag writes require staff/admin.")
 
     def perform_create(self, serializer):
-        self._guard_create()
         tag = serializer.save()
         audit_config_write(
             self.request,
@@ -286,7 +267,7 @@ def _save_assignment(serializer, *, actor, is_create):
 
 
 class StationAssignmentViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
@@ -294,13 +275,7 @@ class StationAssignmentViewSet(
 ):
     write_serializer_class = StationAssignmentWriteSerializer
 
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_station_assignment(user, obj.station)
-
     def perform_create(self, serializer):
-        station = serializer.validated_data["station"]
-        if not ws.can_write_station_assignment(self.request.user, station):
-            raise PermissionDenied("Not allowed to create an assignment for this station.")
         assignment = _save_assignment(serializer, actor=self.request.user, is_create=True)
         audit_account_write(
             self.request,
@@ -310,13 +285,6 @@ class StationAssignmentViewSet(
         )
 
     def perform_update(self, serializer):
-        # `station` is writable: re-validate the NEW target station before saving,
-        # else a region-manager could PATCH an in-scope assignment to move it onto
-        # an out-of-scope station (move-via-update privilege escalation).
-        # can_write_object only checked the OLD station.
-        new_station = serializer.validated_data.get("station", serializer.instance.station)
-        if not ws.can_write_station_assignment(self.request.user, new_station):
-            raise PermissionDenied("Not allowed to move this assignment to that station.")
         # B3: is_create=False → assigned_by is NOT overwritten (provenance preserved)
         assignment = _save_assignment(serializer, actor=self.request.user, is_create=False)
         audit_account_write(
@@ -337,27 +305,15 @@ class StationAssignmentViewSet(
 
 
 class RegionAssignmentViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
     read_views.RegionAssignmentViewSet,
 ):
     write_serializer_class = RegionAssignmentWriteSerializer
-    # R5b: payload-independent create gate — role check runs in has_permission
-    # before DRF validates the serializer (prevents non-staff probing user/region
-    # uniqueness and getting field-validation errors instead of 403).
-    create_requires = staticmethod(ws.can_write_region_assignment)
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_region_assignment(user)
-
-    def _guard_write(self):
-        if not ws.can_write_region_assignment(self.request.user):
-            raise PermissionDenied("Region assignment writes require staff/admin.")
 
     def perform_create(self, serializer):
-        self._guard_write()
         assignment = _save_assignment(serializer, actor=self.request.user, is_create=True)
         audit_account_write(
             self.request,
@@ -368,7 +324,6 @@ class RegionAssignmentViewSet(
         )
 
     def perform_update(self, serializer):
-        self._guard_write()
         # B3: is_create=False → assigned_by is NOT overwritten (provenance preserved)
         assignment = _save_assignment(serializer, actor=self.request.user, is_create=False)
         audit_account_write(
@@ -391,29 +346,22 @@ class RegionAssignmentViewSet(
 
 
 class StationLogEntryViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
-    read_views.ScopedReadOnlyViewSet,
+    read_views.AreaReadOnlyViewSet,
 ):
-    """CRUD for StationLogEntry, scoped to the user's accessible stations."""
+    """CRUD for StationLogEntry (area ``stations``)."""
 
+    area = "stations"
     serializer_class = StationLogEntryWriteSerializer
     write_serializer_class = StationLogEntryWriteSerializer
 
     def get_queryset(self):
-        return StationLogEntry.objects.filter(
-            station__in=ws.accessible_stations(self.request.user)
-        ).order_by("-created_at")
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_station_content(user, obj.station)
+        return StationLogEntry.objects.all().order_by("-created_at")
 
     def perform_create(self, serializer):
-        station = serializer.validated_data["station"]
-        if not ws.can_write_station_content(self.request.user, station):
-            raise PermissionDenied("Not allowed to create a log entry for this station.")
         entry = serializer.save(created_by=self.request.user)
         audit_station_write(
             self.request,
@@ -423,11 +371,6 @@ class StationLogEntryViewSet(
         )
 
     def perform_update(self, serializer):
-        # `station` is writable: re-validate the NEW target station before saving,
-        # else a station-user could move a log entry to an out-of-scope station.
-        new_station = serializer.validated_data.get("station", serializer.instance.station)
-        if not ws.can_write_station_content(self.request.user, new_station):
-            raise PermissionDenied("Not allowed to move this log entry to that station.")
         entry = serializer.save()
         audit_station_write(
             self.request,
@@ -447,29 +390,22 @@ class StationLogEntryViewSet(
 
 
 class StationPhotoViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
-    read_views.ScopedReadOnlyViewSet,
+    read_views.AreaReadOnlyViewSet,
 ):
-    """CRUD for StationPhoto, scoped to the user's accessible stations."""
+    """CRUD for StationPhoto (area ``stations``)."""
 
+    area = "stations"
     serializer_class = StationPhotoWriteSerializer
     write_serializer_class = StationPhotoWriteSerializer
 
     def get_queryset(self):
-        return StationPhoto.objects.filter(
-            station__in=ws.accessible_stations(self.request.user)
-        ).order_by("-uploaded_at")
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_station_content(user, obj.station)
+        return StationPhoto.objects.all().order_by("-uploaded_at")
 
     def perform_create(self, serializer):
-        station = serializer.validated_data["station"]
-        if not ws.can_write_station_content(self.request.user, station):
-            raise PermissionDenied("Not allowed to upload a photo for this station.")
         photo = serializer.save(uploaded_by=self.request.user)
         audit_station_write(
             self.request,
@@ -479,11 +415,6 @@ class StationPhotoViewSet(
         )
 
     def perform_update(self, serializer):
-        # `station` is writable: re-validate the NEW target station before saving,
-        # else a station-user could move a photo to an out-of-scope station.
-        new_station = serializer.validated_data.get("station", serializer.instance.station)
-        if not ws.can_write_station_content(self.request.user, new_station):
-            raise PermissionDenied("Not allowed to move this photo to that station.")
         old_name = serializer.instance.image.name if serializer.instance.image else None
         photo = serializer.save()
         new_name = photo.image.name if photo.image else None
@@ -513,16 +444,13 @@ class StationPhotoViewSet(
 
 
 class RolloutSequenceViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     UpdateModelMixin,
     read_views.RolloutSequenceViewSet,
 ):
-    """Update-only for the singleton RolloutSequence (global, region-mgr/staff)."""
+    """Update-only for the singleton RolloutSequence (``rollouts.manage``)."""
 
     write_serializer_class = RolloutSequenceWriteSerializer
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_rollouts(user)
 
     def perform_update(self, serializer):
         seq = serializer.save(updated_by=self.request.user)
@@ -533,27 +461,17 @@ class RolloutSequenceViewSet(
 
 
 class RolloutSequenceEntryViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
     read_views.RolloutSequenceEntryViewSet,
 ):
-    """Full CRUD for RolloutSequenceEntry (global, region-mgr/staff)."""
+    """Full CRUD for RolloutSequenceEntry (``rollouts.manage``)."""
 
     write_serializer_class = RolloutSequenceEntryWriteSerializer
-    # B5: payload-independent create gate (role only, no target FK involved).
-    create_requires = staticmethod(ws.can_write_rollouts)
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_rollouts(user)
-
-    def _guard_create(self):
-        if not ws.can_write_rollouts(self.request.user):
-            raise PermissionDenied("RolloutSequenceEntry writes require region-manager or staff.")
 
     def perform_create(self, serializer):
-        self._guard_create()
         sequence = serializer.validated_data["sequence"]
         tag = serializer.validated_data["tag"]
         # Route through the locked service so concurrent creates serialize and
@@ -658,32 +576,21 @@ class RolloutSequenceEntryViewSet(
 
 
 class AlertRuleViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     UpdateModelMixin,
     DestroyModelMixin,
     read_views.AlertRuleViewSet,
 ):
-    """Full CRUD for AlertRule (global, region-mgr/staff).
+    """Full CRUD for AlertRule (``alert_rules.manage``).
 
-    AlertRule is a global config resource with no topology FK — gated purely
-    by role (is_any_region_manager). alert_type is UNIQUE per the model, so
-    create will fail with 400 if the client POSTs a duplicate type.
+    alert_type is UNIQUE per the model, so create will fail with 400 if the
+    client POSTs a duplicate type.
     """
 
     write_serializer_class = AlertRuleWriteSerializer
-    # B5: payload-independent create gate (role only, no target FK).
-    create_requires = staticmethod(ws.can_write_alert_rule)
-
-    def can_write_object(self, user, obj, method):
-        return ws.can_write_alert_rule(user)
-
-    def _guard_create(self):
-        if not ws.can_write_alert_rule(self.request.user):
-            raise PermissionDenied("AlertRule writes require region-manager or staff.")
 
     def perform_create(self, serializer):
-        self._guard_create()
         rule = serializer.save()
         audit_config_write(
             self.request,
@@ -706,7 +613,7 @@ class AlertRuleViewSet(
 
 
 class DeploymentViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     read_views.DeploymentViewSet,
 ):
@@ -715,28 +622,19 @@ class DeploymentViewSet(
     POST  /deployments/ — fire a new STATION-targeted deploy.
     GET   /deployments/ — inherited list (read-only).
     GET   /deployments/{pk}/ — inherited retrieve (read-only).
-    PATCH/PUT/DELETE — not mixed in → 405.
+    PATCH/PUT — not mixed in → 405. DELETE — never allowed (spec: deployments
+    are not deletable), excluded from ``http_method_names`` → 405.
 
-    Authz: internal OR region-manager of the target station's region.
-    target_type is always forced to STATION; status/created_by/target_type
-    from the client body are ignored (server-set).
+    Authz: ``deployments.manage``. target_type is always forced to STATION;
+    status/created_by/target_type from the client body are ignored
+    (server-set).
     """
 
     write_serializer_class = DeploymentCreateSerializer
-
-    def can_write_object(self, user, obj, method):
-        # No object-level writes (no Update/Destroy mixin).
-        # Belt-and-suspenders: deny everything so an accidental UpdateMixin
-        # addition cannot sneak through.
-        return False
+    http_method_names = ["get", "post", "head", "options"]
 
     def perform_create(self, serializer):
         station = serializer.validated_data["target_station"]
-        # Authz first: an unauthorized user gets 403 regardless of image
-        # validity (403-before-400 ordering).
-        if not ws.can_trigger_deployment(self.request.user, station):
-            raise PermissionDenied("Not allowed to trigger a deployment for this station.")
-
         image_release = serializer.validated_data["image_release"]
 
         # Input-validation parity with the canonical UI trigger
@@ -823,7 +721,7 @@ class DeploymentViewSet(
 
 
 class ProvisioningJobViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     CreateModelMixin,
     read_views.ProvisioningJobViewSet,
 ):
@@ -834,26 +732,14 @@ class ProvisioningJobViewSet(
     GET   /provisioning-jobs/{pk}/ — inherited retrieve (read-only).
     PATCH/PUT/DELETE — not mixed in → 405.
 
-    Authz: staff/admin only (is_internal).  requested_by and status are
-    always server-set; any client-supplied values are ignored.
+    Authz: ``provisioning.manage``. requested_by and status are always
+    server-set; any client-supplied values are ignored.
     """
 
     write_serializer_class = ProvisioningJobCreateSerializer
-    # R5c: payload-independent create gate — role check runs in has_permission
-    # before DRF validates the serializer (prevents non-staff probing station/
-    # image FK existence via field-validation errors instead of 403).
-    create_requires = staticmethod(ws.can_trigger_provisioning_role)
-
-    def can_write_object(self, user, obj, method):
-        # No object-level writes (no Update/Destroy mixin).
-        return False
 
     def perform_create(self, serializer):
         station = serializer.validated_data["station"]
-
-        # Authz first: 403 before any input-validation 400 (403-before-400 ordering).
-        if not ws.can_trigger_provisioning(self.request.user, station):
-            raise PermissionDenied("Not allowed to trigger a provisioning job for this station.")
 
         # Serialize the duplicate-active-job check + INSERT on the Station row
         # so two concurrent automation requests both seeing "no active job" cannot
@@ -899,7 +785,7 @@ _USER_MEMBERSHIP_ORDER = [
 
 
 class UserViewSet(
-    ScopedWriteViewSet,
+    AreaWriteViewSet,
     UpdateModelMixin,
     read_views.UserViewSet,
 ):
@@ -934,6 +820,9 @@ class UserViewSet(
     """
 
     write_serializer_class = UserWriteSerializer
+    # Still on the legacy topology/object-level gate until the users
+    # migration (Task 12) moves it to ``users.view``/``users.manage``.
+    permission_classes = [TopologyScopedWritePermission]
 
     def get_queryset(self):
         # Mirror the UI: soft-deleted users are off-limits to mutation. Narrow
@@ -982,12 +871,13 @@ _LINUX_IMAGE_REPO_DEFAULT = "OE5XRX/linux-image"
 _GITHUB_RELEASES_LIMIT = 30
 
 
-class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
+class ImageReleaseViewSet(AreaWriteViewSet, read_views.ImageReleaseViewSet):
     """ImageRelease special write surface: archive/restore + available + import.
 
     No generic create/update/destroy (no write mixins added). Hard DELETE
     on images/{id}/ → 405 (inherited from ReadOnlyModelViewSet; no
-    DestroyModelMixin here). Every mutation is staff-only (can_manage_images).
+    DestroyModelMixin here). Every action needs ``images.manage``
+    (``@action(..., verb="manage")``, also for the GET ``available``).
 
     Actions:
       POST images/{id}/archive/  — soft-delete (idempotent)
@@ -996,21 +886,14 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
       POST images/import/        — queue an ImageImportJob
     """
 
-    def can_write_object(self, user, obj, method):
-        # No generic object writes (no Update/Destroy mixin). All mutations
-        # go through custom actions that gate themselves via can_manage_images.
-        return False
-
     # ------------------------------------------------------------------ #
     # archive / restore                                                    #
     # ------------------------------------------------------------------ #
 
     @extend_schema(request=None, responses={200: read_serializers.ImageReleaseSerializer})
-    @action(detail=True, methods=["post"], url_path="archive")
+    @action(detail=True, methods=["post"], url_path="archive", verb="manage")
     def archive(self, request, pk=None):
-        """Soft-delete a release. Idempotent. Staff-only."""
-        if not ws.can_manage_images(request.user):
-            raise PermissionDenied("Image management requires staff/admin.")
+        """Soft-delete a release. Idempotent."""
         obj = get_object_or_404(ImageRelease.all_objects, pk=pk)
         obj.archive()
         audit_config_write(request, message=f"ImageRelease {obj.tag} archived")
@@ -1018,11 +901,9 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
         return Response(ser.data)
 
     @extend_schema(request=None, responses={200: read_serializers.ImageReleaseSerializer})
-    @action(detail=True, methods=["post"], url_path="restore")
+    @action(detail=True, methods=["post"], url_path="restore", verb="manage")
     def restore(self, request, pk=None):
-        """Undo a previous archive. Idempotent. Staff-only."""
-        if not ws.can_manage_images(request.user):
-            raise PermissionDenied("Image management requires staff/admin.")
+        """Undo a previous archive. Idempotent."""
         obj = get_object_or_404(ImageRelease.all_objects, pk=pk)
         obj.restore()
         audit_config_write(request, message=f"ImageRelease {obj.tag} restored")
@@ -1055,9 +936,9 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
             )
         }
     )
-    @action(detail=False, methods=["get"], url_path="available")
+    @action(detail=False, methods=["get"], url_path="available", verb="manage")
     def available(self, request):
-        """List GitHub releases that have at least one importable variant. Staff-only.
+        """List GitHub releases that have at least one importable variant.
 
         Only releases with a complete asset triple (wic.bz2 + .sha256 + .bundle)
         for at least one machine/channel combination are returned. This mirrors
@@ -1068,8 +949,6 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
         ``{"machine": ..., "channel": ...}`` dicts — so callers know exactly
         what can be passed to the import/ endpoint.
         """
-        if not ws.can_manage_images(request.user):
-            raise PermissionDenied("Image management requires staff/admin.")
         repo = getattr(settings, "LINUX_IMAGE_REPO", _LINUX_IMAGE_REPO_DEFAULT)
         releases = github_releases.fetch_releases(repo, limit=_GITHUB_RELEASES_LIMIT)
 
@@ -1102,15 +981,13 @@ class ImageReleaseViewSet(ScopedWriteViewSet, read_views.ImageReleaseViewSet):
         request=ImageImportInputSerializer,
         responses={202: read_serializers.ImageImportJobSerializer},
     )
-    @action(detail=False, methods=["post"], url_path="import", url_name="import")
+    @action(detail=False, methods=["post"], url_path="import", url_name="import", verb="manage")
     def import_release(self, request):
-        """Queue an ImageImportJob for a given GitHub release tag. Staff-only.
+        """Queue an ImageImportJob for a given GitHub release tag.
 
         The ``tag`` must exist in the current GitHub releases list — free-text
         or unknown tags are rejected with a 400 field error on ``tag``.
         """
-        if not ws.can_manage_images(request.user):
-            raise PermissionDenied("Image management requires staff/admin.")
 
         serializer = ImageImportInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

@@ -18,6 +18,21 @@ from apps.monitoring.models import Alert, AlertRule
 from apps.stations.models import Station
 
 
+@pytest.fixture(autouse=True)
+def _reset_throttle_cache():
+    """Start every test with an empty default cache.
+
+    DRF's ScopedRateThrottle ("api-token": 120/min) keys on the user pk and
+    lives in the default cache, which survives the per-test DB rollback.
+    Users recreated with the same pk across tests would otherwise share one
+    throttle bucket and hit 429 in a full-suite run.
+    """
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+
+
 def _make_ed25519_keypair():
     """Generate an Ed25519 keypair for tests.
 

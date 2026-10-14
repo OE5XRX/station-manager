@@ -1,9 +1,9 @@
 """Permission-matrix + audit tests for AlertRule write endpoints.
 
-Task 8: region-mgr/staff full CRUD.  Every mutation produces a CONFIG_CHANGED
-AccountAuditLog row with "via API token" in the message.
+alert_rules.manage (Admin) full CRUD; staff/region-mgr get 403.  Every
+mutation produces a CONFIG_CHANGED AccountAuditLog row with "via API token" in the message.
 
-AlertRule is a global config resource — gated purely by role (is_any_region_manager),
+AlertRule is a global config resource — gated purely by alert_rules.manage,
 no topology/station scope.
 
 Design notes:
@@ -64,18 +64,19 @@ def _create_rule(alert_type=_CREATE_TYPE):
 # ---------------------------------------------------------------------------
 
 
-def test_update_region_mgr_allowed(api_topology, bearer, cpu_temp_alert_rule):
+def test_update_region_mgr_forbidden(api_topology, bearer, cpu_temp_alert_rule):
     url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
     resp = bearer(api_topology["region_mgr"]).patch(url, {"threshold": 85.0}, format="json")
-    assert resp.status_code == 200
+    assert resp.status_code == 403
+    assert resp.json()["required"] == "alert_rules.manage"
     cpu_temp_alert_rule.refresh_from_db()
-    assert cpu_temp_alert_rule.threshold == 85.0
+    assert cpu_temp_alert_rule.threshold != 85.0
 
 
-def test_update_staff_allowed(api_topology, bearer, cpu_temp_alert_rule):
+def test_update_staff_forbidden(api_topology, bearer, cpu_temp_alert_rule):
     url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
     resp = bearer(api_topology["staff"]).patch(url, {"threshold": 90.0}, format="json")
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
 
 def test_update_admin_allowed(api_topology, bearer, cpu_temp_alert_rule):
@@ -107,19 +108,19 @@ def test_update_anon_unauthorized(api_topology, anon_client, cpu_temp_alert_rule
 # ---------------------------------------------------------------------------
 
 
-def test_create_staff_allowed(api_topology, bearer):
+def test_create_staff_forbidden(api_topology, bearer):
     _ensure_no_rule(_CREATE_TYPE)
     url = reverse("api:alert-rule-list")
     resp = bearer(api_topology["staff"]).post(url, _CREATE_PAYLOAD, format="json")
-    assert resp.status_code == 201
-    assert resp.data["alert_type"] == _CREATE_TYPE
+    assert resp.status_code == 403
+    assert resp.json()["required"] == "alert_rules.manage"
 
 
-def test_create_region_mgr_allowed(api_topology, bearer):
+def test_create_region_mgr_forbidden(api_topology, bearer):
     _ensure_no_rule(_CREATE_TYPE)
     url = reverse("api:alert-rule-list")
     resp = bearer(api_topology["region_mgr"]).post(url, _CREATE_PAYLOAD, format="json")
-    assert resp.status_code == 201
+    assert resp.status_code == 403
 
 
 def test_create_admin_allowed(api_topology, bearer):
@@ -155,18 +156,18 @@ def test_create_anon_unauthorized(api_topology, anon_client):
 # ---------------------------------------------------------------------------
 
 
-def test_delete_staff_allowed(api_topology, bearer):
+def test_delete_staff_forbidden(api_topology, bearer):
     rule = _create_rule()
     url = reverse("api:alert-rule-detail", args=[rule.pk])
     resp = bearer(api_topology["staff"]).delete(url)
-    assert resp.status_code == 204
+    assert resp.status_code == 403
 
 
-def test_delete_region_mgr_allowed(api_topology, bearer):
+def test_delete_region_mgr_forbidden(api_topology, bearer):
     rule = _create_rule()
     url = reverse("api:alert-rule-detail", args=[rule.pk])
     resp = bearer(api_topology["region_mgr"]).delete(url)
-    assert resp.status_code == 204
+    assert resp.status_code == 403
 
 
 def test_delete_station_user_forbidden(api_topology, bearer):
@@ -199,7 +200,7 @@ def test_update_produces_audit_row(api_topology, bearer, cpu_temp_alert_rule):
     from apps.accounts.models import AccountAuditLog
 
     url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
-    bearer(api_topology["region_mgr"]).patch(url, {"threshold": 82.0}, format="json")
+    bearer(api_topology["admin"]).patch(url, {"threshold": 82.0}, format="json")
     log = AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
         message__contains="via API token",
@@ -213,7 +214,7 @@ def test_create_produces_audit_row(api_topology, bearer):
 
     _ensure_no_rule(_CREATE_TYPE)
     url = reverse("api:alert-rule-list")
-    bearer(api_topology["staff"]).post(url, _CREATE_PAYLOAD, format="json")
+    bearer(api_topology["admin"]).post(url, _CREATE_PAYLOAD, format="json")
     log = AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
         message__contains="via API token",
@@ -227,7 +228,7 @@ def test_delete_produces_audit_row(api_topology, bearer):
 
     rule = _create_rule()
     url = reverse("api:alert-rule-detail", args=[rule.pk])
-    bearer(api_topology["region_mgr"]).delete(url)
+    bearer(api_topology["admin"]).delete(url)
     log = AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
         message__contains="via API token",
@@ -246,6 +247,6 @@ def test_threshold_as_json_number(api_topology, bearer, cpu_temp_alert_rule):
     JSON bodies are always dot-decimal — no de-locale conversion needed.
     """
     url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
-    resp = bearer(api_topology["region_mgr"]).patch(url, {"threshold": 82.5}, format="json")
+    resp = bearer(api_topology["admin"]).patch(url, {"threshold": 82.5}, format="json")
     assert resp.status_code == 200
     assert resp.data["threshold"] == 82.5

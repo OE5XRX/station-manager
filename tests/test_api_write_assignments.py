@@ -1,7 +1,7 @@
 """Write-surface permission matrix tests for StationAssignment + RegionAssignment.
 
-TDD: run RED first (router still points to read viewsets), then implement and
-verify GREEN.
+Every assignment write needs topology.manage (Admin). Region-manager
+assignments grant no API rights; there is no topology scoping.
 """
 
 import pytest
@@ -10,28 +10,24 @@ from django.urls import reverse
 pytestmark = pytest.mark.django_db
 
 
-def test_region_mgr_assigns_in_scope(api_topology, bearer):
+def test_admin_assigns_station(api_topology, bearer):
     t = api_topology
     payload = {"user": t["applicant"].pk, "station": t["station_in"].pk, "role": "maintainer"}
     # applicant target is rejected by _ApplicantForbiddenMixin -> 400
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
-    )
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code == 400
     payload["user"] = t["staff"].pk
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
-    )
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code == 201
 
 
-def test_region_mgr_cannot_assign_out_of_scope_station(api_topology, bearer):
+def test_region_mgr_and_staff_cannot_assign(api_topology, bearer):
     t = api_topology
-    payload = {"user": t["staff"].pk, "station": t["station_out"].pk, "role": "maintainer"}
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
-    )
-    assert r.status_code == 403
+    payload = {"user": t["staff"].pk, "station": t["station_in"].pk, "role": "maintainer"}
+    for role in ("region_mgr", "staff"):
+        r = bearer(t[role]).post(reverse("api:station-assignment-list"), payload, format="json")
+        assert r.status_code == 403
+        assert r.json()["required"] == "topology.manage"
 
 
 def test_assigned_by_is_server_side(api_topology, bearer):
@@ -44,9 +40,9 @@ def test_assigned_by_is_server_side(api_topology, bearer):
         "role": "maintainer",
         "assigned_by": t["admin"].pk,  # attacker-supplied, must be ignored
     }
-    bearer(t["region_mgr"]).post(reverse("api:station-assignment-list"), payload, format="json")
+    bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     a = StationAssignment.objects.get(user=t["staff"], station=t["station_in"])
-    assert a.assigned_by == t["region_mgr"]
+    assert a.assigned_by == t["admin"]
 
 
 def test_region_assignment_staff_only(api_topology, bearer):
@@ -72,9 +68,7 @@ def test_station_assignment_create_audit_row(api_topology, bearer):
 
     t = api_topology
     payload = {"user": t["staff"].pk, "station": t["station_in"].pk, "role": "maintainer"}
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
-    )
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code == 201
     assert AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_CREATED,
@@ -83,7 +77,7 @@ def test_station_assignment_create_audit_row(api_topology, bearer):
 
 
 def test_station_assignment_delete(api_topology, bearer):
-    """region_mgr can delete an in-scope StationAssignment."""
+    """Admin (topology.manage) can delete a StationAssignment."""
     from apps.stations.models import StationAssignment
 
     t = api_topology
@@ -91,29 +85,26 @@ def test_station_assignment_delete(api_topology, bearer):
         user=t["staff"], station=t["station_in"], role="maintainer"
     )
     url = reverse("api:station-assignment-detail", args=[assignment.pk])
-    r = bearer(t["region_mgr"]).delete(url)
+    r = bearer(t["admin"]).delete(url)
     assert r.status_code == 204
     assert not StationAssignment.objects.filter(pk=assignment.pk).exists()
 
 
-def test_station_assignment_delete_out_of_scope(api_topology, bearer):
-    """region_mgr cannot delete an assignment on station_out.
+def test_station_assignment_delete_needs_topology_manage(api_topology, bearer):
+    """region_mgr and staff cannot delete any assignment (topology.manage = Admin).
 
-    The assignment is out of the region_mgr's read scope, so get_object()
-    returns 404 (invisible object), not 403. This matches the Phase-2
-    read-scope contract: inaccessible == not found.
+    No topology scoping: the assignment is visible, so the denial is a 403,
+    not a 404.
     """
     from apps.stations.models import StationAssignment
 
     t = api_topology
     assignment = StationAssignment.objects.create(
-        user=t["staff"], station=t["station_out"], role="maintainer"
+        user=t["staff"], station=t["station_in"], role="maintainer"
     )
     url = reverse("api:station-assignment-detail", args=[assignment.pk])
-    r = bearer(t["region_mgr"]).delete(url)
-    # 404: the assignment is not in region_mgr's read queryset
-    assert r.status_code == 404
-    # Confirm it was NOT deleted
+    for role in ("region_mgr", "staff"):
+        assert bearer(t[role]).delete(url).status_code == 403
     assert StationAssignment.objects.filter(pk=assignment.pk).exists()
 
 
@@ -131,7 +122,7 @@ def test_region_assignment_delete_staff_only(api_topology, bearer):
 
 
 def test_station_assignment_update(api_topology, bearer):
-    """region_mgr can update (PATCH) an in-scope StationAssignment."""
+    """Admin (topology.manage) can update (PATCH) a StationAssignment."""
     from apps.stations.models import StationAssignment
 
     t = api_topology
@@ -139,19 +130,14 @@ def test_station_assignment_update(api_topology, bearer):
         user=t["staff"], station=t["station_in"], role="maintainer"
     )
     url = reverse("api:station-assignment-detail", args=[assignment.pk])
-    r = bearer(t["region_mgr"]).patch(url, {"role": "admin"}, format="json")
+    r = bearer(t["admin"]).patch(url, {"role": "admin"}, format="json")
     assert r.status_code == 200
     assignment.refresh_from_db()
     assert assignment.role == "admin"
 
 
-def test_region_mgr_cannot_move_assignment_to_out_of_scope_station(api_topology, bearer):
-    """C1: `station` is writable; perform_update must re-validate the NEW station.
-
-    region_mgr of region_in may edit an in-scope assignment, but must NOT be
-    able to PATCH its `station` to station_out (out of scope) -> 403, DB
-    unchanged.
-    """
+def test_region_mgr_cannot_move_assignment(api_topology, bearer):
+    """Region-manager assignments grant no API write rights -> 403, DB unchanged."""
     from apps.stations.models import StationAssignment
 
     t = api_topology
@@ -165,8 +151,8 @@ def test_region_mgr_cannot_move_assignment_to_out_of_scope_station(api_topology,
     assert assignment.station == t["station_in"]  # unchanged
 
 
-def test_staff_can_move_assignment_to_any_station(api_topology, bearer):
-    """Guard isn't over-restrictive: staff (is_internal) may move an assignment."""
+def test_admin_can_move_assignment_to_any_station(api_topology, bearer):
+    """Admin (topology.manage) may move an assignment to any station."""
     from apps.stations.models import StationAssignment
 
     t = api_topology
@@ -190,7 +176,7 @@ def test_station_assignment_update_audit_uses_updated_event(api_topology, bearer
         user=t["staff"], station=t["station_in"], role="maintainer"
     )
     url = reverse("api:station-assignment-detail", args=[assignment.pk])
-    bearer(t["region_mgr"]).patch(url, {"role": "admin"}, format="json")
+    bearer(t["admin"]).patch(url, {"role": "admin"}, format="json")
     assert AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.STATION_ASSIGNMENT_UPDATED,
         message__contains="via API token",
@@ -222,9 +208,7 @@ def test_duplicate_station_assignment_returns_400(api_topology, bearer):
         "station": t["station_in"].pk,
         "role": "admin",
     }
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
-    )
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code in (400, 409), f"Expected 400 or 409, got {r.status_code}: {r.data}"
 
 
@@ -259,25 +243,28 @@ def test_assigned_by_unchanged_on_patch(api_topology, bearer):
     from apps.stations.models import StationAssignment
 
     t = api_topology
-    # Create an assignment as region_mgr
-    payload = {"user": t["staff"].pk, "station": t["station_in"].pk, "role": "maintainer"}
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
+    from apps.accounts.models import User
+
+    editor = User.objects.create_user(
+        "api_admin2", password="x", membership_level=User.MembershipLevel.ADMIN
     )
+    # Create an assignment as the first admin
+    payload = {"user": t["staff"].pk, "station": t["station_in"].pk, "role": "maintainer"}
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code == 201, r.data
     assignment_pk = r.data["id"]
     assignment = StationAssignment.objects.get(pk=assignment_pk)
-    assert assignment.assigned_by == t["region_mgr"]
+    assert assignment.assigned_by == t["admin"]
 
-    # Now staff (admin) PATCHes the role
+    # Now a different admin PATCHes the role
     detail = reverse("api:station-assignment-detail", args=[assignment_pk])
-    r2 = bearer(t["admin"]).patch(detail, {"role": "admin"}, format="json")
+    r2 = bearer(editor).patch(detail, {"role": "admin"}, format="json")
     assert r2.status_code == 200, r2.data
     assignment.refresh_from_db()
     assert assignment.role == "admin"
-    # assigned_by must NOT have changed to admin
-    assert assignment.assigned_by == t["region_mgr"], (
-        f"assigned_by was rewritten to {assignment.assigned_by}, expected region_mgr"
+    # assigned_by must NOT have changed to the editor
+    assert assignment.assigned_by == t["admin"], (
+        f"assigned_by was rewritten to {assignment.assigned_by}, expected the creator"
     )
 
 
@@ -299,9 +286,7 @@ def test_soft_deleted_user_rejected_for_station_assignment(api_topology, bearer)
         "station": t["station_in"].pk,
         "role": "maintainer",
     }
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:station-assignment-list"), payload, format="json"
-    )
+    r = bearer(t["admin"]).post(reverse("api:station-assignment-list"), payload, format="json")
     assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
     assert not StationAssignment.objects.filter(user=victim).exists()
 

@@ -110,13 +110,15 @@ class TestInventoryView:
         )
         assert response.status_code in (401, 403)
 
-    def test_inventory_view_member_no_assignment_gets_404(self, client, member_user, station):
-        """Member without a station assignment cannot see the station → 404."""
+    def test_inventory_view_member_no_assignment_sees_data(self, client, member_user, station):
+        """No topology scoping: a member without assignment reads inventory (stations.view)."""
+        StationInventory.objects.create(station=station, data={"cpu": {"cores": 2}})
         client.force_login(member_user)
         response = client.get(
             reverse("api:station-inventory", kwargs={"pk": station.pk}),
         )
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert response.json()["data"]["cpu"]["cores"] == 2
 
     def test_inventory_view_returns_data(self, client, admin_user, station):
         """Admin should get inventory data as JSON."""

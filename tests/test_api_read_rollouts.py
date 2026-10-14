@@ -29,5 +29,6 @@ def test_rollout_sequence_entries_nested(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_rollout_applicant_403(topology):  # noqa: F811
-    assert bearer(topology["applicant"]).get("/api/v1/rollout-sequences/").status_code == 403
+def test_rollout_applicant_can_read(topology):  # noqa: F811
+    # rollouts.view = Applicant (spec matrix).
+    assert bearer(topology["applicant"]).get("/api/v1/rollout-sequences/").status_code == 200

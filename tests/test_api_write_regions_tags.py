@@ -1,6 +1,7 @@
 """Permission-matrix + audit tests for the Region and StationTag write endpoints.
 
-Task 3: Region (staff/admin-only CRUD) + StationTag (staff/admin-only CRUD).
+Region CRUD needs topology.manage (Admin); StationTag CRUD needs
+stations.manage (Staff).
 Every mutation must produce a DB audit row containing "via API token".
 
 Batch B regression tests are appended below the original suite.
@@ -12,11 +13,14 @@ from django.urls import reverse
 pytestmark = pytest.mark.django_db
 
 
-def test_region_crud_staff_only(api_topology, bearer):
+def test_region_crud_admin_only(api_topology, bearer):
     t = api_topology
     url = reverse("api:region-list")
-    resp = bearer(t["staff"]).post(url, {"name": "R3", "slug": "r3"}, format="json")
+    resp = bearer(t["admin"]).post(url, {"name": "R3", "slug": "r3"}, format="json")
     assert resp.status_code == 201
+    resp = bearer(t["staff"]).post(url, {"name": "R5", "slug": "r5"}, format="json")
+    assert resp.status_code == 403
+    assert resp.json()["required"] == "topology.manage"
     resp = bearer(t["region_mgr"]).post(url, {"name": "R4", "slug": "r4"}, format="json")
     assert resp.status_code == 403
     detail = reverse("api:region-detail", args=[t["region_in"].pk])
@@ -39,7 +43,7 @@ def test_region_create_audits(api_topology, bearer):
     from apps.accounts.models import AccountAuditLog
 
     t = api_topology
-    bearer(t["staff"]).post(
+    bearer(t["admin"]).post(
         reverse("api:region-list"), {"name": "R9", "slug": "r9"}, format="json"
     )
     log = AccountAuditLog.objects.filter(
@@ -63,7 +67,7 @@ def test_station_tag_create_audits(api_topology, bearer):
 
 
 def test_region_delete_audits(api_topology, bearer):
-    """Staff delete of a region records an API REGION_DELETED audit row with token origin.
+    """Admin delete of a region records an API REGION_DELETED audit row with token origin.
 
     NB: a post_delete signal on Region also emits a REGION_DELETED row
     ("deleted: <name>"), so filter on the API message ("via API token")
@@ -75,7 +79,7 @@ def test_region_delete_audits(api_topology, bearer):
     t = api_topology
     victim = Region.objects.create(name="Doomed", slug="doomed")
     detail = reverse("api:region-detail", args=[victim.pk])
-    resp = bearer(t["staff"]).delete(detail)
+    resp = bearer(t["admin"]).delete(detail)
     assert resp.status_code == 204
     log = AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.REGION_DELETED,

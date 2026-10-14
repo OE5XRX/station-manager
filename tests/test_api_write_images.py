@@ -2,7 +2,7 @@
 
 Covers: archive/restore (soft-delete lifecycle), available/ (GH proxy),
 import/ (queue an ImageImportJob), hard-DELETE blocked (405), permission
-matrix (staff pass, region_mgr/station_user/applicant/anon fail).
+matrix (admin passes images.manage; staff/region_mgr/station_user/applicant/anon fail).
 """
 
 import pytest
@@ -16,27 +16,27 @@ pytestmark = pytest.mark.django_db
 # ---------------------------------------------------------------------------
 
 
-def test_archive_restore_idempotent_staff(api_topology, bearer, image_release):
+def test_archive_restore_idempotent_admin(api_topology, bearer, image_release):
     t = api_topology
     arch = reverse("api:image-archive", args=[image_release.pk])
-    assert bearer(t["staff"]).post(arch).status_code in (200, 204)
-    assert bearer(t["staff"]).post(arch).status_code in (200, 204)  # idempotent
+    assert bearer(t["admin"]).post(arch).status_code in (200, 204)
+    assert bearer(t["admin"]).post(arch).status_code in (200, 204)  # idempotent
     image_release.refresh_from_db()
     assert image_release.archived_at is not None
     rest = reverse("api:image-restore", args=[image_release.pk])
-    assert bearer(t["staff"]).post(rest).status_code in (200, 204)
+    assert bearer(t["admin"]).post(rest).status_code in (200, 204)
     image_release.refresh_from_db()
     assert image_release.archived_at is None
 
 
-def test_non_staff_cannot_archive(api_topology, bearer, image_release):
+def test_non_admin_cannot_archive(api_topology, bearer, image_release):
     t = api_topology
-    assert (
-        bearer(t["region_mgr"])
-        .post(reverse("api:image-archive", args=[image_release.pk]))
-        .status_code
-        == 403
-    )
+    for role in ("region_mgr", "staff"):
+        r = bearer(t[role]).post(reverse("api:image-archive", args=[image_release.pk]))
+        assert r.status_code == 403
+        assert r.json()["required"] == "images.manage"
+    image_release.refresh_from_db()
+    assert image_release.archived_at is None
 
 
 def test_no_hard_delete(api_topology, bearer, image_release):
@@ -52,7 +52,7 @@ def test_import_rejects_unknown_tag(api_topology, bearer, monkeypatch):
 
     t = api_topology
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [])
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v-nope", "machine": "qemux86-64", "channel": "stable"},
         format="json",
@@ -90,7 +90,7 @@ def test_anon_cannot_archive(anon_client, image_release):
     assert r.status_code == 401
 
 
-def test_non_staff_cannot_restore(api_topology, bearer, image_release):
+def test_non_admin_cannot_restore(api_topology, bearer, image_release):
     t = api_topology
     assert (
         bearer(t["region_mgr"])
@@ -100,23 +100,25 @@ def test_non_staff_cannot_restore(api_topology, bearer, image_release):
     )
 
 
-def test_non_staff_cannot_import(api_topology, bearer):
-    """region_mgr → 403 from the can_manage_images gate, and no job row created.
+def test_non_admin_cannot_import(api_topology, bearer):
+    """region_mgr/staff → 403 from AreaPermission (images.manage), no job row.
 
-    No monkeypatch of fetch_releases: the gate fires at the very top of the
-    action, before any fetch or ImageImportJob creation, so a non-staff POST
-    must never reach the network or the DB.
+    No monkeypatch of fetch_releases: the permission check runs before the
+    action body, before any fetch or ImageImportJob creation, so a denied
+    POST must never reach the network or the DB.
     """
     from apps.images.models import ImageImportJob
 
     t = api_topology
     before = ImageImportJob.objects.count()
-    r = bearer(t["region_mgr"]).post(
-        reverse("api:image-import"),
-        {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
-        format="json",
-    )
-    assert r.status_code == 403
+    for role in ("region_mgr", "staff"):
+        r = bearer(t[role]).post(
+            reverse("api:image-import"),
+            {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
+            format="json",
+        )
+        assert r.status_code == 403
+        assert r.json()["required"] == "images.manage"
     assert ImageImportJob.objects.count() == before
 
 
@@ -150,7 +152,7 @@ def _make_fake_release(tag):
     )
 
 
-def test_available_returns_list_for_staff(api_topology, bearer, monkeypatch):
+def test_available_returns_list_for_admin(api_topology, bearer, monkeypatch):
     from apps.images import github_releases
 
     # Use releases WITH complete importable asset triples so the C4 filter
@@ -163,7 +165,7 @@ def test_available_returns_list_for_staff(api_topology, bearer, monkeypatch):
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: fake_releases)
 
     t = api_topology
-    r = bearer(t["staff"]).get(reverse("api:image-available"))
+    r = bearer(t["admin"]).get(reverse("api:image-available"))
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, list)
@@ -173,14 +175,17 @@ def test_available_returns_list_for_staff(api_topology, bearer, monkeypatch):
     assert "v1.9" in tags
 
 
-def test_available_forbidden_for_region_mgr(api_topology, bearer, monkeypatch):
+def test_available_forbidden_for_non_admin(api_topology, bearer, monkeypatch):
+    # available/ is a GET but declares verb="manage": images.manage (Admin).
     from apps.images import github_releases
 
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [])
 
     t = api_topology
-    r = bearer(t["region_mgr"]).get(reverse("api:image-available"))
-    assert r.status_code == 403
+    for role in ("region_mgr", "staff"):
+        r = bearer(t[role]).get(reverse("api:image-available"))
+        assert r.status_code == 403
+        assert r.json()["required"] == "images.manage"
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +213,7 @@ def test_import_happy_path(api_topology, bearer, monkeypatch):
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [fake_release])
 
     t = api_topology
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
         format="json",
@@ -217,7 +222,7 @@ def test_import_happy_path(api_topology, bearer, monkeypatch):
 
     # Job created with correct requested_by
     job = ImageImportJob.objects.get(tag="v2.0", machine="qemux86-64", channel="stable")
-    assert job.requested_by == t["staff"]
+    assert job.requested_by == t["admin"]
 
     # CONFIG_CHANGED audit row with "via API token"
     log = AccountAuditLog.objects.filter(
@@ -276,7 +281,7 @@ def test_available_returns_only_importable_releases(api_topology, bearer, monkey
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [complete, incomplete])
 
     t = api_topology
-    r = bearer(t["staff"]).get(reverse("api:image-available"))
+    r = bearer(t["admin"]).get(reverse("api:image-available"))
     assert r.status_code == 200
     data = r.json()
     tags = [item["tag"] for item in data]
@@ -292,7 +297,7 @@ def test_available_no_releases_returns_empty(api_topology, bearer, monkeypatch):
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [incomplete])
 
     t = api_topology
-    r = bearer(t["staff"]).get(reverse("api:image-available"))
+    r = bearer(t["admin"]).get(reverse("api:image-available"))
     assert r.status_code == 200
     assert r.json() == []
 
@@ -309,7 +314,7 @@ def test_available_exposes_channels_per_release(api_topology, bearer, monkeypatc
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [complete])
 
     t = api_topology
-    r = bearer(t["staff"]).get(reverse("api:image-available"))
+    r = bearer(t["admin"]).get(reverse("api:image-available"))
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
@@ -359,14 +364,14 @@ def test_import_duplicate_pending_job_returns_conflict(api_topology, bearer, mon
         machine="qemux86-64",
         channel="stable",
         mark_as_latest=False,
-        requested_by=t["staff"],
+        requested_by=t["admin"],
         status=ImageImportJob.Status.PENDING,
     )
     before = ImageImportJob.objects.filter(
         tag="v2.0", machine="qemux86-64", channel="stable"
     ).count()
 
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
         format="json",
@@ -393,10 +398,10 @@ def test_import_duplicate_running_job_returns_conflict(api_topology, bearer, mon
         machine="qemux86-64",
         channel="stable",
         mark_as_latest=False,
-        requested_by=t["staff"],
+        requested_by=t["admin"],
         status=ImageImportJob.Status.RUNNING,
     )
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
         format="json",
@@ -425,7 +430,7 @@ def test_import_fresh_variant_still_202(api_topology, bearer, monkeypatch):
     monkeypatch.setattr(github_releases, "fetch_releases", lambda *a, **k: [fake_release])
 
     t = api_topology
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
         format="json",
@@ -453,7 +458,7 @@ def test_import_already_imported_returns_conflict(api_topology, bearer, monkeypa
         sha256="a" * 64,
         size_bytes=1000,
     )
-    r = bearer(t["staff"]).post(
+    r = bearer(t["admin"]).post(
         reverse("api:image-import"),
         {"tag": "v2.0", "machine": "qemux86-64", "channel": "stable"},
         format="json",

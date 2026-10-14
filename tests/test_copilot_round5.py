@@ -218,14 +218,16 @@ class TestR5bRegionAssignmentCreatePreCheck:
         )
         assert r.status_code == 403
 
-    def test_staff_can_still_create_region_assignment(self, api_topology, bearer):
-        """Staff POST to region-assignments still returns 201 (pre-check passes)."""
+    def test_staff_gets_403_on_region_assignment_create(self, api_topology, bearer):
+        """Staff lacks topology.manage (Admin) → 403, no row created."""
+        from apps.stations.models import RegionAssignment
+
         t = api_topology
         payload = {"user": t["staff"].pk, "region": t["region_in"].pk, "role": "manager"}
         r = bearer(t["staff"]).post(reverse("api:region-assignment-list"), payload, format="json")
-        assert r.status_code == 201, (
-            f"Staff must still be able to create region-assignment, got {r.status_code}: {r.data}"
-        )
+        assert r.status_code == 403, r.data
+        assert r.json()["required"] == "topology.manage"
+        assert not RegionAssignment.objects.filter(user=t["staff"]).exists()
 
     def test_admin_can_still_create_region_assignment(self, api_topology, bearer):
         """Admin POST to region-assignments still returns 201."""
@@ -286,17 +288,16 @@ class TestR5cProvisioningJobCreatePreCheck:
         )
         assert r.status_code == 403
 
-    def test_staff_can_still_trigger_provisioning(self, api_topology, bearer, image_release):
-        """Staff POST to provisioning-jobs still returns 201."""
+    def test_staff_gets_403_on_provisioning_create(self, api_topology, bearer, image_release):
+        """Staff lacks provisioning.manage (Admin) → 403, no job created."""
         from apps.provisioning.models import ProvisioningJob
 
         t = api_topology
         payload = {"station": t["station_in"].pk, "image_release": image_release.pk}
         r = bearer(t["staff"]).post(reverse("api:provisioning-job-list"), payload, format="json")
-        assert r.status_code == 201, (
-            f"Staff must still trigger provisioning-job 201, got {r.status_code}: {r.data}"
-        )
-        assert ProvisioningJob.objects.filter(station=t["station_in"]).exists()
+        assert r.status_code == 403, r.data
+        assert r.json()["required"] == "provisioning.manage"
+        assert not ProvisioningJob.objects.filter(station=t["station_in"]).exists()
 
     def test_admin_can_still_trigger_provisioning(self, api_topology, bearer, image_release):
         """Admin POST to provisioning-jobs still returns 201."""
@@ -342,7 +343,7 @@ class TestR5dEntryTagIntegrityError400:
         tag = _make_tag("r5d-create-tag")
         url = reverse("api:rollout-sequence-entry-list")
         # position is required by the serializer (the service ignores it, but DRF validates it)
-        r = bearer(api_topology["region_mgr"]).post(
+        r = bearer(api_topology["admin"]).post(
             url, {"sequence": seq.pk, "tag": tag.pk, "position": 0}, format="json"
         )
         assert r.status_code in (400, 409), (
@@ -383,7 +384,7 @@ class TestR5dEntryTagIntegrityError400:
         monkeypatch.setattr(ModelSerializer, "update", _raising_update)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"tag": tag_new.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_new.pk}, format="json")
         assert r.status_code in (400, 409), (
             f"IntegrityError on update must produce 400/409, got {r.status_code}: "
             f"{r.data if hasattr(r, 'data') else '(no data)'}"
@@ -399,7 +400,7 @@ class TestR5dEntryTagIntegrityError400:
 
         url = reverse("api:rollout-sequence-entry-list")
         # position is required by the serializer
-        r = bearer(api_topology["region_mgr"]).post(
+        r = bearer(api_topology["admin"]).post(
             url, {"sequence": seq.pk, "tag": tag.pk, "position": 0}, format="json"
         )
         # The serializer (validate_tag) or add_entry's None-return path should 400
@@ -424,7 +425,7 @@ class TestR5dEntryTagIntegrityError400:
         tag = _make_tag("r5d-ie-body-tag")
         url = reverse("api:rollout-sequence-entry-list")
         # position is required by the serializer
-        r = bearer(api_topology["region_mgr"]).post(
+        r = bearer(api_topology["admin"]).post(
             url, {"sequence": seq.pk, "tag": tag.pk, "position": 0}, format="json"
         )
         assert r.status_code in (400, 409)
@@ -485,7 +486,7 @@ class TestR6aPositionTagIntegrityError400:
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
         # position changes (0 -> 1) AND tag changes -> takes the position branch.
-        r = bearer(api_topology["region_mgr"]).patch(
+        r = bearer(api_topology["admin"]).patch(
             url, {"position": 1, "tag": tag_new.pk}, format="json"
         )
         assert r.status_code in (400, 409), (

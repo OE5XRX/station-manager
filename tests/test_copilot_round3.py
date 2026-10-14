@@ -66,7 +66,7 @@ class TestR1EntryUpdateAtomic:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
-        r = bearer(api_topology["region_mgr"]).patch(
+        r = bearer(api_topology["admin"]).patch(
             url, {"position": 1, "tag": tag_new.pk}, format="json"
         )
         assert r.status_code == 200
@@ -86,7 +86,7 @@ class TestR1EntryUpdateAtomic:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_y, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_x.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"position": 1}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
         assert r.status_code == 200
         entry_x.refresh_from_db()
         assert entry_x.position == 1
@@ -104,7 +104,7 @@ class TestR2ValidateTagMalformedPK:
         """POST with sequence='notanint' → 400 field error, not 500."""
         tag = _make_tag("r2-any-tag")
         url = reverse("api:rollout-sequence-entry-list")
-        r = bearer(api_topology["region_mgr"]).post(
+        r = bearer(api_topology["admin"]).post(
             url,
             {"sequence": "notanint", "tag": tag.pk, "position": 0},
             format="json",
@@ -120,7 +120,7 @@ class TestR2ValidateTagMalformedPK:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-list")
-        r = bearer(api_topology["region_mgr"]).post(
+        r = bearer(api_topology["admin"]).post(
             url,
             {"sequence": seq.pk, "tag": tag.pk, "position": 1},
             format="json",
@@ -147,7 +147,7 @@ class TestR3SequenceReadOnlyOnUpdate:
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
         # Full PUT includes sequence — must not fail because sequence is required
-        r = bearer(api_topology["region_mgr"]).put(
+        r = bearer(api_topology["admin"]).put(
             url,
             {"sequence": seq.pk, "tag": tag_b.pk, "position": 0},
             format="json",
@@ -168,7 +168,7 @@ class TestR3SequenceReadOnlyOnUpdate:
         entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"sequence": seq2.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"sequence": seq2.pk}, format="json")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.data}"
         entry.refresh_from_db()
         assert entry.sequence == seq, "Sequence must NOT change on PATCH"
@@ -177,9 +177,7 @@ class TestR3SequenceReadOnlyOnUpdate:
         """POST without sequence → 400 (sequence required on create)."""
         tag = _make_tag("r3-create-no-seq-tag")
         url = reverse("api:rollout-sequence-entry-list")
-        r = bearer(api_topology["region_mgr"]).post(
-            url, {"tag": tag.pk, "position": 0}, format="json"
-        )
+        r = bearer(api_topology["admin"]).post(url, {"tag": tag.pk, "position": 0}, format="json")
         assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
 
 
@@ -393,7 +391,7 @@ class TestR7OffsetCap:
         # Move last entry to position 0
         entry = entries[-1]
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"position": 0}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"position": 0}, format="json")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.data}"
 
         # Positions must be gap-free

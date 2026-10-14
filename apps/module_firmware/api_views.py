@@ -32,6 +32,7 @@ class ModuleFirmwareDownloadView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     CHUNK = 1 << 20  # 1 MiB
 

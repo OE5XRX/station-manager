@@ -18,10 +18,10 @@ def test_alert_rule_list_member_and_new_types(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_alert_scope(topology):  # noqa: F811
+def test_alerts_not_topology_scoped(topology):  # noqa: F811
     from apps.monitoring.models import Alert
 
-    Alert.objects.create(
+    a_out = Alert.objects.create(
         station=topology["station_out"], severity="warning", title="x", message="y"
     )
     a_in = Alert.objects.create(
@@ -30,4 +30,4 @@ def test_alert_scope(topology):  # noqa: F811
     resp = bearer(topology["station_user"]).get("/api/v1/alerts/")
     assert resp.status_code == 200
     ids = {a["id"] for a in resp.data["results"]}
-    assert ids == {a_in.id}
+    assert ids == {a_in.id, a_out.id}

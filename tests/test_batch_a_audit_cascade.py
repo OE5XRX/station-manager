@@ -92,7 +92,7 @@ class TestClientIpDoesNotSuppressAudit:
     """A garbage XFF must NOT suppress the audit row — it should write None."""
 
     def test_garbage_xff_still_produces_audit_row(self, api_topology, bearer):
-        """Staff PATCH a region with garbage XFF → 200 AND audit row is written.
+        """Admin PATCH a region with garbage XFF → 200 AND audit row is written.
 
         The count may go up by more than 1 because both the view's
         audit_account_write AND the _on_region_save signal fire; >=+1 is the
@@ -105,7 +105,7 @@ class TestClientIpDoesNotSuppressAudit:
             event_type=AccountAuditLog.EventType.REGION_UPDATED
         ).count()
         url = reverse("api:region-detail", args=[t["region_in"].pk])
-        r = bearer(t["staff"]).patch(
+        r = bearer(t["admin"]).patch(
             url,
             {"name": "Updated Name"},
             format="json",

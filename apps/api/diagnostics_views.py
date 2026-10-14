@@ -4,7 +4,7 @@ POST /api/v1/stations/{pk}/audio-diagnostics/
 
 Drives a headless diagnostic run via the channel-layer orchestrator and
 returns the assembled run report.  Authentication mirrors the read API:
-PersonalAccessToken or session, TopologyScopedPermission.
+PersonalAccessToken or session; requires ``control.manage``.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.permissions import AreaPermission
 from apps.api.authentication import PersonalAccessTokenAuthentication
-from apps.api.permissions import TopologyScopedPermission
 from apps.audio import orchestrator
-from apps.stations.scoping import accessible_stations
+from apps.stations.models import Station
 
 _DEFAULT_SIGNAL = {
     "kind": "sine",
@@ -36,12 +36,13 @@ class StationAudioDiagnosticView(APIView):
     """Run a TX audio-path diagnostic on a station agent."""
 
     authentication_classes = [PersonalAccessTokenAuthentication, SessionAuthentication]
-    permission_classes = [TopologyScopedPermission]
+    permission_classes = [AreaPermission]
+    area = "control"
+    verb = "manage"
     throttle_scope = "api-token"
 
     def post(self, request, pk):
-        # Resolve station in the caller's scope (topology gate + 404 for out-of-scope).
-        station = accessible_stations(request.user).filter(pk=pk).first()
+        station = Station.objects.filter(pk=pk).first()
         if station is None:
             raise NotFound()
 

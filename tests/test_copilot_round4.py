@@ -67,14 +67,14 @@ class TestR4aTagOnlyPatchLocked:
         before = datetime.datetime.now(datetime.UTC)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"tag": tag_b.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_b.pk}, format="json")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.data}"
 
         entry.refresh_from_db()
         assert entry.tag == tag_b, "Entry tag must be updated"
 
         seq.refresh_from_db()
-        assert seq.updated_by == api_topology["region_mgr"], (
+        assert seq.updated_by == api_topology["admin"], (
             "Parent sequence.updated_by must be set to the API actor on tag-only PATCH"
         )
         assert seq.updated_at >= before, (
@@ -91,7 +91,7 @@ class TestR4aTagOnlyPatchLocked:
         entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"tag": tag_b.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_b.pk}, format="json")
         assert r.status_code == 200, (
             f"Tag-only PATCH must return 200, got {r.status_code}: {r.data}"
         )
@@ -108,7 +108,7 @@ class TestR4aTagOnlyPatchLocked:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
-        r = bearer(api_topology["region_mgr"]).patch(
+        r = bearer(api_topology["admin"]).patch(
             url, {"position": 1, "tag": tag_new.pk}, format="json"
         )
         assert r.status_code == 200, (
@@ -228,7 +228,7 @@ class TestR4bTagDeleteRenumbersSequence:
 
         # Delete entry directly via API (not via tag delete)
         url = reverse("api:rollout-sequence-entry-detail", args=[e1.pk])
-        r = bearer(api_topology["region_mgr"]).delete(url)
+        r = bearer(api_topology["admin"]).delete(url)
         assert r.status_code == 204, f"Entry DELETE must return 204, got {r.status_code}"
 
         positions = list(seq.entries.order_by("position").values_list("position", flat=True))
@@ -263,7 +263,7 @@ class TestR4cOffsetOverflow400:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"position": 1}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
         assert r.status_code == 400, (
             f"ValueError from _calc_offset must produce 400, got {r.status_code}: "
             f"{r.data if hasattr(r, 'data') else '(no data)'}"
@@ -292,7 +292,7 @@ class TestR4cOffsetOverflow400:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"position": 1}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
         assert r.status_code == 400
 
         # Flatten all error strings from the response
@@ -310,7 +310,7 @@ class TestR4cOffsetOverflow400:
         RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
-        r = bearer(api_topology["region_mgr"]).patch(url, {"position": 1}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
         assert r.status_code == 200, (
             f"Normal reorder (no overflow) must return 200, got {r.status_code}: {r.data}"
         )

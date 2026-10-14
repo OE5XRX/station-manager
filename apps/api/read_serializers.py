@@ -182,12 +182,10 @@ class DeploymentSerializer(serializers.ModelSerializer):
         progress_map = self.context.get("deployment_progress_map")
         if progress_map is not None and obj.pk in progress_map:
             return progress_map[obj.pk]
-        # Detail / no-map fallback: single scoped aggregate (1 query).
-        from apps.api.scoping import accessible_deployment_results
+        # Detail / no-map fallback: single aggregate (1 query).
         from apps.deployments.models import compute_progress
 
-        user = self.context["request"].user
-        return compute_progress(accessible_deployment_results(user).filter(deployment=obj))
+        return compute_progress(DeploymentResult.objects.filter(deployment=obj))
 
     class Meta:
         model = Deployment
