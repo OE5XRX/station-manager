@@ -52,3 +52,12 @@ def test_schema_has_no_sensitive_component_fields(topology):  # noqa: F811
     # ImageRelease must not expose S3 keys
     img_props = set(schemas["ImageRelease"]["properties"].keys())
     assert {"s3_key", "cosign_bundle_s3_key", "rootfs_s3_key"}.isdisjoint(img_props)
+
+
+@pytest.mark.django_db
+def test_user_schema_documents_join_year(topology):  # noqa: F811
+    resp = bearer(topology["admin"]).get("/api/v1/schema/?format=json")
+    props = resp.data["components"]["schemas"]["User"]["properties"]
+    assert props["date_joined_year"]["type"] == "integer"
+    assert "is_admin" not in props and "is_internal" not in props
+    assert "themself" in props["date_joined"]["description"]

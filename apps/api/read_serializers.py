@@ -3,11 +3,13 @@
 No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 """
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounts.models import User
 from apps.accounts.permissions import can
-from apps.accounts.visibility import directory_visible_fields
+from apps.accounts.visibility import Audience, audience_for, directory_visible_fields
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
@@ -342,11 +344,27 @@ class UserSerializer(serializers.ModelSerializer):
     target)`` allows are emitted (``id`` always), so e.g. Staff no longer sees
     every user's address/phone. Without a request the serializer fails closed
     to ``id`` only.
+
+    Join date: ``date_joined_year`` (int) is emitted whenever the directory
+    shows the join year; the full ``date_joined`` timestamp only to Admins and
+    the user themself — Members see peers' join *year* only, like the UI.
     """
+
+    date_joined_year = serializers.SerializerMethodField(
+        help_text="Year the user joined; visible wherever the directory shows it."
+    )
 
     # Serializer key -> visibility concept key, where they differ.
     # ``notify_channel`` is a private preference, grouped with ``language``.
-    _CONCEPT_KEYS = {"date_joined": "date_joined_year", "notify_channel": "language"}
+    _CONCEPT_KEYS = {
+        "date_joined": "date_joined_year",
+        "date_joined_year": "date_joined_year",
+        "notify_channel": "language",
+    }
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_date_joined_year(self, obj):
+        return obj.date_joined.year if obj.date_joined else None
 
     class Meta:
         model = User
@@ -370,15 +388,27 @@ class UserSerializer(serializers.ModelSerializer):
             "locator",
             "is_directory_visible",
             "date_joined",
+            "date_joined_year",
         ]
+        extra_kwargs = {
+            "date_joined": {
+                "help_text": "Full join timestamp; only for Admins and the user themself."
+            }
+        }
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
         viewer = getattr(request, "user", None)
-        visible = directory_visible_fields(viewer, instance) if viewer is not None else frozenset()
-        return {
+        if viewer is None:
+            return {"id": data["id"]}
+        visible = directory_visible_fields(viewer, instance)
+        out = {
             key: value
             for key, value in data.items()
             if key == "id" or self._CONCEPT_KEYS.get(key, key) in visible
         }
+        if audience_for(viewer, instance) == Audience.MEMBER:
+            # Peers see the join year only (concept ``date_joined_year``).
+            out.pop("date_joined", None)
+        return out

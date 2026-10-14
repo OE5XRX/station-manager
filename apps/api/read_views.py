@@ -6,7 +6,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
-from apps.accounts.permissions import AreaPermission
+from apps.accounts.permissions import AreaPermission, can
 from apps.accounts.visibility import audience_for, directory_queryset
 from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.read_filters import (
@@ -305,8 +305,27 @@ class UserViewSet(AreaReadOnlyViewSet):
 
     area = "users"
     serializer_class = UserSerializer
-    search_fields = ["username", "email", "first_name", "last_name"]
-    ordering_fields = ["username", "date_joined"]
+
+    def _viewer_manages_users(self):
+        request = getattr(self, "request", None)
+        return request is not None and can(request.user, "users", "manage")
+
+    # Non-managers may only search/order by ``username``: every directory row
+    # shows it, whereas email/names/join date are hidden for some rows
+    # (``is_directory_visible=False`` → minimal fields), and a substring search
+    # or sort on them would let a Member probe the hidden values. Same rule as
+    # the UI ``UserListView`` search.
+    @property
+    def search_fields(self):
+        if self._viewer_manages_users():
+            return ["username", "email", "first_name", "last_name"]
+        return ["username"]
+
+    @property
+    def ordering_fields(self):
+        if self._viewer_manages_users():
+            return ["username", "date_joined"]
+        return ["username"]
 
     def get_queryset(self):
         return directory_queryset(self.request.user).order_by("username")

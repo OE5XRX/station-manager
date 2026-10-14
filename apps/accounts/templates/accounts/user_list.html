@@ -74,7 +74,7 @@
 <form method="get" class="filter-bar mb-24">
   {% if is_admin_view %}<input type="hidden" name="show" value="{{ filter_show }}">{% endif %}
   <input type="search" name="q" value="{{ filter_q }}"
-         placeholder="{% trans 'Search callsign, email, name' %}"
+         placeholder="{% if is_admin_view %}{% trans 'Search callsign, email, name' %}{% else %}{% trans 'Search callsign' %}{% endif %}"
          class="form-control">
   <select name="role" class="form-select">
     <option value="">{% trans "All roles" %}</option>

@@ -266,3 +266,66 @@ def test_admin_users_api_lists_all_non_deleted():
     names = {u["username"] for u in _c("admin").get("/api/v1/users/").json()["results"]}
     assert {"adm-app", "adm-inactive"} <= names
     assert "adm-gone" not in names
+
+
+def _hidden_peer():
+    return User.objects.create_user(
+        username="hidden-peer",
+        password="x",
+        membership_level="member",
+        email="secret-xyz@example.org",
+        first_name="Geheimname",
+        is_directory_visible=False,
+    )
+
+
+def test_member_api_search_cannot_probe_hidden_fields():
+    _hidden_peer()
+    c = _c("member")
+    for term in ("secret-xyz", "Geheimname"):
+        names = {u["username"] for u in c.get(f"/api/v1/users/?search={term}").json()["results"]}
+        assert "hidden-peer" not in names
+    names = {u["username"] for u in c.get("/api/v1/users/?search=hidden-p").json()["results"]}
+    assert names == {"hidden-peer"}
+
+
+def test_admin_api_search_covers_email():
+    _hidden_peer()
+    r = _c("admin").get("/api/v1/users/?search=secret-xyz")
+    assert {u["username"] for u in r.json()["results"]} == {"hidden-peer"}
+
+
+def test_member_ui_search_cannot_probe_hidden_fields(client):
+    from django.urls import reverse
+
+    _hidden_peer()
+    viewer = User.objects.create_user(
+        username="ui-viewer", password="x", membership_level="member"
+    )
+    client.force_login(viewer)
+    for term in ("secret-xyz", "Geheimname"):
+        users = client.get(reverse("accounts:user_list"), {"q": term}).context["users"]
+        assert "hidden-peer" not in {u.username for u in users}
+
+
+def test_member_api_cannot_order_by_date_joined():
+    User.objects.create_user(username="zz-early", password="x", membership_level="member")
+    User.objects.create_user(username="aa-late", password="x", membership_level="member")
+    c = _c("member")
+    names = [
+        u["username"] for u in c.get("/api/v1/users/?ordering=-date_joined").json()["results"]
+    ]
+    assert names == sorted(names)
+
+
+def test_member_api_sees_join_year_only():
+    peer = User.objects.create_user(username="year-peer", password="x", membership_level="member")
+    body = _c("member").get(f"/api/v1/users/{peer.pk}/").json()
+    assert "date_joined" not in body
+    assert body["date_joined_year"] == peer.date_joined.year
+
+
+def test_admin_api_sees_full_date_joined():
+    peer = User.objects.create_user(username="year-peer2", password="x", membership_level="member")
+    body = _c("admin").get(f"/api/v1/users/{peer.pk}/").json()
+    assert body["date_joined"] and body["date_joined_year"] == peer.date_joined.year

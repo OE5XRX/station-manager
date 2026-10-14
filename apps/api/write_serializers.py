@@ -45,7 +45,7 @@ class UserWriteSerializer(serializers.ModelSerializer):
       - self-change of membership_level is blocked (400).
       - demote-to-applicant blocked when user has assignments (400).
     The request is injected via context so the serializer can compare
-    request.user with instance and check actor role.
+    request.user with instance (self-change guard).
     """
 
     class Meta:

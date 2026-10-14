@@ -721,13 +721,18 @@ class UserListView(AreaPermissionMixin, ListView):
         qs = qs.order_by("username")
 
         q = self.request.GET.get("q", "").strip()
-        if q:
+        if q and is_manager:
             qs = qs.filter(
                 Q(username__icontains=q)
                 | Q(email__icontains=q)
                 | Q(first_name__icontains=q)
                 | Q(last_name__icontains=q)
             )
+        elif q:
+            # Non-managers search the callsign only: email/names are hidden on
+            # some rows (is_directory_visible=False), a substring search on
+            # them would leak those values. Same rule as the users API.
+            qs = qs.filter(username__icontains=q)
 
         role = self.request.GET.get("role", "")
         valid_roles = {x.value for x in User.MembershipLevel}

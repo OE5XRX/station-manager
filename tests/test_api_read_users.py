@@ -49,7 +49,10 @@ def test_member_retrieves_peer_with_public_fields_only(topology):  # noqa: F811
     resp = bearer(topology["station_user"]).get(f"/api/v1/users/{topology['admin'].pk}/")
     assert resp.status_code == 200
     assert resp.data["username"] == "admin"
-    assert {"id", "username", "email", "membership_level", "date_joined"} <= set(resp.data)
+    assert {"id", "username", "email", "membership_level", "date_joined_year"} <= set(resp.data)
+    assert resp.data["date_joined_year"] == topology["admin"].date_joined.year
+    # Peers get the join year only, never the full timestamp.
+    assert "date_joined" not in resp.data
     assert PRIVATE.isdisjoint(resp.data.keys())
 
 
@@ -69,6 +72,7 @@ def test_member_sees_own_private_fields(topology):  # noqa: F811
     resp = bearer(me).get(f"/api/v1/users/{me.pk}/")
     assert resp.status_code == 200
     assert PRIVATE <= set(resp.data)
+    assert {"date_joined", "date_joined_year"} <= set(resp.data)
 
 
 @pytest.mark.django_db
