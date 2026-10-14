@@ -19,10 +19,14 @@
       <p class="page-sub">{% trans "Every firmware rollout, live or historical. Click a row for per-station progress." %}</p>
     </div>
     <div class="page-head-actions">
+      {% if can.deployments.manage %}
       <a href="{% url 'deployments:deployment_create' %}" class="btn btn-primary">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         {% trans "New deployment" %}
       </a>
+      {% else %}
+      {% include "includes/readonly_badge.html" %}
+      {% endif %}
     </div>
   </div>
 

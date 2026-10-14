@@ -771,10 +771,11 @@ class TestSidebar:
         assert response.status_code == 200
         assert b'/images/"' in response.content
 
-    def test_operator_does_not_see_images_link(self, client, operator_user):
+    def test_operator_sees_images_link(self, client, operator_user):
+        """images:view is Applicant+ (spec 1.3), so every level sees the link."""
         from django.urls import reverse
 
         client.force_login(operator_user)
         response = client.get(reverse("dashboard:index"))
         assert response.status_code == 200
-        assert b'/images/"' not in response.content
+        assert b'/images/"' in response.content

@@ -1,7 +1,7 @@
 """UI-Gating folgt den Backend-Checks: kein Link/Button, der auf eine 403 führt.
 
-Alerts = is_admin (AlertListView), Deployments = is_internal
-(DeploymentListView), Control-Panel = can_use_station (StationControlView).
+Alerts = is_admin (AlertListView), Deployments = deployments:view (Applicant+),
+Control-Panel = can_use_station (StationControlView).
 """
 
 import pytest
@@ -45,8 +45,8 @@ class TestNavLinksMatchBackend:
         [
             ("admin_user", True, True),
             ("operator_user", False, True),
-            ("member_user", False, False),
-            ("applicant_user", False, False),
+            ("member_user", False, True),
+            ("applicant_user", False, True),
         ],
     )
     @pytest.mark.parametrize("page", ["dashboard:index", "stations:station_list"])
@@ -63,8 +63,8 @@ class TestNavLinksMatchBackend:
         [
             ("admin_user", 200, 200),
             ("operator_user", 403, 200),
-            ("member_user", 403, 403),
-            ("applicant_user", 403, 403),
+            ("member_user", 403, 200),
+            ("applicant_user", 403, 200),
         ],
     )
     def test_backend_contract_unchanged(

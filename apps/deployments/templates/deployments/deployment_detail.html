@@ -28,7 +28,9 @@
       </div>
     </div>
     <div class="page-head-actions">
-      {% if deployment.status == "pending" or deployment.status == "in_progress" %}
+      {% if not can.deployments.manage %}
+      {% include "includes/readonly_badge.html" %}
+      {% elif deployment.status == "pending" or deployment.status == "in_progress" %}
       <form method="post" action="{% url 'deployments:deployment_cancel' deployment.pk %}" data-confirm="{% trans 'Cancel this deployment?' %}">
         {% csrf_token %}
         <button type="submit" class="btn btn-danger">{% trans "Cancel deployment" %}</button>

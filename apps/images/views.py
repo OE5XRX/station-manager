@@ -10,7 +10,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import ListView
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 
 from . import github_releases, storage
 from .models import ImageImportJob, ImageRelease
@@ -40,7 +40,8 @@ def _storage_backend_label() -> str:
     return _("Local FS")
 
 
-class ImageListView(AdminRequiredMixin, ListView):
+class ImageListView(AreaPermissionMixin, ListView):
+    area = "images"
     model = ImageRelease
     template_name = "images/image_list.html"
     context_object_name = "releases"
@@ -76,7 +77,10 @@ class ImageListView(AdminRequiredMixin, ListView):
         return ctx
 
 
-class ImageMarkLatestView(AdminRequiredMixin, View):
+class ImageMarkLatestView(AreaPermissionMixin, View):
+    area = "images"
+    verb = "manage"
+
     def post(self, request, pk):
         release = get_object_or_404(ImageRelease.all_objects, pk=pk)
         if release.archived_at is not None:
@@ -100,7 +104,10 @@ class ImageMarkLatestView(AdminRequiredMixin, View):
         return redirect("images:list")
 
 
-class ImageDeleteView(AdminRequiredMixin, View):
+class ImageDeleteView(AreaPermissionMixin, View):
+    area = "images"
+    verb = "manage"
+
     def post(self, request, pk):
         release = get_object_or_404(ImageRelease.all_objects, pk=pk)
 
@@ -176,7 +183,9 @@ def _delete_blockers(release: ImageRelease) -> list[str]:
     return [str(p) for p in parts]
 
 
-class ImageArchiveView(AdminRequiredMixin, View):
+class ImageArchiveView(AreaPermissionMixin, View):
+    area = "images"
+    verb = "manage"
     """Soft-delete a release. Always succeeds (vs hard delete which
     PROTECT-FKs from Deployment/ProvisioningJob can block).
 
@@ -196,7 +205,9 @@ class ImageArchiveView(AdminRequiredMixin, View):
         return redirect("images:list")
 
 
-class ImageRestoreView(AdminRequiredMixin, View):
+class ImageRestoreView(AreaPermissionMixin, View):
+    area = "images"
+    verb = "manage"
     """Undo a previous archive. Operates on ``all_objects`` because
     archived rows are hidden from the default manager."""
 
@@ -210,7 +221,10 @@ class ImageRestoreView(AdminRequiredMixin, View):
         return redirect("images:list")
 
 
-class GitHubReleasesPartialView(AdminRequiredMixin, View):
+class GitHubReleasesPartialView(AreaPermissionMixin, View):
+    area = "images"
+    verb = "manage"
+
     def get(self, request):
         show = request.GET.get("show", "newest")
         try:
@@ -260,7 +274,10 @@ class GitHubReleasesPartialView(AdminRequiredMixin, View):
         )
 
 
-class QuickQueueView(AdminRequiredMixin, View):
+class QuickQueueView(AreaPermissionMixin, View):
+    area = "images"
+    verb = "manage"
+
     def post(self, request):
         tag = request.POST.get("tag", "").strip()
         machine = request.POST.get("machine", "").strip()

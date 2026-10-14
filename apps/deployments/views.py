@@ -8,8 +8,8 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import CreateView, DetailView, ListView
 
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.models import StationAuditLog
-from apps.stations.views import AdminOrOperatorRequiredMixin
 
 from .forms import DeploymentForm
 from .models import Deployment, DeploymentResult
@@ -20,7 +20,8 @@ def _get_client_ip(request):
     return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
 
 
-class DeploymentListView(AdminOrOperatorRequiredMixin, ListView):
+class DeploymentListView(AreaPermissionMixin, ListView):
+    area = "deployments"
     model = Deployment
     template_name = "deployments/deployment_list.html"
     context_object_name = "deployments"
@@ -69,7 +70,8 @@ class DeploymentListView(AdminOrOperatorRequiredMixin, ListView):
         return context
 
 
-class DeploymentDetailView(AdminOrOperatorRequiredMixin, DetailView):
+class DeploymentDetailView(AreaPermissionMixin, DetailView):
+    area = "deployments"
     model = Deployment
     template_name = "deployments/deployment_detail.html"
     context_object_name = "deployment"
@@ -83,7 +85,9 @@ class DeploymentDetailView(AdminOrOperatorRequiredMixin, DetailView):
         )
 
 
-class DeploymentCreateView(AdminOrOperatorRequiredMixin, CreateView):
+class DeploymentCreateView(AreaPermissionMixin, CreateView):
+    area = "deployments"
+    verb = "manage"
     model = Deployment
     form_class = DeploymentForm
     template_name = "deployments/deployment_form.html"
@@ -139,7 +143,9 @@ class DeploymentCreateView(AdminOrOperatorRequiredMixin, CreateView):
         return context
 
 
-class DeploymentCancelView(AdminOrOperatorRequiredMixin, View):
+class DeploymentCancelView(AreaPermissionMixin, View):
+    area = "deployments"
+    verb = "manage"
     """Cancel a deployment (POST only)."""
 
     def post(self, request, pk):

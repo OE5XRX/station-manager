@@ -134,8 +134,8 @@ class StationDetailView(AreaPermissionMixin, DetailView):
                 .order_by("-created_at")
                 .first()
             )
-        # Upgrade card (deployments)
-        if can(user, "deployments", "view"):
+        # Upgrade card (deployments:manage; the card is hidden otherwise)
+        if can(user, "deployments", "manage"):
             current = self.object.current_image_release
             if current is not None:
                 context["upgrade_target"] = ImageRelease.objects.filter(

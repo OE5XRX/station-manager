@@ -470,11 +470,11 @@ class TestDeploymentWebViews:
             r.refresh_from_db()
             assert r.status == expected, f"terminal status {expected} was clobbered to {r.status}"
 
-    def test_deployment_list_requires_operator(self, client, member_user):
-        """Member should get 403 on deployment list."""
+    def test_deployment_list_readable_by_member_but_create_forbidden(self, client, member_user):
+        """deployments:view is Applicant+; create needs deployments:manage (Staff)."""
         client.force_login(member_user)
-        response = client.get(reverse("deployments:deployment_list"))
-        assert response.status_code == 403
+        assert client.get(reverse("deployments:deployment_list")).status_code == 200
+        assert client.get(reverse("deployments:deployment_create")).status_code == 403
 
     def test_deployment_list_ordered_by_created_at_desc(
         self, client, operator_user, image_release, station

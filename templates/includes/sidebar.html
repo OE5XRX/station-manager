@@ -76,9 +76,10 @@
     </a>
   </div>
 
-  {% if user.is_internal %}
+  {% if can.deployments.view or can.rollouts.view or can.images.view %}
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Fleet Updates" %}</div>
+    {% if can.deployments.view %}
     <a href="{% url 'deployments:deployment_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'deployments' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'deployments' %}aria-current="page"{% endif %}>
@@ -87,7 +88,8 @@
       </svg>
       <span class="label">{% trans "Deployments" %}</span>
     </a>
-    {% if user.is_admin %}
+    {% endif %}
+    {% if can.rollouts.view %}
     <a href="{% url 'rollouts:upgrade_dashboard' %}"
        class="nav-item{% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'rollouts' and request.resolver_match.url_name == 'upgrade_dashboard' %}aria-current="page"{% endif %}>
@@ -96,6 +98,8 @@
       </svg>
       <span class="label">{% trans "Upgrades" %}</span>
     </a>
+    {% endif %}
+    {% if can.rollouts.manage %}
     <a href="{% url 'rollouts:sequence_edit' %}"
        class="nav-item{% if request.resolver_match.namespace == 'rollouts' and 'sequence' in request.resolver_match.url_name %} active{% endif %}"
        {% if request.resolver_match.namespace == 'rollouts' and 'sequence' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
@@ -103,6 +107,16 @@
         <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
       </svg>
       <span class="label">{% trans "Rollout Sequence" %}</span>
+    </a>
+    {% endif %}
+    {% if can.images.view %}
+    <a href="{% url 'images:list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'images' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'images' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="7" cy="12" r="1.2"/><path d="M11 12h7"/>
+      </svg>
+      <span class="label">{% trans "Images" %}</span>
     </a>
     {% endif %}
   </div>
@@ -140,14 +154,6 @@
         <path d="M4 4h12l4 4v12H4z"/><path d="M16 4v4h4"/><path d="M8 13h8M8 17h5"/>
       </svg>
       <span class="label">{% trans "Audit Log" %}</span>
-    </a>
-    <a href="{% url 'images:list' %}"
-       class="nav-item{% if request.resolver_match.namespace == 'images' %} active{% endif %}"
-       {% if request.resolver_match.namespace == 'images' %}aria-current="page"{% endif %}>
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="7" cy="12" r="1.2"/><path d="M11 12h7"/>
-      </svg>
-      <span class="label">{% trans "Images" %}</span>
     </a>
     <a href="{% url 'monitoring:alert_settings' %}"
        class="nav-item">

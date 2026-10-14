@@ -19,12 +19,16 @@
     </p>
   </div>
   <div class="page-head-actions">
+    {% if can.images.manage %}
     <a href="#import-form" class="btn btn-primary">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
       </svg>
       {% trans "Import from GitHub" %}
     </a>
+    {% else %}
+    {% include "includes/readonly_badge.html" %}
+    {% endif %}
   </div>
 </div>
 
@@ -162,7 +166,7 @@
               so the UI doesn't suggest an action it would reject.
               {% endcomment %}
               <span class="t-muted">—</span>
-            {% else %}
+            {% elif can.images.manage %}
               <form method="post" action="{% url 'images:mark_latest' rel.pk %}" style="display:inline;margin:0;">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-ghost" title="{% trans 'Promote this release to latest for its machine.' %}">
@@ -193,7 +197,9 @@
             {% endif %}
           </td>
           <td class="actions">
-            {% if rel.archived_at %}
+            {% if not can.images.manage %}
+              <span class="t-muted">—</span>
+            {% elif rel.archived_at %}
               <form method="post"
                     action="{% url 'images:restore' rel.pk %}"
                     style="display:inline;margin:0;">
@@ -241,7 +247,7 @@
 
 <div class="grid grid-main">
 
-  {% include "images/_github_panel.html" %}
+  {% if can.images.manage %}{% include "images/_github_panel.html" %}{% endif %}
 
   <section class="panel">
     <div class="panel-head">

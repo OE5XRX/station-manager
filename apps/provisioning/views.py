@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.images import storage as image_storage
 from apps.stations.models import Station, StationAuditLog
 
@@ -24,7 +24,9 @@ ACTIVE_PROVISIONING_STATUSES = [
 ]
 
 
-class CreateProvisioningJobView(AdminRequiredMixin, View):
+class CreateProvisioningJobView(AreaPermissionMixin, View):
+    area = "provisioning"
+    verb = "manage"
     """Admin-only endpoint that creates a new ProvisioningJob for a station."""
 
     def post(self, request, station_pk):
@@ -86,7 +88,9 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
         return redirect("stations:station_detail", pk=station.pk)
 
 
-class ProvisioningJobStatusView(AdminRequiredMixin, View):
+class ProvisioningJobStatusView(AreaPermissionMixin, View):
+    area = "provisioning"
+    verb = "manage"
     """HTMX-polled partial showing the job's current state."""
 
     def get(self, request, pk):
@@ -94,7 +98,9 @@ class ProvisioningJobStatusView(AdminRequiredMixin, View):
         return render(request, "provisioning/_job_status.html", {"job": job})
 
 
-class ProvisioningJobDownloadView(AdminRequiredMixin, View):
+class ProvisioningJobDownloadView(AreaPermissionMixin, View):
+    area = "provisioning"
+    verb = "manage"
     """Stream the provisioned image from S3 and mark job as downloaded.
 
     Returns 409 if the job is not yet READY and 410 if its presigned-like
