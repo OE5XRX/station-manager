@@ -13,7 +13,9 @@ from __future__ import annotations
 import dataclasses
 from enum import IntEnum
 
-from django.core.exceptions import ImproperlyConfigured
+from django.core.cache import cache
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
 VERBS: tuple[str, ...] = ("view", "use", "manage")
@@ -227,3 +229,96 @@ def matrix() -> list[MatrixRow]:
         )
         for name, spec in AREAS.items()
     ]
+
+
+DENIAL_DEDUPE_SECONDS = 600
+
+
+class AreaDenied(PermissionDenied):
+    def __init__(self, area: str, verb: str, actual_level: Level | None):
+        self.area = area
+        self.verb = verb
+        self.required_level = required_level(area, verb)
+        self.actual_level = actual_level
+        super().__init__(self._message())
+
+    def _message(self) -> str:
+        what = verb_label(self.area, self.verb)
+        if self.required_level is None:
+            return str(
+                _("Keine Berechtigung — %(what)s ist für niemanden freigegeben.") % {"what": what}
+            )
+        return str(
+            _(
+                "Keine Berechtigung — %(what)s erfordert %(need)s, du bist %(have)s. "
+                "Wenn du glaubst, dass das falsch ist, wende dich an einen Admin."
+            )
+            % {
+                "what": what,
+                "need": level_label(self.required_level),
+                "have": level_label(self.actual_level),
+            }
+        )
+
+    def as_api_body(self) -> dict:
+        return {
+            "detail": str(self),
+            "required": f"{self.area}.{self.verb}",
+            "required_level": self.required_level.slug if self.required_level else None,
+            "your_level": self.actual_level.slug if self.actual_level else None,
+        }
+
+
+def _client_ip(request):
+    return request.META.get("REMOTE_ADDR") if request is not None else None
+
+
+def log_denial(user, exc: AreaDenied, *, channel: str, path: str, method: str, ip=None) -> None:
+    from apps.accounts.models import AccountAuditLog
+
+    if not getattr(user, "is_authenticated", False):
+        return  # anonymous: never logged
+    key = f"perm-denied:{user.pk}:{exc.area}:{exc.verb}:{path}"
+    pk = cache.get(key)
+    if pk is not None:
+        with transaction.atomic():
+            row = AccountAuditLog.objects.select_for_update().filter(pk=pk).first()
+            if row is not None:
+                row.details["count"] = int(row.details.get("count", 1)) + 1
+                row.save(update_fields=["details"])
+                return
+    row = AccountAuditLog.log(
+        event_type=AccountAuditLog.EventType.PERMISSION_DENIED,
+        actor=user,
+        message=f"{exc.area}.{exc.verb} denied ({method} {path})",
+        ip_address=ip,
+        details={
+            "area": exc.area,
+            "verb": exc.verb,
+            "path": path,
+            "method": method,
+            "channel": channel,
+            "required_level": exc.required_level.slug if exc.required_level else None,
+            "actual_level": exc.actual_level.slug if exc.actual_level else None,
+            "count": 1,
+        },
+    )
+    cache.set(key, row.pk, DENIAL_DEDUPE_SECONDS)
+
+
+def require(user, area, verb, *, request=None, channel="web", path=None, method=None, ip=None):
+    if can(user, area, verb):
+        return
+    exc = AreaDenied(area, verb, level_of(user))
+    if getattr(user, "is_authenticated", False):
+        log_denial(
+            user,
+            exc,
+            channel=channel,
+            path=path if path is not None else (request.path if request is not None else ""),
+            method=method
+            if method is not None
+            else (request.method if request is not None else ""),
+            ip=ip if ip is not None else _client_ip(request),
+        )
+    raise exc

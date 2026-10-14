@@ -399,6 +399,8 @@ class AccountAuditLog(models.Model):
         USER_HARD_PURGED = "user_hard_purged", _("User Hard-Purged")
         # === Added in Phase 3 (user/automation API write surface) ===
         CONFIG_CHANGED = "config_changed", _("Config Changed")
+        # === Added in Unified Permissions (2026-10-14) ===
+        PERMISSION_DENIED = "permission_denied", _("Permission Denied")
 
     event_type = models.CharField(
         _("event type"),
@@ -430,6 +432,7 @@ class AccountAuditLog(models.Model):
         verbose_name=_("region"),
     )
     message = models.TextField(_("message"), blank=True)
+    details = models.JSONField(_("details"), default=dict, blank=True)
     ip_address = models.GenericIPAddressField(_("IP address"), null=True, blank=True)
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
 
@@ -456,6 +459,7 @@ class AccountAuditLog(models.Model):
         region=None,
         message="",
         ip_address=None,
+        details=None,
     ):
         return cls.objects.create(
             event_type=event_type,
@@ -464,6 +468,7 @@ class AccountAuditLog(models.Model):
             region=region,
             message=message,
             ip_address=ip_address,
+            details=details or {},
         )
 
 
