@@ -522,6 +522,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        self.start_periodic_recheck()  # passive viewers never send a frame
         # Reconnect within grace keeps a held lock — but only while the user may still
         # operate (connect itself needs only control.view). A holder demoted while
         # disconnected loses the lock here instead of getting it back.
@@ -554,6 +555,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self.close(code=code)
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         pending = list(self.pending.values())
         self.pending.clear()
         for task in pending:

@@ -480,6 +480,7 @@ class AudioConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
         # Start the periodic link-stats push now that the socket is authorized.
         self._link_task = asyncio.ensure_future(self._link_stats_loop())
+        self.start_periodic_recheck()  # listeners never send a frame
 
     async def _link_stats_loop(self):
         """Push server-side relay counters to the browser every 2 s.
@@ -532,6 +533,7 @@ class AudioConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self.close(code=close_code)
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         # Stop the link-stats push loop and await it so it finishes cleanly
         # before the consumer is GC'd (avoids "Task was destroyed but it is
         # pending" warnings).

@@ -10,9 +10,11 @@ The single assignment-based exception is :func:`can_override_station`.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 import json
+import logging
 from enum import IntEnum
 
 from asgiref.sync import sync_to_async
@@ -21,6 +23,8 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework.permissions import BasePermission
+
+logger = logging.getLogger(__name__)
 
 VERBS: tuple[str, ...] = ("view", "use", "manage")
 
@@ -464,15 +468,56 @@ def _load_fresh_user(pk):
     return User.objects.filter(pk=pk).first()
 
 
+#: How often passive feeds re-check ``connect_verb`` (see
+#: :meth:`AreaConsumerMixin.start_periodic_recheck`). Read at runtime, so tests
+#: can monkeypatch it.
+PERIODIC_RECHECK_SECONDS = 60.0
+
+
 class AreaConsumerMixin:
     """Channels consumer gate: re-reads the user from the DB on every check."""
 
     area: str | None = None
     connect_verb: str = "view"
+    _recheck_task: asyncio.Task | None = None
 
     async def fresh_user(self):
         user = self.scope.get("user")
         return await sync_to_async(_load_fresh_user)(getattr(user, "pk", None))
+
+    def start_periodic_recheck(self) -> None:
+        """Opt-in for passive feeds: re-check ``connect_verb`` every
+        ``PERIODIC_RECHECK_SECONDS`` with a fresh user. A listener never sends a
+        frame, so per-frame checks alone would let a deactivated/demoted viewer
+        keep listening until reconnect. Call after the connect gate passed; pair
+        with :meth:`stop_periodic_recheck` in ``disconnect``."""
+        if self._recheck_task is None:
+            self._recheck_task = asyncio.ensure_future(self._periodic_recheck_loop())
+
+    async def stop_periodic_recheck(self) -> None:
+        task, self._recheck_task = self._recheck_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def on_periodic_recheck(self, user) -> None:
+        """Hook: refresh permission-derived state (still allowed; ``user`` is fresh)."""
+
+    async def _periodic_recheck_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(PERIODIC_RECHECK_SECONDS)
+                user = await self.fresh_user()
+                if not await self.area_allows(self.connect_verb, user=user):
+                    # One denial (audited once), then the feed ends: no further checks.
+                    self._recheck_task = None
+                    await self.close(code=4403)
+                    return
+                await self.on_periodic_recheck(user)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("permissions: periodic WS re-check failed")
 
     def _check(self, user, area, verb):
         require(
@@ -485,10 +530,15 @@ class AreaConsumerMixin:
             ip=_ws_client_ip(self.scope),
         )
 
-    async def area_allows(self, verb, *, area=None, request_id=None, notify=True) -> bool:
+    async def area_allows(
+        self, verb, *, area=None, request_id=None, notify=True, user=None
+    ) -> bool:
+        """``user``: an already freshly loaded user (default: load one now)."""
         from django.contrib.auth.models import AnonymousUser
 
-        user = await self.fresh_user() or AnonymousUser()
+        if user is None:
+            user = await self.fresh_user()
+        user = user or AnonymousUser()
         try:
             await sync_to_async(self._check)(user, area or self.area, verb)
         except AreaDenied as exc:

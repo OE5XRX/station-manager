@@ -16,8 +16,9 @@ class StationStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """WebSocket consumer that pushes live station status updates to clients.
 
     Connect needs ``stations.view``. IP addresses are Staff-only
-    (``stations.manage``): the flag is computed once at connect from a fresh
-    user and ``last_ip_address`` is stripped from frames for everyone else.
+    (``stations.manage``): the flag is computed at connect and on every
+    periodic re-check from a fresh user, and ``last_ip_address`` is stripped
+    from frames for everyone else.
     """
 
     area = "stations"
@@ -32,13 +33,15 @@ class StationStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self.accept()
         if not await self.area_connect_gate():
             return
-        fresh = await self.fresh_user()
-        self.can_see_ip = fresh is not None and await sync_to_async(can)(
-            fresh, "stations", "manage"
-        )
+        await self.on_periodic_recheck(await self.fresh_user())
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
+        self.start_periodic_recheck()
+
+    async def on_periodic_recheck(self, user):
+        self.can_see_ip = user is not None and await sync_to_async(can)(user, "stations", "manage")
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):

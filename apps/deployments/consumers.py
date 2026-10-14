@@ -28,8 +28,10 @@ class DeploymentStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if not await self.area_connect_gate():
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
+        self.start_periodic_recheck()
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
