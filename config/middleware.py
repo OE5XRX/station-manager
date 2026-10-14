@@ -50,10 +50,10 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
       in ``tests/test_login_required_middleware.py`` catch a stale
       allow-list immediately.
 
-    Paths NOT on the allow-list — including ``/sso/applications/`` and
-    ``/sso/authorized_tokens/`` (django-oauth-toolkit's admin-style
-    pages) — stay gated, so an anon visitor cannot enumerate registered
-    OAuth clients or active tokens.
+    Paths NOT on the allow-list — e.g. ``/sso/authorize/``, which needs
+    a session — stay gated (default-deny). django-oauth-toolkit's
+    admin-style management views are not mounted at all (see
+    ``config/urls.py``); client management lives in ``apps.sso``.
 
     ``request.path`` carries no locale prefix on the matched URLs
     because the public OIDC endpoints are mounted *outside*
@@ -135,10 +135,10 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
 
         Defense-in-depth: we normalise the path with ``posixpath.normpath``
         before matching so that traversal sequences like
-        ``/sso/token/../applications/`` don't slip through the prefix
+        ``/sso/token/../authorize/`` don't slip through the prefix
         check. Note that Django's URL resolver matches against the raw
         ``PATH_INFO`` and does NOT perform dot-segment normalisation —
-        whether such a path resolves to ``/sso/applications/``, returns
+        whether such a path resolves to ``/sso/authorize/``, returns
         404, or is rewritten by an upstream reverse proxy depends on
         the deployment. Our normalisation here is therefore the only
         guaranteed defense against an attacker using ``..`` to flip the
