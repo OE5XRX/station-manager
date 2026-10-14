@@ -11,6 +11,7 @@ The single assignment-based exception is :func:`can_override_station`.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from enum import IntEnum
 
 from django.core.cache import cache
@@ -278,7 +279,11 @@ def log_denial(user, exc: AreaDenied, *, channel: str, path: str, method: str, i
 
     if not getattr(user, "is_authenticated", False):
         return  # anonymous: never logged
-    key = f"perm-denied:{user.pk}:{exc.area}:{exc.verb}:{path}"
+    # Hash the user-controlled path: raw URLs can hold spaces/control chars or
+    # exceed cache-key limits (CacheKeyWarning / InvalidCacheKey -> 500).
+    path_digest = hashlib.sha256(path.encode()).hexdigest()
+    key = f"perm-denied:{user.pk}:{exc.area}:{exc.verb}:{path_digest}"
+    path = path[:255]
     pk = cache.get(key)
     if pk is not None:
         with transaction.atomic():

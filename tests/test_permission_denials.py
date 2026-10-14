@@ -103,3 +103,26 @@ def test_nobody_verb_message(member):
         require(member, "audit", "manage", path="/x/", method="POST")
     assert ei.value.required_level is None
     assert ei.value.as_api_body()["required_level"] is None
+
+
+def test_hostile_path_dedupes_without_cache_key_warning(member):
+    import warnings
+
+    path = "/de/some path\x01/" + "a" * 400
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for _ in range(2):
+            with pytest.raises(AreaDenied):
+                require(member, "audit", "view", path=path, method="GET")
+    row = AccountAuditLog.objects.get(event_type=DENIED)
+    assert row.details["count"] == 2
+    assert len(row.details["path"]) <= 255
+
+
+def test_inactive_authenticated_user_logged_with_null_level(member):
+    member.is_active = False
+    member.save()
+    with pytest.raises(AreaDenied):
+        require(member, "dashboard", "view", path="/", method="GET")
+    row = AccountAuditLog.objects.get(event_type=DENIED)
+    assert row.details["actual_level"] is None
