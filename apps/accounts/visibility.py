@@ -60,6 +60,10 @@ def audience_for(viewer, target):
     if Level.from_slug(target.membership_level) == Level.APPLICANT:
         # Member sehen Applicants nicht (Bewerber bleiben „außerhalb").
         return None
+    if not target.is_active or target.deleted_at is not None:
+        # Deactivated/soft-deleted users are manager-only — same set as
+        # directory_queryset (UI list + users API).
+        return None
     return Audience.MEMBER
 
 

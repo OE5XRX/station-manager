@@ -101,3 +101,45 @@ def test_webpush_subscribe_requires_profile_use(client):
 
     r = Client().post(reverse("webpush:subscribe"), "{}", content_type="application/json")
     assert r.status_code == 302
+
+
+def test_member_cannot_open_deactivated_user_detail(client):
+    # UI matches the API (directory_queryset): inactive targets are 404 for non-managers.
+    client.force_login(_mk("member"))
+    gone = _mk("member", "gone")
+    User.objects.filter(pk=gone.pk).update(is_active=False)
+    assert client.get(reverse("accounts:user_detail", args=[gone.pk])).status_code == 404
+
+
+def test_admin_can_open_deactivated_user_detail(client):
+    client.force_login(_mk("admin"))
+    gone = _mk("member", "gone2")
+    User.objects.filter(pk=gone.pk).update(is_active=False)
+    assert client.get(reverse("accounts:user_detail", args=[gone.pk])).status_code == 200
+
+
+def test_assignment_controls_follow_topology_manage(client, monkeypatch):
+    """Assignment cards are editable only with topology.manage (their endpoints'
+    gate), not with users.manage."""
+    from apps.accounts import permissions
+    from apps.stations.models import Region, Station
+
+    Region.objects.create(name="R1")
+    Station.objects.create(name="S1")
+    client.force_login(_mk("admin"))
+    target = _mk("member", "tgt")
+    url = reverse("accounts:user_detail", args=[target.pk])
+    create_urls = [
+        reverse("accounts:region_assignment_create", args=[target.pk]),
+        reverse("accounts:station_assignment_create", args=[target.pk]),
+    ]
+    body = client.get(url).content.decode()
+    assert all(u in body for u in create_urls)
+
+    monkeypatch.setitem(
+        permissions.AREAS,
+        "topology",
+        permissions.Area(permissions.AREAS["topology"].label, view=permissions.Level.APPLICANT),
+    )
+    body = client.get(url).content.decode()
+    assert not any(u in body for u in create_urls)
