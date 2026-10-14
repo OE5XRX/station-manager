@@ -14,6 +14,8 @@ Design notes:
 import pytest
 from django.urls import reverse
 
+from tests.test_api_read_fixtures import session
+
 pytestmark = pytest.mark.django_db
 
 
@@ -77,7 +79,7 @@ def test_sequence_update_station_user_forbidden(api_topology, bearer):
 def test_sequence_update_applicant_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     url = reverse("api:rollout-sequence-detail", args=[seq.pk])
-    resp = bearer(api_topology["applicant"]).patch(url, {}, format="json")
+    resp = session(api_topology["applicant"]).patch(url, {}, format="json")
     assert resp.status_code == 403
 
 
@@ -137,7 +139,7 @@ def test_entry_create_applicant_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     tag = _make_tag("epsilon")
     url = reverse("api:rollout-sequence-entry-list")
-    resp = bearer(api_topology["applicant"]).post(
+    resp = session(api_topology["applicant"]).post(
         url, {"sequence": seq.pk, "tag": tag.pk, "position": 50}, format="json"
     )
     assert resp.status_code == 403

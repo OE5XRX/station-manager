@@ -1,6 +1,12 @@
 import pytest
 
-from tests.test_api_read_fixtures import anon_client, bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import (  # noqa: F401
+    anon_client,
+    bearer,
+    client_for,
+    session,
+    topology,
+)
 
 
 @pytest.mark.django_db
@@ -12,7 +18,7 @@ def test_anon_list_401(topology):  # noqa: F811
 @pytest.mark.django_db
 def test_applicant_list_200(topology):  # noqa: F811
     # stations.view = Applicant (spec matrix).
-    resp = bearer(topology["applicant"]).get("/api/v1/stations/")
+    resp = session(topology["applicant"]).get("/api/v1/stations/")
     assert resp.status_code == 200
 
 
@@ -28,7 +34,7 @@ def test_applicant_list_200(topology):  # noqa: F811
     ],
 )
 def test_station_list_no_topology_scope(topology, role, expected_names):  # noqa: F811
-    resp = bearer(topology[role]).get("/api/v1/stations/")
+    resp = client_for(topology[role]).get("/api/v1/stations/")
     assert resp.status_code == 200
     names = {row["name"] for row in resp.data["results"]}
     assert names == expected_names

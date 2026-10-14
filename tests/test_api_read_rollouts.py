@@ -1,6 +1,6 @@
 import pytest
 
-from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import bearer, session, topology  # noqa: F401
 
 
 def _seq():
@@ -31,4 +31,4 @@ def test_rollout_sequence_entries_nested(topology):  # noqa: F811
 @pytest.mark.django_db
 def test_rollout_applicant_can_read(topology):  # noqa: F811
     # rollouts.view = Applicant (spec matrix).
-    assert bearer(topology["applicant"]).get("/api/v1/rollout-sequences/").status_code == 200
+    assert session(topology["applicant"]).get("/api/v1/rollout-sequences/").status_code == 200

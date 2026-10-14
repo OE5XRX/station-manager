@@ -16,6 +16,7 @@ import pytest
 from django.urls import reverse
 
 from apps.accounts.models import User
+from tests.test_api_read_fixtures import session
 
 pytestmark = pytest.mark.django_db
 
@@ -38,7 +39,7 @@ def test_anon_gets_401(api_topology, anon_client):
 def test_applicant_gets_403(api_topology, bearer):
     t = api_topology
     url = reverse("api:user-detail", args=[t["applicant"].pk])
-    assert bearer(t["applicant"]).patch(url, {"bio": "x"}, format="json").status_code == 403
+    assert session(t["applicant"]).patch(url, {"bio": "x"}, format="json").status_code == 403
 
 
 def test_member_cannot_self_elevate(api_topology, bearer):

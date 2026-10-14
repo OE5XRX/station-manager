@@ -11,6 +11,7 @@ from django.urls import reverse
 
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.stations.models import StationAuditLog
+from tests.test_api_read_fixtures import session
 
 
 @pytest.fixture
@@ -76,7 +77,7 @@ def test_applicant_cannot_trigger(api_topology, bearer, image_release):
     """Applicant-level user is forbidden at the permission gate (403)."""
     t = api_topology
     payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
-    r = bearer(t["applicant"]).post(reverse("api:deployment-list"), payload, format="json")
+    r = session(t["applicant"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 403
 
 

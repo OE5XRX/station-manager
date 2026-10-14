@@ -1,6 +1,6 @@
 import pytest
 
-from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import bearer, session, topology  # noqa: F401
 
 
 @pytest.mark.django_db
@@ -59,4 +59,4 @@ def test_station_assignment_scope_region_manager(topology):  # noqa: F811
 @pytest.mark.django_db
 def test_assignment_applicant_can_read(topology):  # noqa: F811
     # topology.view = Applicant (spec matrix).
-    assert bearer(topology["applicant"]).get("/api/v1/station-assignments/").status_code == 200
+    assert session(topology["applicant"]).get("/api/v1/station-assignments/").status_code == 200

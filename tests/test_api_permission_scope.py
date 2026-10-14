@@ -10,7 +10,7 @@ from rest_framework.test import APIRequestFactory
 
 from apps.accounts.models import AccountAuditLog
 from apps.accounts.permissions import AreaDenied, AreaPermission
-from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import bearer, client_for, session, topology  # noqa: F401
 
 
 @pytest.fixture
@@ -91,6 +91,7 @@ def test_deployments_not_scoped_by_results(topology):  # noqa: F811
     DeploymentResult.objects.create(deployment=dep_all, station=topology["station_out"])
 
     for role in ("region_mgr", "station_user", "applicant", "admin"):
-        resp = bearer(topology[role]).get("/api/v1/deployments/")
+        client = client_for(topology[role])
+        resp = client.get("/api/v1/deployments/")
         assert resp.status_code == 200
         assert dep_all.pk in {d["id"] for d in resp.data["results"]}

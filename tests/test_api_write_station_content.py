@@ -8,6 +8,8 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
+from tests.test_api_read_fixtures import session
+
 pytestmark = pytest.mark.django_db
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ class TestStationLogEntryCreate:
             "title": "Test Entry",
             "message": "Hello",
         }
-        r = bearer(t["applicant"]).post(
+        r = session(t["applicant"]).post(
             reverse("api:station-log-entry-list"), payload, format="json"
         )
         assert r.status_code == 403
@@ -275,7 +277,7 @@ class TestStationPhotoCreate:
 
     def test_applicant_cannot_upload(self, api_topology, bearer):
         t = api_topology
-        r = bearer(t["applicant"]).post(
+        r = session(t["applicant"]).post(
             reverse("api:station-photo-list"),
             {
                 "station": t["station_in"].pk,

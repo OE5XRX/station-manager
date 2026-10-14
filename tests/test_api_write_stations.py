@@ -2,6 +2,8 @@
 import pytest
 from django.urls import reverse
 
+from tests.test_api_read_fixtures import session
+
 pytestmark = pytest.mark.django_db
 
 
@@ -92,7 +94,7 @@ def test_applicant_and_anon_blocked(api_topology, bearer, anon_client):
     t = api_topology
     url = reverse("api:station-list")
     assert (
-        bearer(t["applicant"])
+        session(t["applicant"])
         .post(url, _station_payload(t["region_in"]), format="json")
         .status_code
         == 403

@@ -8,7 +8,7 @@ assignments — exactly like the UI.
 import pytest
 
 from apps.stations.models import Region, RegionAssignment, StationAssignment
-from tests.test_api_read_fixtures import bearer
+from tests.test_api_read_fixtures import bearer, client_for
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def region(db):
 
 
 def _station_names(user):
-    resp = bearer(user).get("/api/v1/stations/")
+    resp = client_for(user).get("/api/v1/stations/")
     assert resp.status_code == 200
     return {row["name"] for row in resp.data["results"]}
 

@@ -4,7 +4,7 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
-from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import bearer, client_for, session, topology  # noqa: F401
 
 _counter = itertools.count(1)
 
@@ -29,7 +29,8 @@ def test_member_sees_all_deployments(topology):  # noqa: F811
     dep_out = _dep(topology, topology["station_out"])
     dep_in = _dep(topology, topology["station_in"])
     for role in ("region_mgr", "station_user", "applicant"):
-        ids = {d["id"] for d in bearer(topology[role]).get("/api/v1/deployments/").data["results"]}
+        client = client_for(topology[role])
+        ids = {d["id"] for d in client.get("/api/v1/deployments/").data["results"]}
         assert {dep_in.pk, dep_out.pk} <= ids
 
 

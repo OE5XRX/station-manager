@@ -101,3 +101,23 @@ def test_inactive_owner_rejected(member_user):
     member_user.save(update_fields=["is_active"])
     with pytest.raises(AuthenticationFailed):
         _auth(raw)
+
+
+@pytest.mark.django_db
+def test_owner_demoted_below_member_rejected(member_user):
+    """A PAT whose owner lost api_tokens.use (e.g. demoted to Applicant) stops working:
+    the owner can no longer see/revoke it, so it must not keep authenticating."""
+    _, raw = PersonalAccessToken.issue(member_user, name="x")
+    member_user.membership_level = "applicant"
+    member_user.save(update_fields=["membership_level"])
+    with pytest.raises(AuthenticationFailed):
+        _auth(raw)
+
+
+@pytest.mark.django_db
+def test_soft_deleted_owner_rejected(member_user):
+    _, raw = PersonalAccessToken.issue(member_user, name="x")
+    member_user.deleted_at = timezone.now()
+    member_user.save(update_fields=["deleted_at"])
+    with pytest.raises(AuthenticationFailed):
+        _auth(raw)

@@ -3,7 +3,7 @@
 import pytest
 from django.utils import timezone
 
-from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import bearer, session, topology  # noqa: F401
 
 FORBIDDEN = {
     "password",
@@ -39,7 +39,7 @@ def test_admin_sees_all_non_deleted(topology):  # noqa: F811
 
 @pytest.mark.django_db
 def test_applicant_list_forbidden(topology):  # noqa: F811
-    resp = bearer(topology["applicant"]).get("/api/v1/users/")
+    resp = session(topology["applicant"]).get("/api/v1/users/")
     assert resp.status_code == 403
     assert resp.data["required"] == "users.view"
 

@@ -8,7 +8,7 @@ Reuses topology + bearer fixtures from test_api_read_fixtures.
 
 import pytest
 
-from tests.test_api_read_fixtures import bearer, topology  # noqa: F401
+from tests.test_api_read_fixtures import bearer, session, topology  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -77,7 +77,7 @@ def test_assigned_member_forbidden(topology):  # noqa: F811
 @pytest.mark.django_db
 def test_applicant_forbidden(topology):  # noqa: F811
     """Applicant-level user → 403."""
-    client = bearer(topology["applicant"])
+    client = session(topology["applicant"])
     r = client.post(
         f"/api/v1/stations/{topology['station_in'].pk}/audio-diagnostics/",
         {"anchor": "C"},

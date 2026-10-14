@@ -21,6 +21,8 @@ Design notes:
 import pytest
 from django.urls import reverse
 
+from tests.test_api_read_fixtures import session
+
 pytestmark = pytest.mark.django_db
 
 
@@ -93,7 +95,7 @@ def test_update_station_user_forbidden(api_topology, bearer, cpu_temp_alert_rule
 
 def test_update_applicant_forbidden(api_topology, bearer, cpu_temp_alert_rule):
     url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
-    resp = bearer(api_topology["applicant"]).patch(url, {"threshold": 70.0}, format="json")
+    resp = session(api_topology["applicant"]).patch(url, {"threshold": 70.0}, format="json")
     assert resp.status_code == 403
 
 
@@ -140,7 +142,7 @@ def test_create_station_user_forbidden(api_topology, bearer):
 def test_create_applicant_forbidden(api_topology, bearer):
     _ensure_no_rule(_CREATE_TYPE)
     url = reverse("api:alert-rule-list")
-    resp = bearer(api_topology["applicant"]).post(url, _CREATE_PAYLOAD, format="json")
+    resp = session(api_topology["applicant"]).post(url, _CREATE_PAYLOAD, format="json")
     assert resp.status_code == 403
 
 
@@ -180,7 +182,7 @@ def test_delete_station_user_forbidden(api_topology, bearer):
 def test_delete_applicant_forbidden(api_topology, bearer):
     rule = _create_rule()
     url = reverse("api:alert-rule-detail", args=[rule.pk])
-    resp = bearer(api_topology["applicant"]).delete(url)
+    resp = session(api_topology["applicant"]).delete(url)
     assert resp.status_code == 403
 
 

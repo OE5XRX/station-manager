@@ -15,6 +15,7 @@ from django.urls import reverse
 
 from apps.provisioning.models import ProvisioningJob
 from apps.stations.models import StationAuditLog
+from tests.test_api_read_fixtures import session
 
 URL = "api:provisioning-job-list"
 DETAIL_URL = "api:provisioning-job-detail"
@@ -140,7 +141,7 @@ def test_station_user_cannot_trigger_403(api_topology, bearer, image_release):
 def test_applicant_cannot_trigger_403(api_topology, bearer, image_release):
     """Applicant-level user is rejected at the permission gate → 403."""
     t = api_topology
-    r = bearer(t["applicant"]).post(reverse(URL), _payload(t, image_release), format="json")
+    r = session(t["applicant"]).post(reverse(URL), _payload(t, image_release), format="json")
     assert r.status_code == 403
 
 

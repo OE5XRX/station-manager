@@ -8,6 +8,8 @@ matrix (admin passes images.manage; staff/region_mgr/station_user/applicant/anon
 import pytest
 from django.urls import reverse
 
+from tests.test_api_read_fixtures import session
+
 pytestmark = pytest.mark.django_db
 
 
@@ -78,7 +80,7 @@ def test_station_user_cannot_archive(api_topology, bearer, image_release):
 def test_applicant_cannot_archive(api_topology, bearer, image_release):
     t = api_topology
     assert (
-        bearer(t["applicant"])
+        session(t["applicant"])
         .post(reverse("api:image-archive", args=[image_release.pk]))
         .status_code
         == 403
