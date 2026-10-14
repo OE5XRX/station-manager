@@ -178,11 +178,14 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return True
         self.rejected = True
         # Same teardown as an explicit close: the agent kills the shell. disconnect()
-        # then closes the session tracking row.
-        await self.channel_layer.group_send(
-            f"{self.group_name}_agent", {"type": "terminal_close", "data": ""}
-        )
-        await self.close(code=4403)
+        # then closes the session tracking row. The socket is closed even if the
+        # group_send raises (``rejected`` short-circuits any later retry).
+        try:
+            await self.channel_layer.group_send(
+                f"{self.group_name}_agent", {"type": "terminal_close", "data": ""}
+            )
+        finally:
+            await self.close(code=4403)
         return False
 
     # -- Channel layer handlers -----------------------------------------------

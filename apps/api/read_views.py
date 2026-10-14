@@ -1,5 +1,7 @@
 """Read-only viewsets for the user/automation API (v1)."""
 
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
@@ -157,6 +159,26 @@ class StationTagViewSet(AreaReadOnlyViewSet):
         return StationTag.objects.all().order_by("name")
 
 
+User = get_user_model()
+
+
+def _assignments_visible_to(qs, viewer):
+    """Narrow assignment rows to those whose target user the viewer may see.
+
+    Mirrors the UI (``visibility``): non-managers must not learn assignments of
+    users hidden from the directory (``is_directory_visible=False``), inactive or
+    soft-deleted users, or Applicants. The viewer's own rows are always kept.
+    """
+    if can(viewer, "users", "manage"):
+        return qs
+    visible = Q(user=viewer) | Q(
+        user__is_directory_visible=True,
+        user__is_active=True,
+        user__deleted_at__isnull=True,
+    ) & ~Q(user__membership_level=User.MembershipLevel.APPLICANT)
+    return qs.filter(visible)
+
+
 class StationAssignmentViewSet(AreaReadOnlyViewSet):
     area = "topology"
     serializer_class = StationAssignmentSerializer
@@ -164,7 +186,9 @@ class StationAssignmentViewSet(AreaReadOnlyViewSet):
     ordering_fields = ["assigned_at"]
 
     def get_queryset(self):
-        return StationAssignment.objects.all().order_by("-assigned_at")
+        return _assignments_visible_to(
+            StationAssignment.objects.all(), self.request.user
+        ).order_by("-assigned_at")
 
 
 class RegionAssignmentViewSet(AreaReadOnlyViewSet):
@@ -174,7 +198,9 @@ class RegionAssignmentViewSet(AreaReadOnlyViewSet):
     ordering_fields = ["assigned_at"]
 
     def get_queryset(self):
-        return RegionAssignment.objects.all().order_by("-assigned_at")
+        return _assignments_visible_to(RegionAssignment.objects.all(), self.request.user).order_by(
+            "-assigned_at"
+        )
 
 
 class RolloutSequenceViewSet(AreaReadOnlyViewSet):

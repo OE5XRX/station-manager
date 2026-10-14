@@ -60,3 +60,50 @@ def test_station_assignment_scope_region_manager(topology):  # noqa: F811
 def test_assignment_applicant_can_read(topology):  # noqa: F811
     # topology.view = Applicant (spec matrix).
     assert session(topology["applicant"]).get("/api/v1/station-assignments/").status_code == 200
+
+
+@pytest.fixture
+def hidden_assignments(topology):  # noqa: F811
+    """Assignments of a directory-hidden user, an inactive one and an applicant."""
+    from apps.accounts.models import User
+    from apps.stations.models import RegionAssignment, StationAssignment
+
+    hidden = User.objects.create_user(
+        username="hidden", password="x", membership_level="member", is_directory_visible=False
+    )
+    inactive = User.objects.create_user(
+        username="gone", password="x", membership_level="member", is_active=False
+    )
+    for u in (hidden, inactive):
+        StationAssignment.objects.create(user=u, station=topology["station_in"], role="maintainer")
+        RegionAssignment.objects.create(user=u, region=topology["region_in"], role="manager")
+    topology["hidden"] = hidden
+    topology["inactive"] = inactive
+    return topology
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("url", ["station-assignments", "region-assignments"])
+def test_assignments_of_hidden_users_not_exposed_to_members(hidden_assignments, url):
+    t = hidden_assignments
+    users = {r["user"] for r in bearer(t["station_user"]).get(f"/api/v1/{url}/").data["results"]}
+    assert t["hidden"].pk not in users and t["inactive"].pk not in users
+    # Filtering by the hidden user's id reveals nothing either.
+    q = bearer(t["station_user"]).get(f"/api/v1/{url}/?user={t['hidden'].pk}")
+    assert q.data["count"] == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("url", ["station-assignments", "region-assignments"])
+def test_assignments_of_hidden_users_visible_to_admin(hidden_assignments, url):
+    t = hidden_assignments
+    users = {r["user"] for r in bearer(t["admin"]).get(f"/api/v1/{url}/").data["results"]}
+    assert t["hidden"].pk in users and t["inactive"].pk in users
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("url", ["station-assignments", "region-assignments"])
+def test_hidden_user_sees_own_assignments(hidden_assignments, url):
+    t = hidden_assignments
+    users = {r["user"] for r in bearer(t["hidden"]).get(f"/api/v1/{url}/").data["results"]}
+    assert t["hidden"].pk in users

@@ -252,6 +252,13 @@ def test_demoted_holder_get_command_forbidden_and_lock_revoked(control_agent_aut
     async def scenario():
         agent = _agent_comm(station.id)
         assert (await agent.connect())[0] is True
+        from channels.layers import get_channel_layer
+
+        from apps.audio import constants as audio_constants
+
+        layer = get_channel_layer()
+        spy = "audio-browser-spy"
+        await layer.group_add(audio_constants.browser_group(station.pk), spy)
         comm = _browser_comm(member, station.id)
         assert (await comm.connect())[0] is True
         await _acquire(comm)
@@ -263,6 +270,11 @@ def test_demoted_holder_get_command_forbidden_and_lock_revoked(control_agent_aut
         assert frame["code"] == "forbidden" and frame["request_id"] == "g1"
         lost = await _drain_until(comm, "lock")
         assert lost["state"] == "free" and lost["you_hold"] is False
+        # The revoke also broadcast the closed gate to the audio consumers.
+        gate_evt = await asyncio.wait_for(layer.receive(spy), timeout=2)
+        assert gate_evt["type"] == "audio.gate"
+        assert gate_evt["state"]["ptt_active"] is False
+        assert gate_evt["state"]["tx_slot"] is None
         assert await agent.receive_nothing(timeout=0.3)  # the get was not relayed
         await comm.disconnect()
         await agent.disconnect()

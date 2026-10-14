@@ -320,13 +320,13 @@ async def _ws_case(station, user, consumer, action):
 
     comm, connected, code = await _connect(path, user)
     if not connected:
-        return [{"type": "websocket.close", "code": code}], None
+        return [{"type": "websocket.close", "code": code}], None, []
     connect_out = await _outputs(comm)
     if _closes(connect_out) or action == "connect":
         await comm.disconnect()
         if agent is not None:
             await agent.disconnect()
-        return connect_out, None
+        return connect_out, None, []
 
     rid = "mx-1"
     if action == "lock_acquire":
@@ -353,13 +353,15 @@ async def _ws_case(station, user, consumer, action):
     else:
         raise AssertionError(f"unknown WS action {action!r}")
     action_out = await _outputs(comm, timeout=0.6)
+    # What the (fake) agent received: positive evidence that an allowed command was relayed.
+    agent_out = await _outputs(agent, timeout=0.3) if agent is not None else []
     if consumer == "control":
         await comm.send_json_to({"type": "lock_release"})
         await _outputs(comm)
     await comm.disconnect()
     if agent is not None:
         await agent.disconnect()
-    return connect_out, action_out
+    return connect_out, action_out, agent_out
 
 
 @pytest.mark.django_db(transaction=True)
@@ -370,7 +372,7 @@ def test_ws_matrix(control_agent_auth, level, entry):
     station = Station.objects.create(name=f"mx-{consumer}-{action}", status="online")
     user = _user(level)
 
-    connect_out, action_out = asyncio.run(_ws_case(station, user, consumer, action))
+    connect_out, action_out, agent_out = asyncio.run(_ws_case(station, user, consumer, action))
     connect_frames = _frames(connect_out)
 
     if level is None:
@@ -394,5 +396,13 @@ def test_ws_matrix(control_agent_auth, level, entry):
     if _expected_allowed(level, area, verb):
         assert not _forbidden(frames, rid), frames
         assert not _closes(action_out), action_out
+        if action == "lock_acquire":
+            locks = [f for f in frames if f.get("type") == "lock"]
+            assert locks and locks[-1]["you_hold"] is True, frames
+        elif action == "mic_open":
+            # Past the permission gate: the lock-less open is refused as not_locked.
+            assert any(f.get("code") == "not_locked" for f in frames), frames
+        elif action.startswith("command:"):
+            assert [o for o in agent_out if o["type"] == "websocket.send"], agent_out
     else:
         assert _forbidden(frames, rid), frames

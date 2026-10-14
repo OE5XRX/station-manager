@@ -254,6 +254,34 @@ def test_terminal_still_allowed_short_circuits_when_rejected():
     assert calls == []
 
 
+def test_terminal_still_allowed_closes_4403_even_if_group_send_raises():
+    """A failing terminal_close broadcast must not leave the demoted user's socket open."""
+    from apps.tunnel.consumers import TerminalConsumer
+
+    consumer = TerminalConsumer()
+    consumer.rejected = False
+    consumer.group_name = "terminal_x"
+    closed = []
+
+    class _Layer:
+        async def group_send(self, *a, **kw):
+            raise RuntimeError("redis down")
+
+    async def _area_allows(*a, **kw):
+        return False
+
+    async def _close(code=None):
+        closed.append(code)
+
+    consumer.channel_layer = _Layer()
+    consumer.area_allows = _area_allows
+    consumer.close = _close
+    with pytest.raises(RuntimeError):
+        asyncio.run(consumer._still_allowed())
+    assert closed == [4403]
+    assert consumer.rejected is True
+
+
 # -- terminal keepalive survives transient errors, never runs unchecked ----------
 
 
