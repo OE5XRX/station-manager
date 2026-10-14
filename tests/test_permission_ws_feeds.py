@@ -155,3 +155,62 @@ def test_ws_connect_denials_are_deduplicated():
 def test_agent_consumers_declare_exemption():
     for cls in (AgentControlConsumer, AgentAudioConsumer, AgentTerminalConsumer):
         assert cls.permission_exempt == "agent: ed25519"
+
+
+def _demote(user):
+    User.objects.filter(pk=user.pk).update(membership_level=STAFF)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_demoted_admin_terminal_input_denied_and_session_closed():
+    from asgiref.sync import sync_to_async
+
+    from apps.tunnel.models import TerminalSession
+
+    station = Station.objects.create(name="t-demote", status="online")
+    admin = _user("term-admin", User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "agent-spy-demote"
+        await layer.group_add(f"terminal_{station.id}_agent", spy)
+        comm = _comm(f"/ws/terminal/{station.id}/", admin)
+        assert (await comm.connect())[0] is True
+        assert (await layer.receive(spy))["type"] == "terminal_ensure"
+        await sync_to_async(_demote)(admin)
+        await comm.send_json_to({"type": "input", "data": "rm -rf /\n"})
+        frame = await comm.receive_json_from()
+        assert frame["code"] == "forbidden"
+        out = await comm.receive_output()
+        assert out == {"type": "websocket.close", "code": 4403}
+        await comm.disconnect()
+        # Shell torn down (terminal_close), input never forwarded.
+        assert (await layer.receive(spy))["type"] == "terminal_close"
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(layer.receive(spy), timeout=0.3)
+
+    asyncio.run(scenario())
+    assert TerminalSession.objects.get(station=station).status == "closed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_demoted_admin_idle_terminal_closed_by_keepalive(monkeypatch):
+    from asgiref.sync import sync_to_async
+
+    from apps.tunnel import consumers as tunnel_consumers
+
+    monkeypatch.setattr(tunnel_consumers, "TERMINAL_SESSION_KEEPALIVE_SECONDS", 0.2)
+    station = Station.objects.create(name="t-idle", status="online")
+    admin = _user("term-admin2", User.MembershipLevel.ADMIN)
+
+    async def scenario():
+        comm = _comm(f"/ws/terminal/{station.id}/", admin)
+        assert (await comm.connect())[0] is True
+        await sync_to_async(_demote)(admin)
+        frame = await comm.receive_json_from()
+        assert frame["code"] == "forbidden"
+        out = await comm.receive_output()
+        assert out == {"type": "websocket.close", "code": 4403}
+        await comm.disconnect()
+
+    asyncio.run(scenario())

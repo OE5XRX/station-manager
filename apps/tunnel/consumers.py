@@ -127,6 +127,10 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         except json.JSONDecodeError:
             return
 
+        # Root shell: re-check terminal.use with a fresh user on EVERY frame.
+        if not await self._still_allowed():
+            return
+
         msg_type = payload.get("type", "input")
 
         if msg_type == "resize":
@@ -154,6 +158,18 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 f"{self.group_name}_agent",
                 {"type": "terminal_input", "data": payload.get("data", "")},
             )
+
+    async def _still_allowed(self):
+        """Fresh terminal.use re-check; on deny tear the shell down and close 4403."""
+        if await self.area_allows("use", notify=True):
+            return True
+        # Same teardown as an explicit close: the agent kills the shell. disconnect()
+        # then closes the session tracking row.
+        await self.channel_layer.group_send(
+            f"{self.group_name}_agent", {"type": "terminal_close", "data": ""}
+        )
+        await self.close(code=4403)
+        return False
 
     # -- Channel layer handlers -----------------------------------------------
 
@@ -240,6 +256,8 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         try:
             while True:
                 await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+                if not await self._still_allowed():
+                    return
                 await self._touch_session()
         except asyncio.CancelledError:
             raise
