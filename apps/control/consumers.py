@@ -16,7 +16,15 @@ from apps.accounts.permissions import (
     required_level,
 )
 
-from . import agent_presence, capability_policy, constants, lock, persistence, registry
+from . import (
+    agent_presence,
+    capability_policy,
+    constants,
+    lock,
+    persistence,
+    registry,
+    telemetry_subscriptions,
+)
 from .models import AgentConnection, StationModule
 
 logger = logging.getLogger(__name__)
@@ -559,6 +567,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         station = await self._cached_station()
         if station is not None and self.user and not self.user.is_anonymous:
             await self._holder_disconnected(station)
+            await self._telemetry_drop_channel(station)
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -594,9 +603,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 await self._bridge_gate(station)
             else:
                 await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
-        elif mtype in ("subscribe", "unsubscribe"):
-            # Any viewer may subscribe/unsubscribe — control.view checked at connect.
-            await self._relay(msg)
+        elif mtype == "subscribe":
+            # Any viewer may subscribe — control.view checked at connect. Ref-counted:
+            # the agent's subscription is station-wide (see telemetry_subscriptions).
+            await self._telemetry_subscribe(station, msg)
+        elif mtype == "unsubscribe":
+            await self._telemetry_unsubscribe(station, msg)
         elif mtype == "lock_acquire":
             await self._lock_acquire(station)
         elif mtype == "lock_release":
@@ -754,6 +766,47 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             self.pending.pop(request_id, None)
         except asyncio.CancelledError:
             raise
+
+    # -- telemetry subscriptions (ref-counted across viewers) ------------------
+
+    async def _telemetry_subscribe(self, station, msg):
+        addr = telemetry_subscriptions.parse_addr(msg)
+        if addr is None:
+            return
+        slot_key, module, caps = addr
+        interval_ms = await database_sync_to_async(telemetry_subscriptions.subscribe)(
+            station, self.channel_name, slot_key, module, caps, msg.get("interval_ms")
+        )
+        await self._relay({**msg, "capabilities": caps, "interval_ms": interval_ms})
+
+    async def _telemetry_unsubscribe(self, station, msg):
+        addr = telemetry_subscriptions.parse_addr(msg)
+        if addr is None:
+            return
+        slot_key, module, caps = addr
+        zeroed = await database_sync_to_async(telemetry_subscriptions.unsubscribe)(
+            station, self.channel_name, slot_key, module, caps
+        )
+        if zeroed:
+            await self._relay({**msg, "capabilities": zeroed})
+
+    async def _telemetry_drop_channel(self, station):
+        try:
+            zeroed = await database_sync_to_async(telemetry_subscriptions.drop_channel)(
+                station, self.channel_name
+            )
+            for slot_key, module, caps in zeroed:
+                await self._relay(
+                    {
+                        "v": constants.PROTOCOL_VERSION,
+                        "type": "unsubscribe",
+                        "slot": telemetry_subscriptions.slot_value(slot_key),
+                        "module": module,
+                        "capabilities": caps,
+                    }
+                )
+        except Exception:
+            logger.exception("control: dropping telemetry subscriptions failed")
 
     async def _relay(self, frame):
         await self.channel_layer.group_send(

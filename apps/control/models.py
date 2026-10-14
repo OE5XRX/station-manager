@@ -180,3 +180,41 @@ class AgentConnection(models.Model):
 
     def __str__(self):
         return f"{self.station_id}/{self.kind}={self.channel_name}"
+
+
+class TelemetrySubscription(models.Model):
+    """One browser connection's demand for one telemetry capability.
+
+    The agent keeps ONE station-wide subscription per (slot, module); viewers must
+    not be able to stop or slow down telemetry other viewers rely on. Rows are
+    reference counts: unsubscribe reaches the agent only when the last viewer of a
+    capability leaves. Mutated only via ``apps.control.telemetry_subscriptions``;
+    stored in the DB (not process memory) so counting is worker-safe, mirroring
+    ``apps.audio.models.AudioSubscription``.
+    """
+
+    station = models.ForeignKey(
+        "stations.Station",
+        verbose_name=_("station"),
+        on_delete=models.CASCADE,
+        related_name="telemetry_subscriptions",
+    )
+    slot = models.CharField(_("slot"), max_length=64)
+    module = models.CharField(_("module"), max_length=64)
+    capability = models.CharField(_("capability"), max_length=64)
+    channel_name = models.CharField(_("channel name"), max_length=255)
+    interval_ms = models.PositiveIntegerField(_("interval (ms)"))
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("telemetry subscription")
+        verbose_name_plural = _("telemetry subscriptions")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["station", "slot", "module", "capability", "channel_name"],
+                name="uniq_telemetry_sub",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.station_id}/{self.slot}/{self.module}/{self.capability}@{self.channel_name}"
