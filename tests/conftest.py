@@ -85,7 +85,6 @@ def _user_with_level(username, password, level):
     user = User.objects.create_user(username=username, password=password)
     user.membership_level = level
     user.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(user)
     return user
 
 
@@ -95,11 +94,9 @@ def admin_user(db):
 
 
 @pytest.fixture
-def operator_user(db):
-    """Kept fixture name for test-suite continuity. The membership
-    level is STAFF (formerly the 'operator' group).
-    """
-    return _user_with_level("operator", "testpass123", User.MembershipLevel.STAFF)
+def staff_user(db):
+    """A user at the STAFF membership level."""
+    return _user_with_level("staff", "testpass123", User.MembershipLevel.STAFF)
 
 
 @pytest.fixture
@@ -184,14 +181,14 @@ def make_station_tag(db):
 
 
 @pytest.fixture
-def deployment(image_release, station, operator_user):
+def deployment(image_release, station, staff_user):
     """An in-progress Deployment targeting a single station."""
     dep = Deployment.objects.create(
         image_release=image_release,
         target_type=Deployment.TargetType.STATION,
         target_station=station,
         status=Deployment.Status.IN_PROGRESS,
-        created_by=operator_user,
+        created_by=staff_user,
     )
     return dep
 

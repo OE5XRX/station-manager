@@ -30,7 +30,7 @@ class UserWriteSerializer(serializers.ModelSerializer):
 
     Writable: profile fields + membership_level.
     Read-only: id, username, date_joined (stable identifiers) + email.
-    Absent entirely (never writable): password, is_staff, is_superuser,
+    Absent entirely (never writable): password, the Django admin flags,
     is_active, last_login, deleted_at, deleted_by, groups, user_permissions.
 
     ``email`` is deliberately read-only: cross-user email mutation bypasses the

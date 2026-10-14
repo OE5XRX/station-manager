@@ -88,7 +88,6 @@ class MembershipSetView(AreaPermissionMixin, View):
 
         target.membership_level = new_level
         target.save(update_fields=["membership_level"])
-        User._invalidate_role_cache(target)
 
         new_index = MEMBERSHIP_ORDER.index(User.MembershipLevel(new_level))
         old_index = MEMBERSHIP_ORDER.index(User.MembershipLevel(old_level))

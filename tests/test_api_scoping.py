@@ -23,9 +23,7 @@ def _station_names(user):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "fixture", ["admin_user", "operator_user", "member_user", "applicant_user"]
-)
+@pytest.mark.parametrize("fixture", ["admin_user", "staff_user", "member_user", "applicant_user"])
 def test_every_level_sees_all_stations(request, fixture, station_factory):
     user = request.getfixturevalue(fixture)
     a = station_factory()

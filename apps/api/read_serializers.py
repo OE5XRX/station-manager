@@ -338,7 +338,7 @@ class ImageImportJobSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     """Read-only user profile, filtered per target like the member directory.
 
-    Sensitive fields (password, last_login, is_staff, is_superuser, is_active,
+    Sensitive fields (password, last_login, Django admin flags, is_active,
     deleted_at, deleted_by) are structurally absent — not listed in ``fields``.
     Of the rest, only the keys ``visibility.directory_visible_fields(viewer,
     target)`` allows are emitted (``id`` always), so e.g. Staff no longer sees

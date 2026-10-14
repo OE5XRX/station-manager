@@ -505,10 +505,10 @@ class TestProvisioningViews:
         assert response.status_code == 302
         assert ProvisioningJob.objects.count() == 0
 
-    def test_operator_cannot_create_job(self, client, operator_user, station, image_release):
+    def test_operator_cannot_create_job(self, client, staff_user, station, image_release):
         from apps.provisioning.models import ProvisioningJob
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("provisioning:new", kwargs={"station_pk": station.pk}),
             {"image_release": image_release.pk},
@@ -739,9 +739,9 @@ class TestStationDetailIntegration:
         assert b'onchange="_filterVersions' not in response.content
 
     def test_operator_does_not_see_provisioning_section(
-        self, client, operator_user, station, image_release
+        self, client, staff_user, station, image_release
     ):
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(
             reverse("stations:station_detail", kwargs={"pk": station.pk}),
         )

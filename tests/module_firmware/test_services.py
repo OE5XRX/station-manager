@@ -16,7 +16,7 @@ def module(db):
 
 @pytest.mark.django_db
 def test_confirm_registration(module):
-    user = User.objects.create_user(username="admin", password="x", is_staff=True)
+    user = User.objects.create_user(username="admin", password="x", membership_level="staff")
     services.confirm_registration(module, user=user)
     module.refresh_from_db()
     assert module.registration_status == Module.Registration.REGISTERED

@@ -31,10 +31,10 @@ def test_invalid_verb_rejected():
         cp.CapabilityPolicy(verb="admin")
 
 
-def test_can_write(db, member_user, operator_user):
+def test_can_write(db, member_user, staff_user):
     assert cp.can_write(member_user, "ptt", "fm_transceiver") is True
     assert cp.can_write(member_user, "filter_hpf", None) is False
-    assert cp.can_write(operator_user, "filter_hpf", None) is True
+    assert cp.can_write(staff_user, "filter_hpf", None) is True
 
 
 def test_unknown_caps_default_use_no_persist():

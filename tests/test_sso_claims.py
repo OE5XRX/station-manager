@@ -98,7 +98,6 @@ def member(db):
     u = User.objects.create_user(username="peter", password="x", email="p@ex.org")
     u.membership_level = User.MembershipLevel.MEMBER
     u.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(u)
     return u
 
 
@@ -107,7 +106,6 @@ def applicant(db):
     u = User.objects.create_user(username="anna", password="x")
     u.membership_level = User.MembershipLevel.APPLICANT
     u.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(u)
     return u
 
 

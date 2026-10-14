@@ -187,21 +187,21 @@ class TestAlertViews:
         response = client.get(reverse("monitoring:alert_list"))
         assert response.status_code == 200
 
-    def test_alert_acknowledge(self, client, operator_user, alert):
+    def test_alert_acknowledge(self, client, staff_user, alert):
         """POST acknowledge should set is_acknowledged."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("monitoring:alert_acknowledge", kwargs={"pk": alert.pk}),
         )
         assert response.status_code == 200
         alert.refresh_from_db()
         assert alert.is_acknowledged is True
-        assert alert.acknowledged_by == operator_user
+        assert alert.acknowledged_by == staff_user
         assert alert.acknowledged_at is not None
 
-    def test_alert_resolve(self, client, operator_user, alert):
+    def test_alert_resolve(self, client, staff_user, alert):
         """POST resolve should set is_resolved."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("monitoring:alert_resolve", kwargs={"pk": alert.pk}),
         )
@@ -226,9 +226,9 @@ class TestAlertViews:
         response = client.get(reverse("monitoring:alert_count"))
         assert response.status_code == 302
 
-    def test_alert_settings_staff_read_only(self, client, operator_user, offline_alert_rule):
+    def test_alert_settings_staff_read_only(self, client, staff_user, offline_alert_rule):
         """Staff may view alert settings (alert_rules.view) but not change rules (manage)."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(reverse("monitoring:alert_settings"))
         assert response.status_code == 200
         assert "nur lesend" in response.content.decode()

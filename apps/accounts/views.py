@@ -5,7 +5,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseRedirect
@@ -47,8 +46,7 @@ User = get_user_model()
 def _client_ip(request):
     """Lazy wrapper around `apps.accounts.views_membership._get_client_ip`.
 
-    Imported lazily to avoid a circular import — views_membership pulls
-    `AdminRequiredMixin` from this module at import time.
+    Imported lazily to avoid a circular import with views_membership.
     """
     from .views_membership import _get_client_ip
 
@@ -94,13 +92,6 @@ TRACKED_USER_FIELDS = frozenset(
         "is_directory_visible",
     }
 )
-
-
-class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Mixin that restricts access to users with admin role."""
-
-    def test_func(self):
-        return self.request.user.is_admin
 
 
 # The login & logout pages must be reachable without a session, otherwise

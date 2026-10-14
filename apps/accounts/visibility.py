@@ -37,7 +37,7 @@ def audience_for(viewer, target):
     Returns None when the viewer has no access — caller raises Http404
     to avoid existence-leaking via 403.
 
-    Note: viewer.is_admin precedes the viewer-equals-target check, so a
+    Note: the users.manage check precedes the viewer-equals-target check, so a
     Vereins-Admin sieht sich selbst auch als ADMIN (nicht als SELF). Das
     ist erwünscht — Admin braucht beim Self-View dieselben Werkzeuge
     wie bei anderen.

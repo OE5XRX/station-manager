@@ -262,8 +262,7 @@ def _run_after_db_change(station, user, frame, mutate):
         assert (await browser.connect())[0] is True
         await browser.send_json_to({"type": "lock_acquire"})
         await _until(browser, lambda m: m.get("type") == "lock" and m.get("state") == "held")
-        # Warm the cached role properties on the scope instance, then change the DB row.
-        assert user.is_internal is True
+        # The scope user instance stays stale; change the DB row underneath it.
         await database_sync_to_async(mutate)()
         await browser.send_json_to(frame)
         if await agent.receive_nothing(timeout=0.5):

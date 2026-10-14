@@ -361,11 +361,9 @@ class TestDeploymentCommit:
 
 @pytest.mark.django_db
 class TestDeploymentWebViews:
-    def test_create_deployment_creates_results(
-        self, client, operator_user, image_release, station
-    ):
+    def test_create_deployment_creates_results(self, client, staff_user, image_release, station):
         """Creating a deployment should create DeploymentResult per target station."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("deployments:deployment_create"),
             data={
@@ -382,9 +380,9 @@ class TestDeploymentWebViews:
         assert dep.results.first().station == station
         assert dep.status == Deployment.Status.IN_PROGRESS
 
-    def test_cancel_deployment(self, client, operator_user, deployment, deployment_result):
+    def test_cancel_deployment(self, client, staff_user, deployment, deployment_result):
         """Cancelling should set deployment and pending results to cancelled."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
         )
@@ -395,7 +393,7 @@ class TestDeploymentWebViews:
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
 
     def test_cancel_cascades_in_flight_results(
-        self, client, operator_user, deployment, deployment_result
+        self, client, staff_user, deployment, deployment_result
     ):
         """Regression: a result that was already mid-deployment
         (DOWNLOADING / INSTALLING / REBOOTING / VERIFYING) used to be
@@ -408,7 +406,7 @@ class TestDeploymentWebViews:
         deployment_result.status = DeploymentResult.Status.INSTALLING
         deployment_result.save(update_fields=["status"])
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
         )
@@ -421,9 +419,7 @@ class TestDeploymentWebViews:
         assert deployment_result.completed_at is not None
         assert "cancelled" in deployment_result.error_message.lower()
 
-    def test_cancel_leaves_terminal_results_alone(
-        self, client, operator_user, deployment, station
-    ):
+    def test_cancel_leaves_terminal_results_alone(self, client, staff_user, deployment, station):
         """Mixed-status cancel: non-terminal children flip to CANCELLED,
         already-terminal children (SUCCESS / FAILED / ROLLED_BACK /
         CANCELLED / SUPERSEDED) keep the status they earned.
@@ -452,7 +448,7 @@ class TestDeploymentWebViews:
             deployment=deployment, station=s_rolled, status=DeploymentResult.Status.ROLLED_BACK
         )
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
         )
@@ -477,7 +473,7 @@ class TestDeploymentWebViews:
         assert client.get(reverse("deployments:deployment_create")).status_code == 403
 
     def test_deployment_list_ordered_by_created_at_desc(
-        self, client, operator_user, image_release, station
+        self, client, staff_user, image_release, station
     ):
         """Regression: the aggregate annotation on DeploymentListView used to
         drop Meta.ordering (Django omits the default ordering once a GROUP BY
@@ -491,7 +487,7 @@ class TestDeploymentWebViews:
                 target_type=Deployment.TargetType.STATION,
                 target_station=station,
                 status=Deployment.Status.IN_PROGRESS,
-                created_by=operator_user,
+                created_by=staff_user,
             )
             for _ in range(3)
         ]
@@ -506,17 +502,17 @@ class TestDeploymentWebViews:
         for pk, ts in stamps.items():
             Deployment.objects.filter(pk=pk).update(created_at=ts)
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(reverse("deployments:deployment_list"))
         assert response.status_code == 200
         returned = [d.pk for d in response.context["deployments"]]
         assert returned == [deps[1].pk, deps[0].pk, deps[2].pk]
 
     def test_deployment_detail_shows_progress(
-        self, client, operator_user, deployment, deployment_result
+        self, client, staff_user, deployment, deployment_result
     ):
         """Detail page should render for operator."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(
             reverse("deployments:deployment_detail", kwargs={"pk": deployment.pk}),
         )

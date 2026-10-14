@@ -432,11 +432,11 @@ class TestUpgradeDashboard:
         # The "Upgrade group" form action must render for this non-empty, non-unassigned group.
         assert b"upgrade/group/test-stations/" in response.content
 
-    def test_operator_read_only(self, client, operator_user):
+    def test_operator_read_only(self, client, staff_user):
         """rollouts:view is Applicant+, so Staff sees the dashboard read-only."""
         from django.urls import reverse
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(reverse("rollouts:upgrade_dashboard"))
         assert response.status_code == 200
         assert "nur lesend" in response.content.decode()

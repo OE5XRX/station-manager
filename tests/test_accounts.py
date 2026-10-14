@@ -12,39 +12,7 @@ class TestUserModel:
 
     def test_create_superuser(self):
         user = User.objects.create_superuser(username="super", password="pass123")
-        assert user.is_superuser
-
-
-@pytest.mark.django_db
-def test_is_admin_true_when_membership_level_admin():
-    """``is_admin`` is driven by ``membership_level=ADMIN`` (Task 9)."""
-    user = User.objects.create_user(username="a", password="x", email="a@x")
-    user.membership_level = User.MembershipLevel.ADMIN
-    user.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(user)
-    assert user.is_admin is True
-    assert user.is_internal is True
-
-
-@pytest.mark.django_db
-def test_is_internal_true_when_membership_level_staff():
-    """``is_internal`` covers STAFF and ADMIN; STAFF must not be admin."""
-    user = User.objects.create_user(username="o", password="x", email="o@x")
-    user.membership_level = User.MembershipLevel.STAFF
-    user.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(user)
-    assert user.is_admin is False
-    assert user.is_internal is True
-
-
-@pytest.mark.django_db
-def test_member_user_is_neither_admin_nor_internal():
-    user = User.objects.create_user(username="m", password="x", email="m@x")
-    user.membership_level = User.MembershipLevel.MEMBER
-    user.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(user)
-    assert user.is_admin is False
-    assert user.is_internal is False
+        assert user.is_superuser and user.is_staff
 
 
 @pytest.mark.django_db
@@ -91,15 +59,11 @@ class TestUserManagement:
 
 @pytest.mark.django_db
 def test_create_superuser_sets_admin_membership_level():
-    """createsuperuser must yield is_admin=True so the new account can
-    actually access admin views, otherwise the chicken-and-egg
-    bootstrap is broken on a fresh install. After Task 10, the manager
-    sets ``membership_level=ADMIN`` directly (formerly: added user to
-    the legacy ``admin`` Django Group)."""
+    """createsuperuser must yield an ADMIN-level account, otherwise the
+    chicken-and-egg bootstrap is broken on a fresh install."""
     user = User.objects.create_superuser(username="sup", password="x", email="s@x")
     assert user.is_superuser is True
     assert user.membership_level == User.MembershipLevel.ADMIN
-    assert user.is_admin is True
 
 
 @pytest.mark.django_db

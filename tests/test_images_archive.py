@@ -184,7 +184,7 @@ def test_archive_view_requires_admin(client, member_user):
     client.force_login(member_user)
     resp = client.post(reverse("images:archive", kwargs={"pk": rel.pk}))
 
-    # AdminRequiredMixin raises PermissionDenied for authenticated
+    # admin-only view raises PermissionDenied for authenticated
     # non-admins → 403.
     assert resp.status_code == 403
     rel.refresh_from_db()

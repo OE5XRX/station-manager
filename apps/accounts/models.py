@@ -10,7 +10,6 @@ from django.db import models
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.utils import timezone
-from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
 from .managers import UserManager
@@ -50,19 +49,10 @@ class User(AbstractUser):
     """Custom user model with membership-level role + language preference.
 
     Role state lives in ``membership_level`` (a TextChoices: applicant /
-    member / staff / admin). ``is_admin`` and ``is_internal`` read this
-    field directly.
-
-    Cached-property staleness caveat: the two cached properties below
-    (``is_admin``, ``is_internal``) are memoized on the instance. If
-    you mutate ``user.membership_level`` in the same request and then
-    re-check, you'll see the pre-mutation value. After mutating, bust
-    the cache with ``User._invalidate_role_cache(user)``.
-    ``UserManager.create_superuser`` does this automatically. The
-    ``UserCreationForm`` / ``UserChangeForm`` in ``apps.accounts.forms``
-    do NOT yet set ``membership_level`` — admin-side membership-level
-    promotion happens via Django Admin until the dedicated UI lands
-    in PR-2.
+    member / staff / admin). Authorization goes through
+    ``apps.accounts.permissions`` (``can()`` / ``User.can``). Django's
+    ``/admin/`` flags are derived from the level in ``save()``; they are never
+    set independently.
     """
 
     # Sub-Spec 2b Soft-Delete: override AbstractUser.username with unique=False
@@ -252,104 +242,21 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
-    # NOTE: the two properties below are @cached_property. Once a
-    # caller reads e.g. ``user.is_admin``, the value is memoized on the
-    # instance and stays stale through subsequent ``membership_level``
-    # mutations on the same instance. Bust with
-    # ``User._invalidate_role_cache(user)`` after mutating
-    # ``membership_level`` in the same request.
-    @cached_property
-    def is_admin(self):
-        """True iff Vereins-Admin (membership_level=ADMIN).
-
-        Backwards-compat: kept the same name as the pre-refactor
-        group-based check — call-site semantics are unchanged.
-        """
-        return self.membership_level == self.MembershipLevel.ADMIN
-
-    @cached_property
-    def is_internal(self):
-        """True iff Vereins-Staff or Vereins-Admin.
-
-        Replaces the pre-refactor ``is_staff_member``. Renamed because
-        Django's built-in ``is_staff`` (admin-backend access) is a
-        related but distinct concept — keeping both names increases
-        confusion. ``is_internal`` reads cleanly at call sites:
-        "is this user a member of the internal operations team?"
-        """
-        return self.membership_level in (
-            self.MembershipLevel.STAFF,
-            self.MembershipLevel.ADMIN,
-        )
-
-    def is_station_admin(self, station):
-        return self.station_assignments.filter(
-            station=station,
-            role="admin",
-        ).exists()
-
-    def is_station_maintainer(self, station):
-        return self.station_assignments.filter(
-            station=station,
-            role="maintainer",
-        ).exists()
-
-    def is_region_manager(self, region):
-        if region is None:
-            return False
-        return self.region_assignments.filter(
-            region=region,
-            role="manager",
-        ).exists()
-
-    def can_administer_station(self, station):
-        """Full operative authority on `station`:
-        Vereins-Admin OR Vereins-Staff OR Station-Admin of `station`
-        OR Region-Manager of station.region.
-        """
-        if self.is_internal:
-            return True
-        if self.is_station_admin(station):
-            return True
-        if self.is_region_manager(station.region):
-            return True
-        return False
-
-    def can_maintain_station(self, station):
-        """can_administer_station OR Station-Maintainer of `station`.
-
-        Lower bar than administer: maintenance + operational acks,
-        but not structural changes (image release, station rename).
-        """
-        if self.can_administer_station(station):
-            return True
-        return self.is_station_maintainer(station)
-
-    def can_use_station(self, station):
-        """Future hook for radio operation (Funken über die Station).
-
-        Today: every non-Applicant user passes. The Funk-Stack does not
-        yet exist; the permission is defined now so its consumers can
-        be written against a stable contract. Per-station restriction
-        (e.g., only Region-Members may funken on Region-Stations) can
-        be added later without changing the signature.
-        """
-        return self.membership_level != self.MembershipLevel.APPLICANT
+    def save(self, *args, **kwargs):
+        # Django's /admin/ is the only consumer of is_staff/is_superuser; both are
+        # derived from the membership level and never set independently.
+        derived = self.membership_level == self.MembershipLevel.ADMIN
+        self.is_staff = derived
+        self.is_superuser = derived
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "membership_level" in update_fields:
+            kwargs["update_fields"] = {*update_fields, "is_staff", "is_superuser"}
+        super().save(*args, **kwargs)
 
     def can(self, area, verb):
         from apps.accounts.permissions import can
 
         return can(self, area, verb)
-
-    @staticmethod
-    def _invalidate_role_cache(user):
-        """Delete cached ``is_admin`` / ``is_internal`` entries on a User
-        instance after ``membership_level`` has been mutated in the same
-        request. Idempotent — safe to call when the properties have not
-        yet been read.
-        """
-        for attr in ("is_admin", "is_internal"):
-            user.__dict__.pop(attr, None)
 
 
 class AccountAuditLog(models.Model):

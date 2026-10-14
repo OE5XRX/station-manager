@@ -40,29 +40,29 @@ def test_station_field_nullable_default_none(station_factory):
 
 
 @pytest.mark.django_db
-def test_form_exposes_field_only_to_internal(operator_user, member_user):
-    assert "tx_audio_ceiling_dbfs" in StationForm(user=operator_user).fields
+def test_form_exposes_field_only_to_internal(staff_user, member_user):
+    assert "tx_audio_ceiling_dbfs" in StationForm(user=staff_user).fields
     assert "tx_audio_ceiling_dbfs" not in StationForm(user=member_user).fields
     assert "tx_audio_ceiling_dbfs" not in StationForm().fields  # no user -> safe default
 
 
 @pytest.mark.django_db
-def test_form_rejects_out_of_range_for_staff(operator_user):
+def test_form_rejects_out_of_range_for_staff(staff_user):
     f = StationForm(
         data={"name": "S", "callsign": "OE5XRX", "tx_audio_ceiling_dbfs": "-40"},
-        user=operator_user,
+        user=staff_user,
     )
     assert not f.is_valid()
     assert "tx_audio_ceiling_dbfs" in f.errors
 
 
 @pytest.mark.django_db
-def test_form_saves_valid_value_for_staff(operator_user, station_factory):
+def test_form_saves_valid_value_for_staff(staff_user, station_factory):
     s = station_factory()
     f = StationForm(
         data={"name": s.name, "callsign": s.callsign, "tx_audio_ceiling_dbfs": "-9.5"},
         instance=s,
-        user=operator_user,
+        user=staff_user,
     )
     assert f.is_valid(), f.errors
     f.save()
@@ -71,22 +71,22 @@ def test_form_saves_valid_value_for_staff(operator_user, station_factory):
 
 
 @pytest.mark.django_db
-def test_edit_page_renders_field_for_staff(client, operator_user, station_factory):
+def test_edit_page_renders_field_for_staff(client, staff_user, station_factory):
     from django.urls import reverse
 
     s = station_factory()
-    client.force_login(operator_user)
+    client.force_login(staff_user)
     resp = client.get(reverse("stations:station_edit", kwargs={"pk": s.pk}))
     assert resp.status_code == 200
     assert 'name="tx_audio_ceiling_dbfs"' in resp.content.decode()
 
 
 @pytest.mark.django_db
-def test_edit_view_post_saves_ceiling_for_staff(client, operator_user, station_factory):
+def test_edit_view_post_saves_ceiling_for_staff(client, staff_user, station_factory):
     from django.urls import reverse
 
     s = station_factory()
-    client.force_login(operator_user)
+    client.force_login(staff_user)
     resp = client.post(
         reverse("stations:station_edit", kwargs={"pk": s.pk}),
         data={"name": s.name, "callsign": s.callsign, "tx_audio_ceiling_dbfs": "-9.5"},
@@ -97,13 +97,13 @@ def test_edit_view_post_saves_ceiling_for_staff(client, operator_user, station_f
 
 
 @pytest.mark.django_db
-def test_edit_view_ceiling_change_is_audited(client, operator_user, station_factory):
+def test_edit_view_ceiling_change_is_audited(client, staff_user, station_factory):
     from django.urls import reverse
 
     from apps.stations.models import StationAuditLog
 
     s = station_factory()
-    client.force_login(operator_user)
+    client.force_login(staff_user)
     resp = client.post(
         reverse("stations:station_edit", kwargs={"pk": s.pk}),
         data={"name": s.name, "callsign": s.callsign, "tx_audio_ceiling_dbfs": "-18"},
@@ -112,4 +112,4 @@ def test_edit_view_ceiling_change_is_audited(client, operator_user, station_fact
     log = StationAuditLog.objects.get(station=s, event_type=StationAuditLog.EventType.UPDATED)
     assert "tx_audio_ceiling_dbfs" in log.message
     assert "tx_audio_ceiling_dbfs" in log.changes
-    assert log.user_id == operator_user.id
+    assert log.user_id == staff_user.id

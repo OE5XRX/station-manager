@@ -31,9 +31,8 @@ def test_staff_cannot_update_alert_rule_or_send_test(client):
     assert client.post(reverse("monitoring:test_email")).status_code == 403
 
 
-def test_staff_without_django_is_staff_gets_module_rights(client):
-    u = _login(client, "staff")
-    User.objects.filter(pk=u.pk).update(is_staff=False)
+def test_staff_gets_module_rights(client):
+    _login(client, "staff")
     assert client.get(reverse("module_firmware:gh_partial")).status_code != 403
 
 

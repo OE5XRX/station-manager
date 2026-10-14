@@ -1,6 +1,5 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
@@ -40,16 +39,6 @@ def _track_changes(old_instance, new_instance, fields):
         if old_val != new_val:
             changes[field] = {"old": old_val, "new": new_val}
     return changes
-
-
-class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Legacy: still imported by other apps; removed in Task 13 of unified-permissions.
-
-    Station views in this module use AreaPermissionMixin instead.
-    """
-
-    def test_func(self):
-        return self.request.user.is_internal
 
 
 # ---------------------------------------------------------------------------

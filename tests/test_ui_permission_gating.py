@@ -44,7 +44,7 @@ class TestNavLinksMatchBackend:
         "user_fixture, alerts, deployments",
         [
             ("admin_user", True, True),
-            ("operator_user", True, True),
+            ("staff_user", True, True),
             ("member_user", True, True),
             ("applicant_user", True, True),
         ],
@@ -62,7 +62,7 @@ class TestNavLinksMatchBackend:
         "user_fixture, expected_alerts, expected_deployments",
         [
             ("admin_user", 200, 200),
-            ("operator_user", 200, 200),
+            ("staff_user", 200, 200),
             ("member_user", 200, 200),
             ("applicant_user", 200, 200),
         ],
@@ -82,7 +82,7 @@ class TestControlPanelButton:
         "user_fixture, visible",
         [
             ("admin_user", True),
-            ("operator_user", True),
+            ("staff_user", True),
             ("member_user", True),
             ("applicant_user", True),  # control:view is Applicant+ (spec 1.3)
         ],

@@ -333,7 +333,7 @@ class TestResendWelcomeView:
         target.save()
         client.force_login(member)
         resp = client.post(reverse("accounts:resend_welcome", kwargs={"pk": target.pk}))
-        # AdminRequiredMixin → 302 or 403; in any case no token
+        # admin-only view → 302 or 403; in any case no token
         assert resp.status_code in (302, 403)
         assert not AccountToken.objects.filter(user=target).exists()
 
