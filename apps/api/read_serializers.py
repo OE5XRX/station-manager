@@ -16,6 +16,7 @@ from apps.images.models import ImageImportJob, ImageRelease
 from apps.monitoring.models import Alert, AlertRule
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
+from apps.stations.inventory import inventory_for_viewer
 from apps.stations.models import (
     Region,
     RegionAssignment,
@@ -134,9 +135,7 @@ class StationInventorySerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         # The agent's inventory carries ``network`` (interface IPs + MACs); the
         # UI never shows it to viewers, so only stations.manage gets it.
-        inv = data.get("data")
-        if isinstance(inv, dict) and "network" in inv and not _can_manage_stations(self):
-            data["data"] = {k: v for k, v in inv.items() if k != "network"}
+        data["data"] = inventory_for_viewer(data.get("data"), _can_manage_stations(self))
         return data
 
 

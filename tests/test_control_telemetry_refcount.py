@@ -13,6 +13,7 @@ replayed. No pytest-asyncio: asyncio.run().
 import asyncio
 
 import pytest
+from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 
@@ -311,6 +312,52 @@ def test_malformed_subscribe_not_relayed():
 
     asyncio.run(scenario())
     assert not TelemetrySubscription.objects.exists()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"slot": True},
+        {"slot": 2**31},
+        {"slot": -(2**31)},
+        {"module": "x" * 200},
+        {"module": ""},
+        {"capabilities": [f"c{i}" for i in range(subs._MAX_CAPS + 1)]},
+        {"capabilities": [1, None, ["rssi"]]},
+        {"capabilities": "rssi"},
+        {"capabilities": []},
+        {"v": 2},
+    ],
+)
+def test_parse_addr_rejects(overrides):
+    assert subs.parse_addr({**_sub(), **overrides}) is None
+
+
+def test_parse_addr_accepts_and_dedupes_caps():
+    assert subs.parse_addr(_sub(caps=("rssi", "rssi", "snr", "rssi"))) == (
+        0,
+        "fm0",
+        ["rssi", "snr"],
+    )
+    full = [f"c{i}" for i in range(subs._MAX_CAPS)]
+    assert subs.parse_addr(_sub(caps=full)) == (0, "fm0", full)
+    # non-str entries are skipped, valid ones survive
+    assert subs.parse_addr({**_sub(), "capabilities": [1, "rssi"]}) == (0, "fm0", ["rssi"])
+
+
+def test_duplicate_caps_collapse_to_one_row_and_one_relay():
+    station, op, _ = _setup()
+
+    async def scenario():
+        layer, spy = await _spy(station)
+        a = await _connect(op, station)
+        await a.send_json_to(_sub(caps=("rssi", "rssi", "rssi")))
+        assert await _next(layer, spy) == _expected_sub(["rssi"], 500)
+        assert await _nothing(layer, spy)
+        assert await sync_to_async(TelemetrySubscription.objects.count)() == 1
+        await a.disconnect()
+
+    asyncio.run(scenario())
 
 
 def test_string_slot_alias_cannot_unsubscribe_operator():

@@ -20,6 +20,7 @@ from apps.images.models import ImageRelease
 from apps.provisioning.models import ProvisioningJob
 
 from .forms import StationForm, StationLogEntryForm, StationPhotoForm, StationTagForm
+from .inventory import inventory_for_viewer
 from .models import Region, Station, StationAssignment, StationAuditLog, StationTag
 
 User = get_user_model()
@@ -106,6 +107,10 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             context["show_raw_private_key"] = True
             context["raw_private_key"] = raw_private_key
         user = self.request.user
+        inventory = getattr(self.object, "inventory", None)
+        context["inventory_data"] = inventory_for_viewer(
+            inventory.data if inventory else None, can(user, "stations", "manage")
+        )
         # Provisioning section (provisioning:manage)
         if can(user, "provisioning", "manage"):
             context["image_releases"] = ImageRelease.objects.order_by(

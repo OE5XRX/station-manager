@@ -279,8 +279,8 @@
         {% if station.inventory %}<span class="t-label">{% trans "Updated" %} {{ station.inventory.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
       </div>
       <div class="panel-body">
-        {% if station.inventory and station.inventory.data %}
-          {% with inv=station.inventory.data %}
+        {% if inventory_data %}
+          {% with inv=inventory_data %}
           <div class="grid grid-cols-3">
             {% if inv.cpu %}
             <div class="panel" style="background:var(--bg-0);">

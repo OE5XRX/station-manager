@@ -54,3 +54,36 @@ class TestStationDetailTopologyCard:
         body = response.content.decode()
         assert "franz" in body
         assert "hans" in body
+
+
+@pytest.mark.django_db
+class TestStationDetailInventoryNetwork:
+    IP, MAC = "10.77.66.55", "aa:bb:cc:dd:ee:ff"
+
+    def _station(self):
+        from apps.stations.models import StationInventory
+
+        s = Station.objects.create(name="OE5N", callsign="OE5N")
+        StationInventory.objects.create(
+            station=s,
+            data={
+                "cpu": {"model": "cm4"},
+                "network": {"interfaces": [{"ip_address": self.IP, "mac_address": self.MAC}]},
+            },
+        )
+        return s
+
+    def test_applicant_does_not_see_network(self, client):
+        s = self._station()
+        client.force_login(_user(User.MembershipLevel.APPLICANT, "appl"))
+        body = client.get(reverse("stations:station_detail", args=[s.pk])).content.decode()
+        assert "cm4" in body
+        assert self.IP not in body
+        assert self.MAC not in body
+
+    def test_staff_sees_network_and_model_unmutated(self, client):
+        s = self._station()
+        client.force_login(_user(User.MembershipLevel.ADMIN, "adm2"))
+        body = client.get(reverse("stations:station_detail", args=[s.pk])).content.decode()
+        assert self.IP in body
+        assert self.MAC in body
