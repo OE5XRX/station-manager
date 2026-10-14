@@ -28,13 +28,10 @@ User = get_user_model()
 
 
 def _get_client_ip(request):
-    """XFF-aware client IP — matches the pattern used in apps/sso/views.py
-    and apps/stations/views.py. Production runs behind cloudflared/Caddy,
-    so REMOTE_ADDR is the proxy. The first hop in X-Forwarded-For is the
-    operator's real address.
-    """
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
+    """Trusted client IP (proxy-set X-Real-IP, see apps.accounts.client_ip)."""
+    from apps.accounts.client_ip import client_ip
+
+    return client_ip(request)
 
 
 # Sequential ordering of membership levels. Index defines "up" (promote)

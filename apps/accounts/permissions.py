@@ -278,31 +278,16 @@ class AreaDenied(PermissionDenied):
 
 
 def _client_ip(request):
-    """Real client IP for web/API denials (first validated X-Forwarded-For hop).
+    """Trusted client IP for web/API denials (see apps.accounts.client_ip)."""
+    from apps.accounts.client_ip import client_ip
 
-    Daphne runs behind nginx without ``--proxy-headers``: REMOTE_ADDR is the
-    proxy. Reuses the validated helper of the other audit writers.
-    """
-    if request is None:
-        return None
-    from apps.api.audit import _client_ip as validated_client_ip
-
-    return validated_client_ip(request)
+    return client_ip(request)
 
 
 def _ws_client_ip(scope) -> str | None:
-    """WS counterpart of :func:`_client_ip`: same rules on ``scope["headers"]``."""
-    from apps.api.audit import _parse_ip
+    from apps.accounts.client_ip import ws_client_ip
 
-    for name, value in scope.get("headers") or ():
-        if name.lower() == b"x-forwarded-for":
-            first = value.decode("latin-1").split(",")[0].strip()
-            ip = _parse_ip(first)
-            if ip is not None:
-                return ip
-            break
-    client = scope.get("client") or (None, None)
-    return _parse_ip(client[0])
+    return ws_client_ip(scope)
 
 
 def log_denial(user, exc: AreaDenied, *, channel: str, path: str, method: str, ip=None) -> None:

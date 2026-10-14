@@ -257,16 +257,19 @@ class SsoOAuth2Validator(OAuth2Validator):
 
     @staticmethod
     def _extract_ip(request):
-        """Return the client IP from oauthlib request headers.
+        """Return the trusted client IP from oauthlib request headers.
 
         oauthlib's extract_headers copies Django's request.META keys
-        verbatim, so the production-reality keys are
-        HTTP_X_FORWARDED_FOR / HTTP_X_REAL_IP. Unit tests using
-        SimpleNamespace with the HTTP standard names (X-Forwarded-For,
-        X-Real-IP) are also supported via the second-arg fallback.
+        verbatim (HTTP_X_REAL_IP, REMOTE_ADDR); unit tests using the HTTP
+        standard name (X-Real-IP) are also supported. X-Forwarded-For is
+        client-controlled behind nginx and never used (see
+        apps.accounts.client_ip).
         """
+        from apps.accounts.client_ip import parse_ip
+
         headers = getattr(request, "headers", None) or {}
-        xff = headers.get("HTTP_X_FORWARDED_FOR") or headers.get("X-Forwarded-For")
-        if xff:
-            return xff.split(",")[0].strip()
-        return headers.get("HTTP_X_REAL_IP") or headers.get("X-Real-IP")
+        return (
+            parse_ip(headers.get("HTTP_X_REAL_IP"))
+            or parse_ip(headers.get("X-Real-IP"))
+            or parse_ip(headers.get("REMOTE_ADDR"))
+        )

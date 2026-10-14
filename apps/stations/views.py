@@ -26,8 +26,9 @@ User = get_user_model()
 
 
 def _get_client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
+    from apps.accounts.client_ip import client_ip
+
+    return client_ip(request)
 
 
 def _track_changes(old_instance, new_instance, fields):

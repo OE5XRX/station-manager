@@ -117,17 +117,20 @@ def test_ws_action_uses_fresh_user():
     asyncio.run(scenario())
 
 
-# --- denial audit records the real client IP behind the reverse proxy ---
+# --- denial audit records the proxy-set client IP (X-Real-IP), never client XFF ---
 
 
-def test_web_denial_ip_uses_x_forwarded_for():
+def test_web_denial_ip_uses_x_real_ip_not_xff():
     from django.test import RequestFactory
 
     from apps.accounts.permissions import AreaDenied, require
 
     user = _u("member")
     req = RequestFactory().get(
-        "/de/audit/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="203.0.113.7, 10.0.0.1"
+        "/de/audit/",
+        REMOTE_ADDR="127.0.0.1",
+        HTTP_X_REAL_IP="203.0.113.7",
+        HTTP_X_FORWARDED_FOR="6.6.6.6, 203.0.113.7",
     )
     req.user = user
     with pytest.raises(AreaDenied):
@@ -136,23 +139,30 @@ def test_web_denial_ip_uses_x_forwarded_for():
     assert row.ip_address == "203.0.113.7"
 
 
-def test_web_denial_ip_falls_back_on_garbage_xff():
+def test_web_denial_ip_spoofed_xff_ignored():
     from django.test import RequestFactory
 
     from apps.accounts.permissions import AreaDenied, require
 
     user = _u("member")
-    req = RequestFactory().get("/de/audit/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="evil")
+    req = RequestFactory().get(
+        "/de/audit/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="6.6.6.6"
+    )
     req.user = user
     with pytest.raises(AreaDenied):
         require(user, "audit", "view", request=req)
     assert AccountAuditLog.objects.get(event_type="permission_denied").ip_address == "127.0.0.1"
 
 
-def test_api_denial_ip_uses_x_forwarded_for():
+def test_api_denial_ip_uses_x_real_ip_not_xff():
     c = APIClient()
     c.force_authenticate(_u("staff"))
-    r = c.get("/t/img/available/", HTTP_X_FORWARDED_FOR="198.51.100.4", REMOTE_ADDR="127.0.0.1")
+    r = c.get(
+        "/t/img/available/",
+        HTTP_X_REAL_IP="198.51.100.4",
+        HTTP_X_FORWARDED_FOR="6.6.6.6",
+        REMOTE_ADDR="127.0.0.1",
+    )
     assert r.status_code == 403
     assert AccountAuditLog.objects.get(event_type="permission_denied").ip_address == "198.51.100.4"
 
@@ -173,13 +183,18 @@ def _ws_denied_ip(headers, client=("127.0.0.1", 4444)):
     return AccountAuditLog.objects.get(event_type="permission_denied").ip_address
 
 
-def test_ws_denial_ip_uses_x_forwarded_for():
-    assert _ws_denied_ip([(b"x-forwarded-for", b"192.0.2.55, 127.0.0.1")]) == "192.0.2.55"
+def test_ws_denial_ip_uses_x_real_ip_not_xff():
+    headers = [(b"x-forwarded-for", b"6.6.6.6, 127.0.0.1"), (b"x-real-ip", b"192.0.2.55")]
+    assert _ws_denied_ip(headers) == "192.0.2.55"
 
 
-def test_ws_denial_ip_falls_back_to_scope_client_on_garbage_xff():
-    assert _ws_denied_ip([(b"x-forwarded-for", b"not-an-ip")]) == "127.0.0.1"
+def test_ws_denial_ip_spoofed_xff_ignored():
+    assert _ws_denied_ip([(b"x-forwarded-for", b"6.6.6.6")]) == "127.0.0.1"
 
 
-def test_ws_denial_ip_without_xff_uses_scope_client():
+def test_ws_denial_ip_falls_back_to_scope_client_on_garbage_real_ip():
+    assert _ws_denied_ip([(b"x-real-ip", b"not-an-ip")]) == "127.0.0.1"
+
+
+def test_ws_denial_ip_without_header_uses_scope_client():
     assert _ws_denied_ip([]) == "127.0.0.1"

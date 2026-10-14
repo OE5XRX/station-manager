@@ -157,7 +157,7 @@ def _make_dot_tokens(user, app):
 def test_save_bearer_token_creates_token_session(db, user, app):
     _, rt = _make_dot_tokens(user, app)
     request = SimpleNamespace(
-        headers={"X-Forwarded-For": "89.207.4.5", "User-Agent": "TestUA/1.0"},
+        headers={"X-Real-IP": "89.207.4.5", "User-Agent": "TestUA/1.0"},
         refresh_token_instance=None,
     )
 
@@ -176,12 +176,13 @@ def test_save_bearer_token_creates_token_session(db, user, app):
 def test_save_bearer_token_extracts_http_prefixed_headers(db, user, app):
     """Regression test: oauthlib copies Django META verbatim, so the
     production-reality header keys are HTTP_USER_AGENT and
-    HTTP_X_FORWARDED_FOR. The validator must accept those, not just
-    the HTTP standard names."""
+    HTTP_X_REAL_IP. The validator must accept those, not just the HTTP
+    standard names. The client-controlled X-Forwarded-For is ignored."""
     _, rt = _make_dot_tokens(user, app)
     request = SimpleNamespace(
         headers={
-            "HTTP_X_FORWARDED_FOR": "89.207.4.5, 10.0.0.1",
+            "HTTP_X_FORWARDED_FOR": "6.6.6.6, 89.207.4.5",
+            "HTTP_X_REAL_IP": "89.207.4.5",
             "HTTP_USER_AGENT": "Mozilla/5.0 (X11; Linux)",
         },
         refresh_token_instance=None,
@@ -189,7 +190,7 @@ def test_save_bearer_token_extracts_http_prefixed_headers(db, user, app):
     validator = SsoOAuth2Validator()
     validator._record_token_session({"refresh_token": "rtok-456"}, request)
     s = TokenSession.objects.get(refresh_token=rt)
-    assert s.ip_address == "89.207.4.5", "First hop from XFF must win"
+    assert s.ip_address == "89.207.4.5", "proxy-set X-Real-IP must win over XFF"
     assert s.user_agent == "Mozilla/5.0 (X11; Linux)"
 
 

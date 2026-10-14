@@ -16,8 +16,9 @@ from .models import Deployment, DeploymentResult
 
 
 def _get_client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
+    from apps.accounts.client_ip import client_ip
+
+    return client_ip(request)
 
 
 class DeploymentListView(AreaPermissionMixin, ListView):
