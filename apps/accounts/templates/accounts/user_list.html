@@ -41,6 +41,8 @@
       {% trans "New user" %}
     </a>
   </div>
+  {% else %}
+  <div class="page-head-actions">{% include "includes/readonly_badge.html" %}</div>
   {% endif %}
 </div>
 

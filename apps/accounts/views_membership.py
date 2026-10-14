@@ -22,7 +22,7 @@ from django.utils.translation import gettext as _
 from django.views import View
 
 from apps.accounts.models import AccountAuditLog
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 
 User = get_user_model()
 
@@ -48,7 +48,10 @@ MEMBERSHIP_ORDER = [
 ]
 
 
-class MembershipSetView(AdminRequiredMixin, View):
+class MembershipSetView(AreaPermissionMixin, View):
+    area = "users"
+    verb = "manage"
+
     def post(self, request, pk):
         # 2b: soft-deleted users are off-limits to mutation endpoints.
         # The UI disables the membership card for them, but a hand-rolled

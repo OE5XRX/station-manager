@@ -1,13 +1,11 @@
 from django.contrib import messages
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 
-from apps.accounts.models import User
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.api.models import PersonalAccessToken
 
 
@@ -16,7 +14,10 @@ def api_tokens_tab_url(user):
     return reverse("accounts:user_detail", kwargs={"pk": user.pk}) + "#api-tokens"
 
 
-class ApiTokenListView(LoginRequiredMixin, View):
+class ApiTokenListView(AreaPermissionMixin, View):
+    area = "api_tokens"
+    verb = "use"
+
     def get(self, request):
         # Old standalone page; kept as a redirect so bookmarks keep working.
         return redirect(api_tokens_tab_url(request.user))
@@ -26,10 +27,6 @@ class ApiTokenListView(LoginRequiredMixin, View):
         return redirect(api_tokens_tab_url(request.user))
 
     def post(self, request):
-        # Mirror TopologyScopedPermission: applicants cannot use the API, so
-        # they must not mint tokens either.
-        if request.user.membership_level == User.MembershipLevel.APPLICANT:
-            raise PermissionDenied
         name = (request.POST.get("name") or "").strip()
         max_length = PersonalAccessToken._meta.get_field("name").max_length
         if not name:
@@ -51,7 +48,10 @@ class ApiTokenListView(LoginRequiredMixin, View):
         return response
 
 
-class ApiTokenRevokeView(LoginRequiredMixin, View):
+class ApiTokenRevokeView(AreaPermissionMixin, View):
+    area = "api_tokens"
+    verb = "use"
+
     def post(self, request, pk):
         token = get_object_or_404(PersonalAccessToken, pk=pk, user=request.user)
         if token.revoked_at is None:

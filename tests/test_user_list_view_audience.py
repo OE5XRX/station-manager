@@ -60,7 +60,8 @@ class TestUserListPermissions:
     def test_applicant_cannot_access(self, client, applicant):
         client.force_login(applicant)
         resp = client.get(self.url())
-        assert resp.status_code == 404
+        # area gate users.view (was 404 before unified permissions)
+        assert resp.status_code == 403
 
     def test_anonymous_redirected(self, client):
         resp = client.get(self.url())

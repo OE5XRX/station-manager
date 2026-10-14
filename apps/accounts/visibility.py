@@ -11,6 +11,8 @@ import enum
 
 from django.contrib.auth import get_user_model
 
+from apps.accounts.permissions import Level, can, level_of
+
 User = get_user_model()
 
 
@@ -42,20 +44,20 @@ def audience_for(viewer, target):
     """
     if not viewer.is_authenticated:
         return None
-    if viewer.is_admin:
+    if can(viewer, "users", "manage"):
         return Audience.ADMIN
     if viewer.pk == target.pk:
         # Self-Sicht. Applicant-Variante für die wenigen Stellen, wo
         # man unterscheiden muss (z.B. List-Filter, der Applicants
         # ausnimmt).
-        if viewer.membership_level == User.MembershipLevel.APPLICANT:
+        if level_of(viewer) == Level.APPLICANT:
             return Audience.APPLICANT
         return Audience.SELF
     # Cross-User-Sicht.
-    if viewer.membership_level == User.MembershipLevel.APPLICANT:
+    if level_of(viewer) == Level.APPLICANT:
         # Applicants sehen niemand außer sich selbst.
         return None
-    if target.membership_level == User.MembershipLevel.APPLICANT:
+    if Level.from_slug(target.membership_level) == Level.APPLICANT:
         # Member sehen Applicants nicht (Bewerber bleiben „außerhalb").
         return None
     return Audience.MEMBER
@@ -146,9 +148,19 @@ def directory_visible_fields(viewer, target):
 
 
 def user_can_view_directory(viewer):
-    """Gate for the UserListView. Applicants and Anonymous get 404."""
-    if not viewer.is_authenticated:
-        return False
-    if viewer.is_admin:
-        return True
-    return viewer.membership_level != User.MembershipLevel.APPLICANT
+    """Gate for the UserListView: ``users.view`` on the permission registry."""
+    return can(viewer, "users", "view")
+
+
+def directory_queryset(viewer):
+    """Active users the ``viewer`` may see in the member directory.
+
+    Shared by the user list and (later) the users API so both shape the
+    directory identically: non-soft-deleted users only (callers add ``is_active`` / lifecycle
+    buckets), and
+    Applicants are hidden unless the viewer can manage users.
+    """
+    qs = User.objects.active()
+    if not can(viewer, "users", "manage"):
+        qs = qs.exclude(membership_level=User.MembershipLevel.APPLICANT)
+    return qs

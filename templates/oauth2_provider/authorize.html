@@ -124,7 +124,7 @@
         <div class="stack-gap-2" style="min-width:0;">
           <span class="consent-identity-name">{{ user.username }}</span>
           <span class="t-mono-sm t-muted">
-            {% if user.is_admin %}{% trans "Admin" %} · {% endif %}OE5XRX
+            {{ user.get_membership_level_display }} · OE5XRX
           </span>
         </div>
       </div>

@@ -108,9 +108,9 @@
   </div>
   {% endif %}
 
-  {% if user.is_admin %}
+  {% if can.users.view %}
   <div class="nav-section">
-    <div class="nav-section-label">{% trans "Admin" %}</div>
+    <div class="nav-section-label">{% trans "Members" %}</div>
     <a href="{% url 'accounts:user_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'accounts' and 'user' in request.resolver_match.url_name %} active{% endif %}"
        {% if request.resolver_match.namespace == 'accounts' and 'user' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
@@ -119,6 +119,12 @@
       </svg>
       <span class="label">{% trans "Users" %}</span>
     </a>
+  </div>
+  {% endif %}
+
+  {% if user.is_admin %}
+  <div class="nav-section">
+    <div class="nav-section-label">{% trans "Admin" %}</div>
     <a href="{% url 'sso:dashboard' %}"
        class="nav-item{% if request.resolver_match.namespace == 'sso' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'sso' %}aria-current="page"{% endif %}>
