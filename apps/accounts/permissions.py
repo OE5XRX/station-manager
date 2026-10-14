@@ -274,7 +274,31 @@ class AreaDenied(PermissionDenied):
 
 
 def _client_ip(request):
-    return request.META.get("REMOTE_ADDR") if request is not None else None
+    """Real client IP for web/API denials (first validated X-Forwarded-For hop).
+
+    Daphne runs behind nginx without ``--proxy-headers``: REMOTE_ADDR is the
+    proxy. Reuses the validated helper of the other audit writers.
+    """
+    if request is None:
+        return None
+    from apps.api.audit import _client_ip as validated_client_ip
+
+    return validated_client_ip(request)
+
+
+def _ws_client_ip(scope) -> str | None:
+    """WS counterpart of :func:`_client_ip`: same rules on ``scope["headers"]``."""
+    from apps.api.audit import _parse_ip
+
+    for name, value in scope.get("headers") or ():
+        if name.lower() == b"x-forwarded-for":
+            first = value.decode("latin-1").split(",")[0].strip()
+            ip = _parse_ip(first)
+            if ip is not None:
+                return ip
+            break
+    client = scope.get("client") or (None, None)
+    return _parse_ip(client[0])
 
 
 def log_denial(user, exc: AreaDenied, *, channel: str, path: str, method: str, ip=None) -> None:
@@ -451,7 +475,6 @@ class AreaConsumerMixin:
         return await sync_to_async(_load_fresh_user)(getattr(user, "pk", None))
 
     def _check(self, user, area, verb):
-        client = self.scope.get("client") or (None, None)
         require(
             user,
             area,
@@ -459,7 +482,7 @@ class AreaConsumerMixin:
             channel="ws",
             path=self.scope.get("path", ""),
             method=f"WS {verb}",
-            ip=client[0],
+            ip=_ws_client_ip(self.scope),
         )
 
     async def area_allows(self, verb, *, area=None, request_id=None, notify=True) -> bool:

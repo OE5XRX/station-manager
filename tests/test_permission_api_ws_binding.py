@@ -115,3 +115,71 @@ def test_ws_action_uses_fresh_user():
         await comm.disconnect()
 
     asyncio.run(scenario())
+
+
+# --- denial audit records the real client IP behind the reverse proxy ---
+
+
+def test_web_denial_ip_uses_x_forwarded_for():
+    from django.test import RequestFactory
+
+    from apps.accounts.permissions import AreaDenied, require
+
+    user = _u("member")
+    req = RequestFactory().get(
+        "/de/audit/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="203.0.113.7, 10.0.0.1"
+    )
+    req.user = user
+    with pytest.raises(AreaDenied):
+        require(user, "audit", "view", request=req)
+    row = AccountAuditLog.objects.get(event_type="permission_denied")
+    assert row.ip_address == "203.0.113.7"
+
+
+def test_web_denial_ip_falls_back_on_garbage_xff():
+    from django.test import RequestFactory
+
+    from apps.accounts.permissions import AreaDenied, require
+
+    user = _u("member")
+    req = RequestFactory().get("/de/audit/", REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="evil")
+    req.user = user
+    with pytest.raises(AreaDenied):
+        require(user, "audit", "view", request=req)
+    assert AccountAuditLog.objects.get(event_type="permission_denied").ip_address == "127.0.0.1"
+
+
+def test_api_denial_ip_uses_x_forwarded_for():
+    c = APIClient()
+    c.force_authenticate(_u("staff"))
+    r = c.get("/t/img/available/", HTTP_X_FORWARDED_FOR="198.51.100.4", REMOTE_ADDR="127.0.0.1")
+    assert r.status_code == 403
+    assert AccountAuditLog.objects.get(event_type="permission_denied").ip_address == "198.51.100.4"
+
+
+def _ws_denied_ip(headers, client=("127.0.0.1", 4444)):
+    user = _u("applicant")  # applicant lacks control.use -> receive() denies
+
+    async def scenario():
+        comm = WebsocketCommunicator(DummyConsumer.as_asgi(), "/ws/t/", headers=headers)
+        comm.scope["user"] = user
+        comm.scope["client"] = client
+        await comm.connect()
+        await comm.send_to(text_data="{}")
+        await comm.receive_from()
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+    return AccountAuditLog.objects.get(event_type="permission_denied").ip_address
+
+
+def test_ws_denial_ip_uses_x_forwarded_for():
+    assert _ws_denied_ip([(b"x-forwarded-for", b"192.0.2.55, 127.0.0.1")]) == "192.0.2.55"
+
+
+def test_ws_denial_ip_falls_back_to_scope_client_on_garbage_xff():
+    assert _ws_denied_ip([(b"x-forwarded-for", b"not-an-ip")]) == "127.0.0.1"
+
+
+def test_ws_denial_ip_without_xff_uses_scope_client():
+    assert _ws_denied_ip([]) == "127.0.0.1"
