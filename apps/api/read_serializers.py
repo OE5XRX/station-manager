@@ -6,6 +6,7 @@ No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 from rest_framework import serializers
 
 from apps.accounts.models import User
+from apps.accounts.permissions import can
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
@@ -25,6 +26,17 @@ from apps.stations.models import (
 )
 
 
+def _can_manage_stations(serializer) -> bool:
+    """``stations.manage`` for the requesting user; fail closed without a request.
+
+    Mirrors the UI, which shows station IPs and network inventory only to
+    station managers (Staff).
+    """
+    request = serializer.context.get("request")
+    user = getattr(request, "user", None)
+    return user is not None and can(user, "stations", "manage")
+
+
 class RegionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Region
@@ -39,6 +51,14 @@ class StationTagSerializer(serializers.ModelSerializer):
 
 class StationSerializer(serializers.ModelSerializer):
     is_online = serializers.BooleanField(read_only=True)
+    # Not ``read_only`` so the OpenAPI response schema marks it optional: it is
+    # omitted for callers without ``stations.manage`` (read-only viewset, never
+    # used for input).
+    last_ip_address = serializers.IPAddressField(
+        required=False,
+        allow_null=True,
+        help_text="Only present for callers with stations.manage (Staff).",
+    )
 
     class Meta:
         model = Station
@@ -68,6 +88,12 @@ class StationSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["tx_audio_ceiling_dbfs"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not _can_manage_stations(self):
+            data.pop("last_ip_address", None)
+        return data
 
 
 class StationTelemetrySerializer(serializers.ModelSerializer):
@@ -100,6 +126,15 @@ class StationInventorySerializer(serializers.ModelSerializer):
     class Meta:
         model = StationInventory
         fields = ["id", "station", "data", "updated_at"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The agent's inventory carries ``network`` (interface IPs + MACs); the
+        # UI never shows it to viewers, so only stations.manage gets it.
+        inv = data.get("data")
+        if isinstance(inv, dict) and "network" in inv and not _can_manage_stations(self):
+            data["data"] = {k: v for k, v in inv.items() if k != "network"}
+        return data
 
 
 class StationLogEntrySerializer(serializers.ModelSerializer):

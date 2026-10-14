@@ -23,7 +23,7 @@ from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateMod
 from rest_framework.response import Response
 
 from apps.accounts.models import AccountAuditLog, User
-from apps.accounts.permissions import AreaPermission, require
+from apps.accounts.permissions import require
 from apps.api import read_serializers, read_views
 from apps.api import write_scoping as ws
 from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
@@ -76,11 +76,11 @@ class AreaWriteViewSet:
 
     Place BEFORE the read viewset in the MRO. Concrete viewsets add the
     CreateModelMixin/UpdateModelMixin/DestroyModelMixin they actually expose
-    and override perform_* as needed. Authorization is ``AreaPermission``
-    (writes need ``<area>.manage``), checked before the serializer runs.
+    and override perform_* as needed. Authorization is the read base's
+    ``AreaPermission`` (writes need ``<area>.manage``), checked before the
+    serializer runs.
     """
 
-    permission_classes = [AreaPermission]
     write_serializer_class = None
 
     def get_serializer_class(self):

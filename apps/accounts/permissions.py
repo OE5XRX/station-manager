@@ -410,9 +410,15 @@ class AreaPermission(BasePermission):
         user = getattr(request, "user", None)
         if not getattr(user, "is_authenticated", False) or not hasattr(user, "membership_level"):
             return False
-        require(
-            user, view.area, resolve_verb(view, request.method), request=request, channel="api"
-        )
+        verb = resolve_verb(view, request.method)
+        # DRF's OPTIONS metadata (SimpleMetadata.determine_actions) clones the
+        # request as POST/PUT and re-runs check_permissions to decide which
+        # actions to advertise. That probe is not a real attempt: answer it
+        # silently instead of writing a false PERMISSION_DENIED audit row.
+        original = getattr(request, "_request", None)
+        if getattr(original, "method", "").upper() == "OPTIONS" and request.method != "OPTIONS":
+            return can(user, view.area, verb)
+        require(user, view.area, verb, request=request, channel="api")
         return True
 
     def has_object_permission(self, request, view, obj):

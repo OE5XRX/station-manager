@@ -103,3 +103,84 @@ def test_staff_can_delete_station(station):
 def test_applicant_cannot_write_station(station):
     r = _c("applicant").patch(f"/api/v1/stations/{station.pk}/", {"name": "x"}, format="json")
     assert r.status_code == 403 and r.json()["required"] == "stations.manage"
+
+
+@pytest.mark.parametrize("level", ["applicant", "member"])
+def test_viewer_gets_no_station_ip(station, level):
+    station.last_ip_address = "203.0.113.77"
+    station.save(update_fields=["last_ip_address"])
+    c = _c(level)
+    rows = c.get("/api/v1/stations/").json()["results"]
+    assert rows and all("last_ip_address" not in row for row in rows)
+    detail = c.get(f"/api/v1/stations/{station.pk}/").json()
+    assert "last_ip_address" not in detail
+    assert "203.0.113.77" not in c.get(f"/api/v1/stations/{station.pk}/").content.decode()
+
+
+@pytest.mark.parametrize("level", ["staff", "admin"])
+def test_station_manager_gets_station_ip(station, level):
+    station.last_ip_address = "203.0.113.77"
+    station.save(update_fields=["last_ip_address"])
+    c = _c(level)
+    assert c.get(f"/api/v1/stations/{station.pk}/").json()["last_ip_address"] == "203.0.113.77"
+    rows = c.get("/api/v1/stations/").json()["results"]
+    assert rows[0]["last_ip_address"] == "203.0.113.77"
+
+
+def _inventory(station):
+    from apps.stations.models import StationInventory
+
+    return StationInventory.objects.create(
+        station=station,
+        data={
+            "cpu": {"cores": 4},
+            "network": [{"interface": "eth0", "ip_address": "10.9.8.7", "mac_address": "aa:bb"}],
+        },
+    )
+
+
+def test_viewer_inventory_has_no_network_block(station):
+    _inventory(station)
+    r = _c("member").get(f"/api/v1/stations/{station.pk}/inventory/")
+    assert r.status_code == 200
+    assert r.json()["data"] == {"cpu": {"cores": 4}}
+    assert "10.9.8.7" not in r.content.decode()
+
+
+def test_staff_inventory_includes_network_block(station):
+    _inventory(station)
+    r = _c("staff").get(f"/api/v1/stations/{station.pk}/inventory/")
+    assert r.json()["data"]["network"][0]["ip_address"] == "10.9.8.7"
+
+
+def test_station_serializer_without_request_fails_closed(station):
+    from apps.api.read_serializers import StationInventorySerializer, StationSerializer
+
+    station.last_ip_address = "203.0.113.77"
+    station.save(update_fields=["last_ip_address"])
+    assert "last_ip_address" not in StationSerializer(station).data
+    assert "network" not in StationInventorySerializer(_inventory(station)).data["data"]
+
+
+def test_schema_documents_optional_last_ip_address():
+    from drf_spectacular.generators import SchemaGenerator
+
+    schema = SchemaGenerator().get_schema(request=None, public=True)
+    station = schema["components"]["schemas"]["Station"]
+    assert "last_ip_address" in station["properties"]
+    assert "last_ip_address" not in station.get("required", [])
+
+
+def test_options_metadata_probe_does_not_audit_denial():
+    from apps.accounts.models import AccountAuditLog
+
+    r = _c("member").options("/api/v1/stations/")
+    assert r.status_code == 200
+    assert "POST" not in r.json().get("actions", {})
+    assert not AccountAuditLog.objects.filter(event_type="permission_denied").exists()
+
+
+def test_options_metadata_advertises_post_for_staff():
+    r = _c("staff").options("/api/v1/stations/")
+    assert r.status_code == 200
+    assert "POST" in r.json().get("actions", {})
