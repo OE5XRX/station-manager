@@ -14,6 +14,7 @@ import pytest
 from asgiref.sync import sync_to_async
 
 from apps.accounts.models import AccountAuditLog, User
+from apps.audio import gate as audio_gate
 from apps.control import lock as lockmod
 from apps.stations.models import (
     Region,
@@ -191,6 +192,8 @@ def test_region_manager_member_can_preempt_plain_member_cannot():
         await pc.send_json_to({"type": "lock_preempt"})
         frame = await _drain_until(pc, "error")
         assert frame["code"] == "forbidden"
+        assert "Übernehmen der Steuerung" in frame["message"]
+        assert "kalibrieren" not in frame["message"]
         await pc.disconnect()
 
         mc = _browser_comm(manager, station.id)
@@ -232,6 +235,79 @@ def test_applicant_station_admin_cannot_preempt():
 
     asyncio.run(scenario())
     assert lockmod.get_or_create_lock(station).holder_id == holder.id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_demoted_holder_get_command_forbidden_and_lock_revoked(control_agent_auth):
+    """op:get touches the lock too: a demoted holder must not keep it alive with reads.
+    The lock is released and PTT/TX route are cleared (TX path closed)."""
+
+    station = Station.objects.create(name="pc7", status="online")
+    member = _user("pc-mem7", User.MembershipLevel.MEMBER)
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        comm = _browser_comm(member, station.id)
+        assert (await comm.connect())[0] is True
+        await _acquire(comm)
+        await sync_to_async(audio_gate.set_ptt)(station, slot=0, module="fm0")
+        await sync_to_async(audio_gate.set_tx_route)(station, slot=0, module="fm0")
+        await _set_level(member, "applicant")
+        await comm.send_json_to(_cmd("frequency", None, op="get", rid="g1"))
+        frame = await _drain_until(comm, "error")
+        assert frame["code"] == "forbidden" and frame["request_id"] == "g1"
+        lost = await _drain_until(comm, "lock")
+        assert lost["state"] == "free" and lost["you_hold"] is False
+        assert await agent.receive_nothing(timeout=0.3)  # the get was not relayed
+        await comm.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+    lk = lockmod.get_or_create_lock(station)
+    assert lk.holder_id is None and lk.last_activity is None
+    state = audio_gate.get_wire_state(station)
+    assert state["ptt_active"] is False
+    assert state["tx_slot"] is None and state["tx_module"] == ""
+    assert StationAuditLog.objects.filter(
+        station=station, message__contains="lost control (requires control.use)"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_demoted_holder_reconnecting_within_grace_does_not_get_lock_back():
+    station = Station.objects.create(name="pc8", status="online")
+    member = _user("pc-mem8", User.MembershipLevel.MEMBER)
+    lockmod.acquire(station, member)
+    lockmod.holder_disconnected(station, member, grace_seconds=60)
+    User.objects.filter(pk=member.pk).update(membership_level=User.MembershipLevel.APPLICANT)
+
+    async def scenario():
+        comm = _browser_comm(member, station.id)
+        assert (await comm.connect())[0] is True
+        lock = await _drain_until(comm, "lock")
+        assert lock["state"] == "free" and lock["you_hold"] is False
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+    assert lockmod.get_or_create_lock(station).holder_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_member_reconnecting_within_grace_keeps_lock():
+    station = Station.objects.create(name="pc9", status="online")
+    member = _user("pc-mem9", User.MembershipLevel.MEMBER)
+    lockmod.acquire(station, member)
+    lockmod.holder_disconnected(station, member, grace_seconds=60)
+
+    async def scenario():
+        comm = _browser_comm(member, station.id)
+        assert (await comm.connect())[0] is True
+        lock = await _drain_until(comm, "lock")
+        assert lock["you_hold"] is True
+        await comm.disconnect()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.django_db

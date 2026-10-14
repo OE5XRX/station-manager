@@ -6,13 +6,14 @@ import logging
 import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils.translation import gettext
 
 from apps.accounts.permissions import (
     AreaConsumerMixin,
-    AreaDenied,
+    can,
     can_override_station,
-    level_of,
-    ws_denied_frame,
+    level_label,
+    required_level,
 )
 
 from . import agent_presence, capability_policy, constants, lock, persistence, registry
@@ -511,8 +512,13 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        # Reconnect within grace keeps a held lock.
-        await self._holder_reconnected(station)
+        # Reconnect within grace keeps a held lock — but only while the user may still
+        # operate (connect itself needs only control.view). A holder demoted while
+        # disconnected loses the lock here instead of getting it back.
+        if await self._fresh_can_use():
+            await self._holder_reconnected(station)
+        else:
+            await self._revoke_if_holder(station)
         # Initial snapshot + lock status to just this browser, as TWO frames.
         # The initial lock uses the IDENTICAL {type:"lock",...} shape as every
         # later lock mutation, so D5 (the UI) wires a single lock handler and
@@ -566,11 +572,15 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return
 
         # Operating actions re-check control.use with a fresh user on every frame.
+        # EVERY command counts (incl. op:get): any command touches the lock, so a
+        # demoted holder could otherwise keep it alive forever with reads.
         # subscribe/unsubscribe and lock_release stay open to every connected viewer
         # (release only ever affects the caller's own lock).
-        needs_use = mtype in _USE_ACTIONS or (mtype == "command" and msg.get("op") != "get")
-        if needs_use and not await self.area_allows("use", request_id=msg.get("request_id")):
-            return
+        if mtype in _USE_ACTIONS or mtype == "command":
+            if not await self.area_allows("use", request_id=msg.get("request_id")):
+                # A holder who lost control.use must not keep the lock (and TX path).
+                await self._revoke_if_holder(station)
+                return
 
         if mtype == "command":
             await self._handle_command(station, msg)
@@ -764,6 +774,22 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             )
         await self._broadcast_lock(station)
 
+    async def _revoke_if_holder(self, station):
+        """Release the caller's lock after they lost control.use; kill PTT + TX route.
+
+        No-op unless the caller is the current holder."""
+        if not await self._release(station):
+            return
+        await self._audit(
+            station,
+            "control_lock_released",
+            f"{self.user.username} lost control (requires control.use)",
+        )
+        await self._audio_clear_ptt(station)
+        await self._audio_clear_tx_route(station)
+        await self._bridge_gate(station)
+        await self._broadcast_lock(station)
+
     async def _lock_release(self, station):
         released = await self._release(station)
         if released:
@@ -801,11 +827,15 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     async def _lock_preempt(self, station):
         if not await self._can_override(station):
-            # Override is an assignment rule, not an area right: plain station-scoped
-            # denial, no PERMISSION_DENIED audit (require() is deliberately not used).
-            user = await self.fresh_user()
-            exc = AreaDenied("control", "manage", level_of(user))
-            await self.send(text_data=json.dumps(ws_denied_frame(exc, None)))
+            # Override is an assignment rule, not an area right: same forbidden frame
+            # shape, but no PERMISSION_DENIED audit (require() is deliberately not used).
+            message = gettext(
+                "Keine Berechtigung — Übernehmen der Steuerung erfordert %(manage)s oder "
+                "eine Station-Admin-/Region-Manager-Zuweisung (mit Bedien-Recht)."
+            ) % {"manage": level_label(required_level("control", "manage"))}
+            await self.send(
+                text_data=json.dumps({"type": "error", "code": "forbidden", "message": message})
+            )
             return
         await self._preempt(station)
         await self._audit(
@@ -901,6 +931,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return Station.objects.get(pk=self.station_id)
         except Station.DoesNotExist:
             return None
+
+    @database_sync_to_async
+    def _fresh_can_use(self):
+        """control.use for the fresh DB row — a silent check (no denial audit)."""
+        user = _fresh_user(self.user)
+        return user is not None and can(user, "control", "use")
 
     @database_sync_to_async
     def _can_override(self, station):

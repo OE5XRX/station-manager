@@ -118,4 +118,26 @@ ok("legacy reason frame still sets connError", () => {
   assert.equal(c.connError, "Station not found");
 });
 
+ok("a successful (re)connect clears a stale denial", () => {
+  const { c } = make(false);
+  c._onError({ type: "error", code: "forbidden", message: "Old denial" });
+  clearTimeout(c._denyTimer);
+  const handlers = {};
+  globalThis.location = { protocol: "http:", host: "x" };
+  globalThis.WebSocket = function () {
+    this.addEventListener = (t, fn) => {
+      handlers[t] = fn;
+    };
+  };
+  c._subscribeAll = () => {};
+  c._publishControlStore = () => {};
+  c._connect();
+  handlers.open();
+  assert.equal(c._lastDenial, null);
+  // A later 4403 without a fresh denial frame falls back to the generic text.
+  c._closeCode = 4403;
+  c._scheduleReconnect();
+  assert.notEqual(c.connError, "Old denial");
+});
+
 console.log("\n" + passed + " assertions passed");

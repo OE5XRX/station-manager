@@ -194,6 +194,7 @@
           self._retry = 0;
           self.conn = "open";
           self.agentOffline = false;
+          self._lastDenial = null; // a stale action denial must not explain a later 4403
           self._subscribeAll();
           self._publishControlStore();
         });
