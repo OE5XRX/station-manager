@@ -214,3 +214,23 @@ def test_demoted_admin_idle_terminal_closed_by_keepalive(monkeypatch):
         await comm.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rejected_terminal_client_cannot_close_other_users_shell():
+    station = Station.objects.create(name="t-noclose", status="online")
+    staff = _user("term-staff2", STAFF)
+
+    async def scenario():
+        layer = get_channel_layer()
+        spy = "agent-spy-rejected"
+        await layer.group_add(f"terminal_{station.id}_agent", spy)
+        comm = _comm(f"/ws/terminal/{station.id}/", staff)
+        assert (await comm.connect())[0] is True
+        await comm.send_json_to({"type": "input", "data": "x"})
+        await comm.send_json_to({"type": "close"})
+        await comm.disconnect()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(layer.receive(spy), timeout=0.3)
+
+    asyncio.run(scenario())

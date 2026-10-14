@@ -31,6 +31,7 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
         self.group_name = f"terminal_{self.station_id}"
         self.session = None
+        self.rejected = False
         self.keepalive_task = None
 
         user = self.scope.get("user")
@@ -83,6 +84,7 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     async def _reject(self, code, reason):
         """Accept-then-error reject so the browser shows a real reason."""
+        self.rejected = True
         try:
             await self.send(
                 text_data=json.dumps({"type": "error", "reason": reason, "code": code})
@@ -121,6 +123,10 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     async def receive(self, text_data=None, bytes_data=None):
         if text_data is None:
+            return
+        # No frame is processed without an owned, not-yet-rejected session: a
+        # rejected client must never reach (or kill) another user's shell.
+        if self.session is None or self.rejected:
             return
         try:
             payload = json.loads(text_data)
@@ -163,6 +169,7 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         """Fresh terminal.use re-check; on deny tear the shell down and close 4403."""
         if await self.area_allows("use", notify=True):
             return True
+        self.rejected = True
         # Same teardown as an explicit close: the agent kills the shell. disconnect()
         # then closes the session tracking row.
         await self.channel_layer.group_send(
