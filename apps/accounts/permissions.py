@@ -424,12 +424,15 @@ class AreaPermission(BasePermission):
         if not getattr(user, "is_authenticated", False) or not hasattr(user, "membership_level"):
             return False
         verb = resolve_verb(view, request.method)
-        # DRF's OPTIONS metadata (SimpleMetadata.determine_actions) clones the
-        # request as POST/PUT and re-runs check_permissions to decide which
-        # actions to advertise. That probe is not a real attempt: answer it
-        # silently instead of writing a false PERMISSION_DENIED audit row.
+        # DRF probes other methods via ``override_method``/``clone_request``:
+        # OPTIONS metadata (SimpleMetadata.determine_actions) and the browsable
+        # API's form rendering (BrowsableAPIRenderer.show_form_for_method) both
+        # clone the request as POST/PUT and re-run check_permissions, while the
+        # underlying HttpRequest keeps the real method. Such a probe is not a
+        # real attempt: answer it silently instead of raising (-> 403 on a
+        # plain GET) and writing a false PERMISSION_DENIED audit row.
         original = getattr(request, "_request", None)
-        if getattr(original, "method", "").upper() == "OPTIONS" and request.method != "OPTIONS":
+        if original is not None and request.method.upper() != original.method.upper():
             return can(user, view.area, verb)
         require(user, view.area, verb, request=request, channel="api")
         return True

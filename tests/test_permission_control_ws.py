@@ -23,8 +23,12 @@ from apps.stations.models import (
     StationAssignment,
     StationAuditLog,
 )
+from tests.test_audio_consumer import _agent_comm as _audio_agent_comm
 from tests.test_audio_consumer import _browser as _audio_browser
+from tests.test_audio_consumer import _drain_bytes_until as _audio_drain_bytes_until
 from tests.test_audio_consumer import _drain_until as _audio_drain_until
+from tests.test_audio_consumer import _load_bin as _audio_load_bin
+from tests.test_audio_consumer import _load_json as _audio_load_json
 from tests.test_control_consumer_lock import _browser_comm, _drain_until
 from tests.test_control_write_role_enforcement import _agent_comm, _cmd
 
@@ -275,6 +279,39 @@ def test_demoted_holder_get_command_forbidden_and_lock_revoked(control_agent_aut
 
 
 @pytest.mark.django_db(transaction=True)
+def test_silent_demoted_holder_loses_lock_on_periodic_recheck(monkeypatch):
+    """A demoted holder who sends no frames must not keep the lock (and TX path)
+    until the idle sweep: the periodic re-check revokes it."""
+    from apps.accounts import permissions
+
+    monkeypatch.setattr(permissions, "PERIODIC_RECHECK_SECONDS", 0.05)
+    station = Station.objects.create(name="pc10", status="online")
+    member = _user("pc-mem10", User.MembershipLevel.MEMBER)
+
+    async def scenario():
+        comm = _browser_comm(member, station.id)
+        assert (await comm.connect())[0] is True
+        await _acquire(comm)
+        await sync_to_async(audio_gate.set_ptt)(station, slot=0, module="fm0")
+        await sync_to_async(audio_gate.set_tx_route)(station, slot=0, module="fm0")
+        await _set_level(member, "applicant")
+        # No frame sent: only the periodic re-check can notice the demotion.
+        lost = await _drain_until(comm, "lock")
+        assert lost["state"] == "free" and lost["you_hold"] is False
+        # Still a viewer (control.view): the feed stays open.
+        assert await comm.receive_nothing(timeout=0.2)
+        await comm.disconnect()
+
+    asyncio.run(scenario())
+    assert lockmod.get_or_create_lock(station).holder_id is None
+    state = audio_gate.get_wire_state(station)
+    assert state["ptt_active"] is False and state["tx_slot"] is None
+    assert StationAuditLog.objects.filter(
+        station=station, message__contains="lost control (requires control.use)"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_demoted_holder_reconnecting_within_grace_does_not_get_lock_back():
     station = Station.objects.create(name="pc8", status="online")
     member = _user("pc-mem8", User.MembershipLevel.MEMBER)
@@ -327,20 +364,32 @@ def test_transfer_target_needs_control_use():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_applicant_hears_rx_but_mic_open_denied():
+def test_applicant_hears_rx_but_mic_open_denied(audio_agent_auth):
     station = Station.objects.create(name="pa1", status="online")
     applicant = _user("pa-app1", User.MembershipLevel.APPLICANT)
+    media_frame = _audio_load_bin("media_frame_slot0rx.bin")
 
     async def scenario():
+        agent = _audio_agent_comm(station.id)
+        assert (await agent.connect())[0] is True
         comm = _audio_browser(applicant, station.id)  # accepted
         assert (await comm.connect())[0] is True
-        # RX: subscribing a stream works (no error frame, no close).
-        await comm.send_json_to({"v": 1, "type": "subscribe", "stream_ids": ["fm0.rx"]})
-        assert await comm.receive_nothing(timeout=0.3)
+        await asyncio.sleep(0.1)  # let the browser join the broadcast group
+        await agent.send_json_to(_audio_load_json("advertise.json"))
+        await _audio_drain_until(comm, "streams")
+        # RX: the applicant's subscribe creates real demand at the agent ...
+        await comm.send_json_to({"v": 1, "type": "subscribe", "stream_ids": ["slot0.rx"]})
+        sub = await asyncio.wait_for(agent.receive_json_from(), timeout=2.0)
+        assert sub["type"] == "source_subscribe" and sub["stream_id"] == "slot0.rx"
+        await asyncio.sleep(0.1)  # subscribe handler finishes its group_add
+        # ... and RX media is delivered to them byte-identically.
+        await agent.send_to(bytes_data=media_frame)
+        assert await _audio_drain_bytes_until(comm) == media_frame
         await comm.send_json_to({"type": "mic_open"})
         frame = await _audio_drain_until(comm, "error")
         assert frame["code"] == "forbidden"
         await comm.disconnect()
+        await agent.disconnect()
 
     asyncio.run(scenario())
 

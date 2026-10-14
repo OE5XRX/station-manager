@@ -329,3 +329,18 @@ def test_admin_api_sees_full_date_joined():
     peer = User.objects.create_user(username="year-peer2", password="x", membership_level="member")
     body = _c("admin").get(f"/api/v1/users/{peer.pk}/").json()
     assert body["date_joined"] and body["date_joined_year"] == peer.date_joined.year
+
+
+def test_browsable_api_form_probe_does_not_deny_or_audit_member():
+    """BrowsableAPIRenderer probes POST via override_method on a plain GET."""
+    from apps.accounts.models import AccountAuditLog
+
+    r = _c("member").get("/api/v1/stations/", HTTP_ACCEPT="text/html")
+    assert r.status_code == 200
+    assert not AccountAuditLog.objects.filter(event_type="permission_denied").exists()
+
+
+def test_browsable_api_shows_post_form_for_staff():
+    r = _c("staff").get("/api/v1/stations/", HTTP_ACCEPT="text/html")
+    assert r.status_code == 200
+    assert 'id="post-object-form"' in r.content.decode()

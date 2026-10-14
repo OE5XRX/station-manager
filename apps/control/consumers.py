@@ -824,11 +824,16 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._relay(frame)
 
     async def on_periodic_recheck(self, user):
-        """Still allowed: stamp this connection's telemetry rows as live. A failed
-        stamp must not count as a failed permission re-check (would close the feed)."""
+        """Still allowed to watch (control.view). A holder who lost control.use is
+        revoked here too: a silent holder sends no frames, so the per-frame check
+        alone would let them keep the lock until the idle sweep. Then stamp this
+        connection's telemetry rows as live; a failed stamp must not count as a
+        failed permission re-check (would close the feed)."""
         station = self.station
         if station is None:
             return
+        if not can(user, "control", "use"):
+            await self._revoke_if_holder(station)
         try:
             await database_sync_to_async(telemetry_subscriptions.touch)(station, self.channel_name)
         except Exception:

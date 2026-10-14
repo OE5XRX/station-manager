@@ -64,6 +64,26 @@ def test_dedupe_is_per_path_and_verb(member):
     assert AccountAuditLog.objects.filter(event_type=DENIED).count() == 2
 
 
+def test_dedupe_is_per_user(member):
+    other = User.objects.create_user(username="mem2", password="x", membership_level="member")
+    for user in (member, other):
+        with pytest.raises(AreaDenied):
+            require(user, "audit", "view", path="/de/audit/", method="GET")
+    rows = AccountAuditLog.objects.filter(event_type=DENIED)
+    assert rows.count() == 2
+    assert {r.actor_id for r in rows} == {member.pk, other.pk}
+    assert all(r.details["count"] == 1 for r in rows)
+
+
+def test_dedupe_is_per_verb_on_same_path(member):
+    for verb in ("view", "manage"):
+        with pytest.raises(AreaDenied):
+            require(member, "audit", verb, path="/de/audit/", method="GET")
+    rows = AccountAuditLog.objects.filter(event_type=DENIED)
+    assert sorted(r.details["verb"] for r in rows) == ["manage", "view"]
+    assert all(r.details["count"] == 1 for r in rows)
+
+
 def test_dedupe_survives_deleted_row(member):
     with pytest.raises(AreaDenied):
         require(member, "audit", "view", path="/x/", method="GET")

@@ -268,6 +268,29 @@ def test_toggle_flood_is_throttled(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_frame_budget_window_expires(monkeypatch):
+    """The flood guard is a sliding window: once old frames age out, a fresh
+    subscribe is processed again (the budget is not a lifetime cap)."""
+    monkeypatch.setattr(subs, "FRAME_BUDGET", 2)
+    monkeypatch.setattr(subs, "FRAME_WINDOW_SECONDS", 0.2)
+    station, _, viewer = _setup()
+
+    async def scenario():
+        layer, spy = await _spy(station)
+        b = await _connect(viewer, station)
+        await b.send_json_to(_sub())
+        assert await _next(layer, spy) == _expected_sub(["rssi"], 500)
+        await b.send_json_to(_unsub())
+        assert await _next(layer, spy) == _unsub()
+        await b.send_json_to(_sub())  # budget exhausted: dropped
+        assert await _nothing(layer, spy)  # also lets the window expire (0.3 s)
+        await b.send_json_to(_sub())
+        assert await _next(layer, spy) == _expected_sub(["rssi"], 500)
+        await b.disconnect()
+
+    asyncio.run(scenario())
+
+
 def test_malformed_subscribe_not_relayed():
     station, op, _ = _setup()
 
@@ -452,6 +475,36 @@ def test_periodic_recheck_restamps_open_connection(monkeypatch):
         await sync_to_async(_age)(module="fm0")
         await asyncio.sleep(0.3)
         assert await sync_to_async(subs.purge_stale)(station) == []
+        await b.disconnect()
+
+    asyncio.run(scenario())
+
+
+def test_failing_liveness_stamp_does_not_close_feed(monkeypatch):
+    """touch() is bookkeeping, not a permission check: it failing on every tick
+    must not count toward RECHECK_MAX_FAILURES and close the WS."""
+    from apps.accounts import permissions
+
+    monkeypatch.setattr(permissions, "PERIODIC_RECHECK_SECONDS", 0.05)
+    calls = []
+
+    def boom(*args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("stamp failed")
+
+    monkeypatch.setattr(subs, "touch", boom)
+    station, _, viewer = _setup()
+
+    async def scenario():
+        b = await _connect(viewer, station)
+        await b.receive_json_from()  # inventory
+        await b.receive_json_from()  # lock
+        # Many ticks, well past RECHECK_MAX_FAILURES: no error frame, no close.
+        assert await b.receive_nothing(timeout=0.4)
+        assert len(calls) > permissions.RECHECK_MAX_FAILURES
+        # Still a working feed (subscribe() itself re-stamps, so probe via the lock).
+        await b.send_json_to({"type": "lock_release"})
+        assert (await b.receive_json_from())["type"] == "lock"
         await b.disconnect()
 
     asyncio.run(scenario())
