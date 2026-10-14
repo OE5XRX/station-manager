@@ -184,8 +184,6 @@ def _delete_blockers(release: ImageRelease) -> list[str]:
 
 
 class ImageArchiveView(AreaPermissionMixin, View):
-    area = "images"
-    verb = "manage"
     """Soft-delete a release. Always succeeds (vs hard delete which
     PROTECT-FKs from Deployment/ProvisioningJob can block).
 
@@ -194,6 +192,9 @@ class ImageArchiveView(AreaPermissionMixin, View):
     Archive button for active rows, so in practice this is the
     active-row entry path.
     """
+
+    area = "images"
+    verb = "manage"
 
     def post(self, request, pk):
         release = get_object_or_404(ImageRelease.all_objects, pk=pk)
@@ -206,10 +207,11 @@ class ImageArchiveView(AreaPermissionMixin, View):
 
 
 class ImageRestoreView(AreaPermissionMixin, View):
-    area = "images"
-    verb = "manage"
     """Undo a previous archive. Operates on ``all_objects`` because
     archived rows are hidden from the default manager."""
+
+    area = "images"
+    verb = "manage"
 
     def post(self, request, pk):
         release = get_object_or_404(ImageRelease.all_objects, pk=pk)

@@ -1,4 +1,3 @@
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect
@@ -7,6 +6,7 @@ from django.urls import reverse
 from django.views import View
 from django.views.generic import DetailView, ListView
 
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.images import github_releases
 from apps.stations.models import Station
 
@@ -54,7 +54,8 @@ def operator_lifecycle_choices(*, has_open_assignment):
     return choices
 
 
-class ModuleListView(LoginRequiredMixin, ListView):
+class ModuleListView(AreaPermissionMixin, ListView):
+    area = "modules"
     model = Module
     template_name = "module_firmware/module_list.html"
     context_object_name = "modules"
@@ -116,7 +117,8 @@ class ModuleListView(LoginRequiredMixin, ListView):
         return ctx
 
 
-class ModuleDetailView(LoginRequiredMixin, DetailView):
+class ModuleDetailView(AreaPermissionMixin, DetailView):
+    area = "modules"
     model = Module
     template_name = "module_firmware/module_detail.html"
     context_object_name = "module"
@@ -129,7 +131,6 @@ class ModuleDetailView(LoginRequiredMixin, DetailView):
         ctx["assignments"] = m.assignments.select_related("station").order_by("-from_ts")
         ctx["current_assignment"] = m.assignments.filter(to_ts__isnull=True).first()
         ctx["audit_logs"] = m.audit_logs.select_related("station", "user").all()[:200]
-        ctx["can_edit"] = self.request.user.is_staff
         # Don't offer `ready` while an assignment is open — it's assignment-derived
         # and set_lifecycle rejects it in that state.
         ctx["lifecycles"] = operator_lifecycle_choices(
@@ -138,11 +139,8 @@ class ModuleDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class _StaffModuleMixin(LoginRequiredMixin, UserPassesTestMixin):
-    raise_exception = True
-
-    def test_func(self):
-        return self.request.user.is_staff
+class _ModuleActionMixin:
+    """Helpers shared by the module POST actions (permission comes from the area mixin)."""
 
     def get_module(self):
         return get_object_or_404(Module, uid=self.kwargs["uid"])
@@ -151,14 +149,20 @@ class _StaffModuleMixin(LoginRequiredMixin, UserPassesTestMixin):
         return HttpResponseRedirect(reverse("module_firmware:module_detail", args=[uid]))
 
 
-class ModuleConfirmView(_StaffModuleMixin, View):
+class ModuleConfirmView(AreaPermissionMixin, _ModuleActionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def post(self, request, uid):
         m = self.get_module()
         services.confirm_registration(m, user=request.user)
         return self._redirect(uid)
 
 
-class ModuleLifecycleView(_StaffModuleMixin, View):
+class ModuleLifecycleView(AreaPermissionMixin, _ModuleActionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def post(self, request, uid):
         m = self.get_module()
         status = request.POST.get("lifecycle_status")
@@ -173,7 +177,10 @@ class ModuleLifecycleView(_StaffModuleMixin, View):
         return self._redirect(uid)
 
 
-class ModuleNotesView(_StaffModuleMixin, View):
+class ModuleNotesView(AreaPermissionMixin, _ModuleActionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def post(self, request, uid):
         m = self.get_module()
         m.notes = request.POST.get("notes", "")
@@ -186,14 +193,8 @@ class ModuleNotesView(_StaffModuleMixin, View):
 # ---------------------------------------------------------------------------
 
 
-class _StaffFirmwareMixin(LoginRequiredMixin, UserPassesTestMixin):
-    raise_exception = True
-
-    def test_func(self):
-        return self.request.user.is_staff
-
-
-class FirmwareReleaseListView(LoginRequiredMixin, ListView):
+class FirmwareReleaseListView(AreaPermissionMixin, ListView):
+    area = "modules"
     template_name = "module_firmware/release_list.html"
     context_object_name = "releases"
     paginate_by = 50
@@ -230,7 +231,10 @@ class FirmwareReleaseListView(LoginRequiredMixin, ListView):
         return ctx
 
 
-class GitHubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
+class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def get(self, request):
         module_type_id = request.GET.get("module_type")
         if not module_type_id:
@@ -316,7 +320,10 @@ class GitHubFirmwareReleasesPartialView(_StaffFirmwareMixin, View):
         )
 
 
-class FirmwareImportView(_StaffFirmwareMixin, View):
+class FirmwareImportView(AreaPermissionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def post(self, request):
         module_type_id = request.POST.get("module_type")
         tag = request.POST.get("tag", "").strip()
@@ -358,14 +365,20 @@ class FirmwareImportView(_StaffFirmwareMixin, View):
         return HttpResponseRedirect(reverse("module_firmware:release_list"))
 
 
-class FirmwareArchiveView(_StaffFirmwareMixin, View):
+class FirmwareArchiveView(AreaPermissionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def post(self, request, pk):
         release = get_object_or_404(ModuleFirmwareRelease.all_objects, pk=pk)
         release.archive()
         return HttpResponseRedirect(reverse("module_firmware:release_list"))
 
 
-class FirmwareRestoreView(_StaffFirmwareMixin, View):
+class FirmwareRestoreView(AreaPermissionMixin, View):
+    area = "modules"
+    verb = "manage"
+
     def post(self, request, pk):
         release = get_object_or_404(ModuleFirmwareRelease.all_objects, pk=pk)
         release.restore()

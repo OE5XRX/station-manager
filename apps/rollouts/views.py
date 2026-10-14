@@ -83,9 +83,10 @@ def _defer_audit_log(*, station, event_type, message, user=None):
 
 
 class UpgradeStationView(AreaPermissionMixin, View):
+    """Create a Deployment targeting exactly this one station."""
+
     area = "deployments"
     verb = "manage"
-    """Create a Deployment targeting exactly this one station."""
 
     def post(self, request, station_pk):
         station = get_object_or_404(Station, pk=station_pk)
@@ -157,11 +158,12 @@ class UpgradeStationView(AreaPermissionMixin, View):
 
 
 class UpgradeGroupView(AreaPermissionMixin, View):
-    area = "rollouts"
-    verb = "manage"
     """Create Deployments for every station carrying the given tag (grouped
     by machine: one Deployment per (tag, machine) tuple).
     """
+
+    area = "rollouts"
+    verb = "manage"
 
     def post(self, request, tag_slug):
         tag = get_object_or_404(StationTag, slug=tag_slug)
@@ -291,10 +293,11 @@ class UpgradeGroupView(AreaPermissionMixin, View):
 
 
 class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
-    area = "rollouts"
-    """Admin-only roll-up of every station bucketed by its first matching
+    """Roll-up of every station bucketed by its first matching
     rollout-sequence tag, showing pending upgrades and a per-group action.
     """
+
+    area = "rollouts"
 
     template_name = "rollouts/upgrade_dashboard.html"
 

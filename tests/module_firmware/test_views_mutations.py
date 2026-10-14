@@ -24,7 +24,9 @@ def test_non_staff_cannot_confirm(client, module):
 
 @pytest.mark.django_db
 def test_staff_confirms(client, module):
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.post(reverse("module_firmware:module_confirm", args=[module.uid]))
     assert resp.status_code == 302
     module.refresh_from_db()
@@ -33,7 +35,9 @@ def test_staff_confirms(client, module):
 
 @pytest.mark.django_db
 def test_staff_sets_lifecycle(client, module):
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.post(
         reverse("module_firmware:module_lifecycle", args=[module.uid]),
         {"lifecycle_status": "defect"},
@@ -52,7 +56,9 @@ def test_ready_is_rejected_while_assigned(client, module, station_factory):
     module.lifecycle_status = Module.Lifecycle.DEPLOYED
     module.save(update_fields=["lifecycle_status"])
     ModuleAssignmentHistory.objects.create(module=module, station=station_factory(), slot="slot1")
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.post(
         reverse("module_firmware:module_lifecycle", args=[module.uid]),
         {"lifecycle_status": "ready"},
@@ -65,7 +71,9 @@ def test_ready_is_rejected_while_assigned(client, module, station_factory):
 @pytest.mark.django_db
 def test_deployed_is_not_an_operator_settable_lifecycle(client, module):
     """`deployed` is auto-derived from assignment; a manual set must be ignored."""
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.post(
         reverse("module_firmware:module_lifecycle", args=[module.uid]),
         {"lifecycle_status": "deployed"},
@@ -77,7 +85,9 @@ def test_deployed_is_not_an_operator_settable_lifecycle(client, module):
 
 @pytest.mark.django_db
 def test_staff_sets_notes(client, module):
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.post(
         reverse("module_firmware:module_notes", args=[module.uid]), {"notes": "bench unit"}
     )

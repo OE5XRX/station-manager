@@ -22,6 +22,7 @@
       <h1 class="page-title t-mono" style="letter-spacing:-0.01em;">{{ module.uid }}</h1>
       <div class="row-gap-8 mt-10">
         {% include "module_firmware/_pills.html" with module=module %}
+        {% if not can.modules.manage %}{% include "includes/readonly_badge.html" %}{% endif %}
         {% if current_assignment and current_assignment.station %}
           <span class="t-mono-sm t-muted">
             {% trans "at" %}
@@ -56,7 +57,7 @@
     </div>
   </div>
 
-  {% if can_edit %}
+  {% if can.modules.manage %}
   <section class="panel mb-24">
     <div class="panel-head">
       <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Manage module" %}</div>

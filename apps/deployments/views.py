@@ -144,9 +144,10 @@ class DeploymentCreateView(AreaPermissionMixin, CreateView):
 
 
 class DeploymentCancelView(AreaPermissionMixin, View):
+    """Cancel a deployment (POST only)."""
+
     area = "deployments"
     verb = "manage"
-    """Cancel a deployment (POST only)."""
 
     def post(self, request, pk):
         deployment = get_object_or_404(Deployment, pk=pk)

@@ -7,7 +7,7 @@ isolation from email-backend mocking.
 
 Routing contract (see docs/superpowers/specs/
 2026-06-05-membership-levels-and-topology-roles-design.md §4.7):
-  - Vereins-Admins (membership_level=ADMIN), vereinsweit
+  - everyone holding alert_rules.manage (Vereins-Admins), vereinsweit
   - Region-Manager der zugeh. Region (sofern station.region gesetzt)
   - Station-Admin dieser Station
   - Station-Maintainer dieser Station
@@ -28,11 +28,13 @@ a topology assignment.
 from django.contrib.auth import get_user_model
 from django.db.models import Exists, OuterRef, Q
 
+from apps.accounts.permissions import users_with
+
 User = get_user_model()
 
 
 def _topology_q(station):
-    q = Q(membership_level=User.MembershipLevel.ADMIN)
+    q = Q(pk__in=users_with("alert_rules", "manage").values("pk"))
     if station.region_id is not None:
         q |= Q(
             region_assignments__region_id=station.region_id,

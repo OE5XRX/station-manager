@@ -44,9 +44,9 @@ class TestNavLinksMatchBackend:
         "user_fixture, alerts, deployments",
         [
             ("admin_user", True, True),
-            ("operator_user", False, True),
-            ("member_user", False, True),
-            ("applicant_user", False, True),
+            ("operator_user", True, True),
+            ("member_user", True, True),
+            ("applicant_user", True, True),
         ],
     )
     @pytest.mark.parametrize("page", ["dashboard:index", "stations:station_list"])
@@ -62,9 +62,9 @@ class TestNavLinksMatchBackend:
         "user_fixture, expected_alerts, expected_deployments",
         [
             ("admin_user", 200, 200),
-            ("operator_user", 403, 200),
-            ("member_user", 403, 200),
-            ("applicant_user", 403, 200),
+            ("operator_user", 200, 200),
+            ("member_user", 200, 200),
+            ("applicant_user", 200, 200),
         ],
     )
     def test_backend_contract_unchanged(

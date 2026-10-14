@@ -194,12 +194,10 @@ def _test_email(requesting_user=None):
     if requesting_user is not None and requesting_user.email:
         recipient_list = [requesting_user.email]
     else:
-        from apps.accounts.models import User as UserModel
+        from apps.accounts.permissions import users_with
 
         recipient_list = list(
-            UserModel.objects.filter(membership_level=UserModel.MembershipLevel.ADMIN)
-            .exclude(email="")
-            .values_list("email", flat=True)
+            users_with("alert_rules", "manage").exclude(email="").values_list("email", flat=True)
         )
 
     if not recipient_list:

@@ -59,6 +59,8 @@ def user_can_access(user, application) -> bool:
 
     # Local imports keep the validator/permissions module free of an
     # import cycle on settings loading (see existing pattern below).
+    from apps.accounts.permissions import Level, level_of
+
     from .models import AppGrant, ApplicationPolicy
 
     Policy = ApplicationPolicy.AccessPolicy  # noqa: N806 — enum class alias
@@ -70,11 +72,11 @@ def user_can_access(user, application) -> bool:
     if policy == Policy.OPEN_TO_ALL:
         return True
     if policy == Policy.OPEN_TO_MEMBERS:
-        return user.membership_level != user.MembershipLevel.APPLICANT
+        return (level_of(user) or 0) >= Level.MEMBER
     if policy == Policy.OPEN_TO_INTERNAL:
-        return user.is_internal
+        return (level_of(user) or 0) >= Level.STAFF
     if policy == Policy.OPEN_TO_ADMINS:
-        return user.is_admin
+        return level_of(user) == Level.ADMIN
 
     # GRANT_REQUIRED — pre-existing behaviour
     return AppGrant.objects.filter(

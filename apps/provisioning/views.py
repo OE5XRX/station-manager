@@ -25,9 +25,10 @@ ACTIVE_PROVISIONING_STATUSES = [
 
 
 class CreateProvisioningJobView(AreaPermissionMixin, View):
+    """Create a new ProvisioningJob for a station (needs provisioning.manage)."""
+
     area = "provisioning"
     verb = "manage"
-    """Admin-only endpoint that creates a new ProvisioningJob for a station."""
 
     def post(self, request, station_pk):
         station = get_object_or_404(Station, pk=station_pk)
@@ -89,9 +90,10 @@ class CreateProvisioningJobView(AreaPermissionMixin, View):
 
 
 class ProvisioningJobStatusView(AreaPermissionMixin, View):
+    """HTMX-polled partial showing the job's current state."""
+
     area = "provisioning"
     verb = "manage"
-    """HTMX-polled partial showing the job's current state."""
 
     def get(self, request, pk):
         job = get_object_or_404(ProvisioningJob, pk=pk)
@@ -99,8 +101,6 @@ class ProvisioningJobStatusView(AreaPermissionMixin, View):
 
 
 class ProvisioningJobDownloadView(AreaPermissionMixin, View):
-    area = "provisioning"
-    verb = "manage"
     """Stream the provisioned image from S3 and mark job as downloaded.
 
     Returns 409 if the job is not yet READY and 410 if its presigned-like
@@ -109,6 +109,9 @@ class ProvisioningJobDownloadView(AreaPermissionMixin, View):
     conditional UPDATE so concurrent downloads can't clobber a FAILED /
     EXPIRED state written by the worker between status check and iteration.
     """
+
+    area = "provisioning"
+    verb = "manage"
 
     CHUNK = 1 << 20  # 1 MiB
 

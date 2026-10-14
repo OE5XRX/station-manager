@@ -46,6 +46,7 @@
       <span class="label">{% trans "Regions" %}</span>
     </a>
     {% endif %}
+    {% if can.modules.view %}
     <a href="{% url 'module_firmware:module_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'module_firmware' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'module_firmware' %}aria-current="page"{% endif %}>
@@ -54,7 +55,8 @@
       </svg>
       <span class="label">{% trans "Modules" %}</span>
     </a>
-    {% if user.is_admin %}
+    {% endif %}
+    {% if can.alerts.view %}
     <a href="{% url 'monitoring:alert_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'monitoring' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'monitoring' %}aria-current="page"{% endif %}>
@@ -136,9 +138,10 @@
   </div>
   {% endif %}
 
-  {% if user.is_admin %}
+  {% if can.sso.manage or can.audit.view or can.alert_rules.view %}
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Admin" %}</div>
+    {% if can.sso.manage %}
     <a href="{% url 'sso:dashboard' %}"
        class="nav-item{% if request.resolver_match.namespace == 'sso' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'sso' %}aria-current="page"{% endif %}>
@@ -147,6 +150,8 @@
       </svg>
       <span class="label">{% trans "SSO" %}</span>
     </a>
+    {% endif %}
+    {% if can.audit.view %}
     <a href="{% url 'audit:audit_list' %}"
        class="nav-item{% if request.resolver_match.namespace == 'audit' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'audit' %}aria-current="page"{% endif %}>
@@ -155,6 +160,8 @@
       </svg>
       <span class="label">{% trans "Audit Log" %}</span>
     </a>
+    {% endif %}
+    {% if can.alert_rules.view %}
     <a href="{% url 'monitoring:alert_settings' %}"
        class="nav-item">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -162,6 +169,7 @@
       </svg>
       <span class="label">{% trans "Alert Rules" %}</span>
     </a>
+    {% endif %}
   </div>
   {% endif %}
 

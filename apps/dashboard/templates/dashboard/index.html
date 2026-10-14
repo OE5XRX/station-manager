@@ -19,11 +19,13 @@
       <p class="page-sub">{% blocktrans with online=stations_online total=station_count %}{{ online }} of {{ total }} stations are transmitting right now. Deployments and alerts are below.{% endblocktrans %}</p>
     </div>
     <div class="page-head-actions">
-      {% if user.is_internal %}
+      {% if can.stations.manage %}
       <a href="{% url 'stations:station_create' %}" class="btn">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         {% trans "New station" %}
       </a>
+      {% endif %}
+      {% if can.deployments.manage %}
       <a href="{% url 'deployments:deployment_create' %}" class="btn btn-primary">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v14"/><path d="M7 11l5 5 5-5"/></svg>
         {% trans "New deployment" %}
@@ -55,7 +57,7 @@
         {% trans "Active alerts" %}
       </div>
       <div class="stat-value {% if active_alerts_count > 0 %}stat-warn{% endif %}">{{ active_alerts_count }}</div>
-      {% if user.is_admin %}
+      {% if can.alerts.view %}
       <div class="stat-meta">
         <a href="{% url 'monitoring:alert_list' %}" class="t-mono">{% trans "view alerts" %} →</a>
       </div>
@@ -68,7 +70,7 @@
         {% trans "Deployments" %}
       </div>
       <div class="stat-value">{{ deployment_count }}</div>
-      {% if user.is_internal %}
+      {% if can.deployments.view %}
       <div class="stat-meta"><a href="{% url 'deployments:deployment_list' %}" class="t-mono">{% trans "history" %} →</a></div>
       {% endif %}
     </div>
@@ -95,17 +97,34 @@
       </div>
     </div>
 
+    {% if can.users.view %}
     <div class="stat">
       <div class="stat-label">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg>
         {% trans "Operators" %}
       </div>
       <div class="stat-value">{{ user_count }}</div>
+      {% if can.stations.manage %}
       <div class="stat-meta">
         <span class="t-mono">{{ device_key_count }}</span>
         <span>{% trans "active keys" %}</span>
       </div>
+      {% endif %}
     </div>
+    {% endif %}
+
+    {% if can.audit.view %}
+    <div class="stat">
+      <div class="stat-label">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 9l6 6M15 9l-6 6"/></svg>
+        {% trans "Zugriffsverweigerungen (24 h)" %}
+      </div>
+      <div class="stat-value {% if denials_24h > 0 %}stat-warn{% endif %}">{{ denials_24h }}</div>
+      <div class="stat-meta">
+        <a href="{% url 'audit:audit_list' %}?event_type=permission_denied" class="t-mono">{% trans "Verweigerungen ansehen" %} →</a>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   <div class="grid grid-main mb-24">
@@ -130,7 +149,7 @@
               <th>{% trans "Callsign" %}</th>
               <th>{% trans "Status" %}</th>
               <th>{% trans "OS" %}</th>
-              <th>{% trans "IP" %}</th>
+              {% if can.stations.manage %}<th>{% trans "IP" %}</th>{% endif %}
               <th>{% trans "Last heard" %}</th>
               <th></th>
             </tr>
@@ -150,7 +169,7 @@
                 </span>
               </td>
               <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—" }} {% include "images/_channel_badge.html" with channel=station.current_image_variant %}</td>
-              <td class="t-mono" data-station-ip data-label="{% trans 'IP' %}">{{ station.last_ip_address|default:"—" }}</td>
+              {% if can.stations.manage %}<td class="t-mono" data-station-ip data-label="{% trans 'IP' %}">{{ station.last_ip_address|default:"—" }}</td>{% endif %}
               <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">{{ station.last_seen|timesince|default:"—" }}{% if station.last_seen %} {% trans "ago" %}{% endif %}</td>
               <td class="actions">
                 <a href="{% url 'stations:station_detail' station.pk %}" class="btn btn-sm btn-ghost" aria-label="{% trans 'Open' %}">
@@ -169,7 +188,7 @@
           </div>
           <div class="empty-title">{% trans "No stations yet" %}</div>
           <div>{% trans "Add your first remote station to start managing the fleet." %}</div>
-          {% if user.is_internal %}
+          {% if can.stations.manage %}
           <a href="{% url 'stations:station_create' %}" class="btn btn-primary mt-10">{% trans "Add station" %}</a>
           {% endif %}
         </div>
@@ -178,7 +197,7 @@
     </section>
 
     <aside class="stack-gap-14">
-      {% if user.is_internal %}
+      {% if can.deployments.view %}
       <section class="panel">
         <div class="panel-head">
           <div class="panel-title"><span class="dot" style="background:var(--violet)"></span>{% trans "Recent deployments" %}</div>

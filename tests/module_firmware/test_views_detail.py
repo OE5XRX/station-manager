@@ -32,7 +32,9 @@ def test_detail_shows_history_and_audit(client, module):
 def test_detail_edit_controls_only_for_staff(client, module):
     client.force_login(User.objects.create_user(username="u", password="x"))
     resp = client.get(reverse("module_firmware:module_detail", args=[module.uid]))
-    assert resp.context["can_edit"] is False
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    assert b"Manage module" not in resp.content
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.get(reverse("module_firmware:module_detail", args=[module.uid]))
-    assert resp.context["can_edit"] is True
+    assert b"Manage module" in resp.content

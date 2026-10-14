@@ -44,7 +44,15 @@
           </td>
           {% endif %}
           <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>
-          <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
+          <td data-label="{% trans 'Message' %}">{{ entry.message }}
+            {% if entry.details %}
+              <div class="t-mono-sm t-muted">
+                {% if entry.details.area %}{{ entry.details.area }}.{{ entry.details.verb }}{% endif %}
+                {% if entry.details.channel %} · {{ entry.details.channel }}{% endif %}
+                {% if entry.details.count %} · {{ entry.details.count }}×{% endif %}
+              </div>
+            {% endif %}
+          </td>
           <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.actor.username|default:"—" }}</td>
           <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
         {% else %}

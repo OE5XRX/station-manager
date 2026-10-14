@@ -14,8 +14,6 @@ import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseRedirect
@@ -28,32 +26,13 @@ from django.views.generic import DetailView, ListView
 from oauth2_provider.models import Application
 from oauth2_provider.views import AuthorizationView as DotAuthorizationView
 
+from apps.accounts.permissions import AreaPermissionMixin
+
 from .models import AppGrant, SsoAuditLog
 from .permissions import user_can_access
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
-
-
-class AdminOnlyMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Only admins may access SSO management views.
-
-    Anonymous callers get the standard LoginRequiredMixin redirect to
-    ``LOGIN_URL`` (302). Authenticated-but-not-authorized callers get
-    a PermissionDenied (403) — re-auth wouldn't help them, they need
-    different permissions. We can't just set ``raise_exception=True``
-    because AccessMixin applies it for *both* failure modes, which
-    would 403 anonymous users instead of redirecting them. So we
-    override ``handle_no_permission`` and branch on auth state.
-    """
-
-    def test_func(self):
-        return getattr(self.request.user, "is_admin", False)
-
-    def handle_no_permission(self):
-        if self.request.user.is_authenticated:
-            raise PermissionDenied(self.get_permission_denied_message())
-        return super().handle_no_permission()
 
 
 def _client_ip(request):
@@ -76,7 +55,7 @@ def _build_grants_for_user(user):
     return [(app, active_grants.get(app.pk)) for app in Application.objects.order_by("name")]
 
 
-class GrantToggleView(AdminOnlyMixin, View):
+class GrantToggleView(AreaPermissionMixin, View):
     """POST-only: flip an AppGrant on or off for (user, application).
 
     Idempotent given the same starting state, with audit log entry per
@@ -86,6 +65,8 @@ class GrantToggleView(AdminOnlyMixin, View):
     (non-HTMX) falls back to the same partial — fine for now; T15 may
     add a redirect-to-app-detail path.
     """
+
+    area = "sso"
 
     def post(self, request, user_id, application_id):
         target = get_object_or_404(User, pk=user_id)
@@ -171,11 +152,13 @@ class GrantToggleView(AdminOnlyMixin, View):
         )
 
 
-class SsoDashboardView(AdminOnlyMixin, ListView):
+class SsoDashboardView(AreaPermissionMixin, ListView):
     """Top-level SSO overview — list registered apps + grant counts.
 
     Template lands in T14.
     """
+
+    area = "sso"
 
     template_name = "sso/dashboard.html"
     context_object_name = "applications"
@@ -225,8 +208,10 @@ class SsoDashboardView(AdminOnlyMixin, ListView):
         return ctx
 
 
-class ApplicationDetailView(AdminOnlyMixin, DetailView):
+class ApplicationDetailView(AreaPermissionMixin, DetailView):
     """Per-application detail page. Template lands in T15."""
+
+    area = "sso"
 
     template_name = "sso/application_detail.html"
     context_object_name = "application"
@@ -324,6 +309,8 @@ class AppGrantAuthorizationView(DotAuthorizationView):
     Both events are written best-effort; an audit failure must NOT alter
     the security outcome (still deny).
     """
+
+    permission_exempt = "oidc: per-app policy"
 
     def dispatch(self, request, *args, **kwargs):
         # Only gate the actual flow, not anonymous GET/POST that DOT will
@@ -431,12 +418,14 @@ def _is_registered_redirect(application, candidate_uri: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-class SessionRevokeView(AdminOnlyMixin, View):
+class SessionRevokeView(AreaPermissionMixin, View):
     """POST-only: revoke a single TokenSession + its RefreshToken.
 
     Idempotent: a second POST on an already-revoked session is a no-op
     (no extra audit row, no extra DOT-token mutation). Spec §4.4.
     """
+
+    area = "sso"
 
     def post(self, request, pk):
         from datetime import timedelta
@@ -553,13 +542,15 @@ def _active_sessions_for(user):
 # ---------------------------------------------------------------------------
 
 
-class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
+class ApplicationPolicyUpdateView(AreaPermissionMixin, View):
     """POST-only: set or update the ApplicationPolicy for an Application.
 
     Auto-creates the policy row on first set; existing-row update emits
     APP_POLICY_CHANGED audit with snapshot of affected active sessions
     at the time of the change. Spec §3.4.
     """
+
+    area = "sso"
 
     def post(self, request, pk):
         from .models import ApplicationPolicy, TokenSession
@@ -622,7 +613,8 @@ class ApplicationPolicyUpdateView(AdminOnlyMixin, View):
 _TAG_NAME_RE = re.compile(r"^[a-z0-9-]+$")
 
 
-class TagListView(AdminOnlyMixin, ListView):
+class TagListView(AreaPermissionMixin, ListView):
+    area = "sso"
     template_name = "sso/tag_list.html"
     context_object_name = "tags"
 
@@ -632,13 +624,15 @@ class TagListView(AdminOnlyMixin, ListView):
         return Group.objects.annotate(member_count=Count("user")).order_by("name")
 
 
-class TagCreateView(AdminOnlyMixin, View):
+class TagCreateView(AreaPermissionMixin, View):
     """POST-only: create a Django auth.Group with a slug-safe name.
 
     Spec §12 open question default: enforce slug format so the synthesised
     'tag:<name>' string in OIDC tokens stays predictable (no spaces, no
     case sensitivity surprises).
     """
+
+    area = "sso"
 
     def post(self, request):
         from django.contrib.auth.models import Group
@@ -661,7 +655,8 @@ class TagCreateView(AdminOnlyMixin, View):
         return HttpResponseRedirect(reverse("sso:tag_list"))
 
 
-class TagDetailView(AdminOnlyMixin, DetailView):
+class TagDetailView(AreaPermissionMixin, DetailView):
+    area = "sso"
     template_name = "sso/tag_detail.html"
     context_object_name = "tag"
 
@@ -679,8 +674,10 @@ class TagDetailView(AdminOnlyMixin, DetailView):
         return ctx
 
 
-class TagMembershipToggleView(AdminOnlyMixin, View):
+class TagMembershipToggleView(AreaPermissionMixin, View):
     """POST-only: toggle a user's membership in a tag (Django auth.Group)."""
+
+    area = "sso"
 
     def post(self, request, user_id, group_id):
         from django.contrib.auth.models import Group
