@@ -177,7 +177,7 @@ def test_command_relayed_and_result_state_confirm(control_agent_auth):
 
 
 # ---------------------------------------------------------------------------
-# 3. Telemetry subscribe reaches the agent verbatim with caps + interval.
+# 3. Telemetry subscribe reaches the agent (rebuilt frame) with caps + interval.
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db(transaction=True)
 def test_subscribe_carries_capabilities_and_interval(control_agent_auth):
@@ -197,7 +197,7 @@ def test_subscribe_carries_capabilities_and_interval(control_agent_auth):
             {
                 "v": V,
                 "type": "subscribe",
-                "slot": "slot0",
+                "slot": 0,
                 "module": "fm0",
                 "capabilities": ["rssi"],
                 "interval_ms": 500,

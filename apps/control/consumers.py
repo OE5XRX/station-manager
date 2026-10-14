@@ -1,5 +1,6 @@
 # apps/control/consumers.py
 import asyncio
+import collections
 import json
 import logging
 
@@ -153,6 +154,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if station is not None:
                 await self._apply_inventory(station, msg.get("slots", []))
                 await self._reapply_persisted(station, msg.get("slots", []))
+                await self._replay_telemetry(station)
             await self._broadcast("control.inventory", {"msg": msg})
         elif mtype == "state":
             station = await self._cached_station()
@@ -172,6 +174,19 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             if station is not None:
                 await self._retry_pending_reapply(station)
+
+    async def _replay_telemetry(self, station):
+        """Re-arm the agent with the browsers' aggregated telemetry demand: a
+        (re)connected agent has no subscriptions, and redundant browser
+        re-subscribes are not relayed (see telemetry_subscriptions)."""
+        try:
+            frames = await database_sync_to_async(telemetry_subscriptions.active_subscriptions)(
+                station
+            )
+            for frame in frames:
+                await self.send(text_data=json.dumps(frame))
+        except Exception:
+            logger.exception("control: telemetry replay failed")
 
     # -- server -> agent (channel handler) ------------------------------------
 
@@ -506,6 +521,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         self._persist_pending = {}
         self.user = self.scope.get("user")
         self.station = None  # cached after connect to avoid a DB fetch per frame
+        self._telemetry_frames = collections.deque()  # subscribe/unsubscribe budget
 
         await self.accept()
 
@@ -605,12 +621,10 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 await self._bridge_gate(station)
             else:
                 await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
-        elif mtype == "subscribe":
+        elif mtype in ("subscribe", "unsubscribe"):
             # Any viewer may subscribe — control.view checked at connect. Ref-counted:
             # the agent's subscription is station-wide (see telemetry_subscriptions).
-            await self._telemetry_subscribe(station, msg)
-        elif mtype == "unsubscribe":
-            await self._telemetry_unsubscribe(station, msg)
+            await self._telemetry_change(station, msg, mtype)
         elif mtype == "lock_acquire":
             await self._lock_acquire(station)
         elif mtype == "lock_release":
@@ -771,42 +785,40 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     # -- telemetry subscriptions (ref-counted across viewers) ------------------
 
-    async def _telemetry_subscribe(self, station, msg):
-        addr = telemetry_subscriptions.parse_addr(msg)
-        if addr is None:
-            return
-        slot_key, module, caps = addr
-        interval_ms = await database_sync_to_async(telemetry_subscriptions.subscribe)(
-            station, self.channel_name, slot_key, module, caps, msg.get("interval_ms")
-        )
-        await self._relay({**msg, "capabilities": caps, "interval_ms": interval_ms})
+    def _telemetry_budget_ok(self) -> bool:
+        """Per-connection frame budget for subscribe/unsubscribe (flood guard)."""
+        now = asyncio.get_running_loop().time()
+        window = self._telemetry_frames
+        while window and now - window[0] > telemetry_subscriptions.FRAME_WINDOW_SECONDS:
+            window.popleft()
+        if len(window) >= telemetry_subscriptions.FRAME_BUDGET:
+            return False
+        window.append(now)
+        return True
 
-    async def _telemetry_unsubscribe(self, station, msg):
+    async def _telemetry_change(self, station, msg, op):
         addr = telemetry_subscriptions.parse_addr(msg)
-        if addr is None:
+        if addr is None or not self._telemetry_budget_ok():
             return
-        slot_key, module, caps = addr
-        zeroed = await database_sync_to_async(telemetry_subscriptions.unsubscribe)(
-            station, self.channel_name, slot_key, module, caps
-        )
-        if zeroed:
-            await self._relay({**msg, "capabilities": zeroed})
+        slot, module, caps = addr
+        if op == "subscribe":
+            frames = await database_sync_to_async(telemetry_subscriptions.subscribe)(
+                station, self.channel_name, slot, module, caps, msg.get("interval_ms")
+            )
+        else:
+            frames = await database_sync_to_async(telemetry_subscriptions.unsubscribe)(
+                station, self.channel_name, slot, module, caps
+            )
+        for frame in frames:
+            await self._relay(frame)
 
     async def _telemetry_drop_channel(self, station):
         try:
-            zeroed = await database_sync_to_async(telemetry_subscriptions.drop_channel)(
+            frames = await database_sync_to_async(telemetry_subscriptions.drop_channel)(
                 station, self.channel_name
             )
-            for slot_key, module, caps in zeroed:
-                await self._relay(
-                    {
-                        "v": constants.PROTOCOL_VERSION,
-                        "type": "unsubscribe",
-                        "slot": telemetry_subscriptions.slot_value(slot_key),
-                        "module": module,
-                        "capabilities": caps,
-                    }
-                )
+            for frame in frames:
+                await self._relay(frame)
         except Exception:
             logger.exception("control: dropping telemetry subscriptions failed")
 

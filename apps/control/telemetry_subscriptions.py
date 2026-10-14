@@ -2,16 +2,25 @@
 
 The agent keeps ONE subscription per (slot, module) for the whole station
 (``station_agent.broker``): an ``unsubscribe`` stops telemetry for every
-viewer, and a ``subscribe`` replaces the poll interval. A viewer (an Applicant
-watching, or the page teardown of anyone closing the panel) must therefore not
-reach the agent with those directly. ControlConsumer routes them through here:
+viewer, a ``subscribe`` replaces the poll interval and restarts the poll task
+(an immediate poll on the single serial line). A viewer therefore never
+reaches the agent directly; ControlConsumer routes subscribe/unsubscribe
+through here and relays only *state changes* of the station-wide demand:
 
-* ``subscribe`` is always forwarded (additive at the agent, and it re-arms the
-  agent after a reconnect, when browsers re-subscribe on the fresh inventory),
-  but with a server-chosen interval: the FASTEST clamped interval any current
-  subscriber of that (slot, module) asked for, so nobody can slow others down.
-* ``unsubscribe`` / disconnect forward only the capabilities whose count went
-  1 -> 0.
+* a capability going 0 -> 1 (subscribe) or 1 -> 0 (unsubscribe);
+* the effective interval changing — the FASTEST clamped interval any current
+  subscriber of that (slot, module) asked for (faster subscriber joins, or the
+  fastest one leaves and the interval relaxes).
+
+Repeated identical subscribes change nothing and relay nothing. After an agent
+(re)connect, AgentControlConsumer replays :func:`active_subscriptions` on the
+fresh inventory, so browsers' re-subscribes need not reach the agent.
+
+Addresses are parsed exactly like the agent (``broker._valid_addr``): ``slot``
+must be an ``int`` (not bool), ``module`` a ``str``, capabilities the ``str``
+items of a list. Relayed frames are built only from the parsed address
+(:func:`subscribe_frame` / :func:`unsubscribe_frame`), never from the
+browser's frame.
 
 Pure sync DB functions (callers wrap them in ``database_sync_to_async``); the
 counts live in the DB so they are worker-safe, mirroring
@@ -21,6 +30,7 @@ counts live in the DB so they are worker-safe, mirroring
 from django.db import transaction
 from django.db.models import Min
 
+from .constants import PROTOCOL_VERSION
 from .models import TelemetrySubscription
 
 INTERVAL_MIN_MS = 250  # control-logic.js subscribeInterval floor
@@ -28,6 +38,13 @@ INTERVAL_MAX_MS = 10_000
 INTERVAL_DEFAULT_MS = 1_000  # the agent's default when none/invalid is given
 _FIELD_MAX = 64
 _MAX_CAPS = 32
+_SLOT_MAX = 2**31 - 1
+
+#: Per browser connection: at most FRAME_BUDGET subscribe/unsubscribe frames per
+#: FRAME_WINDOW_SECONDS are processed (excess dropped). A real panel sends one
+#: subscribe per module per inventory and one unsubscribe per module on close.
+FRAME_BUDGET = 40
+FRAME_WINDOW_SECONDS = 10.0
 
 
 def clamp_interval(raw) -> int:
@@ -36,13 +53,14 @@ def clamp_interval(raw) -> int:
     return int(min(max(raw, INTERVAL_MIN_MS), INTERVAL_MAX_MS))
 
 
-def parse_addr(msg) -> tuple[str, str, list[str]] | None:
-    """(slot_key, module, capabilities) of a browser frame, or ``None`` if malformed."""
+def parse_addr(msg) -> tuple[int, str, list[str]] | None:
+    """(slot, module, capabilities) parsed with the agent's rules, or ``None``."""
+    if msg.get("v") != PROTOCOL_VERSION:
+        return None  # the agent drops a frame with a missing/mismatched envelope
     slot, module = msg.get("slot"), msg.get("module")
-    if not (type(slot) is int or isinstance(slot, str)) or not isinstance(module, str):
+    if type(slot) is not int or not -_SLOT_MAX <= slot <= _SLOT_MAX:
         return None
-    slot_key = str(slot)
-    if not slot_key or len(slot_key) > _FIELD_MAX or not module or len(module) > _FIELD_MAX:
+    if not isinstance(module, str) or not 0 < len(module) <= _FIELD_MAX:
         return None
     raw_caps = msg.get("capabilities")
     if not isinstance(raw_caps, list):
@@ -53,12 +71,28 @@ def parse_addr(msg) -> tuple[str, str, list[str]] | None:
             caps.append(cap)
     if not caps or len(caps) > _MAX_CAPS:
         return None
-    return slot_key, module, caps
+    return slot, module, caps
 
 
-def slot_value(slot_key: str):
-    """Wire form of a stored slot: numeric slots go back as ints (JS ``slotAddr``)."""
-    return int(slot_key) if slot_key.isdigit() else slot_key
+def subscribe_frame(slot: int, module: str, caps, interval_ms: int) -> dict:
+    return {
+        "v": PROTOCOL_VERSION,
+        "type": "subscribe",
+        "slot": slot,
+        "module": module,
+        "capabilities": list(caps),
+        "interval_ms": interval_ms,
+    }
+
+
+def unsubscribe_frame(slot: int, module: str, caps) -> dict:
+    return {
+        "v": PROTOCOL_VERSION,
+        "type": "unsubscribe",
+        "slot": slot,
+        "module": module,
+        "capabilities": list(caps),
+    }
 
 
 def _lock_station(station):
@@ -68,66 +102,98 @@ def _lock_station(station):
     Station.objects.select_for_update().filter(pk=station.pk).first()
 
 
+def _rows(station, slot: int, module: str):
+    # slot is stored canonically as str(int): the only form parse_addr admits.
+    return TelemetrySubscription.objects.filter(station=station, slot=str(slot), module=module)
+
+
+def _state(station, slot, module) -> tuple[set[str], int | None]:
+    rows = _rows(station, slot, module)
+    caps = set(rows.values_list("capability", flat=True))
+    return caps, rows.aggregate(m=Min("interval_ms"))["m"]
+
+
+def _addrs(rows) -> list[tuple[int, str]]:
+    addrs = set()
+    for slot, module in rows.values_list("slot", "module"):
+        try:
+            addrs.add((int(slot), module))
+        except ValueError:
+            continue  # never written by parse_addr; ignore defensively
+    return sorted(addrs)
+
+
+def _transition(slot, module, before, after) -> list[dict]:
+    """Agent frames turning demand ``before`` into ``after`` (each: (caps, interval))."""
+    (caps_before, iv_before), (caps_after, iv_after) = before, after
+    frames = []
+    gone = sorted(caps_before - caps_after)
+    if gone:
+        frames.append(unsubscribe_frame(slot, module, gone))
+    if not caps_after:
+        return frames
+    new = sorted(caps_after - caps_before)
+    if iv_after != iv_before:
+        frames.append(subscribe_frame(slot, module, sorted(caps_after), iv_after))
+    elif new:
+        frames.append(subscribe_frame(slot, module, new, iv_after))
+    return frames
+
+
 @transaction.atomic
-def subscribe(station, channel_name, slot_key, module, caps, interval_ms) -> int:
-    """Record ``channel_name``'s demand; return the interval to forward."""
+def subscribe(station, channel_name, slot, module, caps, interval_ms) -> list[dict]:
+    """Record ``channel_name``'s demand; return the frames to relay (maybe none).
+
+    A channel's interval for a capability is fixed by its first subscribe, so
+    re-subscribing never wobbles the shared interval.
+    """
     _lock_station(station)
+    before = _state(station, slot, module)
     interval_ms = clamp_interval(interval_ms)
     for cap in caps:
-        TelemetrySubscription.objects.update_or_create(
+        TelemetrySubscription.objects.get_or_create(
             station=station,
-            slot=slot_key,
+            slot=str(slot),
             module=module,
             capability=cap,
             channel_name=channel_name,
             defaults={"interval_ms": interval_ms},
         )
-    return TelemetrySubscription.objects.filter(
-        station=station, slot=slot_key, module=module
-    ).aggregate(m=Min("interval_ms"))["m"]
-
-
-def _zeroed(station, slot_key, module, caps) -> list[str]:
-    still = set(
-        TelemetrySubscription.objects.filter(
-            station=station, slot=slot_key, module=module, capability__in=caps
-        ).values_list("capability", flat=True)
-    )
-    return [cap for cap in caps if cap not in still]
+    return _transition(slot, module, before, _state(station, slot, module))
 
 
 @transaction.atomic
-def unsubscribe(station, channel_name, slot_key, module, caps) -> list[str]:
-    """Drop ``channel_name``'s demand; return the capabilities that hit zero.
+def unsubscribe(station, channel_name, slot, module, caps) -> list[dict]:
+    """Drop ``channel_name``'s demand for ``caps``; return the frames to relay.
 
-    Only capabilities this channel actually held can be returned, so an
-    unsubscribe for someone else's subscription never reaches the agent.
+    Only rows this channel holds are touched, so an unsubscribe for someone
+    else's subscription changes nothing and relays nothing.
     """
     _lock_station(station)
-    rows = TelemetrySubscription.objects.filter(
-        station=station,
-        slot=slot_key,
-        module=module,
-        capability__in=caps,
-        channel_name=channel_name,
-    )
-    held = [cap for cap in caps if cap in set(rows.values_list("capability", flat=True))]
-    rows.delete()
-    return _zeroed(station, slot_key, module, held)
+    before = _state(station, slot, module)
+    _rows(station, slot, module).filter(capability__in=caps, channel_name=channel_name).delete()
+    return _transition(slot, module, before, _state(station, slot, module))
 
 
 @transaction.atomic
-def drop_channel(station, channel_name) -> list[tuple[str, str, list[str]]]:
-    """Remove all of a closed connection's demand; return what hit zero per (slot, module)."""
+def drop_channel(station, channel_name) -> list[dict]:
+    """Remove all of a closed connection's demand; return the frames to relay."""
     _lock_station(station)
     rows = TelemetrySubscription.objects.filter(station=station, channel_name=channel_name)
-    held: dict[tuple[str, str], list[str]] = {}
-    for slot_key, module, cap in rows.values_list("slot", "module", "capability"):
-        held.setdefault((slot_key, module), []).append(cap)
+    addrs = _addrs(rows)
+    befores = {addr: _state(station, *addr) for addr in addrs}
     rows.delete()
-    result = []
-    for (slot_key, module), caps in sorted(held.items()):
-        zeroed = _zeroed(station, slot_key, module, sorted(caps))
-        if zeroed:
-            result.append((slot_key, module, zeroed))
-    return result
+    frames = []
+    for addr in addrs:
+        frames += _transition(*addr, befores[addr], _state(station, *addr))
+    return frames
+
+
+def active_subscriptions(station) -> list[dict]:
+    """Subscribe frames for the whole current demand (agent replay after reconnect)."""
+    frames = []
+    for slot, module in _addrs(TelemetrySubscription.objects.filter(station=station)):
+        caps, interval_ms = _state(station, slot, module)
+        if caps:
+            frames.append(subscribe_frame(slot, module, sorted(caps), interval_ms))
+    return frames

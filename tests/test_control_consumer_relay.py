@@ -303,8 +303,9 @@ def test_subscribe_relayed_without_lock(control_agent_auth):
 
         # Viewer does NOT acquire the lock.
         subscribe_frame = {
+            "v": V,
             "type": "subscribe",
-            "slot": "slot0",
+            "slot": 0,  # the agent only accepts int slots; others are not relayed
             "module": "fm0",
             "capabilities": ["rssi"],
             "interval_ms": 1000,
@@ -315,7 +316,7 @@ def test_subscribe_relayed_without_lock(control_agent_auth):
         relayed = await asyncio.wait_for(layer.receive(agent_spy), timeout=2.0)
         assert relayed["type"] == "control.to_agent"
         assert relayed["frame"]["type"] == "subscribe"
-        assert relayed["frame"]["slot"] == "slot0"
+        assert relayed["frame"]["slot"] == 0
         assert relayed["frame"]["capabilities"] == ["rssi"]
 
         await vc.disconnect()
