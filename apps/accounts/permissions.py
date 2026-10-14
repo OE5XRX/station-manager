@@ -480,3 +480,17 @@ class AreaConsumerMixin:
             return True
         await self.close(code=4403)
         return False
+
+
+# Third-party / framework URL trees that cannot carry our declarations.
+# Keep these to third-party code only; own views declare ``permission_exempt``.
+EXEMPT_URL_NAMESPACES: dict[str, str] = {
+    "admin": "django-admin: gated by derived is_staff",
+    "oauth2_provider": "oidc: protocol endpoints, per-app policy",
+    "djdt": "debug-toolbar: DEBUG only",
+}
+EXEMPT_URL_NAMES: dict[str, str] = {
+    "set_language": "locale switch",
+    "api:schema": "api-docs: schema only, IsAuthenticated",
+    "api:docs": "api-docs: schema only, IsAuthenticated",
+}

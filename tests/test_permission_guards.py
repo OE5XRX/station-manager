@@ -120,3 +120,130 @@ def test_createsuperuser_is_admin_level():
 
     u = User.objects.create_superuser("root", "r@example.org", "pw")
     assert u.membership_level == "admin" and u.is_staff and u.is_superuser
+
+
+# --- Task 14: URL-walk, consumer and template-reference guards ---------------
+
+
+def _walk(patterns, ns=None):
+    from django.urls import URLPattern, URLResolver
+
+    for p in patterns:
+        if isinstance(p, URLResolver):
+            yield from _walk(p.url_patterns, p.namespace or ns)
+        elif isinstance(p, URLPattern):
+            yield ns, p
+
+
+def _declaration(callback):
+    view = getattr(callback, "view_class", None) or getattr(callback, "cls", None)
+    target = view or callback
+    initkwargs = getattr(callback, "initkwargs", {}) or {}
+    area = initkwargs.get("area") or getattr(target, "area", None)
+    exempt = getattr(target, "permission_exempt", None)
+    return view, target, area, exempt
+
+
+def test_every_url_declares_area_or_exemption():
+    from django.urls import get_resolver
+
+    from apps.accounts import permissions as perms
+
+    for table in (perms.EXEMPT_URL_NAMESPACES, perms.EXEMPT_URL_NAMES):
+        assert all(str(r).strip() for r in table.values())
+
+    problems = []
+    for ns, pat in _walk(get_resolver().url_patterns):
+        full_name = f"{ns}:{pat.name}" if ns and pat.name else pat.name
+        if ns in perms.EXEMPT_URL_NAMESPACES or full_name in perms.EXEMPT_URL_NAMES:
+            continue
+        view, target, area, exempt = _declaration(pat.callback)
+        if exempt:
+            assert str(exempt).strip(), full_name
+            continue
+        label = full_name or str(pat.pattern)
+        if not area:
+            problems.append(f"{label}: no area/permission_exempt ({target})")
+            continue
+        assert area in perms.AREAS, f"{label}: unknown area {area!r}"
+        enforced = (
+            (view is not None and issubclass(view, perms.AreaPermissionMixin))
+            or (
+                view is not None
+                and perms.AreaPermission in getattr(view, "permission_classes", [])
+            )
+            or getattr(target, "area_enforced", False)
+        )
+        if not enforced:
+            problems.append(f"{label}: declares area but does not enforce it")
+        verb = getattr(target, "verb", None)
+        assert verb in (None, *perms.VERBS), f"{label}: bad verb {verb!r}"
+    assert not problems, "\n".join(problems)
+
+
+def test_every_consumer_declares_area_or_exemption():
+    from apps.accounts import permissions as perms
+
+    # config.asgi would boot the full ASGI app (static-dir warning); same lists, built from source.
+    from apps.audio import routing as audio
+    from apps.control import routing as control
+    from apps.deployments import routing as deployments
+    from apps.stations import routing as stations
+    from apps.tunnel import routing as tunnel
+
+    browser_ws_routes = (
+        stations.websocket_urlpatterns
+        + deployments.websocket_urlpatterns
+        + tunnel.websocket_urlpatterns
+        + control.websocket_urlpatterns
+        + audio.websocket_urlpatterns
+    )
+    agent_ws_routes = (
+        tunnel.agent_websocket_urlpatterns
+        + control.agent_websocket_urlpatterns
+        + audio.agent_websocket_urlpatterns
+    )
+
+    for route in [*browser_ws_routes, *agent_ws_routes]:
+        consumer = route.callback.consumer_class
+        area = getattr(consumer, "area", None)
+        exempt = getattr(consumer, "permission_exempt", None)
+        assert area or exempt, consumer
+        if exempt:
+            assert str(exempt).strip(), consumer
+        if area:
+            assert area in perms.AREAS and issubclass(consumer, perms.AreaConsumerMixin), consumer
+    for route in browser_ws_routes:
+        assert getattr(route.callback.consumer_class, "area", None), (
+            "browser consumers need an area"
+        )
+
+
+TEMPLATE_CAN = re.compile(r"\bcan\.(\w+)\.(\w+)")
+
+
+def test_template_can_references_are_valid():
+    from apps.accounts.permissions import AREAS, VERBS
+
+    bad = []
+    for d in ["apps", "templates"]:
+        for p in (ROOT / d).rglob("*.html"):
+            for m in TEMPLATE_CAN.finditer(p.read_text(encoding="utf-8")):
+                if m.group(1) not in AREAS or m.group(2) not in VERBS:
+                    bad.append(f"{p.relative_to(ROOT)}: {m.group(0)}")
+    assert not bad, "\n".join(bad)
+
+
+def test_every_drf_action_verb_is_valid():
+    from apps.accounts.permissions import VERBS
+    from apps.api.router import router
+
+    checked = 0
+    for _prefix, viewset, basename in router.registry:
+        for name in dir(viewset):
+            fn = getattr(viewset, name, None)
+            kwargs = getattr(fn, "kwargs", None)
+            if getattr(fn, "mapping", None) is not None and kwargs and "verb" in kwargs:
+                assert kwargs["verb"] in VERBS, (basename, name)
+                checked += 1
+    assert checked, "expected at least one @action with an explicit verb"
