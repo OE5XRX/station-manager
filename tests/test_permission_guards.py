@@ -126,11 +126,13 @@ def test_createsuperuser_is_admin_level():
 
 
 def _walk(patterns, ns=None):
+    """Yield (full namespace path, pattern); nested namespaces are joined by ':'."""
     from django.urls import URLPattern, URLResolver
 
     for p in patterns:
         if isinstance(p, URLResolver):
-            yield from _walk(p.url_patterns, p.namespace or ns)
+            sub = ":".join(x for x in (ns, p.namespace) if x) or None
+            yield from _walk(p.url_patterns, sub)
         elif isinstance(p, URLPattern):
             yield ns, p
 
@@ -155,7 +157,9 @@ def test_every_url_declares_area_or_exemption():
     problems = []
     for ns, pat in _walk(get_resolver().url_patterns):
         full_name = f"{ns}:{pat.name}" if ns and pat.name else pat.name
-        if ns in perms.EXEMPT_URL_NAMESPACES or full_name in perms.EXEMPT_URL_NAMES:
+        if (ns or "").split(":")[
+            0
+        ] in perms.EXEMPT_URL_NAMESPACES or full_name in perms.EXEMPT_URL_NAMES:
             continue
         view, target, area, exempt = _declaration(pat.callback)
         if exempt:
@@ -178,31 +182,23 @@ def test_every_url_declares_area_or_exemption():
             problems.append(f"{label}: declares area but does not enforce it")
         verb = getattr(target, "verb", None)
         assert verb in (None, *perms.VERBS), f"{label}: bad verb {verb!r}"
+        for method, mverb in (getattr(target, "verbs", None) or {}).items():
+            assert mverb in perms.VERBS, f"{label}: bad verbs[{method!r}] = {mverb!r}"
     assert not problems, "\n".join(problems)
 
 
 def test_every_consumer_declares_area_or_exemption():
+    import importlib
+    import inspect
+
     from apps.accounts import permissions as perms
+    from config.ws_routes import ROUTING_MODULES, agent_ws_routes, browser_ws_routes
 
-    # config.asgi would boot the full ASGI app (static-dir warning); same lists, built from source.
-    from apps.audio import routing as audio
-    from apps.control import routing as control
-    from apps.deployments import routing as deployments
-    from apps.stations import routing as stations
-    from apps.tunnel import routing as tunnel
-
-    browser_ws_routes = (
-        stations.websocket_urlpatterns
-        + deployments.websocket_urlpatterns
-        + tunnel.websocket_urlpatterns
-        + control.websocket_urlpatterns
-        + audio.websocket_urlpatterns
-    )
-    agent_ws_routes = (
-        tunnel.agent_websocket_urlpatterns
-        + control.agent_websocket_urlpatterns
-        + audio.agent_websocket_urlpatterns
-    )
+    on_disk = {p.parent.name for p in (ROOT / "apps").glob("*/routing.py")}
+    included = {m.__name__.split(".")[1] for m in ROUTING_MODULES}
+    assert on_disk == included, f"routing modules not in config/ws_routes.py: {on_disk ^ included}"
+    for name in on_disk:
+        importlib.import_module(f"apps.{name}.routing")
 
     for route in [*browser_ws_routes, *agent_ws_routes]:
         consumer = route.callback.consumer_class
@@ -213,6 +209,9 @@ def test_every_consumer_declares_area_or_exemption():
             assert str(exempt).strip(), consumer
         if area:
             assert area in perms.AREAS and issubclass(consumer, perms.AreaConsumerMixin), consumer
+            assert "area_connect_gate" in inspect.getsource(consumer.connect), (
+                f"{consumer.__name__}.connect does not call area_connect_gate"
+            )
     for route in browser_ws_routes:
         assert getattr(route.callback.consumer_class, "area", None), (
             "browser consumers need an area"
@@ -247,3 +246,13 @@ def test_every_drf_action_verb_is_valid():
                 assert kwargs["verb"] in VERBS, (basename, name)
                 checked += 1
     assert checked, "expected at least one @action with an explicit verb"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "path", ["/sso/applications/", "/sso/applications/register/", "/sso/authorized_tokens/"]
+)
+def test_dot_management_views_are_not_mounted(client, django_user_model, path):
+    user = django_user_model.objects.create_user(username="plain", password="x", email="p@x.org")
+    client.force_login(user)
+    assert client.get(path).status_code in (403, 404)
