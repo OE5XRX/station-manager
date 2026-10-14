@@ -250,7 +250,10 @@ Eine DRF-Permission `AreaPermission` ersetzt alle bisherigen User-Permissions:
 - **Jede Aktion prüft neu mit frisch geladenem User** (eine DB-Abfrage), damit
   Herabstufungen sofort wirken statt erst beim Reconnect.
 - **`can_override_station(user, station)`** = `can(user, "control", "manage")`
-  oder Station-Admin dieser Station oder Region-Manager ihrer Region. Einzige
+  oder (`can(user, "control", "use")` **und** Station-Admin dieser Station oder
+  Region-Manager ihrer Region). Der `control.use`-Boden für Zuweisungs-Inhaber
+  verhindert, dass z. B. ein Applicant mit Alt-Zuweisung preemptet und einen
+  Lock bekommt, den er nicht bedienen darf (User-Freigabe 2026-10-14). Einzige
   zuweisungsbasierte Regel im System; in `permissions.py` dokumentiert und in
   `docs/permissions.md` als Fußnote ausgegeben.
 - **Capability-Policy** (`control/capability_policy.py`): `CapabilityPolicy(verb
