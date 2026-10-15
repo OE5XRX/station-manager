@@ -131,6 +131,30 @@ class SsoOAuth2Validator(OAuth2Validator):
             )
         return allowed
 
+    def save_authorization_code(self, client_id, code, request, *args, **kwargs):
+        """Re-check the per-app policy right before a code is persisted.
+
+        Defense in depth behind ``AppGrantAuthorizationView``: oauthlib
+        calls this hook for EVERY authorization-code issuance (consent
+        POST and the skip-authorization GET path alike), with
+        ``request.client`` being the Application the code is bound to.
+        Raising ``AccessDeniedError`` here aborts issuance before the
+        Grant row exists; DOT turns it into an ``error=access_denied``
+        redirect to the (already validated) redirect_uri.
+        """
+        from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
+
+        application = getattr(request, "client", None)
+        user = getattr(request, "user", None)
+        if application is None or user is None or not user_can_access(user, application):
+            logger.warning(
+                "AppGrant gate denied code issuance user=%s app=%s",
+                getattr(user, "username", "<none>"),
+                getattr(application, "client_id", "<unknown>"),
+            )
+            raise AccessDeniedError(state=getattr(request, "state", None), request=request)
+        super().save_authorization_code(client_id, code, request, *args, **kwargs)
+
     def is_pkce_required(self, client_id, request=None):
         # Defense-in-depth: PKCE is mandatory for every client
         # regardless of OAUTH2_PROVIDER settings.

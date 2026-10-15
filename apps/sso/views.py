@@ -16,7 +16,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
-from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseRedirect
+from django.http import (
+    HttpResponse,
+    HttpResponseBadRequest,
+    HttpResponseForbidden,
+    HttpResponseRedirect,
+)
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
@@ -295,7 +300,9 @@ class AppGrantAuthorizationView(DotAuthorizationView):
     """DOT AuthorizationView wrapped with the AppGrant access gate.
 
     Two-line summary:
-    - Pre-flight: resolve client_id -> Application, check user_can_access.
+    - Pre-flight: resolve the client_id DOT will serve (query on GET, body
+      on POST; a query/body mismatch on POST is refused) -> Application,
+      check user_can_access. The validator re-checks on code issuance.
     - On deny: redirect back to RP with ?error=access_denied&state=...
       WITHOUT calling super().dispatch(), so no code/token is ever issued.
 
@@ -321,9 +328,25 @@ class AppGrantAuthorizationView(DotAuthorizationView):
         if not request.user.is_authenticated:
             return super().dispatch(request, *args, **kwargs)
 
-        # client_id arrives either as a GET param (initial visit + consent
-        # POST) or implicitly via session for some DOT versions. Read both.
-        client_id = request.GET.get("client_id") or request.POST.get("client_id")
+        # Evaluate the policy against the client_id the request will
+        # actually be served for: DOT's GET handler validates the query
+        # string, but on POST ``form_valid`` issues the code for the
+        # client_id/redirect_uri in the BODY. Gating POST on the query
+        # string would let a user allowed for app A obtain a code for app
+        # B via ``POST ?client_id=A`` with body ``client_id=B``.
+        params = request.POST if request.method == "POST" else request.GET
+        client_id = params.get("client_id")
+        query_client_id = request.GET.get("client_id")
+        if request.method == "POST" and query_client_id and query_client_id != client_id:
+            # Query and body disagree on the client — a tampered consent
+            # form. Refuse outright; never let DOT pick one of them.
+            logger.warning(
+                "OIDC authorize denied: client_id mismatch query=%r body=%r user=%s",
+                query_client_id,
+                client_id,
+                request.user.username,
+            )
+            return HttpResponseForbidden("access_denied")
         if not client_id:
             # No client_id means the request is malformed; let DOT handle
             # the 400.
@@ -370,8 +393,8 @@ class AppGrantAuthorizationView(DotAuthorizationView):
         # Pull the requested redirect_uri + state for the RP-bounce. The
         # redirect_uri MUST be one the Application has registered — else
         # we have an open-redirect; fall back to a 400 in that case.
-        redirect_uri = request.GET.get("redirect_uri") or request.POST.get("redirect_uri")
-        state = request.GET.get("state") or request.POST.get("state") or ""
+        redirect_uri = params.get("redirect_uri")
+        state = params.get("state") or ""
 
         if not redirect_uri or not _is_registered_redirect(application, redirect_uri):
             # Cannot safely bounce back. Return 400 without echoing the

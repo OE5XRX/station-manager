@@ -8,7 +8,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
-from apps.accounts.permissions import AreaPermission, can
+from apps.accounts.permissions import AreaPermission, Level, can, level_of
 from apps.accounts.visibility import audience_for, directory_queryset
 from apps.api.authentication import PersonalAccessTokenAuthentication
 from apps.api.read_filters import (
@@ -165,13 +165,21 @@ User = get_user_model()
 def _assignments_visible_to(qs, viewer):
     """Narrow assignment rows to those whose target user the viewer may see.
 
-    Mirrors the UI (``visibility``): non-managers must not learn assignments of
-    users hidden from the directory (``is_directory_visible=False``), inactive or
-    soft-deleted users, or Applicants. The viewer's own rows are always kept.
+    Mirrors ``visibility.audience_for`` plus the directory filter:
+
+    - ``users.manage`` holders see every row.
+    - Applicant viewers see only their own rows (``audience_for`` gives an
+      Applicant no view of any other user).
+    - Everyone else sees their own rows plus rows of users who are
+      directory-visible (``is_directory_visible``), active, not soft-deleted
+      and not Applicants.
     """
     if can(viewer, "users", "manage"):
         return qs
-    visible = Q(user=viewer) | Q(
+    own = Q(user=viewer)
+    if level_of(viewer) == Level.APPLICANT:
+        return qs.filter(own)
+    visible = own | Q(
         user__is_directory_visible=True,
         user__is_active=True,
         user__deleted_at__isnull=True,

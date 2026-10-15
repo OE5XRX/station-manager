@@ -74,11 +74,17 @@ def hidden_assignments(topology):  # noqa: F811
     inactive = User.objects.create_user(
         username="gone", password="x", membership_level="member", is_active=False
     )
-    for u in (hidden, inactive):
+    demoted = User.objects.create_user(username="demoted", password="x", membership_level="member")
+    for u in (hidden, inactive, demoted):
         StationAssignment.objects.create(user=u, station=topology["station_in"], role="maintainer")
         RegionAssignment.objects.create(user=u, region=topology["region_in"], role="manager")
+    # A member who held assignments and was later demoted to Applicant. Use a
+    # queryset .update() so no save()-side cleanup can drop the assignments.
+    User.objects.filter(pk=demoted.pk).update(membership_level="applicant")
+    demoted.refresh_from_db()
     topology["hidden"] = hidden
     topology["inactive"] = inactive
+    topology["demoted"] = demoted
     return topology
 
 
@@ -88,6 +94,7 @@ def test_assignments_of_hidden_users_not_exposed_to_members(hidden_assignments, 
     t = hidden_assignments
     users = {r["user"] for r in bearer(t["station_user"]).get(f"/api/v1/{url}/").data["results"]}
     assert t["hidden"].pk not in users and t["inactive"].pk not in users
+    assert t["demoted"].pk not in users
     # Filtering by the hidden user's id reveals nothing either.
     q = bearer(t["station_user"]).get(f"/api/v1/{url}/?user={t['hidden'].pk}")
     assert q.data["count"] == 0
@@ -99,6 +106,7 @@ def test_assignments_of_hidden_users_visible_to_admin(hidden_assignments, url):
     t = hidden_assignments
     users = {r["user"] for r in bearer(t["admin"]).get(f"/api/v1/{url}/").data["results"]}
     assert t["hidden"].pk in users and t["inactive"].pk in users
+    assert t["demoted"].pk in users
 
 
 @pytest.mark.django_db
@@ -107,3 +115,17 @@ def test_hidden_user_sees_own_assignments(hidden_assignments, url):
     t = hidden_assignments
     users = {r["user"] for r in bearer(t["hidden"]).get(f"/api/v1/{url}/").data["results"]}
     assert t["hidden"].pk in users
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("url", ["station-assignments", "region-assignments"])
+def test_applicant_viewer_sees_only_own_assignments(hidden_assignments, url):
+    # Mirrors audience_for: an Applicant has no view of any other user, so the
+    # API must not reveal other members' assignments either — only its own.
+    # The demoted user is an Applicant that still holds assignments (applicants
+    # cannot be given new ones), so it exercises the "own rows" branch.
+    t = hidden_assignments
+    resp = session(t["demoted"]).get(f"/api/v1/{url}/")
+    assert resp.status_code == 200
+    users = {r["user"] for r in resp.data["results"]}
+    assert users == {t["demoted"].pk}
