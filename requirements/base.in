@@ -10,7 +10,7 @@ channels-redis>=4.2,<5.0
 # declares `redis>=4.6` with no upper bound, so an unpinned build floats to
 # the newest major -- this regressed prod on 2026-06-13. Cap below 8.0 until
 # channels_redis supports RESP3. See https://github.com/redis/redis-py/issues/4091
-redis>=5.0,<8.0
+redis>=8.1.0,<9.0
 django-storages[s3]>=1.14,<2.0
 Pillow>=11.0,<13.0
 psycopg[binary]>=3.2,<4.0
