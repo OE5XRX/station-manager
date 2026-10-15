@@ -94,6 +94,9 @@ def test_directory_queryset(db):
     # Members: active, not deleted, no Applicants. Managers: every non-deleted.
     assert set(directory_queryset(mem)) == {mem, adm}
     assert set(directory_queryset(adm)) == {app, mem, adm, dormant}
+    # Staff has no users.manage: same view as a member (no applicants/deactivated).
+    staff = _mk("staff", "st1")
+    assert set(directory_queryset(staff)) == {mem, adm, staff}
 
 
 def test_webpush_subscribe_requires_profile_use(client):

@@ -12,8 +12,9 @@ def _login(client, level):
     return u
 
 
-def test_applicant_sees_station_detail_without_edit_or_audit(client, station):
-    _login(client, "applicant")
+@pytest.mark.parametrize("level", ["applicant", "member"])
+def test_below_staff_sees_station_detail_without_edit_or_audit(client, station, level):
+    _login(client, level)
     r = client.get(reverse("stations:station_detail", args=[station.pk]))
     assert r.status_code == 200
     html = r.content.decode()
@@ -31,8 +32,9 @@ def test_staff_sees_audit_tab_and_edit(client, station):
     assert "nur lesend" not in html
 
 
-def test_audit_logs_not_queried_for_applicant(client, station, django_assert_max_num_queries):
-    _login(client, "applicant")
+@pytest.mark.parametrize("level", ["applicant", "member"])
+def test_audit_logs_not_queried_below_staff(client, station, level):
+    _login(client, level)
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
@@ -111,12 +113,16 @@ def test_sidebar_lists_tags_and_regions_for_applicant(client):
     assert reverse("stations:region_list") in html
 
 
-def test_last_ip_hidden_from_applicant_shown_to_staff(client, station):
+@pytest.mark.parametrize("level", ["applicant", "member"])
+def test_last_ip_hidden_below_staff_shown_to_staff(client, station, level):
     station.last_ip_address = "203.0.113.77"
     station.save()
-    _login(client, "applicant")
+    _login(client, level)
     url = reverse("stations:station_detail", args=[station.pk])
-    assert "203.0.113.77" not in client.get(url).content.decode()
+    html = client.get(url).content.decode()
+    assert "203.0.113.77" not in html
+    assert 'data-tab="audit"' not in html
+    assert 'data-tab-panel="audit"' not in html
     client.logout()
     _login(client, "staff")
     assert "203.0.113.77" in client.get(url).content.decode()

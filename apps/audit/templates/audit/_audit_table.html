@@ -10,7 +10,7 @@
         <th>{% trans "Event" %}</th>
         <th>{% trans "Message" %}</th>
         <th>{% trans "User" %}</th>
-        <th>{% trans "IP" %}</th>
+        {% if can.audit.view %}<th>{% trans "IP" %}</th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -33,7 +33,7 @@
           <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>
           <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
           <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.user.username|default:"—" }}</td>
-          <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
+          {% if can.audit.view %}<td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>{% endif %}
         {% elif row_category == "account" %}
           <td data-label="{% trans 'Category' %}"><span class="pill pill-info">{% trans "Account" %}</span></td>
           {% if not hide_subject %}
@@ -54,7 +54,7 @@
             {% endif %}
           </td>
           <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.actor.username|default:"—" }}</td>
-          <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
+          {% if can.audit.view %}<td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>{% endif %}
         {% else %}
           <td data-label="{% trans 'Category' %}"><span class="pill pill-info">SSO</span></td>
           {% if not hide_subject %}
@@ -67,7 +67,7 @@
           <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ entry.get_event_type_display|upper }}</span></td>
           <td data-label="{% trans 'Message' %}">{{ entry.message }}</td>
           <td class="t-mono-sm" data-label="{% trans 'User' %}">{{ entry.actor.username|default:"—" }}</td>
-          <td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>
+          {% if can.audit.view %}<td class="t-mono-sm" data-label="{% trans 'IP' %}">{{ entry.ip_address|default:"—" }}</td>{% endif %}
         {% endif %}
       </tr>
       {% endfor %}

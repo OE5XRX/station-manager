@@ -252,6 +252,17 @@ def test_users_api_list_matches_ui_directory_for_member(client):
     assert not {"dir-app", "dir-inactive", "dir-gone"} & api_names
 
 
+def test_staff_users_api_lists_same_as_member():
+    """Staff has no users.manage: no Applicants / deactivated users, like a member."""
+    User.objects.create_user(username="st-app", password="x", membership_level="applicant")
+    User.objects.create_user(username="st-mem", password="x", membership_level="member")
+    User.objects.create_user(
+        username="st-off", password="x", membership_level="member", is_active=False
+    )
+    names = {u["username"] for u in _c("staff").get("/api/v1/users/").json()["results"]}
+    assert names == {"st-mem", "api-staff"}
+
+
 def test_admin_users_api_lists_all_non_deleted():
     """Admins get every non-deleted user: active and inactive, incl. Applicants."""
     from django.utils import timezone

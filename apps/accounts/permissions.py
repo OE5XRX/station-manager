@@ -374,6 +374,12 @@ class AreaPermissionMixin:
             from django.contrib.auth.views import redirect_to_login
 
             return redirect_to_login(request.get_full_path())
+        # ``require`` runs before ``View.dispatch``: a method the view does not
+        # implement must answer 405, not map to ``manage`` -> 403 + a false
+        # PERMISSION_DENIED audit row.
+        handler_name = request.method.lower()
+        if handler_name not in self.http_method_names or not hasattr(self, handler_name):
+            return self.http_method_not_allowed(request, *args, **kwargs)
         area, verb = self.get_area_verb()
         require(request.user, area, verb, request=request, channel="web")
         return super().dispatch(request, *args, **kwargs)
@@ -434,6 +440,11 @@ class AreaPermission(BasePermission):
         original = getattr(request, "_request", None)
         if original is not None and request.method.upper() != original.method.upper():
             return can(user, view.area, verb)
+        # A method the view does not implement: let DRF answer 405 instead of
+        # a 403 + false PERMISSION_DENIED row (``manage`` is the fallback verb).
+        allowed = getattr(view, "allowed_methods", None)
+        if allowed is not None and request.method.upper() not in allowed:
+            return True
         require(user, view.area, verb, request=request, channel="api")
         return True
 
@@ -583,8 +594,8 @@ EXEMPT_URL_NAMESPACES: dict[str, str] = {
 _OIDC = "oidc: protocol endpoint"
 EXEMPT_URL_NAMES: dict[str, str] = {
     "set_language": "locale switch",
-    "api:schema": "api-docs: schema only, IsAuthenticated",
-    "api:docs": "api-docs: schema only, IsAuthenticated",
+    "api:schema": "api-docs: public OpenAPI schema, no data",
+    "api:docs": "api-docs: public OpenAPI schema, no data",
     **{
         f"oauth2_provider:{name}": _OIDC
         for name in (

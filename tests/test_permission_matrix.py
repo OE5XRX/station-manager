@@ -90,7 +90,7 @@ API = {
     ("deployments", "view"): ("GET", "/api/v1/deployments/", None),
     ("deployments", "manage"): ("POST", "/api/v1/deployments/", {}),
     ("rollouts", "view"): ("GET", "/api/v1/rollout-sequences/", None),
-    ("rollouts", "manage"): ("POST", "/api/v1/rollout-sequences/", {}),
+    ("rollouts", "manage"): ("POST", "/api/v1/rollout-sequence-entries/", {}),
     ("images", "view"): ("GET", "/api/v1/images/", None),
     # GET, but the action declares verb="manage" (GitHub call mocked in the test).
     ("images", "manage"): ("GET", "/api/v1/images/available/", None),
