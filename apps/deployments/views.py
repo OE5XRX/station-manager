@@ -8,19 +8,21 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import CreateView, DetailView, ListView
 
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.models import StationAuditLog
-from apps.stations.views import AdminOrOperatorRequiredMixin
 
 from .forms import DeploymentForm
 from .models import Deployment, DeploymentResult
 
 
 def _get_client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
+    from apps.accounts.client_ip import client_ip
+
+    return client_ip(request)
 
 
-class DeploymentListView(AdminOrOperatorRequiredMixin, ListView):
+class DeploymentListView(AreaPermissionMixin, ListView):
+    area = "deployments"
     model = Deployment
     template_name = "deployments/deployment_list.html"
     context_object_name = "deployments"
@@ -69,7 +71,8 @@ class DeploymentListView(AdminOrOperatorRequiredMixin, ListView):
         return context
 
 
-class DeploymentDetailView(AdminOrOperatorRequiredMixin, DetailView):
+class DeploymentDetailView(AreaPermissionMixin, DetailView):
+    area = "deployments"
     model = Deployment
     template_name = "deployments/deployment_detail.html"
     context_object_name = "deployment"
@@ -83,7 +86,9 @@ class DeploymentDetailView(AdminOrOperatorRequiredMixin, DetailView):
         )
 
 
-class DeploymentCreateView(AdminOrOperatorRequiredMixin, CreateView):
+class DeploymentCreateView(AreaPermissionMixin, CreateView):
+    area = "deployments"
+    verb = "manage"
     model = Deployment
     form_class = DeploymentForm
     template_name = "deployments/deployment_form.html"
@@ -139,8 +144,11 @@ class DeploymentCreateView(AdminOrOperatorRequiredMixin, CreateView):
         return context
 
 
-class DeploymentCancelView(AdminOrOperatorRequiredMixin, View):
+class DeploymentCancelView(AreaPermissionMixin, View):
     """Cancel a deployment (POST only)."""
+
+    area = "deployments"
+    verb = "manage"
 
     def post(self, request, pk):
         deployment = get_object_or_404(Deployment, pk=pk)

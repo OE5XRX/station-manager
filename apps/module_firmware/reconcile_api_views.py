@@ -36,6 +36,7 @@ class ReconcileCheckView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     def post(self, request):
         station = getattr(request.auth, "station", None)
@@ -111,6 +112,7 @@ class ReconcileStatusUpdateView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     def post(self, request, convergence_id):
         station = getattr(request.auth, "station", None)
@@ -210,6 +212,7 @@ class ReconcileCommitView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     def post(self, request):
         station = getattr(request.auth, "station", None)

@@ -1,7 +1,7 @@
 """UI-Gating folgt den Backend-Checks: kein Link/Button, der auf eine 403 führt.
 
-Alerts = is_admin (AlertListView), Deployments = is_internal
-(DeploymentListView), Control-Panel = can_use_station (StationControlView).
+Alerts = is_admin (AlertListView), Deployments = deployments:view (Applicant+),
+Control-Panel = control.view (StationControlView; Applicant+ read-only).
 """
 
 import pytest
@@ -44,9 +44,9 @@ class TestNavLinksMatchBackend:
         "user_fixture, alerts, deployments",
         [
             ("admin_user", True, True),
-            ("operator_user", False, True),
-            ("member_user", False, False),
-            ("applicant_user", False, False),
+            ("staff_user", True, True),
+            ("member_user", True, True),
+            ("applicant_user", True, True),
         ],
     )
     @pytest.mark.parametrize("page", ["dashboard:index", "stations:station_list"])
@@ -62,9 +62,9 @@ class TestNavLinksMatchBackend:
         "user_fixture, expected_alerts, expected_deployments",
         [
             ("admin_user", 200, 200),
-            ("operator_user", 403, 200),
-            ("member_user", 403, 403),
-            ("applicant_user", 403, 403),
+            ("staff_user", 200, 200),
+            ("member_user", 200, 200),
+            ("applicant_user", 200, 200),
         ],
     )
     def test_backend_contract_unchanged(
@@ -82,12 +82,12 @@ class TestControlPanelButton:
         "user_fixture, visible",
         [
             ("admin_user", True),
-            ("operator_user", True),
+            ("staff_user", True),
             ("member_user", True),
-            ("applicant_user", False),
+            ("applicant_user", True),  # control:view is Applicant+ (spec 1.3)
         ],
     )
-    def test_button_matches_can_use_station(
+    def test_button_matches_control_view(
         self, request, client, station_with_module, user_fixture, visible
     ):
         user = request.getfixturevalue(user_fixture)
@@ -96,7 +96,18 @@ class TestControlPanelButton:
             client, user, reverse("stations:station_detail", args=[station_with_module.pk])
         )
         assert (control_url in html) is visible
-        assert client.get(control_url).status_code == (200 if visible else 403)
+        page = client.get(control_url)
+        assert page.status_code == 200
+        body = page.content.decode()
+        if user_fixture == "applicant_user":
+            # Read-only: no lock/PTT/mic controls, readonly badge, RX audio available.
+            assert '@click="acquire()"' not in body
+            assert "enableMic()" not in body
+            assert 'data-cap="ptt"' not in body
+            assert "nur lesend" in body
+            assert 'x-data="audioPanel"' in body
+        else:
+            assert '@click="acquire()"' in body
 
     def test_applicant_still_sees_station_detail(self, client, applicant_user, station):
         """Applicants dürfen Stationen ansehen — nur nicht steuern."""
@@ -107,9 +118,9 @@ class TestControlPanelButton:
 class TestImageReleaseLink:
     @pytest.mark.parametrize(
         "user_fixture, linked",
-        [("admin_user", True), ("member_user", False), ("applicant_user", False)],
+        [("admin_user", True), ("member_user", True), ("applicant_user", True)],
     )
-    def test_images_link_only_for_admins(
+    def test_images_link_for_everyone_with_images_view(
         self, request, client, station, image_release, user_fixture, linked
     ):
         station.current_image_release = image_release
@@ -120,3 +131,18 @@ class TestImageReleaseLink:
             reverse("stations:station_detail", args=[station.pk]),
         )
         assert (reverse("images:list") in html) is linked
+
+
+@pytest.mark.django_db
+class TestImageListStorageKey:
+    """s3_key is infra storage detail (excluded from the API serializer):
+    only images.manage may see it in the list HTML."""
+
+    @pytest.mark.parametrize(
+        "user_fixture, visible",
+        [("admin_user", True), ("member_user", False), ("applicant_user", False)],
+    )
+    def test_s3_key_only_for_manage(self, request, client, image_release, user_fixture, visible):
+        html = _get(client, request.getfixturevalue(user_fixture), reverse("images:list"))
+        assert (image_release.s3_key[:30] in html) is visible
+        assert image_release.tag in html

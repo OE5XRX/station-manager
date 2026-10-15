@@ -77,4 +77,67 @@ ok("control: setValue/doAction DO send from a writable widget", () => {
   assert.equal(sent.length, 2);
 });
 
+// Error-frame normalisation (spec 2026-10-14 §5.2): the permission frame is
+// {type:"error", code:"forbidden", message}, the legacy one {error:{code,msg}}.
+ok("forbidden frame for a widget request sets the widget error + deny notice", () => {
+  const { c } = make(false);
+  c._reqWidget["r1"] = "slot0 fm filter_hpf";
+  c._onError({ type: "error", code: "forbidden", message: "Keine Berechtigung", request_id: "r1" });
+  assert.equal(c.errors["slot0 fm filter_hpf"], "Not permitted");
+  assert.equal(c.denyNotice, "Keine Berechtigung");
+  assert.equal(c.connError, null);
+  clearTimeout(c._denyTimer);
+});
+ok("legacy {error:{code}} frame still maps to the widget", () => {
+  const { c } = make(false);
+  c._reqWidget["r2"] = "slot0 fm frequency";
+  c._onError({ type: "error", request_id: "r2", error: { code: "not_locked", msg: "x" } });
+  assert.equal(c.errors["slot0 fm frequency"], "You don\u2019t have control");
+  assert.equal(c.denyNotice, null);
+});
+ok("action denial without widget is a toast, not a connection error", () => {
+  const { c } = make(false);
+  c._onError({ type: "error", code: "forbidden", message: "Nope" });
+  assert.equal(c.denyNotice, "Nope");
+  assert.equal(c.connError, null);
+  clearTimeout(c._denyTimer);
+});
+ok("connect-gate denial followed by 4403 becomes the connection error", () => {
+  const { c } = make(false);
+  c._onError({ type: "error", code: "forbidden", message: "Gate says no" });
+  clearTimeout(c._denyTimer);
+  c._closeCode = 4403;
+  c._scheduleReconnect();
+  assert.equal(c.conn, "closed");
+  assert.equal(c.connError, "Gate says no");
+  assert.equal(c.denyNotice, null);
+});
+ok("legacy reason frame still sets connError", () => {
+  const { c } = make(false);
+  c._onError({ type: "error", code: 4404, reason: "Station not found" });
+  assert.equal(c.connError, "Station not found");
+});
+
+ok("a successful (re)connect clears a stale denial", () => {
+  const { c } = make(false);
+  c._onError({ type: "error", code: "forbidden", message: "Old denial" });
+  clearTimeout(c._denyTimer);
+  const handlers = {};
+  globalThis.location = { protocol: "http:", host: "x" };
+  globalThis.WebSocket = function () {
+    this.addEventListener = (t, fn) => {
+      handlers[t] = fn;
+    };
+  };
+  c._subscribeAll = () => {};
+  c._publishControlStore = () => {};
+  c._connect();
+  handlers.open();
+  assert.equal(c._lastDenial, null);
+  // A later 4403 without a fresh denial frame falls back to the generic text.
+  c._closeCode = 4403;
+  c._scheduleReconnect();
+  assert.notEqual(c.connError, "Old denial");
+});
+
 console.log("\n" + passed + " assertions passed");

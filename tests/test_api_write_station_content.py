@@ -1,12 +1,14 @@
 """Write-surface permission matrix tests for StationLogEntry + StationPhoto.
 
-TDD: run RED first (router/viewsets not yet registered), then implement and
-verify GREEN.
+Writes need stations.manage (Staff) on every station — no topology scoping;
+station assignments grant no API write rights.
 """
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
+
+from tests.test_api_read_fixtures import session
 
 pytestmark = pytest.mark.django_db
 
@@ -33,7 +35,7 @@ def _tiny_image(name="photo.png"):
 
 
 class TestStationLogEntryCreate:
-    def test_station_user_creates_on_in_scope_station(self, api_topology, bearer):
+    def test_staff_creates_log_entry(self, api_topology, bearer):
         t = api_topology
         payload = {
             "station": t["station_in"].pk,
@@ -41,15 +43,13 @@ class TestStationLogEntryCreate:
             "title": "Test Entry",
             "message": "Hello",
         }
-        r = bearer(t["station_user"]).post(
-            reverse("api:station-log-entry-list"), payload, format="json"
-        )
+        r = bearer(t["staff"]).post(reverse("api:station-log-entry-list"), payload, format="json")
         assert r.status_code == 201
 
-    def test_station_user_cannot_create_on_out_of_scope_station(self, api_topology, bearer):
+    def test_member_cannot_create_even_on_assigned_station(self, api_topology, bearer):
         t = api_topology
         payload = {
-            "station": t["station_out"].pk,
+            "station": t["station_in"].pk,
             "entry_type": "note",
             "title": "Test Entry",
             "message": "Hello",
@@ -70,12 +70,10 @@ class TestStationLogEntryCreate:
             "message": "Hello",
             "created_by": t["admin"].pk,  # attacker-supplied, must be ignored
         }
-        r = bearer(t["station_user"]).post(
-            reverse("api:station-log-entry-list"), payload, format="json"
-        )
+        r = bearer(t["staff"]).post(reverse("api:station-log-entry-list"), payload, format="json")
         assert r.status_code == 201
         entry = StationLogEntry.objects.get(pk=r.data["id"])
-        assert entry.created_by == t["station_user"]
+        assert entry.created_by == t["staff"]
 
     def test_applicant_cannot_create(self, api_topology, bearer):
         t = api_topology
@@ -85,7 +83,7 @@ class TestStationLogEntryCreate:
             "title": "Test Entry",
             "message": "Hello",
         }
-        r = bearer(t["applicant"]).post(
+        r = session(t["applicant"]).post(
             reverse("api:station-log-entry-list"), payload, format="json"
         )
         assert r.status_code == 403
@@ -111,9 +109,7 @@ class TestStationLogEntryCreate:
             "title": "Test Entry",
             "message": "Hello",
         }
-        r = bearer(t["station_user"]).post(
-            reverse("api:station-log-entry-list"), payload, format="json"
-        )
+        r = bearer(t["staff"]).post(reverse("api:station-log-entry-list"), payload, format="json")
         assert r.status_code == 201
         assert StationAuditLog.objects.filter(
             station=t["station_in"],
@@ -123,7 +119,7 @@ class TestStationLogEntryCreate:
 
 
 class TestStationLogEntryUpdate:
-    def test_out_of_scope_detail_update_returns_404(self, api_topology, bearer):
+    def test_member_update_returns_403(self, api_topology, bearer):
         from apps.stations.models import StationLogEntry
 
         t = api_topology
@@ -136,9 +132,9 @@ class TestStationLogEntryUpdate:
         )
         url = reverse("api:station-log-entry-detail", args=[entry.pk])
         r = bearer(t["station_user"]).patch(url, {"title": "Pwned"}, format="json")
-        assert r.status_code == 404
+        assert r.status_code == 403
 
-    def test_move_to_out_of_scope_station_returns_403_db_unchanged(self, api_topology, bearer):
+    def test_staff_can_move_to_any_station(self, api_topology, bearer):
         from apps.stations.models import StationLogEntry
 
         t = api_topology
@@ -150,10 +146,10 @@ class TestStationLogEntryUpdate:
             created_by=t["station_user"],
         )
         url = reverse("api:station-log-entry-detail", args=[entry.pk])
-        r = bearer(t["station_user"]).patch(url, {"station": t["station_out"].pk}, format="json")
-        assert r.status_code == 403
+        r = bearer(t["staff"]).patch(url, {"station": t["station_out"].pk}, format="json")
+        assert r.status_code == 200
         entry.refresh_from_db()
-        assert entry.station == t["station_in"]  # unchanged
+        assert entry.station == t["station_out"]
 
     def test_update_emits_audit_row(self, api_topology, bearer):
         from apps.stations.models import StationAuditLog, StationLogEntry
@@ -167,7 +163,7 @@ class TestStationLogEntryUpdate:
             created_by=t["station_user"],
         )
         url = reverse("api:station-log-entry-detail", args=[entry.pk])
-        r = bearer(t["station_user"]).patch(url, {"title": "Updated"}, format="json")
+        r = bearer(t["staff"]).patch(url, {"title": "Updated"}, format="json")
         assert r.status_code == 200
         assert StationAuditLog.objects.filter(
             station=t["station_in"],
@@ -177,7 +173,7 @@ class TestStationLogEntryUpdate:
 
 
 class TestStationLogEntryDelete:
-    def test_station_user_can_delete_in_scope(self, api_topology, bearer):
+    def test_staff_can_delete(self, api_topology, bearer):
         from apps.stations.models import StationLogEntry
 
         t = api_topology
@@ -189,7 +185,7 @@ class TestStationLogEntryDelete:
             created_by=t["station_user"],
         )
         url = reverse("api:station-log-entry-detail", args=[entry.pk])
-        r = bearer(t["station_user"]).delete(url)
+        r = bearer(t["staff"]).delete(url)
         assert r.status_code == 204
         assert not StationLogEntry.objects.filter(pk=entry.pk).exists()
 
@@ -205,14 +201,14 @@ class TestStationLogEntryDelete:
             created_by=t["station_user"],
         )
         url = reverse("api:station-log-entry-detail", args=[entry.pk])
-        bearer(t["station_user"]).delete(url)
+        bearer(t["staff"]).delete(url)
         assert StationAuditLog.objects.filter(
             station=t["station_in"],
             event_type=StationAuditLog.EventType.DELETED,
             message__contains="via API token",
         ).exists()
 
-    def test_delete_out_of_scope_returns_404(self, api_topology, bearer):
+    def test_member_delete_returns_403(self, api_topology, bearer):
         from apps.stations.models import StationLogEntry
 
         t = api_topology
@@ -225,7 +221,7 @@ class TestStationLogEntryDelete:
         )
         url = reverse("api:station-log-entry-detail", args=[entry.pk])
         r = bearer(t["station_user"]).delete(url)
-        assert r.status_code == 404
+        assert r.status_code == 403
         assert StationLogEntry.objects.filter(pk=entry.pk).exists()
 
 
@@ -235,9 +231,9 @@ class TestStationLogEntryDelete:
 
 
 class TestStationPhotoCreate:
-    def test_station_user_uploads_photo_on_in_scope_station(self, api_topology, bearer):
+    def test_staff_uploads_photo(self, api_topology, bearer):
         t = api_topology
-        r = bearer(t["station_user"]).post(
+        r = bearer(t["staff"]).post(
             reverse("api:station-photo-list"),
             {
                 "station": t["station_in"].pk,
@@ -248,12 +244,12 @@ class TestStationPhotoCreate:
         )
         assert r.status_code == 201
 
-    def test_station_user_cannot_upload_to_out_of_scope_station(self, api_topology, bearer):
+    def test_member_cannot_upload_even_on_assigned_station(self, api_topology, bearer):
         t = api_topology
         r = bearer(t["station_user"]).post(
             reverse("api:station-photo-list"),
             {
-                "station": t["station_out"].pk,
+                "station": t["station_in"].pk,
                 "caption": "Pwned",
                 "image": _tiny_image(),
             },
@@ -265,7 +261,7 @@ class TestStationPhotoCreate:
         from apps.stations.models import StationPhoto
 
         t = api_topology
-        r = bearer(t["station_user"]).post(
+        r = bearer(t["staff"]).post(
             reverse("api:station-photo-list"),
             {
                 "station": t["station_in"].pk,
@@ -277,11 +273,11 @@ class TestStationPhotoCreate:
         )
         assert r.status_code == 201
         photo = StationPhoto.objects.get(pk=r.data["id"])
-        assert photo.uploaded_by == t["station_user"]
+        assert photo.uploaded_by == t["staff"]
 
     def test_applicant_cannot_upload(self, api_topology, bearer):
         t = api_topology
-        r = bearer(t["applicant"]).post(
+        r = session(t["applicant"]).post(
             reverse("api:station-photo-list"),
             {
                 "station": t["station_in"].pk,
@@ -309,7 +305,7 @@ class TestStationPhotoCreate:
         from apps.stations.models import StationAuditLog
 
         t = api_topology
-        r = bearer(t["station_user"]).post(
+        r = bearer(t["staff"]).post(
             reverse("api:station-photo-list"),
             {
                 "station": t["station_in"].pk,
@@ -327,7 +323,7 @@ class TestStationPhotoCreate:
 
 
 class TestStationPhotoUpdate:
-    def test_out_of_scope_detail_update_returns_404(self, api_topology, bearer):
+    def test_member_update_returns_403(self, api_topology, bearer):
         from apps.stations.models import StationPhoto
 
         t = api_topology
@@ -339,9 +335,9 @@ class TestStationPhotoUpdate:
         )
         url = reverse("api:station-photo-detail", args=[photo.pk])
         r = bearer(t["station_user"]).patch(url, {"caption": "Pwned"}, format="json")
-        assert r.status_code == 404
+        assert r.status_code == 403
 
-    def test_move_to_out_of_scope_station_returns_403_db_unchanged(self, api_topology, bearer):
+    def test_staff_can_move_to_any_station(self, api_topology, bearer):
         from apps.stations.models import StationPhoto
 
         t = api_topology
@@ -352,10 +348,10 @@ class TestStationPhotoUpdate:
             uploaded_by=t["station_user"],
         )
         url = reverse("api:station-photo-detail", args=[photo.pk])
-        r = bearer(t["station_user"]).patch(url, {"station": t["station_out"].pk}, format="json")
-        assert r.status_code == 403
+        r = bearer(t["staff"]).patch(url, {"station": t["station_out"].pk}, format="json")
+        assert r.status_code == 200
         photo.refresh_from_db()
-        assert photo.station == t["station_in"]  # unchanged
+        assert photo.station == t["station_out"]
 
     def test_update_emits_audit_row(self, api_topology, bearer):
         from apps.stations.models import StationAuditLog, StationPhoto
@@ -368,7 +364,7 @@ class TestStationPhotoUpdate:
             uploaded_by=t["station_user"],
         )
         url = reverse("api:station-photo-detail", args=[photo.pk])
-        r = bearer(t["station_user"]).patch(url, {"caption": "Updated"}, format="json")
+        r = bearer(t["staff"]).patch(url, {"caption": "Updated"}, format="json")
         assert r.status_code == 200
         assert StationAuditLog.objects.filter(
             station=t["station_in"],
@@ -402,7 +398,7 @@ class TestStationPhotoUpdate:
             # though pytest-django wraps the test in a savepoint that never
             # commits to the real database.
             with TestCase.captureOnCommitCallbacks(execute=True):
-                r = bearer(t["station_user"]).patch(
+                r = bearer(t["staff"]).patch(
                     url,
                     {"image": _tiny_image("new_photo.png")},
                     format="multipart",
@@ -437,7 +433,7 @@ class TestStationPhotoUpdate:
                 uploaded_by=t["station_user"],
             )
             url = reverse("api:station-photo-detail", args=[photo.pk])
-            r = bearer(t["station_user"]).patch(url, {"caption": "Updated caption"}, format="json")
+            r = bearer(t["staff"]).patch(url, {"caption": "Updated caption"}, format="json")
             assert r.status_code == 200
             assert default_storage.exists(stored_name), (
                 "Blob must NOT be deleted when image was not included in the PATCH"
@@ -447,7 +443,7 @@ class TestStationPhotoUpdate:
 
 
 class TestStationPhotoDelete:
-    def test_station_user_can_delete_in_scope(self, api_topology, bearer):
+    def test_staff_can_delete(self, api_topology, bearer):
         from apps.stations.models import StationPhoto
 
         t = api_topology
@@ -458,7 +454,7 @@ class TestStationPhotoDelete:
             uploaded_by=t["station_user"],
         )
         url = reverse("api:station-photo-detail", args=[photo.pk])
-        r = bearer(t["station_user"]).delete(url)
+        r = bearer(t["staff"]).delete(url)
         assert r.status_code == 204
         assert not StationPhoto.objects.filter(pk=photo.pk).exists()
 
@@ -473,14 +469,14 @@ class TestStationPhotoDelete:
             uploaded_by=t["station_user"],
         )
         url = reverse("api:station-photo-detail", args=[photo.pk])
-        bearer(t["station_user"]).delete(url)
+        bearer(t["staff"]).delete(url)
         assert StationAuditLog.objects.filter(
             station=t["station_in"],
             event_type=StationAuditLog.EventType.DELETED,
             message__contains="via API token",
         ).exists()
 
-    def test_delete_out_of_scope_returns_404(self, api_topology, bearer):
+    def test_member_delete_returns_403(self, api_topology, bearer):
         from apps.stations.models import StationPhoto
 
         t = api_topology
@@ -492,5 +488,5 @@ class TestStationPhotoDelete:
         )
         url = reverse("api:station-photo-detail", args=[photo.pk])
         r = bearer(t["station_user"]).delete(url)
-        assert r.status_code == 404
+        assert r.status_code == 403
         assert StationPhoto.objects.filter(pk=photo.pk).exists()

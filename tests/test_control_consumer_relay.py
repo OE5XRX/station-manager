@@ -8,6 +8,7 @@ from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 
 from apps.accounts.models import User
+from apps.control.models import StationModule
 from apps.stations.models import Station
 from config.asgi import application
 
@@ -291,6 +292,7 @@ def test_subscribe_relayed_without_lock(control_agent_auth):
     to the agent group even without a lock.
     """
     station = Station.objects.create(name="e2e3", status="online")
+    StationModule.objects.create(station=station, slot="0", module_id="fm0")
     viewer = User.objects.create(username="vsub", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
@@ -303,8 +305,9 @@ def test_subscribe_relayed_without_lock(control_agent_auth):
 
         # Viewer does NOT acquire the lock.
         subscribe_frame = {
+            "v": V,
             "type": "subscribe",
-            "slot": "slot0",
+            "slot": 0,  # the agent only accepts int slots; others are not relayed
             "module": "fm0",
             "capabilities": ["rssi"],
             "interval_ms": 1000,
@@ -315,7 +318,7 @@ def test_subscribe_relayed_without_lock(control_agent_auth):
         relayed = await asyncio.wait_for(layer.receive(agent_spy), timeout=2.0)
         assert relayed["type"] == "control.to_agent"
         assert relayed["frame"]["type"] == "subscribe"
-        assert relayed["frame"]["slot"] == "slot0"
+        assert relayed["frame"]["slot"] == 0
         assert relayed["frame"]["capabilities"] == ["rssi"]
 
         await vc.disconnect()

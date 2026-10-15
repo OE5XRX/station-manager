@@ -193,10 +193,10 @@ class TestUpgradeActions:
         msgs = [str(m) for m in response.context["messages"]]
         assert any("v2-unprocessed" in m and "re-import" in m.lower() for m in msgs)
 
-    def test_operator_cannot_upgrade(self, client, operator_user, station):
+    def test_member_cannot_upgrade(self, client, member_user, station):
         from django.urls import reverse
 
-        client.force_login(operator_user)
+        client.force_login(member_user)
         response = client.post(reverse("rollouts:upgrade_station", args=[station.pk]))
         assert response.status_code == 403
 
@@ -432,12 +432,14 @@ class TestUpgradeDashboard:
         # The "Upgrade group" form action must render for this non-empty, non-unassigned group.
         assert b"upgrade/group/test-stations/" in response.content
 
-    def test_operator_forbidden(self, client, operator_user):
+    def test_operator_read_only(self, client, staff_user):
+        """rollouts:view is Applicant+, so Staff sees the dashboard read-only."""
         from django.urls import reverse
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(reverse("rollouts:upgrade_dashboard"))
-        assert response.status_code == 403
+        assert response.status_code == 200
+        assert "nur lesend" in response.content.decode()
 
     def test_dashboard_renders_active_deployment_status(
         self, client, admin_user, station, image_release, make_station_tag

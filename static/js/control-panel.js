@@ -19,6 +19,7 @@
   var KEEPALIVE_MS = 1000;
   var PTT_KEY_STORAGE = "oe5xrx.ptt_key";
   var LOSS_NOTICE_MS = 4000;
+  var DENY_NOTICE_MS = 8000; // long enough to read the full permission message
 
   function controlPanel() {
     return {
@@ -38,6 +39,7 @@
       youHold: false,
       pendingRequest: null, // {id, username}
       lossNotice: false,
+      denyNotice: null, // transient server message for a refused action (socket stays open)
       // config (from data-* on root)
       stationId: null,
       canAdmin: false,
@@ -47,12 +49,14 @@
       _ws: null,
       _retry: 0,
       _closeCode: null, // last WS close code; inspected in _onDisconnect
+      _lastDenial: null, // last forbidden message; explains a following 4403 close
       _caps: {}, // "slot module cap" -> descriptor
       _capNames: {}, // "slot module" -> {settings:[], telemetry:[]}
       _reqWidget: {}, // request_id -> "slot module cap"
       _reqSeq: 0,
       _listeners: [],
       _lossTimer: null,
+      _denyTimer: null,
       _closed: false,
 
       // ---------------------------------------------------------------------
@@ -190,6 +194,7 @@
           self._retry = 0;
           self.conn = "open";
           self.agentOffline = false;
+          self._lastDenial = null; // a stale action denial must not explain a later 4403
           self._subscribeAll();
           self._publishControlStore();
         });
@@ -227,6 +232,11 @@
         var code = this._closeCode;
         if (code === 4401 || code === 4403 || code === 4404) {
           this.conn = "closed";
+          this.denyNotice = null;
+          // A connect-gate denial arrives as a forbidden frame right before 4403.
+          if (!this.connError && code === 4403 && this._lastDenial) {
+            this.connError = this._lastDenial;
+          }
           // The server normally sends a {type:"error", reason:...} frame first,
           // which sets connError. If that frame was missed (network drop / parse
           // failure) connError stays null and the pill would wrongly read
@@ -358,16 +368,34 @@
         var wkey = rid !== undefined ? this._reqWidget[rid] : null;
         if (rid !== undefined) delete this._reqWidget[rid];
         if (wkey && this.pending[wkey]) delete this.pending[wkey];
-        var code = msg.error && msg.error.code ? msg.error.code : msg.code;
+        // Normalise both frame shapes: {error:{code,msg}} and the permission frame
+        // {code:"forbidden", message} (spec 2026-10-14 §5.2).
+        var err = msg.error || (msg.code ? { code: msg.code, msg: msg.message } : null);
+        var code = err ? err.code : undefined;
+        if (code === "forbidden") {
+          // Toast the server's explanation. If the socket then closes with 4403 this
+          // was the connect gate, and _scheduleReconnect promotes it to connError.
+          this._lastDenial = err.msg || L.errorMessage(code);
+          this._showDenyNotice(this._lastDenial);
+        }
         if (wkey) {
           this.errors[wkey] = L.errorMessage(code);
         } else if (msg.reason) {
-          // Connect-time rejection frame (4401/4403/4404): no request_id, but
+          // Connect-time rejection frame (4401/4404): no request_id, but
           // msg.reason contains a human-readable explanation. Surface it as a
           // terminal connection error in the banner area so the user knows why
           // they are not able to connect (not just an endless Reconnecting pill).
           this.connError = msg.reason;
         }
+      },
+
+      _showDenyNotice: function (text) {
+        var self = this;
+        this.denyNotice = text;
+        if (this._denyTimer) clearTimeout(this._denyTimer);
+        this._denyTimer = setTimeout(function () {
+          self.denyNotice = null;
+        }, DENY_NOTICE_MS);
       },
 
       _onEvent: function (msg) {
@@ -585,7 +613,7 @@
       // ---------------------------------------------------------------------
       // Cosmetic defence-in-depth: a role-gated widget renders data-readonly="true"
       // (server rendered, statically disabled). Never send from one even if called
-      // programmatically; the server-side write_role gate remains the real enforcement.
+      // programmatically; the server-side capability gate remains the real enforcement.
       _isReadOnly: function (slot, module, cap) {
         var el = this._widgetEl(slot, module, cap);
         return !!el && el.getAttribute("data-readonly") === "true";
@@ -836,6 +864,7 @@
           this._stopKeepalive(mkey);
         }
         if (this._lossTimer) clearTimeout(this._lossTimer);
+        if (this._denyTimer) clearTimeout(this._denyTimer);
         for (var i = 0; i < this._listeners.length; i++) {
           var l = this._listeners[i];
           try {

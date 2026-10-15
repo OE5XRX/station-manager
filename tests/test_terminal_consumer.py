@@ -29,7 +29,7 @@ def _communicator(user, station_id):
 
 @pytest.mark.django_db(transaction=True)
 def test_non_admin_gets_error_message_then_close():
-    """A staff (internal but not admin) user is accepted then errored 4403."""
+    """A staff user (no terminal.use) is accepted, gets a forbidden frame, then 4403."""
     station = Station.objects.create(name="s-nonadmin", status="online")
     user = User.objects.create(username="u_staff", membership_level=User.MembershipLevel.STAFF)
 
@@ -39,7 +39,11 @@ def test_non_admin_gets_error_message_then_close():
         assert connected is True  # accept happened before the reject
         msg = await comm.receive_json_from()
         assert msg["type"] == "error"
-        assert msg["code"] == 4403
+        assert msg["code"] == "forbidden"
+        assert msg["message"]
+        out = await comm.receive_output()
+        assert out["type"] == "websocket.close"
+        assert out["code"] == 4403
         await comm.disconnect()
 
     asyncio.run(scenario())

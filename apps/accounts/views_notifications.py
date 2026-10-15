@@ -1,12 +1,14 @@
 from django.conf import settings
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse_lazy
 from django.views.generic import UpdateView
 
 from .forms_notifications import NotificationChannelForm
+from .permissions import AreaPermissionMixin
 
 
-class NotificationSettingsView(LoginRequiredMixin, UpdateView):
+class NotificationSettingsView(AreaPermissionMixin, UpdateView):
+    area = "profile"
+    verb = "use"
     form_class = NotificationChannelForm
     template_name = "accounts/notification_settings.html"
     success_url = reverse_lazy("accounts:notification_settings")

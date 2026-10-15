@@ -24,25 +24,32 @@ def test_image_release_no_s3_keys_leak(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_provisioning_job_scope_and_no_s3(topology):  # noqa: F811
+def test_provisioning_job_admin_only_and_no_s3(topology):  # noqa: F811
     from apps.images.models import ImageRelease
     from apps.provisioning.models import ProvisioningJob
 
     rel = ImageRelease.objects.create(
         tag="v1", machine="qemux86-64", sha256="a" * 64, s3_key="k", size_bytes=0
     )
-    ProvisioningJob.objects.create(station=topology["station_out"], image_release=rel)
+    j_out = ProvisioningJob.objects.create(station=topology["station_out"], image_release=rel)
     j_in = ProvisioningJob.objects.create(station=topology["station_in"], image_release=rel)
-    resp = bearer(topology["station_user"]).get("/api/v1/provisioning-jobs/")
+    # provisioning has no own view level: view resolves to manage (Admin).
+    for role in ("station_user", "staff"):
+        resp = bearer(topology[role]).get("/api/v1/provisioning-jobs/")
+        assert resp.status_code == 403
+        assert resp.json()["required_level"] == "admin"
+    resp = bearer(topology["admin"]).get("/api/v1/provisioning-jobs/")
     assert resp.status_code == 200
-    assert {str(r["id"]) for r in resp.data["results"]} == {str(j_in.id)}
+    assert {str(r["id"]) for r in resp.data["results"]} == {str(j_in.id), str(j_out.id)}
     assert "output_s3_key" not in resp.data["results"][0]
 
 
 @pytest.mark.django_db
-def test_image_import_jobs_internal_only(topology):  # noqa: F811
+def test_image_import_jobs_visible_with_images_view(topology):  # noqa: F811
+    # images.view = Applicant; the images page lists recent import jobs to
+    # every viewer, so the API does too.
     from apps.images.models import ImageImportJob
 
     ImageImportJob.objects.create(tag="v1", machine="qemux86-64")
-    assert bearer(topology["station_user"]).get("/api/v1/image-import-jobs/").data["count"] == 0
+    assert bearer(topology["station_user"]).get("/api/v1/image-import-jobs/").data["count"] == 1
     assert bearer(topology["admin"]).get("/api/v1/image-import-jobs/").data["count"] == 1

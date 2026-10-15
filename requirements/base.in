@@ -19,7 +19,7 @@ whitenoise>=6.8,<7.0
 cryptography>=46.0,<47.0
 python-telegram-bot>=21.0,<23.0
 pywebpush>=2.3,<3.0
-django-oauth-toolkit>=3.2,<4.0
+django-oauth-toolkit>=3.4,<4.0  # 3.4: oauth2_provider.urls.metadata_urlpatterns
 geoip2>=4.8,<6.0
 drf-spectacular>=0.30,<0.31
 # Self-hosted Swagger/ReDoc assets so /api/v1/docs/ works under the repo CSP

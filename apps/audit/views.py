@@ -7,7 +7,7 @@ from django.views import View
 from django.views.generic import ListView
 
 from apps.accounts.models import AccountAuditLog
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.sso.models import SsoAuditLog
 from apps.stations.models import Station, StationAuditLog
 
@@ -84,6 +84,9 @@ class AuditLogFilterMixin:
         # audit-tab in UserDetailView matches `target_user OR actor` (e.g.
         # LOGIN_SUCCESS fires with the user as actor); match that contract
         # here so the link-out yields the same row-set as the tab.
+        event_type = params.get("event_type")
+        if event_type and queryset.model is AccountAuditLog:
+            queryset = queryset.filter(event_type=event_type)
         target_user = params.get("target_user")
         if target_user:
             if queryset.model is SsoAuditLog:
@@ -93,7 +96,7 @@ class AuditLogFilterMixin:
         return queryset
 
 
-class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
+class AuditLogListView(AreaPermissionMixin, AuditLogFilterMixin, ListView):
     """Merged audit feed: StationAuditLog + SsoAuditLog + AccountAuditLog.
 
     The template iterates ``page_obj`` as a list of ``(category, entry)``
@@ -101,6 +104,7 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
     apps/audit/templates/audit/_audit_table.html.
     """
 
+    area = "audit"
     template_name = "audit/audit_list.html"
     context_object_name = "audit_logs"
     paginate_by = 50
@@ -122,7 +126,6 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         station_only_filters_active = any(
             [
                 params.get("station"),
-                params.get("event_type"),
                 params.get("user"),
             ]
         )
@@ -133,6 +136,16 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         include_account = category in ("", "account") and not (
             category == "" and station_only_filters_active
         )
+        # An event-type filter on the "All" feed narrows to the feeds that
+        # actually define that event type (Station and/or Account; SSO events
+        # have no event-type filter).
+        event_type = params.get("event_type")
+        if category == "" and event_type:
+            include_sso = False
+            include_station = include_station and event_type in StationAuditLog.EventType.values
+            include_account = include_account and event_type in AccountAuditLog.EventType.values
+            if not (include_station or include_account):
+                include_station = True  # unknown type: empty station result
 
         # Single-source mode (only one feed active) returns the raw
         # queryset so Paginator can LIMIT/OFFSET at the DB level.
@@ -199,7 +212,12 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["stations"] = Station.objects.all().order_by("name")
-        context["event_type_choices"] = StationAuditLog.EventType.choices
+        context["event_type_choices"] = list(StationAuditLog.EventType.choices) + [
+            (
+                AccountAuditLog.EventType.PERMISSION_DENIED.value,
+                AccountAuditLog.EventType.PERMISSION_DENIED.label,
+            )
+        ]
         # Membership-level filter: matches Vereins-Admins. Replaces the
         # pre-Task-10 group-backed query (groups__name="admin").
         context["users"] = User.objects.filter(
@@ -215,23 +233,63 @@ class AuditLogListView(AdminRequiredMixin, AuditLogFilterMixin, ListView):
         return context
 
 
-class AuditLogExportView(AdminRequiredMixin, AuditLogFilterMixin, View):
+class AuditLogExportView(AreaPermissionMixin, AuditLogFilterMixin, View):
+    area = "audit"
     EXPORT_LIMIT = 10_000
 
     def get(self, request):
         export_format = request.GET.get("format", "csv")
-
-        qs = StationAuditLog.objects.select_related("station", "module", "user")
-        qs = self.apply_filters(qs, request.GET)
-        qs = qs[: self.EXPORT_LIMIT]
-
+        entries = self._collect_entries(request.GET)
         if export_format == "json":
-            return self._export_json(qs)
-        return self._export_csv(qs)
+            return self._export_json(entries)
+        return self._export_csv(entries)
+
+    def _collect_entries(self, params):
+        """Rows the list view would show for these filters (Station + Account).
+
+        Mirrors the list view's feed selection (minus SSO, which the export
+        never covered), so an Account-only ``event_type`` such as
+        ``permission_denied`` exports the Account rows instead of nothing.
+        """
+        category = params.get("category", "")
+        event_type = params.get("event_type")
+        station_only = any([params.get("station"), params.get("user")])
+        include_station = category in ("", "station")
+        include_account = category in ("", "account") and not (category == "" and station_only)
+        if category == "" and event_type:
+            include_station = include_station and event_type in StationAuditLog.EventType.values
+            include_account = include_account and event_type in AccountAuditLog.EventType.values
+            if not (include_station or include_account):
+                include_station = True  # unknown type: empty station result
+        entries = []
+        if include_station:
+            qs = StationAuditLog.objects.select_related("station", "module", "user")
+            qs = self.apply_filters(qs, params).order_by("-created_at")
+            entries += list(qs[: self.EXPORT_LIMIT])
+        if include_account:
+            qs = AccountAuditLog.objects.select_related("actor", "target_user", "region")
+            qs = self.apply_shared_date_filters(qs, params).order_by("-created_at")
+            entries += list(qs[: self.EXPORT_LIMIT])
+        entries.sort(key=lambda e: e.created_at, reverse=True)
+        return entries[: self.EXPORT_LIMIT]
 
     def _entry_to_dict(self, entry):
+        if isinstance(entry, AccountAuditLog):
+            return {
+                "id": entry.pk,
+                "category": "account",
+                "station": "",
+                "module": "",
+                "event_type": entry.event_type,
+                "message": entry.message,
+                "changes": entry.details or {},
+                "user": entry.actor.username if entry.actor else "",
+                "ip_address": entry.ip_address or "",
+                "created_at": entry.created_at.isoformat(),
+            }
         return {
             "id": entry.pk,
+            "category": "station",
             "station": entry.station.name if entry.station else "",
             "module": entry.module.uid if entry.module_id else "",
             "event_type": entry.event_type,

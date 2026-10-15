@@ -1,10 +1,11 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.utils import timezone
 from django.views.generic import TemplateView
 
+from apps.accounts.models import AccountAuditLog
+from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment
 from apps.module_firmware.models import Module
@@ -14,7 +15,8 @@ from apps.stations.models import Station, StationLogEntry
 User = get_user_model()
 
 
-class IndexView(LoginRequiredMixin, TemplateView):
+class IndexView(AreaPermissionMixin, TemplateView):
+    area = "dashboard"
     template_name = "dashboard/index.html"
 
     def get_context_data(self, **kwargs):
@@ -55,5 +57,10 @@ class IndexView(LoginRequiredMixin, TemplateView):
             .select_related("module_type")
             .order_by("uid")
         )
+        if can(self.request.user, "audit", "view"):
+            context["denials_24h"] = AccountAuditLog.objects.filter(
+                event_type=AccountAuditLog.EventType.PERMISSION_DENIED,
+                created_at__gte=now - timedelta(hours=24),
+            ).count()
 
         return context

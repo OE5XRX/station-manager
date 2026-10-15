@@ -1,13 +1,31 @@
 # apps/control/consumers.py
 import asyncio
+import collections
 import json
 import logging
 
 import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils.translation import gettext
 
-from . import agent_presence, capability_policy, constants, lock, persistence, registry
+from apps.accounts.permissions import (
+    AreaConsumerMixin,
+    can,
+    can_override_station,
+    level_label,
+    required_level,
+)
+
+from . import (
+    agent_presence,
+    capability_policy,
+    constants,
+    lock,
+    persistence,
+    registry,
+    telemetry_subscriptions,
+)
 from .models import AgentConnection, StationModule
 
 logger = logging.getLogger(__name__)
@@ -35,6 +53,10 @@ def _fresh_user(user):
     return fresh
 
 
+# Browser frames that operate the station: each re-checks control.use (fresh user).
+_USE_ACTIONS = frozenset({"lock_acquire", "lock_request", "lock_transfer", "ptt_keepalive"})
+
+
 class AgentControlConsumer(AsyncWebsocketConsumer):
     """Agent-facing control WebSocket. Path: ws/agent/control/<station_id>/.
 
@@ -46,6 +68,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     the CURRENT connection (``agent_presence``) runs the offline/lock/PTT teardown
     on disconnect — a stale one must not wipe the live connection's state.
     """
+
+    permission_exempt = "agent: ed25519"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -130,6 +154,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if station is not None:
                 await self._apply_inventory(station, msg.get("slots", []))
                 await self._reapply_persisted(station, msg.get("slots", []))
+                await self._replay_telemetry(station)
             await self._broadcast("control.inventory", {"msg": msg})
         elif mtype == "state":
             station = await self._cached_station()
@@ -149,6 +174,19 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             if station is not None:
                 await self._retry_pending_reapply(station)
+
+    async def _replay_telemetry(self, station):
+        """Re-arm the agent with the browsers' aggregated telemetry demand: a
+        (re)connected agent has no subscriptions, and redundant browser
+        re-subscribes are not relayed (see telemetry_subscriptions)."""
+        try:
+            frames = await database_sync_to_async(telemetry_subscriptions.active_subscriptions)(
+                station
+            )
+            for frame in frames:
+                await self.send(text_data=json.dumps(frame))
+        except Exception:
+            logger.exception("control: telemetry replay failed")
 
     # -- server -> agent (channel handler) ------------------------------------
 
@@ -210,6 +248,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
                     await self._retry_pending_reapply(station)
+                    await self._purge_stale_telemetry(station)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -219,6 +258,16 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     async def _broadcast(self, msg_type, payload):
         await self.channel_layer.group_send(self.group_name, {"type": msg_type, **payload})
+
+    async def _purge_stale_telemetry(self, station):
+        """Release telemetry demand of browser connections that died without
+        disconnect() (no one else would). Relayed via the agent group so the CURRENT
+        agent connection gets it even while a stale one is still sweeping."""
+        frames = await database_sync_to_async(telemetry_subscriptions.purge_stale)(station)
+        for frame in frames:
+            await self.channel_layer.group_send(
+                self.agent_group_name, {"type": "control.to_agent", "frame": frame}
+            )
 
     async def _reapply_persisted(self, station, slots):
         """Drift re-apply (spec §4a): the FW persists nothing, so whenever the reported
@@ -455,17 +504,23 @@ def _lock_with_holder(station, scope="station"):
     return lock_obj
 
 
-class ControlConsumer(AsyncWebsocketConsumer):
+class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """Browser-facing control WebSocket. Path: ws/control/<station_id>/.
 
-    Access-controlled (can_use_station). Relays holder commands/PTT and lock
-    actions to the agent; pushes state/inventory/result/event + lock status to
-    all viewers.
+    Permissions (spec 2026-10-14 §3.4): connect = ``control.view`` (watch only);
+    lock acquire/request/transfer, PTT keepalive and every non-``get`` command
+    re-check ``control.use`` against a freshly loaded user, so a demotion bites on
+    the next frame instead of on reconnect. Commands additionally need the
+    capability policy's verb (``use``/``manage``); preempt follows
+    ``can_override_station``. Relays holder commands/PTT and lock actions to the
+    agent; pushes state/inventory/result/event + lock status to all viewers.
 
     Audit note: CONTROL_PTT keepalives arrive ~1/sec — auditing every one would
     spam the log. Instead we audit command frames whose capability == "ptt" (i.e.
     the PTT-on command itself). ptt_keepalive frames are NOT audited.
     """
+
+    area = "control"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -477,6 +532,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         self._persist_pending = {}
         self.user = self.scope.get("user")
         self.station = None  # cached after connect to avoid a DB fetch per frame
+        self._telemetry_frames = collections.deque()  # subscribe/unsubscribe budget
 
         await self.accept()
 
@@ -488,13 +544,19 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self._reject(4404, "Station not found")
             return
         self.station = station
-        if not await self._can_use(station):
-            await self._reject(4403, "You are not permitted to control this station")
+        # control.view: forbidden frame + close 4403 on deny.
+        if not await self.area_connect_gate():
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        # Reconnect within grace keeps a held lock.
-        await self._holder_reconnected(station)
+        self.start_periodic_recheck()  # passive viewers never send a frame
+        # Reconnect within grace keeps a held lock — but only while the user may still
+        # operate (connect itself needs only control.view). A holder demoted while
+        # disconnected loses the lock here instead of getting it back.
+        if await self._fresh_can_use():
+            await self._holder_reconnected(station)
+        else:
+            await self._revoke_if_holder(station)
         # Initial snapshot + lock status to just this browser, as TWO frames.
         # The initial lock uses the IDENTICAL {type:"lock",...} shape as every
         # later lock mutation, so D5 (the UI) wires a single lock handler and
@@ -520,6 +582,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self.close(code=code)
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         pending = list(self.pending.values())
         self.pending.clear()
         for task in pending:
@@ -533,6 +596,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         station = await self._cached_station()
         if station is not None and self.user and not self.user.is_anonymous:
             await self._holder_disconnected(station)
+            await self._telemetry_drop_channel(station)
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -547,6 +611,17 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if station is None:
             return
 
+        # Operating actions re-check control.use with a fresh user on every frame.
+        # EVERY command counts (incl. op:get): any command touches the lock, so a
+        # demoted holder could otherwise keep it alive forever with reads.
+        # subscribe/unsubscribe and lock_release stay open to every connected viewer
+        # (release only ever affects the caller's own lock).
+        if mtype in _USE_ACTIONS or mtype == "command":
+            if not await self.area_allows("use", request_id=msg.get("request_id")):
+                # A holder who lost control.use must not keep the lock (and TX path).
+                await self._revoke_if_holder(station)
+                return
+
         if mtype == "command":
             await self._handle_command(station, msg)
         elif mtype == "ptt_keepalive":
@@ -558,8 +633,9 @@ class ControlConsumer(AsyncWebsocketConsumer):
             else:
                 await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
         elif mtype in ("subscribe", "unsubscribe"):
-            # Any viewer may subscribe/unsubscribe — access already checked at connect.
-            await self._relay(msg)
+            # Any viewer may subscribe — control.view checked at connect. Ref-counted:
+            # the agent's subscription is station-wide (see telemetry_subscriptions).
+            await self._telemetry_change(station, msg, mtype)
         elif mtype == "lock_acquire":
             await self._lock_acquire(station)
         elif mtype == "lock_release":
@@ -625,12 +701,13 @@ class ControlConsumer(AsyncWebsocketConsumer):
             # corrupt the gate. No bridge broadcast on a no-op.
 
     async def _authorize_command(self, station, msg):
-        """Server-side ``write_role`` gate (spec §4a) — the real authz check; the read-only
-        UI render is cosmetic. Every capability command a browser can reach the agent with
-        passes through here (``_handle_command`` is the only relay of ``type: command``).
+        """Server-side capability gate (``control.<policy verb>``, spec §3.4) — the real
+        authz check; the read-only UI render is cosmetic. Every capability command a
+        browser can reach the agent with passes through here (``_handle_command`` is the
+        only relay of ``type: command``).
 
         Any op other than ``get`` is a write. Fail closed: any exception while resolving
-        the module type or the user's role denies the command. Returns
+        the module type or the user's level denies the command. Returns
         ``(allowed, module_type)``.
         """
         capability = msg.get("capability")
@@ -641,24 +718,40 @@ class ControlConsumer(AsyncWebsocketConsumer):
             module_type = await self._lookup_module_type(
                 station, msg.get("slot"), msg.get("module")
             )
-            allowed = await self._may_write(station, capability, module_type)
+            allowed = await self._may_write(capability, module_type)
         except Exception:
-            logger.exception("control: write_role resolution failed; denying command")
+            logger.exception("control: capability permission check failed; denying command")
             allowed = False
         if allowed is True:
             return True, module_type
-        role = capability_policy.policy_for(capability, module_type).write_role
+        verb = capability_policy.policy_for(capability, module_type).verb
         try:
             await self._audit(
                 station,
                 "control_command",
                 f"{self.user.username} {_clip(msg.get('op'))} {_clip(capability)} "
                 f"on {_clip(msg.get('slot'))}/{_clip(msg.get('module'))} "
-                f"denied (requires {role})",
+                f"denied (requires control.{verb})",
             )
         except Exception:
             logger.exception("control: audit of denied command failed")
-        await self._error(msg.get("request_id"), "forbidden", f"Requires role: {role}")
+        request_id = msg.get("request_id")
+        # Standard forbidden frame + PERMISSION_DENIED audit. If the user does hold the
+        # verb (the denial came from a failed resolution), still deny — fail closed.
+        try:
+            send_generic = await self.area_allows(verb, request_id=request_id)
+        except Exception:
+            logger.exception("control: denial notification failed")
+            send_generic = True
+        if send_generic:
+            frame = {
+                "type": "error",
+                "code": "forbidden",
+                "message": "Command could not be authorized",
+            }
+            if request_id is not None:
+                frame["request_id"] = request_id
+            await self.send(text_data=json.dumps(frame))
         return False, module_type
 
     def _remember_persist(self, request_id, msg, module_type):
@@ -701,6 +794,61 @@ class ControlConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             raise
 
+    # -- telemetry subscriptions (ref-counted across viewers) ------------------
+
+    def _telemetry_budget_ok(self) -> bool:
+        """Per-connection frame budget for subscribe/unsubscribe (flood guard)."""
+        now = asyncio.get_running_loop().time()
+        window = self._telemetry_frames
+        while window and now - window[0] > telemetry_subscriptions.FRAME_WINDOW_SECONDS:
+            window.popleft()
+        if len(window) >= telemetry_subscriptions.FRAME_BUDGET:
+            return False
+        window.append(now)
+        return True
+
+    async def _telemetry_change(self, station, msg, op):
+        addr = telemetry_subscriptions.parse_addr(msg)
+        if addr is None or not self._telemetry_budget_ok():
+            return
+        slot, module, caps = addr
+        if op == "subscribe":
+            frames = await database_sync_to_async(telemetry_subscriptions.subscribe)(
+                station, self.channel_name, slot, module, caps, msg.get("interval_ms")
+            )
+        else:
+            frames = await database_sync_to_async(telemetry_subscriptions.unsubscribe)(
+                station, self.channel_name, slot, module, caps
+            )
+        for frame in frames:
+            await self._relay(frame)
+
+    async def on_periodic_recheck(self, user):
+        """Still allowed to watch (control.view). A holder who lost control.use is
+        revoked here too: a silent holder sends no frames, so the per-frame check
+        alone would let them keep the lock until the idle sweep. Then stamp this
+        connection's telemetry rows as live; a failed stamp must not count as a
+        failed permission re-check (would close the feed)."""
+        station = self.station
+        if station is None:
+            return
+        if not can(user, "control", "use"):
+            await self._revoke_if_holder(station)
+        try:
+            await database_sync_to_async(telemetry_subscriptions.touch)(station, self.channel_name)
+        except Exception:
+            logger.exception("control: telemetry liveness stamp failed")
+
+    async def _telemetry_drop_channel(self, station):
+        try:
+            frames = await database_sync_to_async(telemetry_subscriptions.drop_channel)(
+                station, self.channel_name
+            )
+            for frame in frames:
+                await self._relay(frame)
+        except Exception:
+            logger.exception("control: dropping telemetry subscriptions failed")
+
     async def _relay(self, frame):
         await self.channel_layer.group_send(
             self.agent_group_name, {"type": "control.to_agent", "frame": frame}
@@ -720,6 +868,22 @@ class ControlConsumer(AsyncWebsocketConsumer):
             await self._audit(
                 station, "control_lock_acquired", f"{self.user.username} acquired control"
             )
+        await self._broadcast_lock(station)
+
+    async def _revoke_if_holder(self, station):
+        """Release the caller's lock after they lost control.use; kill PTT + TX route.
+
+        No-op unless the caller is the current holder."""
+        if not await self._release(station):
+            return
+        await self._audit(
+            station,
+            "control_lock_released",
+            f"{self.user.username} lost control (requires control.use)",
+        )
+        await self._audio_clear_ptt(station)
+        await self._audio_clear_tx_route(station)
+        await self._bridge_gate(station)
         await self._broadcast_lock(station)
 
     async def _lock_release(self, station):
@@ -758,8 +922,16 @@ class ControlConsumer(AsyncWebsocketConsumer):
         await self._broadcast_lock(station)
 
     async def _lock_preempt(self, station):
-        if not await self._can_administer(station):
-            await self._error(None, "forbidden", "Admin rights required to preempt")
+        if not await self._can_override(station):
+            # Override is an assignment rule, not an area right: same forbidden frame
+            # shape, but no PERMISSION_DENIED audit (require() is deliberately not used).
+            message = gettext(
+                "Keine Berechtigung — Übernehmen der Steuerung erfordert %(manage)s oder "
+                "eine Station-Admin-/Region-Manager-Zuweisung (mit Bedien-Recht)."
+            ) % {"manage": level_label(required_level("control", "manage"))}
+            await self.send(
+                text_data=json.dumps({"type": "error", "code": "forbidden", "message": message})
+            )
             return
         await self._preempt(station)
         await self._audit(
@@ -857,18 +1029,15 @@ class ControlConsumer(AsyncWebsocketConsumer):
             return None
 
     @database_sync_to_async
-    def _can_use(self, station):
-        return (
-            bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
-        )
+    def _fresh_can_use(self):
+        """control.use for the fresh DB row — a silent check (no denial audit)."""
+        user = _fresh_user(self.user)
+        return user is not None and can(user, "control", "use")
 
     @database_sync_to_async
-    def _can_administer(self, station):
-        return (
-            self.user.is_admin
-            or self.user.is_station_admin(station)
-            or self.user.can_administer_station(station)
-        )
+    def _can_override(self, station):
+        user = _fresh_user(self.user)
+        return user is not None and can_override_station(user, station)
 
     @database_sync_to_async
     def _lookup_module_type(self, station, slot, module):
@@ -884,11 +1053,11 @@ class ControlConsumer(AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _may_write(self, station, capability, module_type):
+    def _may_write(self, capability, module_type):
         user = _fresh_user(self.user)
         if user is None:
             return False
-        return capability_policy.can_write(user, station, capability, module_type)
+        return capability_policy.can_write(user, capability, module_type)
 
     async def _persist_result(self, slot, module, capability, value):
         try:
@@ -911,7 +1080,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         if _lock_with_holder(station).holder_id != self.user.id:
             return False
         user = _fresh_user(self.user)
-        if user is None or not capability_policy.can_write(user, station, capability, None):
+        if user is None or not capability_policy.can_write(user, capability, None):
             return False
         return persistence.persist_if_valid(station, slot, module, capability, value, self.user)
 

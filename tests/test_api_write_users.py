@@ -1,12 +1,10 @@
 # tests/test_api_write_users.py
-"""Tests for the User write endpoint (Task 10).
+"""Tests for the User write endpoint.
 
-Authorization model (mirrors the UI — MembershipSetView is AdminRequiredMixin;
-email changes go only through the self-service verification flow):
-  - Write access requires is_internal (staff/admin).
-  - membership_level changes require an ADMIN actor (403 otherwise).
-  - A non-admin (staff) may edit ONLY non-internal (member/applicant) targets;
-    editing a staff/admin target → 403.
+Authorization model (unified permissions; email changes go only through the
+self-service verification flow):
+  - Every write requires ``users.manage`` (Admin) → 403 with
+    ``required == "users.manage"`` otherwise, before any lookup/validation.
   - email is read-only (cross-user set = account takeover) — ignored silently.
   - self-change of membership_level → 400 (admins); demote-to-applicant with
     assignments → 400.
@@ -18,16 +16,13 @@ import pytest
 from django.urls import reverse
 
 from apps.accounts.models import User
+from tests.test_api_read_fixtures import session
 
 pytestmark = pytest.mark.django_db
 
 
 def _user_with_level(username, level):
-    user = User.objects.create_user(username=username, password="x")
-    user.membership_level = level
-    user.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(user)
-    return user
+    return User.objects.create_user(username=username, password="x", membership_level=level)
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +39,7 @@ def test_anon_gets_401(api_topology, anon_client):
 def test_applicant_gets_403(api_topology, bearer):
     t = api_topology
     url = reverse("api:user-detail", args=[t["applicant"].pk])
-    assert bearer(t["applicant"]).patch(url, {"bio": "x"}, format="json").status_code == 403
+    assert session(t["applicant"]).patch(url, {"bio": "x"}, format="json").status_code == 403
 
 
 def test_member_cannot_self_elevate(api_topology, bearer):
@@ -60,12 +55,12 @@ def test_member_cannot_self_elevate(api_topology, bearer):
 
 
 def test_member_cannot_patch_other_user(api_topology, bearer):
-    """Non-internal user cannot see (→ 404) let alone patch another user."""
+    """A Member lacks ``users.manage`` → 403 (area gate runs before the lookup)."""
     t = api_topology
     url = reverse("api:user-detail", args=[t["admin"].pk])
-    # non-internal get_queryset returns only self → 404
     r = bearer(t["station_user"]).patch(url, {"bio": "hi"}, format="json")
-    assert r.status_code == 404
+    assert r.status_code == 403
+    assert r.data["required"] == "users.manage"
 
 
 # ---------------------------------------------------------------------------
@@ -110,14 +105,15 @@ def test_privileged_flags_not_writable(api_topology, bearer):
 # ---------------------------------------------------------------------------
 
 
-def test_staff_updates_profile_field(api_topology, bearer):
-    """Staff can update profile fields on another user."""
+def test_staff_cannot_update_profile_field(api_topology, bearer):
+    """Staff lacks ``users.manage`` → 403; DB unchanged."""
     t = api_topology
     url = reverse("api:user-detail", args=[t["station_user"].pk])
     r = bearer(t["staff"]).patch(url, {"bio": "New bio"}, format="json")
-    assert r.status_code == 200
+    assert r.status_code == 403
+    assert r.data["required"] == "users.manage"
     t["station_user"].refresh_from_db()
-    assert t["station_user"].bio == "New bio"
+    assert t["station_user"].bio == ""
 
 
 def test_admin_updates_profile_field(api_topology, bearer):
@@ -139,8 +135,7 @@ def test_admin_sets_membership_and_audits(api_topology, bearer):
     """Admin PATCHes another user's membership_level → 200; DB updated;
     MEMBERSHIP_PROMOTED AccountAuditLog row with target_user + 'via API token'.
 
-    Membership changes require an ADMIN actor (mirrors AdminRequiredMixin on
-    the UI's MembershipSetView).
+    Membership changes require ``users.manage`` (Admin).
     """
     from apps.accounts.models import AccountAuditLog, User
 
@@ -159,9 +154,7 @@ def test_admin_sets_membership_and_audits(api_topology, bearer):
 
 
 def test_staff_cannot_change_others_membership(api_topology, bearer):
-    """A STAFF (non-admin) actor may NOT change another user's membership_level
-    → 403; DB unchanged. Mirrors AdminRequiredMixin on MembershipSetView.
-    """
+    """A STAFF actor lacks ``users.manage`` → 403; DB unchanged."""
     from apps.accounts.models import User
 
     t = api_topology
@@ -214,10 +207,8 @@ def test_unchanged_membership_audits_user_updated(api_topology, bearer):
 def test_staff_cannot_change_own_membership(api_topology, bearer):
     """Staff cannot change their own membership_level → 403.
 
-    The admin-required guard fires before the self-change guard: a staff actor
-    is not an admin, so ANY membership change (including self) is 403. (The
-    self-change guard still applies to admins — see
-    test_admin_cannot_change_own_membership.)
+    The ``users.manage`` area gate fires before the self-change guard (which
+    still applies to admins — see test_admin_cannot_change_own_membership).
     """
     t = api_topology
     url = reverse("api:user-detail", args=[t["staff"].pk])
@@ -236,10 +227,8 @@ def test_admin_cannot_change_own_membership(api_topology, bearer):
 
 
 def test_staff_cannot_edit_own_profile_via_admin_api(api_topology, bearer):
-    """This is the ADMIN-management endpoint, not the self-service profile flow.
-
-    Under the level-aware target rule, a non-admin (staff) may not mutate any
-    internal target — including themselves (staff is internal) → 403. Self
+    """This is the ADMIN-management endpoint (``users.manage``), not the
+    self-service profile flow → 403 for staff, even on themselves. Self
     profile editing lives in the dedicated ProfileForm UI flow, not here.
     """
     t = api_topology
@@ -249,9 +238,8 @@ def test_staff_cannot_edit_own_profile_via_admin_api(api_topology, bearer):
 
 
 def test_admin_can_edit_own_profile_fields(api_topology, bearer):
-    """An admin actor (is_admin) may edit their own non-membership profile
-    fields — admins may mutate internal targets, including self. The
-    self-change guard only blocks membership_level changes.
+    """An admin (``users.manage``) may edit their own non-membership profile
+    fields. The self-change guard only blocks membership_level changes.
     """
     t = api_topology
     url = reverse("api:user-detail", args=[t["admin"].pk])
@@ -284,10 +272,7 @@ def test_demote_to_applicant_allowed_when_no_assignments(api_topology, bearer):
     t = api_topology
     # region_mgr has a RegionAssignment — use admin who has none
     # Create a fresh user with no assignments
-    fresh = User.objects.create_user(username="fresh_member", password="x")
-    fresh.membership_level = User.MembershipLevel.MEMBER
-    fresh.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(fresh)
+    fresh = _user_with_level("fresh_member", User.MembershipLevel.MEMBER)
 
     url = reverse("api:user-detail", args=[fresh.pk])
     r = bearer(t["admin"]).patch(url, {"membership_level": "applicant"}, format="json")
@@ -297,22 +282,23 @@ def test_demote_to_applicant_allowed_when_no_assignments(api_topology, bearer):
 
 
 # ---------------------------------------------------------------------------
-# role_cache invalidation (cached_property must not go stale)
+# Membership change takes effect on the permission registry
 # ---------------------------------------------------------------------------
 
 
-def test_role_cache_invalidated_after_membership_change(api_topology, bearer):
-    """After changing membership_level the is_internal cached_property on the
-    saved instance must reflect the new value (no stale cache).
+def test_membership_change_grants_new_level_rights(api_topology, bearer):
+    """After promoting to staff the target gets the Staff rights of the
+    registry (``can`` reads the level straight from the row — no role cache).
     """
-    from apps.accounts.models import User
+    from apps.accounts.permissions import can
 
     t = api_topology
     url = reverse("api:user-detail", args=[t["station_user"].pk])
-    bearer(t["admin"]).patch(url, {"membership_level": "staff"}, format="json")
-    t["station_user"].refresh_from_db()
-    User._invalidate_role_cache(t["station_user"])
-    assert t["station_user"].is_internal is True
+    r = bearer(t["admin"]).patch(url, {"membership_level": "staff"}, format="json")
+    assert r.status_code == 200
+    target = User.objects.get(pk=t["station_user"].pk)
+    assert can(target, "stations", "manage") is True
+    assert can(target, "users", "manage") is False
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +326,7 @@ def test_email_not_writable(api_topology, bearer):
 
 
 def test_patch_soft_deleted_user_404(api_topology, bearer):
-    """A soft-deleted user is invisible to the write endpoint → PATCH → 404.
-    Mirrors the UI's deleted_at__isnull=True scoping.
-    """
+    """A soft-deleted user is outside the directory queryset → PATCH → 404."""
     from django.utils import timezone
 
     t = api_topology
@@ -354,16 +338,25 @@ def test_patch_soft_deleted_user_404(api_topology, bearer):
     assert r.status_code == 404
 
 
+def test_admin_can_patch_deactivated_user(api_topology, bearer):
+    """Deactivated (not deleted) users stay in the admin's directory → 200."""
+    t = api_topology
+    t["station_user"].is_active = False
+    t["station_user"].save(update_fields=["is_active"])
+    url = reverse("api:user-detail", args=[t["station_user"].pk])
+    r = bearer(t["admin"]).patch(url, {"bio": "dormant"}, format="json")
+    assert r.status_code == 200
+    t["station_user"].refresh_from_db()
+    assert t["station_user"].bio == "dormant"
+
+
 # ---------------------------------------------------------------------------
-# IMPORTANT 4 — level-aware target protection
+# Target level does not matter — only the actor's users.manage
 # ---------------------------------------------------------------------------
 
 
 def test_staff_cannot_edit_another_staff(api_topology, bearer):
-    """A staff actor may NOT edit an internal (staff/admin) target → 403.
-
-    Only admins may mutate internal users.
-    """
+    """A staff actor lacks ``users.manage`` → 403 on any target."""
     t = api_topology
     peer = _user_with_level("api_staff2", User.MembershipLevel.STAFF)
     url = reverse("api:user-detail", args=[peer.pk])
@@ -373,18 +366,18 @@ def test_staff_cannot_edit_another_staff(api_topology, bearer):
     assert peer.bio == ""
 
 
-def test_staff_can_edit_a_member(api_topology, bearer):
-    """A staff actor MAY edit a non-internal (member) target's profile → 200."""
+def test_staff_cannot_edit_a_member(api_topology, bearer):
+    """Old rule let staff edit non-internal targets; now ``users.manage`` → 403."""
     t = api_topology
     url = reverse("api:user-detail", args=[t["station_user"].pk])
     r = bearer(t["staff"]).patch(url, {"bio": "ok member"}, format="json")
-    assert r.status_code == 200
+    assert r.status_code == 403
     t["station_user"].refresh_from_db()
-    assert t["station_user"].bio == "ok member"
+    assert t["station_user"].bio == ""
 
 
 def test_admin_can_edit_a_staff(api_topology, bearer):
-    """An admin actor MAY edit an internal (staff) target's profile → 200."""
+    """An admin (``users.manage``) MAY edit a staff target's profile → 200."""
     t = api_topology
     url = reverse("api:user-detail", args=[t["staff"].pk])
     r = bearer(t["admin"]).patch(url, {"bio": "admin edits staff"}, format="json")

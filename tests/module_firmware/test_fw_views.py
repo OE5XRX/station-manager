@@ -32,7 +32,7 @@ def rel(db):
 
 @pytest.fixture
 def staff(db):
-    return User.objects.create_user(username="s", password="x", is_staff=True)
+    return User.objects.create_user(username="s", password="x", membership_level="staff")
 
 
 @pytest.mark.django_db
@@ -50,7 +50,9 @@ def test_import_is_staff_only(client, rel):
         {"module_type": rel.module_type_id, "tag": "26.07.04-02"},
     )
     assert resp.status_code == 403
-    client.force_login(User.objects.create_user(username="s", password="x", is_staff=True))
+    client.force_login(
+        User.objects.create_user(username="s", password="x", membership_level="staff")
+    )
     resp = client.post(
         reverse("module_firmware:import"),
         {"module_type": rel.module_type_id, "tag": "26.07.04-02"},

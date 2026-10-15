@@ -174,10 +174,11 @@ class TestCheckAlertsIntegration:
 
 @pytest.mark.django_db
 class TestAlertViews:
-    def test_alert_list_requires_admin(self, client, member_user):
-        """Member should get 403 on alert list."""
+    def test_alert_list_member_read_only(self, client, member_user, alert):
+        """Member may view the alert list (alerts.view) but not acknowledge (alerts.manage)."""
         client.force_login(member_user)
-        response = client.get(reverse("monitoring:alert_list"))
+        assert client.get(reverse("monitoring:alert_list")).status_code == 200
+        response = client.post(reverse("monitoring:alert_acknowledge", args=[alert.pk]))
         assert response.status_code == 403
 
     def test_alert_list_admin_access(self, client, admin_user, alert):
@@ -186,21 +187,21 @@ class TestAlertViews:
         response = client.get(reverse("monitoring:alert_list"))
         assert response.status_code == 200
 
-    def test_alert_acknowledge(self, client, operator_user, alert):
+    def test_alert_acknowledge(self, client, staff_user, alert):
         """POST acknowledge should set is_acknowledged."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("monitoring:alert_acknowledge", kwargs={"pk": alert.pk}),
         )
         assert response.status_code == 200
         alert.refresh_from_db()
         assert alert.is_acknowledged is True
-        assert alert.acknowledged_by == operator_user
+        assert alert.acknowledged_by == staff_user
         assert alert.acknowledged_at is not None
 
-    def test_alert_resolve(self, client, operator_user, alert):
+    def test_alert_resolve(self, client, staff_user, alert):
         """POST resolve should set is_resolved."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("monitoring:alert_resolve", kwargs={"pk": alert.pk}),
         )
@@ -225,10 +226,16 @@ class TestAlertViews:
         response = client.get(reverse("monitoring:alert_count"))
         assert response.status_code == 302
 
-    def test_alert_settings_requires_admin(self, client, operator_user):
-        """Operator should get 403 on alert settings (admin only)."""
-        client.force_login(operator_user)
+    def test_alert_settings_staff_read_only(self, client, staff_user, offline_alert_rule):
+        """Staff may view alert settings (alert_rules.view) but not change rules (manage)."""
+        client.force_login(staff_user)
         response = client.get(reverse("monitoring:alert_settings"))
+        assert response.status_code == 200
+        assert "nur lesend" in response.content.decode()
+        response = client.post(
+            reverse("monitoring:alert_rule_update", args=[offline_alert_rule.pk]),
+            {"threshold": "5"},
+        )
         assert response.status_code == 403
 
     def test_alert_settings_admin_access(self, client, admin_user):

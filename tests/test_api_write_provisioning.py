@@ -1,7 +1,7 @@
 """Tests for the ProvisioningJob create-trigger write endpoint (Phase 3, Task 9).
 
 The endpoint is CREATE-ONLY — list/retrieve are inherited from the read
-viewset; PATCH/PUT/DELETE return 405.  Authz: staff/admin only (internal).
+viewset; PATCH/PUT/DELETE return 405.  Authz: provisioning.manage (Admin).
 requested_by is always the token user; status defaults to PENDING.
 
 Validation parity with apps/provisioning/views.CreateProvisioningJobView:
@@ -15,6 +15,7 @@ from django.urls import reverse
 
 from apps.provisioning.models import ProvisioningJob
 from apps.stations.models import StationAuditLog
+from tests.test_api_read_fixtures import session
 
 URL = "api:provisioning-job-list"
 DETAIL_URL = "api:provisioning-job-detail"
@@ -38,13 +39,14 @@ def _payload(api_topology, image_release):
 
 
 @pytest.mark.django_db
-def test_staff_creates_provisioning_job_201(api_topology, bearer, image_release):
-    """Staff user triggers a provisioning job → 201, ProvisioningJob row created."""
+def test_staff_cannot_trigger_403(api_topology, bearer, image_release):
+    """Staff lacks provisioning.manage (Admin) → 403, no ProvisioningJob row."""
     t = api_topology
     payload = _payload(t, image_release)
     r = bearer(t["staff"]).post(reverse(URL), payload, format="json")
-    assert r.status_code == 201
-    assert ProvisioningJob.objects.filter(station=t["station_in"]).exists()
+    assert r.status_code == 403
+    assert r.json()["required"] == "provisioning.manage"
+    assert not ProvisioningJob.objects.filter(station=t["station_in"]).exists()
 
 
 @pytest.mark.django_db
@@ -62,10 +64,10 @@ def test_requested_by_is_token_user(api_topology, bearer, image_release):
     t = api_topology
     payload = _payload(t, image_release)
     payload["requested_by"] = t["admin"].pk  # body-supplied — must be IGNORED
-    r = bearer(t["staff"]).post(reverse(URL), payload, format="json")
+    r = bearer(t["admin"]).post(reverse(URL), payload, format="json")
     assert r.status_code == 201
     job = ProvisioningJob.objects.latest("created_at")
-    assert job.requested_by == t["staff"]
+    assert job.requested_by == t["admin"]
 
 
 @pytest.mark.django_db
@@ -74,7 +76,7 @@ def test_status_defaults_pending(api_topology, bearer, image_release):
     t = api_topology
     payload = _payload(t, image_release)
     payload["status"] = "ready"  # must be IGNORED
-    r = bearer(t["staff"]).post(reverse(URL), payload, format="json")
+    r = bearer(t["admin"]).post(reverse(URL), payload, format="json")
     assert r.status_code == 201
     job = ProvisioningJob.objects.latest("created_at")
     assert job.status == ProvisioningJob.Status.PENDING
@@ -84,7 +86,7 @@ def test_status_defaults_pending(api_topology, bearer, image_release):
 def test_response_contains_id(api_topology, bearer, image_release):
     """201 response body contains the job id."""
     t = api_topology
-    r = bearer(t["staff"]).post(reverse(URL), _payload(t, image_release), format="json")
+    r = bearer(t["admin"]).post(reverse(URL), _payload(t, image_release), format="json")
     assert r.status_code == 201
     job = ProvisioningJob.objects.latest("created_at")
     assert str(r.data["id"]) == str(job.pk)
@@ -101,7 +103,7 @@ def test_provisioning_trigger_audit_row_created(api_topology, bearer, image_rele
     message and references the correct station."""
     t = api_topology
     station = t["station_in"]
-    bearer(t["staff"]).post(reverse(URL), _payload(t, image_release), format="json")
+    bearer(t["admin"]).post(reverse(URL), _payload(t, image_release), format="json")
     log = (
         StationAuditLog.objects.filter(
             station=station,
@@ -139,7 +141,7 @@ def test_station_user_cannot_trigger_403(api_topology, bearer, image_release):
 def test_applicant_cannot_trigger_403(api_topology, bearer, image_release):
     """Applicant-level user is rejected at the permission gate → 403."""
     t = api_topology
-    r = bearer(t["applicant"]).post(reverse(URL), _payload(t, image_release), format="json")
+    r = session(t["applicant"]).post(reverse(URL), _payload(t, image_release), format="json")
     assert r.status_code == 403
 
 
@@ -202,10 +204,10 @@ def test_duplicate_pending_job_400(api_topology, bearer, image_release, active_s
         station=t["station_in"],
         image_release=image_release,
         status=active_status,
-        requested_by=t["staff"],
+        requested_by=t["admin"],
     )
     before = ProvisioningJob.objects.filter(station=t["station_in"]).count()
-    r = bearer(t["staff"]).post(reverse(URL), _payload(t, image_release), format="json")
+    r = bearer(t["admin"]).post(reverse(URL), _payload(t, image_release), format="json")
     assert r.status_code == 400
     assert ProvisioningJob.objects.filter(station=t["station_in"]).count() == before
 
@@ -234,10 +236,10 @@ def test_provisioning_create_uses_transaction_atomic(
         station=t["station_in"],
         image_release=image_release,
         status=ProvisioningJob.Status.PENDING,
-        requested_by=t["staff"],
+        requested_by=t["admin"],
     )
     before = ProvisioningJob.objects.filter(station=t["station_in"]).count()
-    r = bearer(t["staff"]).post(reverse(URL), _payload(t, image_release), format="json")
+    r = bearer(t["admin"]).post(reverse(URL), _payload(t, image_release), format="json")
     # The duplicate guard must fire — 400 and no new job
     assert r.status_code == 400
     assert ProvisioningJob.objects.filter(station=t["station_in"]).count() == before

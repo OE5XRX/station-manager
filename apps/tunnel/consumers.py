@@ -8,6 +8,9 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.db import models
 from django.utils import timezone
 
+from apps.accounts import permissions
+from apps.accounts.permissions import AreaConsumerMixin
+
 logger = logging.getLogger(__name__)
 
 MAX_SESSIONS_PER_STATION = 2
@@ -15,17 +18,21 @@ TERMINAL_SESSION_KEEPALIVE_SECONDS = 60
 TERMINAL_SESSION_STALE_TTL_SECONDS = 180  # must exceed the keepalive interval
 
 
-class TerminalConsumer(AsyncWebsocketConsumer):
+class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """Browser-side WebSocket consumer for terminal sessions.
 
     Path: ws/terminal/<station_id>/
     Bridges user keystrokes to the station agent and streams output back.
     """
 
+    area = "terminal"
+    connect_verb = "use"
+
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
         self.group_name = f"terminal_{self.station_id}"
         self.session = None
+        self.rejected = False
         self.keepalive_task = None
 
         user = self.scope.get("user")
@@ -39,9 +46,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self._reject(4401, "Not signed in — please sign in again")
             return
 
-        # Root shell -> admin only.
-        if not user.is_admin:
-            await self._reject(4403, "Terminal access is restricted to admins")
+        # Root shell -> terminal.use (forbidden frame + close 4403 on deny).
+        if not await self.area_connect_gate():
             return
 
         station = await self._get_station()
@@ -79,6 +85,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     async def _reject(self, code, reason):
         """Accept-then-error reject so the browser shows a real reason."""
+        self.rejected = True
         try:
             await self.send(
                 text_data=json.dumps({"type": "error", "reason": reason, "code": code})
@@ -93,6 +100,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 await self.keepalive_task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                # A crashed keepalive must not skip the session close / audit /
+                # group_discard below.
+                logger.exception("terminal: keepalive task failed")
             self.keepalive_task = None
 
         if self.session:
@@ -118,9 +129,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data=None, bytes_data=None):
         if text_data is None:
             return
+        # No frame is processed without an owned, not-yet-rejected session: a
+        # rejected client must never reach (or kill) another user's shell.
+        if self.session is None or self.rejected:
+            return
         try:
             payload = json.loads(text_data)
         except json.JSONDecodeError:
+            return
+
+        # Root shell: re-check terminal.use with a fresh user on EVERY frame.
+        if not await self._still_allowed():
             return
 
         msg_type = payload.get("type", "input")
@@ -150,6 +169,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 f"{self.group_name}_agent",
                 {"type": "terminal_input", "data": payload.get("data", "")},
             )
+
+    async def _still_allowed(self):
+        """Fresh terminal.use re-check; on deny tear the shell down and close 4403."""
+        if self.rejected:
+            return False  # already torn down: no second audit row / close
+        if await self.area_allows("use", notify=True):
+            return True
+        self.rejected = True
+        # Same teardown as an explicit close: the agent kills the shell. disconnect()
+        # then closes the session tracking row. The socket is closed even if the
+        # group_send raises (``rejected`` short-circuits any later retry).
+        try:
+            await self.channel_layer.group_send(
+                f"{self.group_name}_agent", {"type": "terminal_close", "data": ""}
+            )
+        finally:
+            await self.close(code=4403)
+        return False
 
     # -- Channel layer handlers -----------------------------------------------
 
@@ -233,12 +270,54 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self.session.save(update_fields=["last_seen"])
 
     async def _keepalive_loop(self):
-        try:
-            while True:
-                await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+        """Periodic terminal.use re-check + last_seen touch, mirroring
+        ``AreaConsumerMixin._periodic_recheck_loop``: a transient error (e.g. DB
+        down) is retried next tick; after ``RECHECK_MAX_FAILURES`` consecutive
+        failures the shell is torn down (1011) instead of staying open unchecked
+        with a lapsing ``last_seen`` (which would let the stale reap admit an
+        extra session past MAX_SESSIONS_PER_STATION)."""
+        failures = 0
+        while True:
+            await asyncio.sleep(TERMINAL_SESSION_KEEPALIVE_SECONDS)
+            try:
+                if not await self._still_allowed():
+                    return
                 await self._touch_session()
-        except asyncio.CancelledError:
-            raise
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                failures += 1
+                logger.exception(
+                    "terminal: keepalive re-check failed (%d/%d)",
+                    failures,
+                    permissions.RECHECK_MAX_FAILURES,
+                )
+                if failures < permissions.RECHECK_MAX_FAILURES:
+                    continue  # retry next tick
+                await self._fail_closed()
+                return
+            failures = 0
+
+    async def _fail_closed(self):
+        """Permission could not be re-checked: kill the shell, tell the browser, 1011."""
+        self.rejected = True
+        try:
+            await self.channel_layer.group_send(
+                f"{self.group_name}_agent", {"type": "terminal_close", "data": ""}
+            )
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "error",
+                        "code": "recheck_failed",
+                        "reason": "Permission could not be verified",
+                    }
+                )
+            )
+        except Exception:
+            logger.exception("terminal: fail-closed notification failed")
+        finally:
+            await self.close(code=1011)
 
     @database_sync_to_async
     def _create_session(self, user):
@@ -282,6 +361,8 @@ class AgentTerminalConsumer(AsyncWebsocketConsumer):
     Path: ws/agent/terminal/<station_id>/
     The station agent connects here and provides shell I/O.
     """
+
+    permission_exempt = "agent: ed25519"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]

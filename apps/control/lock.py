@@ -11,6 +11,8 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
+from apps.accounts.permissions import can
+
 from .models import ControlLock
 
 
@@ -70,7 +72,7 @@ def transfer(station, from_user, to_user_id, scope="station"):
         to_user = User.objects.get(pk=to_user_id)
     except (User.DoesNotExist, ValueError, TypeError):
         return False
-    if not to_user.can_use_station(station):
+    if not can(to_user, "control", "use"):
         return False
     now = timezone.now()
     lock.holder = to_user

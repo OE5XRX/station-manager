@@ -20,7 +20,7 @@ class ControlLockAdmin(admin.ModelAdmin):
 
 @admin.register(PersistedCapability)
 class PersistedCapabilityAdmin(admin.ModelAdmin):
-    """Read-only: rows are written only by the gated control path (write_role +
+    """Read-only: rows are written only by the gated control path (capability verb +
     descriptor type-check); editing here would bypass both."""
 
     list_display = (

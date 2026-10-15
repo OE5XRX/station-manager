@@ -19,10 +19,14 @@
     <p class="page-sub">{% trans "Categorize stations for filtering, batch operations, and OTA rollouts." %}</p>
   </div>
   <div class="page-head-actions">
+    {% if can.stations.manage %}
     <a href="{% url 'stations:tag_create' %}" class="btn btn-primary">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       {% trans "New tag" %}
     </a>
+    {% else %}
+    {% include "includes/readonly_badge.html" %}
+    {% endif %}
   </div>
 </div>
 
@@ -48,8 +52,10 @@
         <td class="t-mono num" data-label="{% trans 'Stations' %}">{{ tag.stations.count }}</td>
         <td class="t-muted" data-label="{% trans 'Description' %}">{{ tag.description|default:"—" }}</td>
         <td class="actions">
+          {% if can.stations.manage %}
           <a href="{% url 'stations:tag_edit' tag.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
           <a href="{% url 'stations:tag_delete' tag.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

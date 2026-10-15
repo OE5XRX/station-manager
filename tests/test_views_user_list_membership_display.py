@@ -6,7 +6,7 @@ from django.urls import reverse
 
 @pytest.mark.django_db
 def test_user_list_renders_membership_level_pills(
-    client, admin_user, member_user, operator_user, applicant_user
+    client, admin_user, member_user, staff_user, applicant_user
 ):
     """Each user row shows the Vereins-X pill from membership_level."""
     client.force_login(admin_user)

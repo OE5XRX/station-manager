@@ -21,13 +21,15 @@
       <p class="page-sub">{% trans "Imported, cosign-verified firmware builds per module type and variant. Staff can import new releases from GitHub or archive old ones." %}</p>
     </div>
     <div class="page-head-actions">
-      {% if request.user.is_staff and module_types %}
+      {% if can.modules.manage and module_types %}
       <a href="#import-panel" class="btn">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 2v14"/><path d="M7 11l5 5 5-5"/><rect x="4" y="18" width="16" height="4" rx="1"/>
         </svg>
         {% trans "Import from GitHub" %}
       </a>
+      {% elif not can.modules.manage %}
+      {% include "includes/readonly_badge.html" %}
       {% endif %}
     </div>
   </div>
@@ -108,7 +110,7 @@
               {% endif %}
             </td>
             <td class="actions">
-              {% if request.user.is_staff %}
+              {% if can.modules.manage %}
                 {% if rel.archived_at %}
                   <form method="post"
                         action="{% url 'module_firmware:restore' rel.pk %}"
@@ -160,7 +162,7 @@
 
   <div class="grid grid-main">
 
-    {% if request.user.is_staff and module_types %}
+    {% if can.modules.manage and module_types %}
     <section class="panel mb-24" id="import-panel">
       <div class="panel-head">
         <div class="panel-title">

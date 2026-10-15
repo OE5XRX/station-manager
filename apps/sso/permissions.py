@@ -59,6 +59,8 @@ def user_can_access(user, application) -> bool:
 
     # Local imports keep the validator/permissions module free of an
     # import cycle on settings loading (see existing pattern below).
+    from apps.accounts.permissions import Level, level_of
+
     from .models import AppGrant, ApplicationPolicy
 
     Policy = ApplicationPolicy.AccessPolicy  # noqa: N806 — enum class alias
@@ -70,11 +72,11 @@ def user_can_access(user, application) -> bool:
     if policy == Policy.OPEN_TO_ALL:
         return True
     if policy == Policy.OPEN_TO_MEMBERS:
-        return user.membership_level != user.MembershipLevel.APPLICANT
+        return (level_of(user) or 0) >= Level.MEMBER
     if policy == Policy.OPEN_TO_INTERNAL:
-        return user.is_internal
+        return (level_of(user) or 0) >= Level.STAFF
     if policy == Policy.OPEN_TO_ADMINS:
-        return user.is_admin
+        return level_of(user) == Level.ADMIN
 
     # GRANT_REQUIRED — pre-existing behaviour
     return AppGrant.objects.filter(
@@ -128,6 +130,30 @@ class SsoOAuth2Validator(OAuth2Validator):
                 getattr(application, "client_id", "<unknown>"),
             )
         return allowed
+
+    def save_authorization_code(self, client_id, code, request, *args, **kwargs):
+        """Re-check the per-app policy right before a code is persisted.
+
+        Defense in depth behind ``AppGrantAuthorizationView``: oauthlib
+        calls this hook for EVERY authorization-code issuance (consent
+        POST and the skip-authorization GET path alike), with
+        ``request.client`` being the Application the code is bound to.
+        Raising ``AccessDeniedError`` here aborts issuance before the
+        Grant row exists; DOT turns it into an ``error=access_denied``
+        redirect to the (already validated) redirect_uri.
+        """
+        from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
+
+        application = getattr(request, "client", None)
+        user = getattr(request, "user", None)
+        if application is None or user is None or not user_can_access(user, application):
+            logger.warning(
+                "AppGrant gate denied code issuance user=%s app=%s",
+                getattr(user, "username", "<none>"),
+                getattr(application, "client_id", "<unknown>"),
+            )
+            raise AccessDeniedError(state=getattr(request, "state", None), request=request)
+        super().save_authorization_code(client_id, code, request, *args, **kwargs)
 
     def is_pkce_required(self, client_id, request=None):
         # Defense-in-depth: PKCE is mandatory for every client
@@ -255,16 +281,19 @@ class SsoOAuth2Validator(OAuth2Validator):
 
     @staticmethod
     def _extract_ip(request):
-        """Return the client IP from oauthlib request headers.
+        """Return the trusted client IP from oauthlib request headers.
 
         oauthlib's extract_headers copies Django's request.META keys
-        verbatim, so the production-reality keys are
-        HTTP_X_FORWARDED_FOR / HTTP_X_REAL_IP. Unit tests using
-        SimpleNamespace with the HTTP standard names (X-Forwarded-For,
-        X-Real-IP) are also supported via the second-arg fallback.
+        verbatim (HTTP_X_REAL_IP, REMOTE_ADDR); unit tests using the HTTP
+        standard name (X-Real-IP) are also supported. X-Forwarded-For is
+        client-controlled behind nginx and never used (see
+        apps.accounts.client_ip).
         """
+        from apps.accounts.client_ip import parse_ip
+
         headers = getattr(request, "headers", None) or {}
-        xff = headers.get("HTTP_X_FORWARDED_FOR") or headers.get("X-Forwarded-For")
-        if xff:
-            return xff.split(",")[0].strip()
-        return headers.get("HTTP_X_REAL_IP") or headers.get("X-Real-IP")
+        return (
+            parse_ip(headers.get("HTTP_X_REAL_IP"))
+            or parse_ip(headers.get("X-Real-IP"))
+            or parse_ip(headers.get("REMOTE_ADDR"))
+        )

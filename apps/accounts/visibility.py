@@ -11,6 +11,8 @@ import enum
 
 from django.contrib.auth import get_user_model
 
+from apps.accounts.permissions import Level, can, level_of
+
 User = get_user_model()
 
 
@@ -35,28 +37,32 @@ def audience_for(viewer, target):
     Returns None when the viewer has no access — caller raises Http404
     to avoid existence-leaking via 403.
 
-    Note: viewer.is_admin precedes the viewer-equals-target check, so a
+    Note: the users.manage check precedes the viewer-equals-target check, so a
     Vereins-Admin sieht sich selbst auch als ADMIN (nicht als SELF). Das
     ist erwünscht — Admin braucht beim Self-View dieselben Werkzeuge
     wie bei anderen.
     """
     if not viewer.is_authenticated:
         return None
-    if viewer.is_admin:
+    if can(viewer, "users", "manage"):
         return Audience.ADMIN
     if viewer.pk == target.pk:
         # Self-Sicht. Applicant-Variante für die wenigen Stellen, wo
         # man unterscheiden muss (z.B. List-Filter, der Applicants
         # ausnimmt).
-        if viewer.membership_level == User.MembershipLevel.APPLICANT:
+        if level_of(viewer) == Level.APPLICANT:
             return Audience.APPLICANT
         return Audience.SELF
     # Cross-User-Sicht.
-    if viewer.membership_level == User.MembershipLevel.APPLICANT:
+    if level_of(viewer) == Level.APPLICANT:
         # Applicants sehen niemand außer sich selbst.
         return None
-    if target.membership_level == User.MembershipLevel.APPLICANT:
+    if Level.from_slug(target.membership_level) == Level.APPLICANT:
         # Member sehen Applicants nicht (Bewerber bleiben „außerhalb").
+        return None
+    if not target.is_active or target.deleted_at is not None:
+        # Deactivated/soft-deleted users are manager-only — same set as
+        # directory_queryset (UI list + users API).
         return None
     return Audience.MEMBER
 
@@ -146,9 +152,23 @@ def directory_visible_fields(viewer, target):
 
 
 def user_can_view_directory(viewer):
-    """Gate for the UserListView. Applicants and Anonymous get 404."""
-    if not viewer.is_authenticated:
-        return False
-    if viewer.is_admin:
-        return True
-    return viewer.membership_level != User.MembershipLevel.APPLICANT
+    """Gate for the UserListView: ``users.view`` on the permission registry."""
+    return can(viewer, "users", "view")
+
+
+def directory_queryset(viewer):
+    """Users the ``viewer`` may see in the member directory.
+
+    Single source for the UI user list (``UserListView``) and the users API so
+    both return the same set:
+
+    - Managers (``users.manage``): every non-soft-deleted user — active and
+      deactivated, Applicants included. (The UI list narrows this further with
+      its lifecycle buckets; its default bucket shows the active ones.)
+    - Everyone else: active (``is_active``), non-soft-deleted, non-Applicant
+      users only.
+    """
+    qs = User.objects.active()
+    if not can(viewer, "users", "manage"):
+        qs = qs.filter(is_active=True).exclude(membership_level=User.MembershipLevel.APPLICANT)
+    return qs

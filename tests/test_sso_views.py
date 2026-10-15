@@ -218,7 +218,6 @@ def admin(db):
     u = User.objects.create_user(username="admin_revoke", password="x")
     u.membership_level = User.MembershipLevel.ADMIN
     u.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(u)
     return u
 
 

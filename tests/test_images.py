@@ -430,7 +430,7 @@ class TestImageManagement:
         assert "images/v1-alpha/qemux86-64.wic.bz2.bundle" in deleted_keys
         assert "images/v1-alpha/qemux86-64.rootfs.bz2" in deleted_keys
 
-    def test_operator_cannot_mark_latest_or_delete(self, client, operator_user):
+    def test_operator_cannot_mark_latest_or_delete(self, client, staff_user):
         from django.urls import reverse
 
         from apps.images.models import ImageRelease
@@ -442,7 +442,7 @@ class TestImageManagement:
             sha256="a" * 64,
             size_bytes=1,
         )
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         assert client.post(reverse("images:mark_latest", args=[rel.pk])).status_code == 403
         assert client.post(reverse("images:delete", args=[rel.pk])).status_code == 403
         # DB row still present
@@ -771,10 +771,11 @@ class TestSidebar:
         assert response.status_code == 200
         assert b'/images/"' in response.content
 
-    def test_operator_does_not_see_images_link(self, client, operator_user):
+    def test_operator_sees_images_link(self, client, staff_user):
+        """images:view is Applicant+ (spec 1.3), so every level sees the link."""
         from django.urls import reverse
 
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.get(reverse("dashboard:index"))
         assert response.status_code == 200
-        assert b'/images/"' not in response.content
+        assert b'/images/"' in response.content

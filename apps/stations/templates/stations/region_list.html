@@ -17,9 +17,13 @@
     <p class="page-sub">{% trans "Geographic / organizational groupings of stations." %}</p>
   </div>
   <div class="page-head-actions">
+    {% if can.topology.manage %}
     <a href="{% url 'stations:region_create' %}" class="btn btn-primary">
       {% trans "New region" %}
     </a>
+    {% else %}
+    {% include "includes/readonly_badge.html" %}
+    {% endif %}
   </div>
 </div>
 
@@ -44,8 +48,10 @@
         <td data-label="{% trans 'Stations' %}">{{ r.stations_count }}</td>
         <td data-label="{% trans 'Description' %}" class="t-muted">{{ r.description|default:"—"|truncatewords:8 }}</td>
         <td class="actions">
+          {% if can.topology.manage %}
           <a href="{% url 'stations:region_update' r.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
           <a href="{% url 'stations:region_delete' r.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+          {% endif %}
         </td>
       </tr>
       {% empty %}

@@ -1,6 +1,8 @@
-"""Server-side ``write_role`` enforcement at the single command choke point
-(``ControlConsumer._handle_command``, spec §4a). Read-only rendering is cosmetic; this
-is the real gate. Async scenarios run via asyncio.run() (no pytest-asyncio)."""
+"""Server-side capability enforcement (``control.<policy verb>``) at the single command
+choke point (``ControlConsumer._handle_command``, spec 2026-10-14 §3.4). Read-only
+rendering is cosmetic; this is the real gate. Denials use the unified forbidden frame
+``{type:"error", code:"forbidden", message, request_id}`` (§5.2). Async scenarios run
+via asyncio.run() (no pytest-asyncio)."""
 
 import asyncio
 
@@ -88,11 +90,13 @@ def _run(station, user, frame, acquire=True):
     return asyncio.run(scenario())
 
 
-FORBIDDEN_STAFF = {
-    "type": "error",
-    "request_id": "r1",
-    "error": {"code": "forbidden", "msg": "Requires role: staff"},
-}
+def _forbidden(frame, rid="r1"):
+    return (
+        frame["type"] == "error"
+        and frame["code"] == "forbidden"
+        and frame.get("request_id") == rid
+        and bool(frame["message"])
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -100,11 +104,11 @@ def test_operator_holding_lock_cannot_set_staff_capability(control_agent_auth):
     station, member = _setup(User.MembershipLevel.MEMBER, "we1")
     kind, frame = _run(station, member, _cmd("filter_hpf"))
     assert kind == "error"
-    assert frame == FORBIDDEN_STAFF
+    assert _forbidden(frame)
     log = StationAuditLog.objects.get(
         station=station, event_type="control_command", message__contains="denied"
     )
-    assert "filter_hpf" in log.message and "staff" in log.message
+    assert "filter_hpf" in log.message and "control.manage" in log.message
     assert log.user_id == member.id
 
 
@@ -126,10 +130,10 @@ def test_staff_can_set_filter_and_it_is_relayed(control_agent_auth):
 
 @pytest.mark.django_db(transaction=True)
 def test_unknown_module_uses_default_policy_by_name(control_agent_auth):
-    # filter_hpf on a module id not in the registry → (cap, None) policy → still staff.
+    # filter_hpf on a module id not in the registry → (cap, None) policy → still manage.
     station, member = _setup(User.MembershipLevel.MEMBER, "we4")
     kind, frame = _run(station, member, _cmd("filter_hpf", module="ghost9"))
-    assert kind == "error" and frame == FORBIDDEN_STAFF
+    assert kind == "error" and _forbidden(frame)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -137,7 +141,7 @@ def test_unknown_module_uses_default_policy_by_name(control_agent_auth):
 def test_any_non_get_op_on_staff_capability_is_forbidden(control_agent_auth, op):
     station, member = _setup(User.MembershipLevel.MEMBER, f"we5-{op}")
     kind, frame = _run(station, member, _cmd("filter_hpf", op=op))
-    assert kind == "error" and frame["error"]["code"] == "forbidden"
+    assert kind == "error" and frame["code"] == "forbidden"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -153,7 +157,7 @@ def test_operator_may_read_staff_capability(control_agent_auth):
 def test_malformed_slot_cannot_bypass(control_agent_auth, slot):
     station, member = _setup(User.MembershipLevel.MEMBER, f"we7-{type(slot).__name__}")
     kind, frame = _run(station, member, _cmd("filter_hpf", slot=slot))
-    assert kind == "error" and frame["error"]["code"] == "forbidden"
+    assert kind == "error" and frame["code"] == "forbidden"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -165,7 +169,7 @@ def test_role_resolution_exception_fails_closed(control_agent_auth, monkeypatch)
 
     monkeypatch.setattr(capability_policy, "can_write", boom)
     kind, frame = _run(station, staff, _cmd("frequency", 145500))
-    assert kind == "error" and frame["error"]["code"] == "forbidden"
+    assert kind == "error" and frame["code"] == "forbidden"
     assert StationAuditLog.objects.filter(station=station, message__contains="denied").exists()
 
 
@@ -178,18 +182,19 @@ def test_module_lookup_exception_fails_closed(control_agent_auth, monkeypatch):
 
     monkeypatch.setattr(control_consumers.ControlConsumer, "_lookup_module_type", boom)
     kind, frame = _run(station, staff, _cmd("filter_hpf"))
-    assert kind == "error" and frame["error"]["code"] == "forbidden"
+    assert kind == "error" and frame["code"] == "forbidden"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_module_type_specific_policy_applies(control_agent_auth, monkeypatch):
     monkeypatch.setitem(
-        capability_policy.POLICY, ("frequency", "fm"), capability_policy.CapabilityPolicy("admin")
+        capability_policy.POLICY,
+        ("frequency", "fm"),
+        capability_policy.CapabilityPolicy("manage"),
     )
-    station, staff = _setup(User.MembershipLevel.STAFF, "we10")
-    kind, frame = _run(station, staff, _cmd("frequency", 145500))
-    assert kind == "error"
-    assert frame["error"] == {"code": "forbidden", "msg": "Requires role: admin"}
+    station, member = _setup(User.MembershipLevel.MEMBER, "we10")
+    kind, frame = _run(station, member, _cmd("frequency", 145500))
+    assert kind == "error" and _forbidden(frame)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -210,7 +215,7 @@ def test_int_slot_end_to_end_deny(control_agent_auth):
         station=station, slot="1", module_id="fm0", type="fm", capability_descriptor=DESC
     )
     kind, frame = _run(station, member, _cmd("filter_hpf", slot=1))
-    assert kind == "error" and frame == FORBIDDEN_STAFF
+    assert kind == "error" and _forbidden(frame)
     kind, frame = _run(station, member, _cmd("frequency", 145500, slot=1))
     assert kind == "relayed" and frame["slot"] == 1
 
@@ -220,19 +225,18 @@ def test_unregistered_module_gets_strictest_type_specific_policy(control_agent_a
     # Only a type-specific entry exists; an unregistered module id (type unknown) must
     # not fall back to the looser default.
     monkeypatch.setitem(
-        capability_policy.POLICY, ("power", "fm"), capability_policy.CapabilityPolicy("admin")
+        capability_policy.POLICY, ("power", "fm"), capability_policy.CapabilityPolicy("manage")
     )
-    station, staff = _setup(User.MembershipLevel.STAFF, "we-strict")
-    kind, frame = _run(station, staff, _cmd("power", 5, module="ghost"))
-    assert kind == "error"
-    assert frame["error"] == {"code": "forbidden", "msg": "Requires role: admin"}
+    station, member = _setup(User.MembershipLevel.MEMBER, "we-strict")
+    kind, frame = _run(station, member, _cmd("power", 5, module="ghost"))
+    assert kind == "error" and _forbidden(frame)
 
 
 @pytest.mark.django_db(transaction=True)
 def test_denied_audit_message_truncates_attacker_strings(control_agent_auth):
     station, member = _setup(User.MembershipLevel.MEMBER, "we-trunc")
     long_cap = "filter_hpf" + "X" * 5000
-    monkey = capability_policy.CapabilityPolicy("staff")
+    monkey = capability_policy.CapabilityPolicy("manage")
     capability_policy.POLICY[(long_cap, None)] = monkey
     try:
         kind, _ = _run(station, member, _cmd(long_cap, op="Y" * 5000))
@@ -258,8 +262,7 @@ def _run_after_db_change(station, user, frame, mutate):
         assert (await browser.connect())[0] is True
         await browser.send_json_to({"type": "lock_acquire"})
         await _until(browser, lambda m: m.get("type") == "lock" and m.get("state") == "held")
-        # Warm the cached role properties on the scope instance, then change the DB row.
-        assert user.is_internal is True
+        # The scope user instance stays stale; change the DB row underneath it.
         await database_sync_to_async(mutate)()
         await browser.send_json_to(frame)
         if await agent.receive_nothing(timeout=0.5):
@@ -282,7 +285,7 @@ def test_demoted_mid_connection_is_forbidden_on_next_set(control_agent_auth):
 
     kind, frame = _run_after_db_change(station, staff, _cmd("filter_hpf"), demote)
     assert kind == "error"
-    assert frame == FORBIDDEN_STAFF
+    assert _forbidden(frame)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -294,7 +297,7 @@ def test_deactivated_mid_connection_is_forbidden_on_next_set(control_agent_auth)
 
     kind, frame = _run_after_db_change(station, staff, _cmd("filter_hpf"), deactivate)
     assert kind == "error"
-    assert frame["error"]["code"] == "forbidden"
+    assert frame["code"] == "forbidden"
 
 
 @pytest.mark.django_db
@@ -308,3 +311,29 @@ def test_fresh_user_denies_missing_or_inactive_row():
     assert control_consumers._fresh_user(inactive) is None
     assert control_consumers._fresh_user(ghost) is None
     assert control_consumers._fresh_user(None) is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_denial_notification_failure_still_denies(control_agent_auth, monkeypatch):
+    # The permission check AND the denial notification both fail (e.g. DB down): the
+    # command is still refused with a generic forbidden frame, the socket survives.
+    station, staff = _setup(User.MembershipLevel.STAFF, "we-notify")
+
+    def boom(*a, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(capability_policy, "can_write", boom)
+    real_allows = control_consumers.ControlConsumer.area_allows
+
+    async def allows(self, verb, **kw):
+        # lock_acquire and the receive-level control.use gate for "r1" pass normally;
+        # the second "r1" check (the denial notification) blows up.
+        if kw.get("request_id") == "r1":
+            if getattr(self, "_seen_r1", False):
+                raise RuntimeError("db down")
+            self._seen_r1 = True
+        return await real_allows(self, verb, **kw)
+
+    monkeypatch.setattr(control_consumers.ControlConsumer, "area_allows", allows)
+    kind, frame = _run(station, staff, _cmd("frequency", 145500))
+    assert kind == "error" and _forbidden(frame)

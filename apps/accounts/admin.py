@@ -11,8 +11,14 @@ class UserAdmin(BaseUserAdmin):
     list_filter = ("language", "is_active", "is_staff", "groups")
     search_fields = ("username", "email", "first_name", "last_name")
 
+    # is_staff / is_superuser are derived from membership_level in User.save()
+    # (apps.accounts.permissions is the single authority). membership_level itself
+    # is read-only here too: level changes go only through the app's membership
+    # UI/API, which audits MEMBERSHIP_PROMOTED/DEMOTED and enforces the
+    # self-change block and assignment guard that the admin would bypass.
+    readonly_fields = ("membership_level", "is_staff", "is_superuser")
     fieldsets = BaseUserAdmin.fieldsets + (
-        (_("Station Manager"), {"fields": ("language",)}),
+        (_("Station Manager"), {"fields": ("membership_level", "language")}),
         (
             _("Profile"),
             {

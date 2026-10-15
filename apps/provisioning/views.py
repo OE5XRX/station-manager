@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.images import storage as image_storage
 from apps.stations.models import Station, StationAuditLog
 
@@ -24,8 +24,11 @@ ACTIVE_PROVISIONING_STATUSES = [
 ]
 
 
-class CreateProvisioningJobView(AdminRequiredMixin, View):
-    """Admin-only endpoint that creates a new ProvisioningJob for a station."""
+class CreateProvisioningJobView(AreaPermissionMixin, View):
+    """Create a new ProvisioningJob for a station (needs provisioning.manage)."""
+
+    area = "provisioning"
+    verb = "manage"
 
     def post(self, request, station_pk):
         station = get_object_or_404(Station, pk=station_pk)
@@ -86,15 +89,18 @@ class CreateProvisioningJobView(AdminRequiredMixin, View):
         return redirect("stations:station_detail", pk=station.pk)
 
 
-class ProvisioningJobStatusView(AdminRequiredMixin, View):
+class ProvisioningJobStatusView(AreaPermissionMixin, View):
     """HTMX-polled partial showing the job's current state."""
+
+    area = "provisioning"
+    verb = "manage"
 
     def get(self, request, pk):
         job = get_object_or_404(ProvisioningJob, pk=pk)
         return render(request, "provisioning/_job_status.html", {"job": job})
 
 
-class ProvisioningJobDownloadView(AdminRequiredMixin, View):
+class ProvisioningJobDownloadView(AreaPermissionMixin, View):
     """Stream the provisioned image from S3 and mark job as downloaded.
 
     Returns 409 if the job is not yet READY and 410 if its presigned-like
@@ -103,6 +109,9 @@ class ProvisioningJobDownloadView(AdminRequiredMixin, View):
     conditional UPDATE so concurrent downloads can't clobber a FAILED /
     EXPIRED state written by the worker between status check and iteration.
     """
+
+    area = "provisioning"
+    verb = "manage"
 
     CHUNK = 1 << 20  # 1 MiB
 

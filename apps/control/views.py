@@ -1,26 +1,25 @@
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.views.generic import DetailView
 
+from apps.accounts.permissions import (
+    AreaPermissionMixin,
+    can_override_station,
+    level_label,
+    required_level,
+)
 from apps.stations.models import Station
 
-from . import capability_policy, serializers
+from . import serializers
 
 
-class StationControlView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
+class StationControlView(AreaPermissionMixin, DetailView):
+    """Control panel. ``control.view`` renders it read-only (RX audio still available);
+    lock/PTT/mic controls render only with ``control.use`` (template ``can.control.use``)."""
+
+    area = "control"
+    verb = "view"
     model = Station
     template_name = "control/panel.html"
     context_object_name = "station"
-    raise_exception = True  # 403 for authenticated-but-unauthorized, not a redirect loop
-
-    def get_object(self, queryset=None):
-        # Memoize: test_func() and DetailView.get() both call get_object,
-        # which would otherwise fire two identical station queries per request.
-        if not hasattr(self, "_cached_object"):
-            self._cached_object = super().get_object(queryset=queryset)
-        return self._cached_object
-
-    def test_func(self):
-        return self.request.user.can_use_station(self.get_object())
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -36,11 +35,9 @@ class StationControlView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
             if m.type != "audio_router"
         ]
         ctx["initial_inventory"] = serializers.snapshot(station)
-        u = self.request.user
-        ctx["can_admin"] = (
-            u.is_admin or u.is_station_admin(station) or u.can_administer_station(station)
-        )
-        # Resolved once per request; the cap_access tag reads it (None = read-only).
-        ctx["viewer_role"] = capability_policy.viewer_role(u, station)
+        # Cosmetic (Override button); the consumer re-checks on every preempt.
+        ctx["can_admin"] = can_override_station(self.request.user, station)
+        # Read-only hint: which level unlocks operating (from the registry, not hardcoded).
+        ctx["control_use_label"] = level_label(required_level("control", "use"))
         ctx["ptt_default_key"] = " "
         return ctx

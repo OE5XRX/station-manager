@@ -5,34 +5,33 @@ from asgiref.sync import async_to_sync
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.layers import get_channel_layer
 
+from apps.accounts.permissions import AreaConsumerMixin
+
 logger = logging.getLogger(__name__)
 
 GROUP_NAME = "deployment_status"
 
 
-class DeploymentStatusConsumer(AsyncWebsocketConsumer):
-    """WebSocket consumer for real-time deployment status updates."""
+class DeploymentStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
+    """WebSocket consumer for real-time deployment status updates (deployments.view)."""
+
+    area = "deployments"
 
     async def connect(self):
         user = self.scope.get("user")
         if not user or user.is_anonymous:
             await self.close(code=4401)
             return
-        # Align with the deployments pages that actually render this feed:
-        # AdminOrOperatorRequiredMixin guards both deployments:deployment_list
-        # and the upgrade dashboard. Members stay excluded (4403) so their
-        # auto-reconnect loop from static/js/app.js stops cleanly.
-        # ``is_internal`` is a pure in-memory check: a @cached_property
-        # that reads the ``membership_level`` field already loaded on
-        # the User instance by AuthMiddleware. No ORM access, so no
-        # database_sync_to_async hop needed.
-        if not user.is_internal:
-            await self.close(code=4403)
+        # Accept first so the forbidden frame reaches the browser; join the group
+        # only after the gate passed.
+        await self.accept()
+        if not await self.area_connect_gate():
             return
         await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
-        await self.accept()
+        self.start_periodic_recheck()
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):

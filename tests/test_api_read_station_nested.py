@@ -17,7 +17,7 @@ def _mk_children(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_telemetry_nested_in_scope(topology):  # noqa: F811
+def test_telemetry_nested(topology):  # noqa: F811
     _mk_children(topology)
     pk = topology["station_in"].pk
     resp = bearer(topology["station_user"]).get(f"/api/v1/stations/{pk}/telemetry/")
@@ -29,9 +29,20 @@ def test_telemetry_nested_in_scope(topology):  # noqa: F811
 
 
 @pytest.mark.django_db
-def test_telemetry_out_of_scope_parent_404(topology):  # noqa: F811
+def test_telemetry_of_unassigned_station_visible(topology):  # noqa: F811
+    # No topology scoping: a station the user has no assignment on is readable.
+    from apps.stations.models import StationTelemetry
+
+    StationTelemetry.objects.create(station=topology["station_out"], boot_count=7)
     pk = topology["station_out"].pk
     resp = bearer(topology["station_user"]).get(f"/api/v1/stations/{pk}/telemetry/")
+    assert resp.status_code == 200
+    assert resp.data["boot_count"] == 7
+
+
+@pytest.mark.django_db
+def test_telemetry_unknown_parent_404(topology):  # noqa: F811
+    resp = bearer(topology["station_user"]).get("/api/v1/stations/999999/telemetry/")
     assert resp.status_code == 404
 
 

@@ -22,6 +22,7 @@ from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 
 from apps.accounts.models import User
+from apps.control.models import StationModule
 from apps.stations.models import Station
 from config.asgi import application
 
@@ -177,11 +178,12 @@ def test_command_relayed_and_result_state_confirm(control_agent_auth):
 
 
 # ---------------------------------------------------------------------------
-# 3. Telemetry subscribe reaches the agent verbatim with caps + interval.
+# 3. Telemetry subscribe reaches the agent (rebuilt frame) with caps + interval.
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db(transaction=True)
 def test_subscribe_carries_capabilities_and_interval(control_agent_auth):
     station = Station.objects.create(name="jsws2", status="online")
+    StationModule.objects.create(station=station, slot="0", module_id="fm0")
     viewer = User.objects.create(username="jv2", membership_level=User.MembershipLevel.MEMBER)
 
     async def scenario():
@@ -197,7 +199,7 @@ def test_subscribe_carries_capabilities_and_interval(control_agent_auth):
             {
                 "v": V,
                 "type": "subscribe",
-                "slot": "slot0",
+                "slot": 0,
                 "module": "fm0",
                 "capabilities": ["rssi"],
                 "interval_ms": 500,

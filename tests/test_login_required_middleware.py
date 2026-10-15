@@ -248,14 +248,14 @@ def test_admin_login_anon_accessible(client):
 
 
 @pytest.mark.django_db
-def test_sso_applications_redirects_anonymous(client):
-    """oauth2_provider's admin-style endpoints (``/sso/applications/``,
-    ``/sso/authorized_tokens/``) must STAY gated — they aren't on the
-    public allow-list and would otherwise expose the OAuth client
-    registry."""
+def test_sso_applications_not_exposed_to_anonymous(client):
+    """oauth2_provider's admin-style endpoints (``/sso/applications/``)
+    are not mounted at all (config/urls.py mounts protocol endpoints only);
+    anonymous must never get a 200 and never see the client registry."""
     response = client.get("/sso/applications/")
-    assert response.status_code == 302
-    assert "/accounts/login/" in response.url
+    assert response.status_code in (302, 403, 404)
+    if response.status_code == 302:
+        assert "/accounts/login/" in response.url
 
 
 @pytest.mark.django_db

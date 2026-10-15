@@ -52,6 +52,15 @@
   <span class="htmx-indicator spinner"></span>
 </form>
 
+<div class="row-gap-8 mb-14">
+  <a href="{% url 'audit:audit_list' %}?event_type=permission_denied"
+     class="btn btn-sm {% if current_event_type == 'permission_denied' %}btn-primary{% else %}btn-ghost{% endif %}"
+     {% if current_event_type == 'permission_denied' %}aria-current="true"{% endif %}>{% trans "Verweigerungen" %}</a>
+  {% if current_event_type == 'permission_denied' %}
+  <a href="{% url 'audit:audit_list' %}" class="btn btn-sm btn-ghost">{% trans "Filter zurücksetzen" %}</a>
+  {% endif %}
+</div>
+
 <div id="audit-table">
   {% include "audit/_audit_table.html" %}
 </div>

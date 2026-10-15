@@ -1,14 +1,17 @@
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import JsonResponse
 from django.views import View
 
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.models import Station
 
 from .models import TerminalSession
 
 
-class TerminalStatusView(LoginRequiredMixin, View):
+class TerminalStatusView(AreaPermissionMixin, View):
     """Check terminal availability for a station (used by HTMX before opening WebSocket)."""
+
+    area = "terminal"
+    verb = "use"
 
     def get(self, request, station_id):
         try:
@@ -21,7 +24,7 @@ class TerminalStatusView(LoginRequiredMixin, View):
             station=station,
             status__in=("connecting", "active"),
         ).count()
-        can_connect = is_online and active_sessions < 2 and request.user.is_internal
+        can_connect = is_online and active_sessions < 2
 
         return JsonResponse(
             {

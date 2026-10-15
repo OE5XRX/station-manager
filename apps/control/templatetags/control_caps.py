@@ -3,6 +3,7 @@ the server-side gate in the control consumer is the real enforcement)."""
 
 from django import template
 
+from apps.accounts.permissions import can, level_label, required_level
 from apps.control import capability_policy
 
 register = template.Library()
@@ -12,21 +13,11 @@ register = template.Library()
 def cap_access(context, cap, module):
     name = cap.get("name") if isinstance(cap, dict) else None
     policy = capability_policy.policy_for(name, getattr(module, "type", None))
-    if "viewer_role" in context:
-        role = context["viewer_role"]
-    else:
-        request = context.get("request")
-        station = context.get("station")
-        role = (
-            capability_policy.viewer_role(getattr(request, "user", None), station)
-            if station is not None
-            else None
-        )
-    # Fail closed: any unresolved role renders read-only.
+    request = context.get("request")
+    user = getattr(request, "user", None)
+    # Fail closed: no request/user renders read-only.
     return {
-        "writable": capability_policy.role_allows(role, policy.write_role),
-        "write_role": policy.write_role,
-        "write_role_label": capability_policy.ROLE_LABELS.get(
-            policy.write_role, policy.write_role
-        ),
+        "writable": can(user, "control", policy.verb),
+        "verb": policy.verb,
+        "required_label": level_label(required_level("control", policy.verb)),
     }

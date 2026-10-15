@@ -3,16 +3,17 @@
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.routers import APIRootView, DefaultRouter
 
+from apps.accounts.permissions import AreaPermission
 from apps.api import read_views, write_views
 from apps.api.authentication import PersonalAccessTokenAuthentication
-from apps.api.permissions import TopologyScopedPermission
 
 
 class ScopedAPIRootView(APIRootView):
     """API root view with the same auth/permission policy as the viewsets."""
 
     authentication_classes = [PersonalAccessTokenAuthentication, SessionAuthentication]
-    permission_classes = [TopologyScopedPermission]
+    permission_classes = [AreaPermission]
+    area = "dashboard"
 
 
 class ScopedDefaultRouter(DefaultRouter):

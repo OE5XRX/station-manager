@@ -5,7 +5,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseRedirect
@@ -36,6 +35,8 @@ from .forms import (
 )
 from .geocoding import geocode_address, lat_lon_to_locator
 from .models import AccountAuditLog
+from .permissions import AreaPermissionMixin, can
+from .visibility import directory_queryset
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,7 @@ User = get_user_model()
 def _client_ip(request):
     """Lazy wrapper around `apps.accounts.views_membership._get_client_ip`.
 
-    Imported lazily to avoid a circular import — views_membership pulls
-    `AdminRequiredMixin` from this module at import time.
+    Imported lazily to avoid a circular import with views_membership.
     """
     from .views_membership import _get_client_ip
 
@@ -94,13 +94,6 @@ TRACKED_USER_FIELDS = frozenset(
 )
 
 
-class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Mixin that restricts access to users with admin role."""
-
-    def test_func(self):
-        return self.request.user.is_admin
-
-
 # The login & logout pages must be reachable without a session, otherwise
 # we trap unauthenticated users in a redirect loop the moment
 # ``LoginRequiredMiddleware`` is active. ``@login_not_required`` is the
@@ -108,16 +101,19 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
 # to skip.
 @method_decorator(login_not_required, name="dispatch")
 class LoginView(auth_views.LoginView):
+    permission_exempt = "auth-flow"
     template_name = "accounts/login.html"
     authentication_form = LoginForm
 
 
 @method_decorator(login_not_required, name="dispatch")
 class LogoutView(auth_views.LogoutView):
-    pass
+    permission_exempt = "auth-flow"
 
 
-class ProfileView(LoginRequiredMixin, TemplateView):
+class ProfileView(AreaPermissionMixin, TemplateView):
+    area = "profile"
+    verb = "use"
     template_name = "accounts/profile.html"
 
     def get_context_data(self, **kwargs):
@@ -291,8 +287,11 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         }
 
 
-class ProfilePasswordChangeView(LoginRequiredMixin, View):
+class ProfilePasswordChangeView(AreaPermissionMixin, View):
     """Self-only password change endpoint posted from the Profile page."""
+
+    area = "profile"
+    verb = "use"
 
     http_method_names = ["post"]
 
@@ -326,6 +325,8 @@ class SetPasswordView(View):
     POST-Phase: validates password form, then consumes token, then sets
     password, then auto-logs-in.
     """
+
+    permission_exempt = "auth-flow"
 
     template_name = "accounts/set_password.html"
 
@@ -402,6 +403,8 @@ class VerifyEmailView(View):
     Idempotent in the sense that a second click on the same link shows
     an "invalid or expired" message — the token is single-use.
     """
+
+    permission_exempt = "auth-flow"
 
     http_method_names = ["get"]
 
@@ -525,6 +528,8 @@ class PasswordResetRequestView(View):
     already shows.
     """
 
+    permission_exempt = "auth-flow"
+
     template_name = "accounts/password_reset_request.html"
 
     def get(self, request):
@@ -605,7 +610,7 @@ class PasswordResetRequestView(View):
         )
 
 
-class ResendWelcomeView(AdminRequiredMixin, View):
+class ResendWelcomeView(AreaPermissionMixin, View):
     """Admin-only: re-issue a Welcome token + mail.
 
     Useful when the original Welcome-Mail expired (7d) or got lost.
@@ -616,6 +621,9 @@ class ResendWelcomeView(AdminRequiredMixin, View):
     - the user has no email set (mail-send would fail or land in
       a black hole).
     """
+
+    area = "users"
+    verb = "manage"
 
     http_method_names = ["post"]
 
@@ -665,62 +673,61 @@ class ResendWelcomeView(AdminRequiredMixin, View):
         return redirect("accounts:user_detail", pk=pk)
 
 
-class UserListView(LoginRequiredMixin, ListView):
-    """Audience-aware list. Admin sees everyone (incl. Applicants),
-    Member sees everyone except Applicants, Applicants get 404.
-    Filter-bar params (q, role, status) are applied on the audience-filtered
-    queryset.
+class UserListView(AreaPermissionMixin, ListView):
+    """Audience-aware list (``users.view``).
+
+    Managers (``users.manage``) see everyone incl. Applicants and the
+    lifecycle buckets; Members see the active, non-Applicant directory
+    (``visibility.directory_queryset``). Applicants are refused with 403 by
+    the area gate. Filter-bar params (q, role, status) are applied on top.
     """
 
+    area = "users"
     model = User
     template_name = "accounts/user_list.html"
     context_object_name = "users"
     paginate_by = 25
 
-    def dispatch(self, request, *args, **kwargs):
-        from .visibility import user_can_view_directory
-
-        # Let LoginRequiredMixin handle anonymous (redirect to login)
-        # before evaluating the directory gate.
-        if not request.user.is_authenticated:
-            return super().dispatch(request, *args, **kwargs)
-        if not user_can_view_directory(request.user):
-            raise Http404()
-        return super().dispatch(request, *args, **kwargs)
+    def _is_manager(self):
+        return can(self.request.user, "users", "manage")
 
     def get_queryset(self):
-        qs = User.objects.order_by("username")
-        if not self.request.user.is_admin:
-            qs = qs.exclude(membership_level=User.MembershipLevel.APPLICANT)
-
-        # Show-filter: lifecycle bucket (active/inactive/deleted/all).
-        # Default "active" hides soft-deleted AND deactivated users.
-        # Non-admin viewers never see deleted/inactive — hard-pinned to active.
-        if self.request.user.is_admin:
+        is_manager = self._is_manager()
+        if is_manager:
+            # Managers start from everyone and pick a lifecycle bucket
+            # (active/inactive/deleted/all). Default "active" hides
+            # soft-deleted AND deactivated users.
+            qs = User.objects.all()
             show = self.request.GET.get("show", "active")
+            if show == "deleted":
+                qs = qs.filter(deleted_at__isnull=False)
+            elif show == "inactive":
+                qs = qs.filter(deleted_at__isnull=True, is_active=False)
+            elif show != "all":
+                qs = qs.filter(deleted_at__isnull=True, is_active=True)
         else:
-            show = "active"
-        if show == "deleted":
-            qs = qs.filter(deleted_at__isnull=False)
-        elif show == "inactive":
-            qs = qs.filter(deleted_at__isnull=True, is_active=False)
-        elif show == "all":
-            pass
-        else:
-            qs = qs.filter(deleted_at__isnull=True, is_active=True)
+            # Non-managers get the shared directory queryset (active, not
+            # deleted, no Applicants) — the same set the users API returns.
+            qs = directory_queryset(self.request.user)
+        qs = qs.order_by("username")
 
         q = self.request.GET.get("q", "").strip()
-        if q:
+        if q and is_manager:
             qs = qs.filter(
                 Q(username__icontains=q)
                 | Q(email__icontains=q)
                 | Q(first_name__icontains=q)
                 | Q(last_name__icontains=q)
             )
+        elif q:
+            # Non-managers search the callsign only: email/names are hidden on
+            # some rows (is_directory_visible=False), a substring search on
+            # them would leak those values. Same rule as the users API.
+            qs = qs.filter(username__icontains=q)
 
         role = self.request.GET.get("role", "")
         valid_roles = {x.value for x in User.MembershipLevel}
-        if not self.request.user.is_admin:
+        if not is_manager:
             valid_roles -= {User.MembershipLevel.APPLICANT.value}
         if role in valid_roles:
             qs = qs.filter(membership_level=role)
@@ -732,20 +739,22 @@ class UserListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["is_admin_view"] = self.request.user.is_admin
-        ctx["is_member_view"] = not self.request.user.is_admin
+        ctx["is_admin_view"] = self._is_manager()
+        ctx["is_member_view"] = not ctx["is_admin_view"]
         ctx["filter_q"] = self.request.GET.get("q", "")
         ctx["filter_role"] = self.request.GET.get("role", "")
         # Mirror get_queryset's hard-pinning for non-admin viewers so the
         # template's active-pill state matches the actual queryset.
-        if self.request.user.is_admin:
+        if ctx["is_admin_view"]:
             ctx["filter_show"] = self.request.GET.get("show", "active")
         else:
             ctx["filter_show"] = "active"
         return ctx
 
 
-class UserCreateView(AdminRequiredMixin, CreateView):
+class UserCreateView(AreaPermissionMixin, CreateView):
+    area = "users"
+    verb = "manage"
     model = User
     template_name = "accounts/user_form.html"
     form_class = UserCreationForm
@@ -803,7 +812,9 @@ class UserCreateView(AdminRequiredMixin, CreateView):
         return context
 
 
-class UserUpdateView(AdminRequiredMixin, UpdateView):
+class UserUpdateView(AreaPermissionMixin, UpdateView):
+    area = "users"
+    verb = "manage"
     model = User
     template_name = "accounts/user_form.html"
     form_class = UserChangeForm
@@ -924,7 +935,7 @@ def _revoke_sso(request, user):
         )
 
 
-class UserSoftDeleteView(AdminRequiredMixin, View):
+class UserSoftDeleteView(AreaPermissionMixin, View):
     """Soft-delete an active user.
 
     GET shows the impact confirm-page (counts of topology assignments,
@@ -937,6 +948,9 @@ class UserSoftDeleteView(AdminRequiredMixin, View):
     delete is meaningless. Restore (Task 5) is the inverse path for
     soft-deleted users.
     """
+
+    area = "users"
+    verb = "manage"
 
     template_name = "accounts/user_confirm_soft_delete.html"
 
@@ -1018,7 +1032,7 @@ class UserSoftDeleteView(AdminRequiredMixin, View):
         return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
 
-class UserRestoreView(AdminRequiredMixin, View):
+class UserRestoreView(AreaPermissionMixin, View):
     """Restore a soft-deleted user.
 
     POST-only. 404 if the user is not soft-deleted. Pre-commit conflict
@@ -1028,6 +1042,9 @@ class UserRestoreView(AdminRequiredMixin, View):
     memberships and account tokens are NOT restored — they were
     revoked at soft-delete time and admin re-assigns manually.
     """
+
+    area = "users"
+    verb = "manage"
 
     http_method_names = ["post"]
 
@@ -1135,7 +1152,9 @@ class UserRestoreView(AdminRequiredMixin, View):
         return redirect("accounts:user_detail", pk=pk)
 
 
-class UserHardPurgeView(AdminRequiredMixin, View):
+class UserHardPurgeView(AreaPermissionMixin, View):
+    area = "users"
+    verb = "manage"
     template_name = "accounts/user_confirm_hard_purge.html"
 
     def get_object(self):
@@ -1226,7 +1245,7 @@ class UserHardPurgeView(AdminRequiredMixin, View):
         return HttpResponseRedirect(reverse("accounts:user_list") + "?show=deleted")
 
 
-class UserDetailView(LoginRequiredMixin, DetailView):
+class UserDetailView(AreaPermissionMixin, DetailView):
     """Audience-aware detail page.
 
     Permission flows entirely through ``apps.accounts.visibility``:
@@ -1237,9 +1256,17 @@ class UserDetailView(LoginRequiredMixin, DetailView):
       - Everyone else gets 404 (no existence-leak).
     """
 
+    area = "users"
     model = User
     template_name = "accounts/user_detail.html"
     context_object_name = "object"
+
+    def get_area_verb(self):
+        # Own page is the self-service profile area (Applicants included);
+        # anyone else's page is the member directory.
+        if self.kwargs["pk"] == self.request.user.pk:
+            return "profile", "use"
+        return "users", "view"
 
     def get_object(self, queryset=None):
         obj = super().get_object(queryset)
@@ -1271,10 +1298,9 @@ class UserDetailView(LoginRequiredMixin, DetailView):
         ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
         # API tokens are strictly personal: only on your own page, also for admins
         # (whose own page resolves to the ADMIN audience, not SELF).
-        # Applicants are excluded: the API rejects them (TopologyScopedPermission).
-        ctx["is_own_page"] = (
-            self.request.user.pk == self.object.pk
-            and self.request.user.membership_level != User.MembershipLevel.APPLICANT
+        # Applicants are excluded: api_tokens.use is Member.
+        ctx["is_own_page"] = self.request.user.pk == self.object.pk and can(
+            self.request.user, "api_tokens", "use"
         )
         if ctx["is_own_page"]:
             from apps.api.models import PersonalAccessToken

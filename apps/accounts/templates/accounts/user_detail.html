@@ -99,7 +99,7 @@
   </div>
 </div>
 
-{% if request.user.is_admin and not object.has_usable_password and not object.deleted_at %}
+{% if can.users.manage and not object.has_usable_password and not object.deleted_at %}
   <section class="panel mb-24" style="border-left:3px solid var(--warn);">
     <div class="panel-head">
       <div class="panel-title"><span class="dot"></span>{% trans "Pending Welcome" %}</div>
@@ -316,9 +316,18 @@
     {% else %}
       {% include "accounts/_membership_card.html" with readonly=True %}
     {% endif %}
+    {% comment %}
+      Assignment controls post to topology.manage endpoints — gate on that,
+      not on users.manage (is_admin_view).
+    {% endcomment %}
     <div class="grid grid-main">
-      {% include "accounts/_region_assignments_card.html" with readonly=False %}
-      {% include "accounts/_station_assignments_card.html" with readonly=False %}
+      {% if can.topology.manage %}
+        {% include "accounts/_region_assignments_card.html" with readonly=False %}
+        {% include "accounts/_station_assignments_card.html" with readonly=False %}
+      {% else %}
+        {% include "accounts/_region_assignments_card.html" with readonly=True %}
+        {% include "accounts/_station_assignments_card.html" with readonly=True %}
+      {% endif %}
     </div>
   {% else %}
     {% include "accounts/_membership_card.html" with readonly=True %}

@@ -3,15 +3,20 @@
 No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 """
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.accounts.models import User
+from apps.accounts.permissions import can
+from apps.accounts.visibility import Audience, audience_for, directory_visible_fields
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.monitoring.models import Alert, AlertRule
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
+from apps.stations.inventory import inventory_for_viewer
 from apps.stations.models import (
     Region,
     RegionAssignment,
@@ -23,6 +28,17 @@ from apps.stations.models import (
     StationTag,
     StationTelemetry,
 )
+
+
+def _can_manage_stations(serializer) -> bool:
+    """``stations.manage`` for the requesting user; fail closed without a request.
+
+    Mirrors the UI, which shows station IPs and network inventory only to
+    station managers (Staff).
+    """
+    request = serializer.context.get("request")
+    user = getattr(request, "user", None)
+    return user is not None and can(user, "stations", "manage")
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -39,6 +55,14 @@ class StationTagSerializer(serializers.ModelSerializer):
 
 class StationSerializer(serializers.ModelSerializer):
     is_online = serializers.BooleanField(read_only=True)
+    # Not ``read_only`` so the OpenAPI response schema marks it optional: it is
+    # omitted for callers without ``stations.manage`` (read-only viewset, never
+    # used for input).
+    last_ip_address = serializers.IPAddressField(
+        required=False,
+        allow_null=True,
+        help_text="Only present for callers with stations.manage (Staff).",
+    )
 
     class Meta:
         model = Station
@@ -68,6 +92,12 @@ class StationSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["tx_audio_ceiling_dbfs"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not _can_manage_stations(self):
+            data.pop("last_ip_address", None)
+        return data
 
 
 class StationTelemetrySerializer(serializers.ModelSerializer):
@@ -100,6 +130,13 @@ class StationInventorySerializer(serializers.ModelSerializer):
     class Meta:
         model = StationInventory
         fields = ["id", "station", "data", "updated_at"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The agent's inventory carries ``network`` (interface IPs + MACs); the
+        # UI never shows it to viewers, so only stations.manage gets it.
+        data["data"] = inventory_for_viewer(data.get("data"), _can_manage_stations(self))
+        return data
 
 
 class StationLogEntrySerializer(serializers.ModelSerializer):
@@ -182,12 +219,10 @@ class DeploymentSerializer(serializers.ModelSerializer):
         progress_map = self.context.get("deployment_progress_map")
         if progress_map is not None and obj.pk in progress_map:
             return progress_map[obj.pk]
-        # Detail / no-map fallback: single scoped aggregate (1 query).
-        from apps.api.scoping import accessible_deployment_results
+        # Detail / no-map fallback: single aggregate (1 query).
         from apps.deployments.models import compute_progress
 
-        user = self.context["request"].user
-        return compute_progress(accessible_deployment_results(user).filter(deployment=obj))
+        return compute_progress(DeploymentResult.objects.filter(deployment=obj))
 
     class Meta:
         model = Deployment
@@ -300,14 +335,35 @@ class ImageImportJobSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """Read-only user profile.
+    """Read-only user profile, filtered per target like the member directory.
 
-    Sensitive fields (password, last_login, is_staff, is_superuser, is_active,
+    Sensitive fields (password, last_login, Django admin flags, is_active,
     deleted_at, deleted_by) are structurally absent — not listed in ``fields``.
+    Of the rest, only the keys ``visibility.directory_visible_fields(viewer,
+    target)`` allows are emitted (``id`` always), so e.g. Staff no longer sees
+    every user's address/phone. Without a request the serializer fails closed
+    to ``id`` only.
+
+    Join date: ``date_joined_year`` (int) is emitted whenever the directory
+    shows the join year; the full ``date_joined`` timestamp only to Admins and
+    the user themself — Members see peers' join *year* only, like the UI.
     """
 
-    is_admin = serializers.BooleanField(read_only=True)
-    is_internal = serializers.BooleanField(read_only=True)
+    date_joined_year = serializers.SerializerMethodField(
+        help_text="Year the user joined; visible wherever the directory shows it."
+    )
+
+    # Serializer key -> visibility concept key, where they differ.
+    # ``notify_channel`` is a private preference, grouped with ``language``.
+    _CONCEPT_KEYS = {
+        "date_joined": "date_joined_year",
+        "date_joined_year": "date_joined_year",
+        "notify_channel": "language",
+    }
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_date_joined_year(self, obj):
+        return obj.date_joined.year if obj.date_joined else None
 
     class Meta:
         model = User
@@ -331,6 +387,27 @@ class UserSerializer(serializers.ModelSerializer):
             "locator",
             "is_directory_visible",
             "date_joined",
-            "is_admin",
-            "is_internal",
+            "date_joined_year",
         ]
+        extra_kwargs = {
+            "date_joined": {
+                "help_text": "Full join timestamp; only for Admins and the user themself."
+            }
+        }
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        viewer = getattr(request, "user", None)
+        if viewer is None:
+            return {"id": data["id"]}
+        visible = directory_visible_fields(viewer, instance)
+        out = {
+            key: value
+            for key, value in data.items()
+            if key == "id" or self._CONCEPT_KEYS.get(key, key) in visible
+        }
+        if audience_for(viewer, instance) == Audience.MEMBER:
+            # Peers see the join year only (concept ``date_joined_year``).
+            out.pop("date_joined", None)
+        return out

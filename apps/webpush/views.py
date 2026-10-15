@@ -7,16 +7,19 @@ filenames — a service worker needs a stable URL and root scope.
 
 import json
 
-from django.contrib.auth.decorators import login_not_required, login_required
+from django.contrib.auth.decorators import login_not_required
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.templatetags.static import static
 from django.views.decorators.http import require_GET, require_POST
 
+from apps.accounts.permissions import area_permission, permission_exempt
+
 from .models import PushSubscription
 
 
 @login_not_required
+@permission_exempt("static: PWA asset")
 @require_GET
 def service_worker(request):
     response = render(request, "webpush/sw.js", content_type="application/javascript")
@@ -26,6 +29,7 @@ def service_worker(request):
 
 
 @login_not_required
+@permission_exempt("static: PWA asset")
 @require_GET
 def manifest(request):
     data = {
@@ -54,7 +58,7 @@ def manifest(request):
     return JsonResponse(data, content_type="application/manifest+json")
 
 
-@login_required
+@area_permission("profile", "use")
 @require_POST
 def subscribe(request):
     try:
@@ -93,7 +97,7 @@ def subscribe(request):
     return JsonResponse({"ok": True})
 
 
-@login_required
+@area_permission("profile", "use")
 @require_POST
 def unsubscribe(request):
     try:

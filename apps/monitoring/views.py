@@ -1,37 +1,19 @@
 import json
 
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views import View
 from django.views.generic import ListView, TemplateView
 
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.monitoring.models import Alert, AlertRule
 from apps.monitoring.notifications import send_test_notification
 from apps.stations.models import Station
 
 
-class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Mixin that restricts access to users with admin role."""
-
-    def test_func(self):
-        return self.request.user.is_admin
-
-
-class AdminOrOperatorRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Restrict access to internal users (Vereins-Staff or Vereins-Admin).
-
-    Class name retained for backwards-compat during the PR-1 -> PR-2
-    rollout; the actual check is now ``user.is_internal``
-    (membership_level in {STAFF, ADMIN}), not Django-group membership.
-    """
-
-    def test_func(self):
-        return self.request.user.is_internal
-
-
-class AlertListView(AdminRequiredMixin, ListView):
+class AlertListView(AreaPermissionMixin, ListView):
+    area = "alerts"
     model = Alert
     template_name = "monitoring/alert_list.html"
     context_object_name = "alerts"
@@ -74,7 +56,10 @@ class AlertListView(AdminRequiredMixin, ListView):
         return context
 
 
-class AlertAcknowledgeView(AdminOrOperatorRequiredMixin, View):
+class AlertAcknowledgeView(AreaPermissionMixin, View):
+    area = "alerts"
+    verb = "manage"
+
     def post(self, request, pk):
         alert = get_object_or_404(Alert, pk=pk)
         alert.is_acknowledged = True
@@ -84,7 +69,10 @@ class AlertAcknowledgeView(AdminOrOperatorRequiredMixin, View):
         return JsonResponse({"status": "ok"})
 
 
-class AlertResolveView(AdminOrOperatorRequiredMixin, View):
+class AlertResolveView(AreaPermissionMixin, View):
+    area = "alerts"
+    verb = "manage"
+
     def post(self, request, pk):
         alert = get_object_or_404(Alert, pk=pk)
         alert.is_resolved = True
@@ -93,7 +81,8 @@ class AlertResolveView(AdminOrOperatorRequiredMixin, View):
         return JsonResponse({"status": "ok"})
 
 
-class AlertSettingsView(AdminRequiredMixin, TemplateView):
+class AlertSettingsView(AreaPermissionMixin, TemplateView):
+    area = "alert_rules"
     template_name = "monitoring/alert_settings.html"
 
     def get_context_data(self, **kwargs):
@@ -102,7 +91,10 @@ class AlertSettingsView(AdminRequiredMixin, TemplateView):
         return context
 
 
-class AlertRuleUpdateView(AdminRequiredMixin, View):
+class AlertRuleUpdateView(AreaPermissionMixin, View):
+    area = "alert_rules"
+    verb = "manage"
+
     def post(self, request, pk):
         rule = get_object_or_404(AlertRule, pk=pk)
 
@@ -131,7 +123,10 @@ class AlertRuleUpdateView(AdminRequiredMixin, View):
         return JsonResponse({"status": "ok"})
 
 
-class TestNotificationView(AdminRequiredMixin, View):
+class TestNotificationView(AreaPermissionMixin, View):
+    area = "alert_rules"
+    verb = "manage"
+
     def post(self, request, channel):
         success, error_message = send_test_notification(channel, requesting_user=request.user)
         return JsonResponse(
@@ -142,7 +137,9 @@ class TestNotificationView(AdminRequiredMixin, View):
         )
 
 
-class AlertCountView(LoginRequiredMixin, View):
+class AlertCountView(AreaPermissionMixin, View):
+    area = "alerts"
+
     def get(self, request):
         unresolved = Alert.objects.filter(is_resolved=False)
         return JsonResponse(

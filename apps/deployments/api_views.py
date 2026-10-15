@@ -39,6 +39,7 @@ class DeploymentCheckView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     def post(self, request):
         station = getattr(request.auth, "station", None)
@@ -115,6 +116,7 @@ class DeploymentStatusUpdateView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     def post(self, request, pk):
         station = getattr(request.auth, "station", None)
@@ -258,6 +260,7 @@ class DeploymentCommitView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     def post(self, request):
         station = getattr(request.auth, "station", None)
@@ -413,6 +416,7 @@ class DeploymentDownloadView(APIView):
 
     authentication_classes = [DeviceKeyAuthentication]
     permission_classes = [IsDevice]
+    permission_exempt = "device-key"
 
     CHUNK = 1 << 20  # 1 MiB
 

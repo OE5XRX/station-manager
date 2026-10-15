@@ -162,6 +162,29 @@
   filter: none;
 }
 
+/* control.view only: the lock-actions slot carries a quiet explanation + the shared
+   read-only pill instead of buttons. */
+.cp-lock-actions--readonly {
+  flex-shrink: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cp-lock-readonly-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  align-self: center;
+}
+
+/* Action refused while the socket stays open (e.g. demoted mid-session). */
+.cp-deny-notice {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 @media (max-width: 560px) {
   .cp-lock-banner {
     flex-wrap: wrap;
@@ -1180,7 +1203,7 @@
   opacity: 0.12;
 }
 
-/* Role-gated capability (write_role above the viewer's role): rendered but inert. */
+/* Capability gated above the viewer's level (control.use/manage): rendered but inert. */
 .cp-widget[data-readonly="true"] {
   opacity: 0.75;
 }

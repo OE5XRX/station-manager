@@ -18,6 +18,21 @@ from apps.monitoring.models import Alert, AlertRule
 from apps.stations.models import Station
 
 
+@pytest.fixture(autouse=True)
+def _reset_throttle_cache():
+    """Start every test with an empty default cache.
+
+    DRF's ScopedRateThrottle ("api-token": 120/min) keys on the user pk and
+    lives in the default cache, which survives the per-test DB rollback.
+    Users recreated with the same pk across tests would otherwise share one
+    throttle bucket and hit 429 in a full-suite run.
+    """
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+
+
 def _make_ed25519_keypair():
     """Generate an Ed25519 keypair for tests.
 
@@ -70,7 +85,6 @@ def _user_with_level(username, password, level):
     user = User.objects.create_user(username=username, password=password)
     user.membership_level = level
     user.save(update_fields=["membership_level"])
-    User._invalidate_role_cache(user)
     return user
 
 
@@ -80,11 +94,9 @@ def admin_user(db):
 
 
 @pytest.fixture
-def operator_user(db):
-    """Kept fixture name for test-suite continuity. The membership
-    level is STAFF (formerly the 'operator' group).
-    """
-    return _user_with_level("operator", "testpass123", User.MembershipLevel.STAFF)
+def staff_user(db):
+    """A user at the STAFF membership level."""
+    return _user_with_level("staff", "testpass123", User.MembershipLevel.STAFF)
 
 
 @pytest.fixture
@@ -169,14 +181,14 @@ def make_station_tag(db):
 
 
 @pytest.fixture
-def deployment(image_release, station, operator_user):
+def deployment(image_release, station, staff_user):
     """An in-progress Deployment targeting a single station."""
     dep = Deployment.objects.create(
         image_release=image_release,
         target_type=Deployment.TargetType.STATION,
         target_station=station,
         status=Deployment.Status.IN_PROGRESS,
-        created_by=operator_user,
+        created_by=staff_user,
     )
     return dep
 

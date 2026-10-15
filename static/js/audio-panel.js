@@ -413,11 +413,18 @@
 
       _onError: function (msg) {
         var code = msg.code;
-        if (code === "not_locked") {
+        // Audio frames carry `detail`; the unified permission frame carries
+        // `message` (spec 2026-10-14 §5.2). Normalise before handling.
+        var detail = msg.detail || msg.message || "";
+        if (code === "forbidden") {
+          // mic_open refused (no control.use) — tell the operator why TX is dead.
+          this.micError = detail || "Not permitted";
+          console.warn("[audio] forbidden:", detail);
+        } else if (code === "not_locked") {
           // Transient notice, suppress flood.
           if (!this._notLockedShown) {
             this._notLockedShown = true;
-            console.warn("[audio] not_locked:", msg.detail);
+            console.warn("[audio] not_locked:", detail);
             var self = this;
             if (this._notLockedTimer) clearTimeout(this._notLockedTimer);
             this._notLockedTimer = setTimeout(function () {
@@ -425,7 +432,7 @@
             }, NOT_LOCKED_SUPPRESS_MS);
           }
         } else {
-          console.error("[audio] server error:", code, msg.detail || "");
+          console.error("[audio] server error:", code, detail);
         }
       },
 

@@ -92,5 +92,5 @@ def test_test_push_view_requires_admin(client, settings):
     member = User.objects.create_user(username="m", password="x", email="m@x")
     client.force_login(member)
     r = client.post(reverse("monitoring:test_push"))
-    # AdminRequiredMixin blocks non-admins (redirect or 403)
+    # admin-only view blocks non-admins (redirect or 403)
     assert r.status_code in (302, 403)

@@ -27,11 +27,16 @@ class TestRegionListView:
         assert "Tirol" in body
         assert "OOe" in body
 
-    def test_non_admin_forbidden(self, client):
+    def test_non_admin_can_view_list_read_only(self, client):
         staff = _user(User.MembershipLevel.STAFF, "staff")
         client.force_login(staff)
         response = client.get(reverse("stations:region_list"))
-        assert response.status_code in (302, 403)
+        assert response.status_code == 200
+        assert reverse("stations:region_create") not in response.content.decode()
+
+    def test_anonymous_redirected(self, client):
+        response = client.get(reverse("stations:region_list"))
+        assert response.status_code == 302
 
 
 @pytest.mark.django_db

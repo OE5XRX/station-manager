@@ -93,6 +93,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.template.context_processors.csp",
                 "django.contrib.auth.context_processors.auth",
+                "apps.accounts.context_processors.permissions",
                 "django.contrib.messages.context_processors.messages",
                 "django.template.context_processors.i18n",
             ],
@@ -187,6 +188,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Django REST Framework
 REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "apps.api.exceptions.area_exception_handler",
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.api.authentication.DeviceKeyAuthentication",
         "apps.api.authentication.PersonalAccessTokenAuthentication",

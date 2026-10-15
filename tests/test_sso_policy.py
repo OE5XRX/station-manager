@@ -55,7 +55,6 @@ def _make_user(level: str, *, active: bool = True) -> User:
     u.membership_level = level
     u.is_active = active
     u.save(update_fields=["membership_level", "is_active"])
-    User._invalidate_role_cache(u)
     return u
 
 

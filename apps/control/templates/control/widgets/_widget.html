@@ -6,7 +6,7 @@ PTT is detected by cap.kind=="action" AND cap.name=="ptt" (platform-level capabi
 {% if cap.kind == "telemetry" %}
   {% include "control/widgets/_telemetry.html" %}
 {% elif cap.kind == "action" and cap.name == "ptt" %}
-  {% include "control/widgets/_ptt.html" %}
+  {% if access.writable %}{% include "control/widgets/_ptt.html" %}{% endif %}
 {% elif cap.kind == "action" %}
   {% include "control/widgets/_action.html" %}
 {% elif cap.kind == "setting" and cap.readonly %}

@@ -18,6 +18,8 @@ import time
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
+from apps.accounts.permissions import AreaConsumerMixin
+
 from . import constants, gate, subscriptions, tx_meter
 
 # Channels group names must match ^[a-zA-Z\d\-_.]+$ and be <100 chars.
@@ -34,6 +36,8 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
     Ed25519 query-param auth — identical to AgentControlConsumer._verify_agent.
     Pre-accept close (4404/4401) on failure; post-accept on success.
     """
+
+    permission_exempt = "agent: ed25519"
 
     async def connect(self):
         from urllib.parse import parse_qs
@@ -401,13 +405,17 @@ class AgentAudioConsumer(AsyncWebsocketConsumer):
         return subscriptions.count(station, stream_id)
 
 
-class AudioConsumer(AsyncWebsocketConsumer):
+class AudioConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """Browser-facing audio WebSocket.  Path: ws/audio/<station_id>/.
 
     Accept first (so every reject can send a human-readable error), then
-    validate auth + access.  Mic uplink additionally requires holding the
-    ControlLock and PTT being active.
+    validate auth + access.  Connect = ``control.view`` (hear RX).  ``mic_open``
+    re-checks ``control.use`` with a fresh user; mic frames are then gated by
+    the in-memory lock+PTT cache (no DB per frame) — a demoted holder loses the
+    lock/PTT through the control plane, which refreshes that cache.
     """
+
+    area = "control"
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -443,15 +451,15 @@ class AudioConsumer(AsyncWebsocketConsumer):
             return
         self.station = station
 
-        if not await self._can_use(station):
-            await self._reject(4403, "You are not permitted to use this station")
+        # control.view: forbidden frame + close 4403 on deny.
+        if not await self.area_connect_gate():
             return
 
         # Only an authorized socket joins the browser fan-out group — an
         # unauthorized socket must never receive gate/stream broadcasts.  A
         # broadcast racing the tiny auth window may be missed; that is
         # acceptable (mirrors ControlConsumer, which also joins only after
-        # can_use passes).
+        # the connect gate passes).
         self.browser_group = constants.browser_group(self.station_id)
         await self.channel_layer.group_add(self.browser_group, self.channel_name)
 
@@ -472,6 +480,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
         # Start the periodic link-stats push now that the socket is authorized.
         self._link_task = asyncio.ensure_future(self._link_stats_loop())
+        self.start_periodic_recheck()  # listeners never send a frame
 
     async def _link_stats_loop(self):
         """Push server-side relay counters to the browser every 2 s.
@@ -524,6 +533,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
             await self.close(code=close_code)
 
     async def disconnect(self, close_code):
+        await self.stop_periodic_recheck()
         # Stop the link-stats push loop and await it so it finishes cleanly
         # before the consumer is GC'd (avoids "Task was destroyed but it is
         # pending" warnings).
@@ -662,7 +672,10 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 self._src_groups.discard(grp)
 
     async def _handle_mic_open(self, station, msg):
-        """Browser declares uplink format.  Validate lock+PTT from cache; error if not met."""
+        """Browser declares uplink format.  control.use (fresh user), then lock+PTT from cache."""
+        if not await self.area_allows("use"):
+            self._mic_open = False
+            return
         self._mic_open = True
         self._not_locked_error_sent = False
         # Decide from the in-memory gate cache (same source as the uplink path).
@@ -773,12 +786,6 @@ class AudioConsumer(AsyncWebsocketConsumer):
             return Station.objects.get(pk=self.station_id)
         except Station.DoesNotExist:
             return None
-
-    @database_sync_to_async
-    def _can_use(self, station):
-        return (
-            bool(self.user) and not self.user.is_anonymous and self.user.can_use_station(station)
-        )
 
     @database_sync_to_async
     def _get_wire_state(self, station):

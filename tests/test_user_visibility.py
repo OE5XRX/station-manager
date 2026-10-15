@@ -84,7 +84,7 @@ class TestAudienceFor:
         """Admin sieht sich selbst zwar im SELF-Sinn, weil viewer.pk==target.pk
         Vorrang vor is_admin haben sollte — oder umgekehrt? Spec sagt: Admin-Check
         zuerst (Admin sieht sich als Admin)."""
-        # Per Spec: viewer.is_admin precedes viewer==target check.
+        # Per Spec: users.manage precedes viewer==target check.
         assert audience_for(admin, admin) == Audience.ADMIN
 
     def test_member_sees_self_as_self(self, member):
@@ -109,7 +109,7 @@ class TestAudienceFor:
         assert audience_for(AnonymousUser(), member) is None
 
     def test_staff_sees_member_as_member(self, staff, member):
-        """Staff ist nicht is_admin (per User.is_admin property → nur Vereins-Admin).
+        """Staff hat nicht users.manage (nur Vereins-Admin).
         Daher behandelt audience_for() Staff wie einen normalen Member."""
         assert audience_for(staff, member) == Audience.MEMBER
 

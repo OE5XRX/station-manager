@@ -329,19 +329,19 @@ class TestRoutingAndAuth:
     def test_queue_url_reverses(self):
         assert reverse("images:gh_queue") == "/en/images/github-releases/queue/"
 
-    def test_partial_requires_admin(self, client, operator_user):
-        client.force_login(operator_user)
+    def test_partial_requires_admin(self, client, staff_user):
+        client.force_login(staff_user)
         response = client.get(reverse("images:gh_partial"))
         assert response.status_code == 403
 
-    def test_queue_requires_admin(self, client, operator_user):
-        client.force_login(operator_user)
+    def test_queue_requires_admin(self, client, staff_user):
+        client.force_login(staff_user)
         response = client.post(reverse("images:gh_queue"))
         assert response.status_code == 403
 
     def test_partial_anonymous_redirects(self, client):
         response = client.get(reverse("images:gh_partial"))
-        # AdminRequiredMixin -> LoginRequiredMixin -> 302
+        # admin-only mixin -> login redirect 302
         assert response.status_code == 302
 
 

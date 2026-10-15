@@ -50,10 +50,10 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
       in ``tests/test_login_required_middleware.py`` catch a stale
       allow-list immediately.
 
-    Paths NOT on the allow-list — including ``/sso/applications/`` and
-    ``/sso/authorized_tokens/`` (django-oauth-toolkit's admin-style
-    pages) — stay gated, so an anon visitor cannot enumerate registered
-    OAuth clients or active tokens.
+    Paths NOT on the allow-list — e.g. ``/sso/authorize/``, which needs
+    a session — stay gated (default-deny). django-oauth-toolkit's
+    admin-style management views are not mounted at all (see
+    ``config/urls.py``); client management lives in ``apps.sso``.
 
     ``request.path`` carries no locale prefix on the matched URLs
     because the public OIDC endpoints are mounted *outside*
@@ -100,12 +100,8 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     #: URI; the view must run to honour that contract.
     #:
     #: Not on this list: OAuth 2.0 Device Authorization Grant
-    #: (RFC 8628) endpoints (``device-authorization/``, ``device/``,
-    #: ``device-confirm/``, ``device-grant-status/``). The grant is
-    #: shipped by ``django-oauth-toolkit`` but is not configured or
-    #: used by any current RP. The principle is "no anonymous surface
-    #: we don't actively use" — add the relevant entries (with a
-    #: companion test) the moment the device flow goes live.
+    #: (RFC 8628) endpoints. ``config/urls.py`` does not mount them at
+    #: all (they bypass the per-app SSO policy and no RP uses them).
     PUBLIC_EXACT_PATHS: Final[frozenset[str]] = frozenset(
         {
             "/i18n/setlang/",
@@ -139,10 +135,10 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
 
         Defense-in-depth: we normalise the path with ``posixpath.normpath``
         before matching so that traversal sequences like
-        ``/sso/token/../applications/`` don't slip through the prefix
+        ``/sso/token/../authorize/`` don't slip through the prefix
         check. Note that Django's URL resolver matches against the raw
         ``PATH_INFO`` and does NOT perform dot-segment normalisation —
-        whether such a path resolves to ``/sso/applications/``, returns
+        whether such a path resolves to ``/sso/authorize/``, returns
         404, or is rewritten by an upstream reverse proxy depends on
         the deployment. Our normalisation here is therefore the only
         guaranteed defense against an attacker using ``..`` to flip the

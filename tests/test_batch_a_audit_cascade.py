@@ -13,23 +13,23 @@ pytestmark = pytest.mark.django_db
 
 
 # ---------------------------------------------------------------------------
-# A1 — _client_ip: validate forwarded IP, return None for garbage
+# A1 — _client_ip: validate the proxy-set IP, return None for garbage
 # ---------------------------------------------------------------------------
 
 
 class TestClientIp:
-    """Unit tests for apps.api.audit._client_ip."""
+    """Unit tests for apps.api.audit._client_ip (trusted X-Real-IP, validated)."""
 
-    def _make_request(self, xff=None, remote=None):
+    def _make_request(self, real=None, remote=None, xff=None):
         """Build a minimal mock-request-like object."""
 
-        class FakeMeta(dict):
-            pass
-
         class FakeReq:
-            META = FakeMeta()
+            META = {}
 
         req = FakeReq()
+        req.META = {}
+        if real is not None:
+            req.META["HTTP_X_REAL_IP"] = real
         if xff is not None:
             req.META["HTTP_X_FORWARDED_FOR"] = xff
         if remote is not None:
@@ -39,60 +39,53 @@ class TestClientIp:
     def test_valid_ipv4_returned(self):
         from apps.api.audit import _client_ip
 
-        req = self._make_request(xff="203.0.113.1")
-        assert _client_ip(req) == "203.0.113.1"
+        assert _client_ip(self._make_request(real="203.0.113.1")) == "203.0.113.1"
 
     def test_valid_ipv6_returned(self):
         from apps.api.audit import _client_ip
 
-        req = self._make_request(xff="2001:db8::1")
-        assert _client_ip(req) == "2001:db8::1"
+        assert _client_ip(self._make_request(real="2001:db8::1")) == "2001:db8::1"
 
-    def test_garbage_xff_returns_none(self):
+    def test_garbage_real_ip_returns_none(self):
         from apps.api.audit import _client_ip
 
-        req = self._make_request(xff="not-an-ip; DROP TABLE audit--")
-        assert _client_ip(req) is None
+        assert _client_ip(self._make_request(real="not-an-ip; DROP TABLE audit--")) is None
 
-    def test_garbage_xff_falls_back_to_remote(self):
-        """When XFF is garbage, REMOTE_ADDR is used if valid."""
+    def test_garbage_real_ip_falls_back_to_remote(self):
+        """When X-Real-IP is garbage, REMOTE_ADDR is used if valid."""
         from apps.api.audit import _client_ip
 
-        req = self._make_request(xff="garbage!!", remote="10.0.0.1")
+        assert _client_ip(self._make_request(real="garbage!!", remote="10.0.0.1")) == "10.0.0.1"
+
+    def test_client_xff_is_ignored(self):
+        """X-Forwarded-For is client-controlled behind nginx (it appends)."""
+        from apps.api.audit import _client_ip
+
+        req = self._make_request(xff="6.6.6.6, 10.0.0.1", remote="10.0.0.1")
         assert _client_ip(req) == "10.0.0.1"
 
-    def test_xff_with_multiple_hops(self):
-        """The first (leftmost) IP is extracted and validated."""
+    def test_no_header_returns_remote_addr(self):
         from apps.api.audit import _client_ip
 
-        req = self._make_request(xff="203.0.113.5, 10.0.0.1, 192.168.1.1")
-        assert _client_ip(req) == "203.0.113.5"
+        assert _client_ip(self._make_request(remote="172.16.0.1")) == "172.16.0.1"
 
-    def test_no_xff_returns_remote_addr(self):
+    def test_no_header_garbage_remote_returns_none(self):
         from apps.api.audit import _client_ip
 
-        req = self._make_request(remote="172.16.0.1")
-        assert _client_ip(req) == "172.16.0.1"
-
-    def test_no_xff_garbage_remote_returns_none(self):
-        from apps.api.audit import _client_ip
-
-        req = self._make_request(remote="not-valid-either")
-        assert _client_ip(req) is None
+        assert _client_ip(self._make_request(remote="not-valid-either")) is None
 
     def test_ip_with_port_stripped(self):
-        """An IPv4:port pair (nginx-style) should be stripped to just the IP."""
+        """An IPv4:port pair should be stripped to just the IP."""
         from apps.api.audit import _client_ip
 
-        req = self._make_request(xff="203.0.113.7:12345")
-        assert _client_ip(req) == "203.0.113.7"
+        assert _client_ip(self._make_request(real="203.0.113.7:12345")) == "203.0.113.7"
 
 
 class TestClientIpDoesNotSuppressAudit:
     """A garbage XFF must NOT suppress the audit row — it should write None."""
 
     def test_garbage_xff_still_produces_audit_row(self, api_topology, bearer):
-        """Staff PATCH a region with garbage XFF → 200 AND audit row is written.
+        """Admin PATCH a region with garbage XFF → 200 AND audit row is written.
 
         The count may go up by more than 1 because both the view's
         audit_account_write AND the _on_region_save signal fire; >=+1 is the
@@ -105,11 +98,11 @@ class TestClientIpDoesNotSuppressAudit:
             event_type=AccountAuditLog.EventType.REGION_UPDATED
         ).count()
         url = reverse("api:region-detail", args=[t["region_in"].pk])
-        r = bearer(t["staff"]).patch(
+        r = bearer(t["admin"]).patch(
             url,
             {"name": "Updated Name"},
             format="json",
-            HTTP_X_FORWARDED_FOR="not-an-ip; DROP TABLE audit--",
+            HTTP_X_REAL_IP="not-an-ip; DROP TABLE audit--",
         )
         assert r.status_code == 200
         after = AccountAuditLog.objects.filter(

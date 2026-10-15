@@ -49,5 +49,24 @@ def bearer(user):
     return client
 
 
+def session(user):
+    """APIClient authenticated as `user` without a token (browser-session principal).
+
+    Applicants lack ``api_tokens.use``, so their PATs no longer authenticate;
+    tests about what an Applicant may *read* use this instead of :func:`bearer`.
+    """
+    client = APIClient()
+    client.force_authenticate(user)
+    return client
+
+
+def client_for(user):
+    """PAT client for users who may hold API tokens, session client otherwise
+    (Applicants: ``api_tokens.use`` is Member+, their PATs do not authenticate)."""
+    from apps.accounts.permissions import can
+
+    return bearer(user) if can(user, "api_tokens", "use") else session(user)
+
+
 def anon_client():
     return APIClient()

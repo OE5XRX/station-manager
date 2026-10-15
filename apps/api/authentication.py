@@ -6,6 +6,7 @@ from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
 from rest_framework.exceptions import AuthenticationFailed
 
+from apps.accounts.permissions import can
 from apps.api.models import DeviceKey, PersonalAccessToken
 
 
@@ -132,6 +133,10 @@ class PersonalAccessTokenAuthentication(BaseAuthentication):
             raise AuthenticationFailed("Token expired or revoked.")
         if not token.user.is_active:
             raise AuthenticationFailed("Token owner is inactive.")
+        # An owner below api_tokens.use (demoted, soft-deleted) can no longer see
+        # or revoke the token in the UI, so it must stop authenticating too.
+        if not can(token.user, "api_tokens", "use"):
+            raise AuthenticationFailed("Token owner may no longer use API tokens.")
 
         # best-effort last-used stamp; never break the request on failure
         try:

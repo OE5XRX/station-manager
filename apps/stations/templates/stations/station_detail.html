@@ -39,10 +39,11 @@
       </div>
     </div>
     <div class="page-head-actions">
-      {% if can_use_station and station.modules.exists %}
-      <a class="btn btn-sm btn-primary" href="{% url 'control:station_control' station.id %}">{% trans "Control panel" %}</a>
+      {% if not can.stations.manage %}{% include "includes/readonly_badge.html" %}{% endif %}
+      {% if can.control.view and station.modules.exists %}
+      <a class="btn btn-sm btn-primary" href="{% url 'control:station_control' station.id %}">{% trans "Steuerung" %}</a>
       {% endif %}
-      {% if user.is_internal %}
+      {% if can.stations.manage %}
       <a href="{% url 'stations:station_edit' station.pk %}" class="btn btn-ghost">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4v16h16v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         {% trans "Edit" %}
@@ -61,7 +62,7 @@
       <div class="summary-key">{% trans "Provisioned with" %}</div>
       <div class="summary-val mono">
         {% if station.current_image_release %}
-          {% if user.is_admin %}<a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a>{% else %}{{ station.current_image_release.tag }}{% endif %} {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}
+          {% if can.images.view %}<a href="{% url 'images:list' %}">{{ station.current_image_release.tag }}</a>{% else %}{{ station.current_image_release.tag }}{% endif %} {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}
         {% else %}
           —
         {% endif %}
@@ -71,10 +72,12 @@
       <div class="summary-key">{% trans "Agent Version" %}</div>
       <div class="summary-val mono">{{ station.current_agent_version|default:"—" }}</div>
     </div>
+    {% if can.stations.manage %}
     <div class="summary-item">
       <div class="summary-key">{% trans "Last IP" %}</div>
       <div class="summary-val mono" data-station-ip>{{ station.last_ip_address|default:"—" }}</div>
     </div>
+    {% endif %}
     <div class="summary-item">
       <div class="summary-key">{% trans "Coordinates" %}</div>
       <div class="summary-val mono">
@@ -94,8 +97,10 @@
       <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
       <button type="button" class="tab" data-tab="telemetry" aria-selected="false">{% trans "Telemetry" %}</button>
+      {% if can.stations.manage %}
       <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
-      {% if user.is_admin %}
+      {% endif %}
+      {% if can.terminal.use %}
       <button type="button" class="tab" data-tab="terminal" aria-selected="false">{% trans "Terminal" %}</button>
       {% endif %}
     </div>
@@ -181,7 +186,7 @@
         <span class="t-label">{{ station.photos.count }} {% trans "image(s)" %}</span>
       </div>
       <div class="panel-body">
-        {% if user.is_internal %}
+        {% if can.stations.manage %}
         <form method="post" action="{% url 'stations:station_photo_upload' station.pk %}" enctype="multipart/form-data" class="mb-20">
           {% csrf_token %}
           <div class="row-gap-8 photo-upload-row" style="align-items:flex-end;flex-wrap:wrap;">
@@ -223,7 +228,7 @@
         <div class="panel-title"><span class="dot"></span>{% trans "Station logbook" %}</div>
       </div>
       <div class="panel-body">
-        {% if user.is_internal %}
+        {% if can.stations.manage %}
         <form method="post" action="{% url 'stations:station_log_add' station.pk %}" class="mb-20">
           {% csrf_token %}
           <div class="form-row">
@@ -274,8 +279,8 @@
         {% if station.inventory %}<span class="t-label">{% trans "Updated" %} {{ station.inventory.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
       </div>
       <div class="panel-body">
-        {% if station.inventory and station.inventory.data %}
-          {% with inv=station.inventory.data %}
+        {% if inventory_data %}
+          {% with inv=inventory_data %}
           <div class="grid grid-cols-3">
             {% if inv.cpu %}
             <div class="panel" style="background:var(--bg-0);">
@@ -459,6 +464,7 @@
     {% endwith %}
   </div>
 
+  {% if can.stations.manage %}
   <div data-tab-panel="audit" hidden>
     <section class="panel">
       <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Station audit log" %}</div></div>
@@ -493,7 +499,9 @@
     </section>
   </div>
 
-  {% if user.is_admin %}
+  {% endif %}
+
+  {% if can.terminal.use %}
   <div data-tab-panel="terminal" hidden>
     <section class="panel">
       <div class="panel-head">
@@ -513,7 +521,7 @@
   </div>
   {% endif %}
 
-  {% if user.is_admin %}
+  {% if can.topology.manage %}
     {% include "stations/_station_topology_card.html" %}
   {% endif %}
 

@@ -52,9 +52,9 @@ class TestStationPermissions:
         )
         assert response.status_code == 403
 
-    def test_operator_can_create_station(self, client, operator_user):
+    def test_operator_can_create_station(self, client, staff_user):
         """Operators should be able to create stations."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("stations:station_create"),
             data={"name": "New Station", "callsign": "OE5NEW"},
@@ -63,9 +63,9 @@ class TestStationPermissions:
         assert response.status_code == 302
         assert Station.objects.filter(name="New Station").exists()
 
-    def test_operator_can_edit_station(self, client, operator_user, station):
+    def test_operator_can_edit_station(self, client, staff_user, station):
         """Operators should be able to edit stations."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("stations:station_edit", kwargs={"pk": station.pk}),
             data={"name": "Updated Station", "callsign": "OE5UPD"},
@@ -99,18 +99,18 @@ class TestStationPermissions:
 
 @pytest.mark.django_db
 class TestDeviceKeyManagement:
-    def test_generate_ed25519_key(self, client, operator_user, station):
+    def test_generate_ed25519_key(self, client, staff_user, station):
         """Generating an Ed25519 key should create DeviceKey."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         response = client.post(
             reverse("stations:station_generate_key", kwargs={"pk": station.pk}),
         )
         assert response.status_code == 302
         assert DeviceKey.objects.filter(station=station).exists()
 
-    def test_generate_ed25519_shows_private_key_once(self, client, operator_user, station):
+    def test_generate_ed25519_shows_private_key_once(self, client, staff_user, station):
         """After generating a key, the detail page should show the PEM once."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         client.post(
             reverse("stations:station_generate_key", kwargs={"pk": station.pk}),
         )
@@ -119,9 +119,9 @@ class TestDeviceKeyManagement:
         )
         assert response.status_code == 200
 
-    def test_revoke_ed25519_key(self, client, operator_user, station):
+    def test_revoke_ed25519_key(self, client, staff_user, station):
         """Revoking should delete the DeviceKey."""
-        client.force_login(operator_user)
+        client.force_login(staff_user)
         # First generate
         client.post(
             reverse("stations:station_generate_key", kwargs={"pk": station.pk}),

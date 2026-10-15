@@ -11,6 +11,7 @@ from django.urls import reverse
 
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.stations.models import StationAuditLog
+from tests.test_api_read_fixtures import session
 
 
 @pytest.fixture
@@ -34,24 +35,23 @@ def test_deploy_trigger_creates_result_and_supersedes(
         "target_station": t["station_in"].pk,
         "status": "completed",  # must be IGNORED
     }
-    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201
     dep = Deployment.objects.latest("id")
     assert dep.status == Deployment.Status.IN_PROGRESS  # client 'status' ignored
-    assert dep.created_by == t["region_mgr"]
+    assert dep.created_by == t["staff"]
     assert DeploymentResult.objects.filter(deployment=dep, station=t["station_in"]).exists()
 
 
 @pytest.mark.django_db
-def test_deploy_out_of_scope_station_403(api_topology, bearer, image_release):
+def test_region_mgr_cannot_trigger_403(api_topology, bearer, image_release):
+    # deployments.manage is Staff; a region-manager assignment grants nothing,
+    # not even for a station in the managed region.
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_out"].pk}
-    assert (
-        bearer(t["region_mgr"])
-        .post(reverse("api:deployment-list"), payload, format="json")
-        .status_code
-        == 403
-    )
+    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    assert r.status_code == 403
+    assert r.json()["required"] == "deployments.manage"
 
 
 @pytest.mark.django_db
@@ -59,6 +59,7 @@ def test_deployment_no_delete_no_update(api_topology, bearer, deployment):
     t = api_topology
     url = reverse("api:deployment-detail", args=[deployment.pk])
     assert bearer(t["admin"]).delete(url).status_code == 405
+    assert bearer(t["staff"]).delete(url).status_code == 405
     assert bearer(t["admin"]).patch(url, {"status": "cancelled"}, format="json").status_code == 405
 
 
@@ -76,7 +77,7 @@ def test_applicant_cannot_trigger(api_topology, bearer, image_release):
     """Applicant-level user is forbidden at the permission gate (403)."""
     t = api_topology
     payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
-    r = bearer(t["applicant"]).post(reverse("api:deployment-list"), payload, format="json")
+    r = session(t["applicant"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 403
 
 
@@ -98,7 +99,7 @@ def test_deploy_trigger_audit_row_created(
     t = api_topology
     station = t["station_in"]
     payload = {"image_release": image_release.pk, "target_station": station.pk}
-    bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     log = (
         StationAuditLog.objects.filter(
             station=station,
@@ -122,7 +123,7 @@ def test_deploy_trigger_target_type_forced_station(
         "target_station": t["station_in"].pk,
         "target_type": "all",  # must be ignored
     }
-    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201
     dep = Deployment.objects.latest("id")
     assert dep.target_type == Deployment.TargetType.STATION
@@ -135,7 +136,7 @@ def test_deploy_trigger_result_is_pending(
     """The DeploymentResult created starts as PENDING, not anything else."""
     t = api_topology
     payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
-    bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     dep = Deployment.objects.latest("id")
     result = DeploymentResult.objects.get(deployment=dep, station=t["station_in"])
     assert result.status == DeploymentResult.Status.PENDING
@@ -224,7 +225,7 @@ def test_deploy_trigger_station_lock_happy_path(
     """
     t = api_topology
     payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
-    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201
     dep = Deployment.objects.latest("id")
     assert dep.status == Deployment.Status.IN_PROGRESS
@@ -255,5 +256,5 @@ def test_deploy_trigger_station_lock_supersedes_existing(
     )
     # Trigger a new deployment for the same station/image — supersession fires
     payload = {"image_release": image_release.pk, "target_station": station.pk}
-    r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
+    r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201

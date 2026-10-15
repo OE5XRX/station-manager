@@ -89,7 +89,8 @@ class TestUserDetailViewPermissions:
     def test_applicant_cannot_see_member(self, client, applicant, member):
         client.force_login(applicant)
         resp = client.get(self.url(member))
-        assert resp.status_code == 404
+        # users.view needs Member -> area gate 403 (was 404 before unified permissions).
+        assert resp.status_code == 403
 
     def test_anonymous_redirected_to_login(self, client, member):
         # No login → LoginRequiredMixin redirects (302) to LOGIN_URL.

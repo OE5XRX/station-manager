@@ -9,7 +9,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import TemplateView
 
-from apps.accounts.views import AdminRequiredMixin
+from apps.accounts.permissions import AreaPermissionMixin
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.deployments.supersession import (
     ActiveDeploymentConflictError,
@@ -82,8 +82,11 @@ def _defer_audit_log(*, station, event_type, message, user=None):
     transaction.on_commit(_write)
 
 
-class UpgradeStationView(AdminRequiredMixin, View):
+class UpgradeStationView(AreaPermissionMixin, View):
     """Create a Deployment targeting exactly this one station."""
+
+    area = "deployments"
+    verb = "manage"
 
     def post(self, request, station_pk):
         station = get_object_or_404(Station, pk=station_pk)
@@ -154,10 +157,13 @@ class UpgradeStationView(AdminRequiredMixin, View):
         return redirect("stations:station_detail", pk=station.pk)
 
 
-class UpgradeGroupView(AdminRequiredMixin, View):
+class UpgradeGroupView(AreaPermissionMixin, View):
     """Create Deployments for every station carrying the given tag (grouped
     by machine: one Deployment per (tag, machine) tuple).
     """
+
+    area = "rollouts"
+    verb = "manage"
 
     def post(self, request, tag_slug):
         tag = get_object_or_404(StationTag, slug=tag_slug)
@@ -286,10 +292,12 @@ class UpgradeGroupView(AdminRequiredMixin, View):
         return redirect("rollouts:upgrade_dashboard")
 
 
-class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
-    """Admin-only roll-up of every station bucketed by its first matching
+class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
+    """Roll-up of every station bucketed by its first matching
     rollout-sequence tag, showing pending upgrades and a per-group action.
     """
+
+    area = "rollouts"
 
     template_name = "rollouts/upgrade_dashboard.html"
 
@@ -362,7 +370,9 @@ class UpgradeDashboardView(AdminRequiredMixin, TemplateView):
         return ctx
 
 
-class SequenceEditView(AdminRequiredMixin, TemplateView):
+class SequenceEditView(AreaPermissionMixin, TemplateView):
+    area = "rollouts"
+    verb = "manage"
     template_name = "rollouts/sequence_edit.html"
 
     def get_context_data(self, **kwargs):
@@ -374,7 +384,10 @@ class SequenceEditView(AdminRequiredMixin, TemplateView):
         return ctx
 
 
-class SequenceAddView(AdminRequiredMixin, View):
+class SequenceAddView(AreaPermissionMixin, View):
+    area = "rollouts"
+    verb = "manage"
+
     def post(self, request):
         seq = current_sequence()
         form = SequenceAddForm(request.POST, sequence=seq)
@@ -405,7 +418,10 @@ class SequenceAddView(AdminRequiredMixin, View):
         return redirect("rollouts:sequence_edit")
 
 
-class SequenceRemoveView(AdminRequiredMixin, View):
+class SequenceRemoveView(AreaPermissionMixin, View):
+    area = "rollouts"
+    verb = "manage"
+
     def post(self, request, entry_pk):
         seq = current_sequence()
         entry = get_object_or_404(RolloutSequenceEntry, pk=entry_pk, sequence=seq)
@@ -426,7 +442,10 @@ class SequenceRemoveView(AdminRequiredMixin, View):
         return redirect("rollouts:sequence_edit")
 
 
-class SequenceReorderView(AdminRequiredMixin, View):
+class SequenceReorderView(AreaPermissionMixin, View):
+    area = "rollouts"
+    verb = "manage"
+
     def post(self, request):
         seq = current_sequence()
         order_str = request.POST.get("order", "")

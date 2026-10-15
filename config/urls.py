@@ -2,8 +2,23 @@ from django.conf import settings
 from django.conf.urls.i18n import i18n_patterns
 from django.contrib import admin
 from django.urls import include, path
+from oauth2_provider import urls as dot_urls
 
 from apps.sso.views import AppGrantAuthorizationView
+
+# Only DOT's protocol endpoints are mounted. DOT's management_urlpatterns
+# (applications/, authorized_tokens/) and dcr_urlpatterns are deliberately
+# left out: client management lives in apps.sso (sso.manage). The RFC 8628
+# device grant is dropped from base_urlpatterns too: it bypasses the per-app
+# SSO policy (AppGrantAuthorizationView) and no RP uses it.
+_DOT_DEVICE_FLOW = frozenset(
+    {"device-authorization", "device", "device-confirm", "device-grant-status"}
+)
+DOT_PROTOCOL_URLPATTERNS = (
+    dot_urls.metadata_urlpatterns
+    + [p for p in dot_urls.base_urlpatterns if p.name not in _DOT_DEVICE_FLOW]
+    + dot_urls.oidc_urlpatterns
+)
 
 urlpatterns = [
     path("", include("apps.webpush.urls")),
@@ -22,7 +37,9 @@ urlpatterns = [
     ),
     # OIDC endpoints — kept out of i18n_patterns so well-known URLs
     # don't carry a locale prefix that breaks RP discovery.
-    path("sso/", include("oauth2_provider.urls", namespace="oauth2_provider")),
+    path(
+        "sso/", include((DOT_PROTOCOL_URLPATTERNS, "oauth2_provider"), namespace="oauth2_provider")
+    ),
 ]
 
 urlpatterns += i18n_patterns(
@@ -48,3 +65,5 @@ if settings.DEBUG:
     urlpatterns = [
         path("__debug__/", include(debug_toolbar.urls)),
     ] + urlpatterns
+
+handler403 = "apps.accounts.views_errors.permission_denied"

@@ -1,7 +1,7 @@
 """Permission-matrix + audit tests for RolloutSequence and RolloutSequenceEntry write endpoints.
 
-Task 6: region-mgr/staff full CRUD.  Every mutation produces a CONFIG_CHANGED
-AccountAuditLog row with "via API token" in the message.
+rollouts.manage (Admin) full CRUD; staff/region-mgr get 403.  Every
+mutation produces a CONFIG_CHANGED AccountAuditLog row with "via API token" in the message.
 
 Design notes:
 - RolloutSequence is a singleton (singleton_key has a unique constraint) so
@@ -13,6 +13,8 @@ Design notes:
 
 import pytest
 from django.urls import reverse
+
+from tests.test_api_read_fixtures import session
 
 pytestmark = pytest.mark.django_db
 
@@ -46,18 +48,18 @@ def _make_tag(name=None):
 # ---------------------------------------------------------------------------
 
 
-def test_sequence_update_region_mgr_allowed(api_topology, bearer):
+def test_sequence_update_region_mgr_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     url = reverse("api:rollout-sequence-detail", args=[seq.pk])
     resp = bearer(api_topology["region_mgr"]).patch(url, {}, format="json")
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
 
-def test_sequence_update_staff_allowed(api_topology, bearer):
+def test_sequence_update_staff_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     url = reverse("api:rollout-sequence-detail", args=[seq.pk])
     resp = bearer(api_topology["staff"]).patch(url, {}, format="json")
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
 
 def test_sequence_update_admin_allowed(api_topology, bearer):
@@ -77,7 +79,7 @@ def test_sequence_update_station_user_forbidden(api_topology, bearer):
 def test_sequence_update_applicant_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     url = reverse("api:rollout-sequence-detail", args=[seq.pk])
-    resp = bearer(api_topology["applicant"]).patch(url, {}, format="json")
+    resp = session(api_topology["applicant"]).patch(url, {}, format="json")
     assert resp.status_code == 403
 
 
@@ -93,24 +95,24 @@ def test_sequence_update_anon_unauthorized(api_topology, anon_client):
 # ---------------------------------------------------------------------------
 
 
-def test_entry_create_region_mgr_allowed(api_topology, bearer):
+def test_entry_create_region_mgr_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     tag = _make_tag("alpha")
     url = reverse("api:rollout-sequence-entry-list")
     resp = bearer(api_topology["region_mgr"]).post(
         url, {"sequence": seq.pk, "tag": tag.pk, "position": 10}, format="json"
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 403
 
 
-def test_entry_create_staff_allowed(api_topology, bearer):
+def test_entry_create_staff_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     tag = _make_tag("beta")
     url = reverse("api:rollout-sequence-entry-list")
     resp = bearer(api_topology["staff"]).post(
         url, {"sequence": seq.pk, "tag": tag.pk, "position": 20}, format="json"
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 403
 
 
 def test_entry_create_admin_allowed(api_topology, bearer):
@@ -137,7 +139,7 @@ def test_entry_create_applicant_forbidden(api_topology, bearer):
     seq = _get_or_create_sequence()
     tag = _make_tag("epsilon")
     url = reverse("api:rollout-sequence-entry-list")
-    resp = bearer(api_topology["applicant"]).post(
+    resp = session(api_topology["applicant"]).post(
         url, {"sequence": seq.pk, "tag": tag.pk, "position": 50}, format="json"
     )
     assert resp.status_code == 403
@@ -158,7 +160,7 @@ def test_entry_create_anon_unauthorized(api_topology, anon_client):
 # ---------------------------------------------------------------------------
 
 
-def test_entry_delete_region_mgr_allowed(api_topology, bearer):
+def test_entry_delete_region_mgr_forbidden(api_topology, bearer):
     from apps.rollouts.models import RolloutSequenceEntry
 
     seq = _get_or_create_sequence()
@@ -166,7 +168,7 @@ def test_entry_delete_region_mgr_allowed(api_topology, bearer):
     entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=100)
     url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
     resp = bearer(api_topology["region_mgr"]).delete(url)
-    assert resp.status_code == 204
+    assert resp.status_code == 403
 
 
 def test_entry_delete_station_user_forbidden(api_topology, bearer):
@@ -193,12 +195,10 @@ def test_sequence_updated_by_is_server_side(api_topology, bearer):
     seq = _get_or_create_sequence()
     url = reverse("api:rollout-sequence-detail", args=[seq.pk])
     other_user = User.objects.create_user(username="other_rollout", password="x")
-    resp = bearer(api_topology["region_mgr"]).patch(
-        url, {"updated_by": other_user.pk}, format="json"
-    )
+    resp = bearer(api_topology["admin"]).patch(url, {"updated_by": other_user.pk}, format="json")
     assert resp.status_code == 200
     seq.refresh_from_db()
-    assert seq.updated_by == api_topology["region_mgr"]
+    assert seq.updated_by == api_topology["admin"]
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ def test_sequence_update_produces_audit_row(api_topology, bearer):
 
     seq = _get_or_create_sequence()
     url = reverse("api:rollout-sequence-detail", args=[seq.pk])
-    bearer(api_topology["region_mgr"]).patch(url, {}, format="json")
+    bearer(api_topology["admin"]).patch(url, {}, format="json")
     log = AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
         message__contains="via API token",
@@ -225,7 +225,7 @@ def test_entry_create_produces_audit_row(api_topology, bearer):
     seq = _get_or_create_sequence()
     tag = _make_tag("audit-test-tag")
     url = reverse("api:rollout-sequence-entry-list")
-    bearer(api_topology["staff"]).post(
+    bearer(api_topology["admin"]).post(
         url, {"sequence": seq.pk, "tag": tag.pk, "position": 5}, format="json"
     )
     log = AccountAuditLog.objects.filter(
@@ -243,7 +243,7 @@ def test_entry_delete_produces_audit_row(api_topology, bearer):
     tag = _make_tag("audit-delete-tag")
     entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=300)
     url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-    bearer(api_topology["region_mgr"]).delete(url)
+    bearer(api_topology["admin"]).delete(url)
     log = AccountAuditLog.objects.filter(
         event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
         message__contains="via API token",
@@ -273,7 +273,7 @@ def test_api_create_entry_at_occupied_position_renumbers(api_topology, bearer):
 
     url = reverse("api:rollout-sequence-entry-list")
     # POST a new tag — position=0 is occupied; service must not crash
-    r = bearer(api_topology["region_mgr"]).post(
+    r = bearer(api_topology["admin"]).post(
         url, {"sequence": seq.pk, "tag": tag_b.pk, "position": 0}, format="json"
     )
     assert r.status_code == 201
@@ -296,7 +296,7 @@ def test_api_delete_entry_renumbers_and_bumps_parent(api_topology, bearer):
     _entry_c = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_c, position=2)
 
     url = reverse("api:rollout-sequence-entry-detail", args=[entry_b.pk])
-    r = bearer(api_topology["region_mgr"]).delete(url)
+    r = bearer(api_topology["admin"]).delete(url)
     assert r.status_code == 204
 
     # Remaining entries must be 0-based contiguous
@@ -305,7 +305,7 @@ def test_api_delete_entry_renumbers_and_bumps_parent(api_topology, bearer):
 
     # Parent updated_by must be the API actor
     seq.refresh_from_db()
-    assert seq.updated_by == api_topology["region_mgr"]
+    assert seq.updated_by == api_topology["admin"]
 
     # entry_a is still present (position may have shifted)
     assert seq.entries.filter(pk=entry_a.pk).exists()
@@ -319,9 +319,9 @@ def test_api_delete_entry_parent_updated_by_reflects_actor(api_topology, bearer)
     tag = _make_tag("c1-actor-tag")
     entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
     url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-    bearer(api_topology["staff"]).delete(url)
+    bearer(api_topology["admin"]).delete(url)
     seq.refresh_from_db()
-    assert seq.updated_by == api_topology["staff"]
+    assert seq.updated_by == api_topology["admin"]
 
 
 def test_api_create_entry_bumps_parent_updated_by(api_topology, bearer):
@@ -329,12 +329,12 @@ def test_api_create_entry_bumps_parent_updated_by(api_topology, bearer):
     seq = _get_or_create_sequence()
     tag = _make_tag("c1-create-bump-tag")
     url = reverse("api:rollout-sequence-entry-list")
-    r = bearer(api_topology["region_mgr"]).post(
+    r = bearer(api_topology["admin"]).post(
         url, {"sequence": seq.pk, "tag": tag.pk, "position": 0}, format="json"
     )
     assert r.status_code == 201
     seq.refresh_from_db()
-    assert seq.updated_by == api_topology["region_mgr"]
+    assert seq.updated_by == api_topology["admin"]
 
 
 def test_api_reorder_entry_leaves_positions_gap_free(api_topology, bearer):
@@ -350,7 +350,7 @@ def test_api_reorder_entry_leaves_positions_gap_free(api_topology, bearer):
 
     # PATCH entry_b to position=0 (occupied by entry_a) → two-phase move
     url = reverse("api:rollout-sequence-entry-detail", args=[entry_b.pk])
-    r = bearer(api_topology["region_mgr"]).patch(url, {"position": 0}, format="json")
+    r = bearer(api_topology["admin"]).patch(url, {"position": 0}, format="json")
     assert r.status_code == 200
 
     positions = list(seq.entries.order_by("position").values_list("position", flat=True))
@@ -389,14 +389,14 @@ def test_entry_tag_only_patch_stamps_parent_sequence(api_topology, bearer):
     before = datetime.datetime.now(datetime.UTC)
 
     url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-    r = bearer(api_topology["region_mgr"]).patch(url, {"tag": tag_b.pk}, format="json")
+    r = bearer(api_topology["admin"]).patch(url, {"tag": tag_b.pk}, format="json")
     assert r.status_code == 200
 
     entry.refresh_from_db()
     assert entry.tag == tag_b, "Entry tag must be updated"
 
     seq.refresh_from_db()
-    assert seq.updated_by == api_topology["region_mgr"], (
+    assert seq.updated_by == api_topology["admin"], (
         "Parent sequence.updated_by must be set to the API actor on tag-only PATCH"
     )
     assert seq.updated_at >= before, "Parent sequence.updated_at must be bumped on tag-only PATCH"
