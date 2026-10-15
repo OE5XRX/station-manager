@@ -96,8 +96,44 @@ def test_get_post_client_id_mismatch_is_denied(client, app_a, app_b, user_a_only
         f"/sso/authorize/?client_id={app_a.client_id}&redirect_uri={URI_A}",
         _body(app_b, URI_B),
     )
-    assert resp.status_code in (302, 400, 403)
+    assert resp.status_code == 403
+    assert "Location" not in resp
     assert _codes_in(resp) == []
+    assert not Grant.objects.exists()
+
+
+@pytest.fixture
+def validator_hook_neutralised(monkeypatch):
+    """Strip SsoOAuth2Validator's policy re-check so only the view gate remains."""
+    from oauth2_provider.oauth2_validators import OAuth2Validator
+
+    monkeypatch.setattr(
+        SsoOAuth2Validator, "save_authorization_code", OAuth2Validator.save_authorization_code
+    )
+
+
+@pytest.mark.django_db
+def test_view_gate_alone_denies_get_post_mismatch(
+    client, app_a, app_b, user_a_only, validator_hook_neutralised
+):
+    client.force_login(user_a_only)
+    resp = client.post(
+        f"/sso/authorize/?client_id={app_a.client_id}&redirect_uri={URI_A}",
+        _body(app_b, URI_B),
+    )
+    assert resp.status_code == 403
+    assert "Location" not in resp
+    assert not Grant.objects.exists()
+
+
+@pytest.mark.django_db
+def test_view_gate_alone_denies_post_body_client_id(
+    client, app_a, app_b, user_a_only, validator_hook_neutralised
+):
+    client.force_login(user_a_only)
+    resp = client.post("/sso/authorize/", _body(app_b, URI_B, state="b"))
+    assert _codes_in(resp) == []
+    assert resp.status_code != 200
     assert not Grant.objects.exists()
 
 

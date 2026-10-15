@@ -139,7 +139,9 @@
           <td data-primary data-label="{% trans 'Tag' %}">
             <div class="stack-gap-2">
               <span style="font-weight:600;color:var(--ink-0);font-family:var(--font-mono);letter-spacing:0.02em;">{{ rel.tag }}</span>
-              <span class="t-mono-sm t-muted">{{ rel.s3_key|truncatechars:42 }}</span>
+              {% if can.images.manage %}
+                <span class="t-mono-sm t-muted">{{ rel.s3_key|truncatechars:42 }}</span>
+              {% endif %}
             </div>
           </td>
           <td data-label="{% trans 'Machine' %}">

@@ -131,3 +131,18 @@ class TestImageReleaseLink:
             reverse("stations:station_detail", args=[station.pk]),
         )
         assert (reverse("images:list") in html) is linked
+
+
+@pytest.mark.django_db
+class TestImageListStorageKey:
+    """s3_key is infra storage detail (excluded from the API serializer):
+    only images.manage may see it in the list HTML."""
+
+    @pytest.mark.parametrize(
+        "user_fixture, visible",
+        [("admin_user", True), ("member_user", False), ("applicant_user", False)],
+    )
+    def test_s3_key_only_for_manage(self, request, client, image_release, user_fixture, visible):
+        html = _get(client, request.getfixturevalue(user_fixture), reverse("images:list"))
+        assert (image_release.s3_key[:30] in html) is visible
+        assert image_release.tag in html
