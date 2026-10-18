@@ -1,7 +1,5 @@
 """Firmware targets (desired version per module type) in the GUI."""
 
-from collections import defaultdict
-
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
@@ -38,12 +36,8 @@ class TargetListView(AreaPermissionMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         targets = list(context["targets"])
-        coverage = defaultdict(list)
         type_ids = {t.module_type_id for t in targets}
-        for type_id, version, variant in ModuleFirmwareRelease.objects.filter(
-            module_type_id__in=type_ids
-        ).values_list("module_type_id", "version", "variant"):
-            coverage[(type_id, version)].append(variant or "—")
+        coverage = ops.variant_coverage_map(type_ids)
         groups = {}
         for t in sorted(
             targets,

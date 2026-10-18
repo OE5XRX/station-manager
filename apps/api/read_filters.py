@@ -80,8 +80,9 @@ class ModuleFilter(django_filters.FilterSet):
 
 
 class ModuleFirmwareReleaseFilter(django_filters.FilterSet):
-    """Runs over ``all_objects``; archived (soft-deleted) rows are dropped
-    unless ``include_archived=true`` — same default as the GUI list."""
+    """List-only (see ModuleFirmwareReleaseViewSet.filter_queryset); runs over
+    ``all_objects`` and drops archived (soft-deleted) rows unless
+    ``include_archived=true`` — same default as the GUI list."""
 
     include_archived = django_filters.BooleanFilter(method="filter_include_archived")
 

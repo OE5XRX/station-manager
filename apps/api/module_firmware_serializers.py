@@ -4,12 +4,10 @@ No ``fields="__all__"``: release storage keys (``storage_key``,
 ``cosign_bundle_key``) are structurally absent.
 """
 
-from collections import defaultdict
-
-from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from apps.module_firmware import ops
 from apps.module_firmware.models import (
     Module,
     ModuleAssignmentHistory,
@@ -70,18 +68,27 @@ class _QuarantineSerializer(serializers.Serializer):
     updated_at = serializers.DateTimeField()
 
 
+class _Row:
+    """Read-only view of ``obj`` plus computed attributes, so declared (typed)
+    serializer fields can read API-only facts without mutating the instance
+    or the serializer."""
+
+    def __init__(self, obj, **computed):
+        self._obj = obj
+        self.__dict__.update(computed)
+
+    def __getattr__(self, name):
+        return getattr(self._obj, name)
+
+
 class ModuleListSerializer(serializers.ListSerializer):
     """Computes the page's active release keys once (one query) instead of an
     EXISTS per row — same optimisation as the GUI convergence overview."""
 
     def to_representation(self, data):
         items = list(data.all() if hasattr(data, "all") else data)
-        self.child.release_keys = set(
-            ModuleFirmwareRelease.objects.filter(
-                module_type_id__in={m.module_type_id for m in items}
-            ).values_list("module_type_id", "variant", "version")
-        )
-        return super().to_representation(items)
+        keys = ops.active_release_keys({m.module_type_id for m in items})
+        return [self.child.to_representation(m, release_keys=keys) for m in items]
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -91,13 +98,10 @@ class ModuleSerializer(serializers.ModelSerializer):
     prefetches (falls back to queries without them)."""
 
     module_type_key = serializers.CharField(source="module_type.key", read_only=True)
-    assignment = serializers.SerializerMethodField()
-    target_version = serializers.SerializerMethodField()
-    has_release = serializers.SerializerMethodField()
-    quarantine = serializers.SerializerMethodField()
-
-    # Set by ModuleListSerializer for list pages; None → per-object EXISTS.
-    release_keys = None
+    assignment = _AssignmentSerializer(read_only=True, allow_null=True)
+    target_version = serializers.CharField(read_only=True, allow_null=True)
+    has_release = serializers.BooleanField(read_only=True)
+    quarantine = _QuarantineSerializer(read_only=True, allow_null=True)
 
     class Meta:
         model = Module
@@ -122,7 +126,9 @@ class ModuleSerializer(serializers.ModelSerializer):
             "quarantine",
         ]
 
-    def to_representation(self, instance):
+    def to_representation(self, instance, release_keys=None):
+        """``release_keys``: page-level set from ModuleListSerializer; None →
+        firmware_row's per-object EXISTS (retrieve)."""
         open_rows = getattr(instance, "open_assignments", None)
         if open_rows is None:
             open_rows = list(
@@ -130,31 +136,17 @@ class ModuleSerializer(serializers.ModelSerializer):
                     module=instance, to_ts__isnull=True
                 ).select_related("station")
             )
-        self._assignment = open_rows[0] if open_rows else None
-        self._facts = firmware_row(instance, self._assignment, release_keys=self.release_keys)
-        return super().to_representation(instance)
-
-    @extend_schema_field(_AssignmentSerializer(allow_null=True))
-    def get_assignment(self, obj):
-        if self._assignment is None:
-            return None
-        return _AssignmentSerializer(self._assignment).data
-
-    @extend_schema_field(serializers.CharField(allow_null=True))
-    def get_target_version(self, obj):
-        target = self._facts["target"]
-        return target.version if target is not None else None
-
-    @extend_schema_field(OpenApiTypes.BOOL)
-    def get_has_release(self, obj):
-        return self._facts["has_release"]
-
-    @extend_schema_field(_QuarantineSerializer(allow_null=True))
-    def get_quarantine(self, obj):
-        state = self._facts["quarantine"]
-        if state is None:
-            return None
-        return _QuarantineSerializer(state).data
+        assignment = open_rows[0] if open_rows else None
+        facts = firmware_row(instance, assignment, release_keys=release_keys)
+        target = facts["target"]
+        row = _Row(
+            instance,
+            assignment=assignment,
+            target_version=target.version if target is not None else None,
+            has_release=facts["has_release"],
+            quarantine=facts["quarantine"],
+        )
+        return super().to_representation(row)
 
 
 class ModuleFirmwareReleaseSerializer(serializers.ModelSerializer):
@@ -200,33 +192,20 @@ class ModuleFirmwareImportJobSerializer(serializers.ModelSerializer):
         ]
 
 
-def variant_coverage_map(type_ids):
-    """(module_type_id, version) -> variants with an active release ("—" for
-    blank). Mirrors ``TargetListView.get_context_data``."""
-    coverage = defaultdict(list)
-    for type_id, version, variant in ModuleFirmwareRelease.objects.filter(
-        module_type_id__in=type_ids
-    ).values_list("module_type_id", "version", "variant"):
-        coverage[(type_id, version)].append(variant or "—")
-    return coverage
-
-
 class ModuleFirmwareTargetListSerializer(serializers.ListSerializer):
     """One coverage query per page instead of one per target."""
 
     def to_representation(self, data):
         items = list(data.all() if hasattr(data, "all") else data)
-        self.child.coverage = variant_coverage_map({t.module_type_id for t in items})
-        return super().to_representation(items)
+        coverage = ops.variant_coverage_map({t.module_type_id for t in items})
+        return [self.child.to_representation(t, coverage=coverage) for t in items]
 
 
 class ModuleFirmwareTargetSerializer(serializers.ModelSerializer):
     module_type_key = serializers.CharField(source="module_type.key", read_only=True)
-    variant_coverage = serializers.SerializerMethodField()
+    # Variants with an active release at this version ("—" = blank variant).
+    variant_coverage = serializers.ListField(child=serializers.CharField(), read_only=True)
     created_by = _username_field()
-
-    # Set by ModuleFirmwareTargetListSerializer; None → per-object query.
-    coverage = None
 
     class Meta:
         model = ModuleFirmwareTarget
@@ -246,9 +225,12 @@ class ModuleFirmwareTargetSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
-    def get_variant_coverage(self, obj):
-        coverage = self.coverage
+    def to_representation(self, instance, coverage=None):
+        """``coverage``: page-level map from the list serializer; None →
+        one query for this target's type (retrieve)."""
         if coverage is None:
-            coverage = variant_coverage_map({obj.module_type_id})
-        return sorted(coverage.get((obj.module_type_id, obj.version), []))
+            coverage = ops.variant_coverage_map({instance.module_type_id})
+        key = (instance.module_type_id, instance.version)
+        return super().to_representation(
+            _Row(instance, variant_coverage=sorted(coverage.get(key, [])))
+        )

@@ -80,11 +80,18 @@ class ModuleFirmwareReleaseViewSet(AreaReadOnlyViewSet):
     ordering_fields = ["imported_at", "version"]
 
     def get_queryset(self):
-        # all_objects: the filterset hides archived rows unless
-        # include_archived=true.
+        # all_objects: the list's filterset hides archived rows unless
+        # include_archived=true; detail routes resolve archived ids too.
         return ModuleFirmwareRelease.all_objects.select_related(
             "module_type", "imported_by"
         ).order_by("module_type__key", "variant", "-version")
+
+    def filter_queryset(self, queryset):
+        # Filters (incl. the archived default) are a list concern; a release
+        # id must stay addressable after archiving (detail, restore).
+        if self.action != "list":
+            return queryset
+        return super().filter_queryset(queryset)
 
 
 class ModuleFirmwareImportJobViewSet(AreaReadOnlyViewSet):

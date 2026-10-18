@@ -94,11 +94,16 @@ def test_release_list_hides_archived_unless_include_archived(api_topology, beare
     assert ids == {active.id}
     ids = {r["id"] for r in client.get(url, {"include_archived": "true"}).data["results"]}
     assert ids == {active.id, archived.id}
-    # archived release still retrievable by id only via include_archived
-    assert (
-        client.get(reverse("api:module-firmware-release-detail", args=[archived.id])).status_code
-        == 404
-    )
+
+
+def test_archived_release_retrievable_by_id(api_topology, bearer, fm):
+    archived = _release(fm, version="0.9")
+    archived.archive()
+    client = bearer(api_topology["station_user"])
+    resp = client.get(reverse("api:module-firmware-release-detail", args=[archived.id]))
+    assert resp.status_code == 200
+    assert resp.data["archived_at"] is not None
+    assert client.get(reverse("api:module-firmware-release-list")).data["count"] == 0
 
 
 def test_release_payload_has_no_storage_keys(api_topology, bearer, fm):
@@ -223,3 +228,18 @@ def test_import_job_payload(api_topology, bearer, fm):
 def test_unknown_id_404(api_topology, bearer, route):
     resp = bearer(api_topology["admin"]).get(reverse(route, args=[999999]))
     assert resp.status_code == 404
+
+
+def test_openapi_types_computed_fields():
+    from drf_spectacular.generators import SchemaGenerator
+
+    schemas = SchemaGenerator().get_schema(public=True)["components"]["schemas"]
+    module = schemas["Module"]["properties"]
+    assert module["has_release"]["type"] == "boolean"
+    assert module["target_version"]["type"] == "string"
+    assert module["target_version"].get("nullable") is True
+    for name in ("assignment", "quarantine"):
+        assert "$ref" in str(module[name]), (name, module[name])
+    coverage = schemas["ModuleFirmwareTarget"]["properties"]["variant_coverage"]
+    assert coverage["type"] == "array"
+    assert coverage["items"]["type"] == "string"

@@ -5,6 +5,8 @@ so the GUI and the API cannot drift apart. ``via`` is appended verbatim to every
 audit message an op writes (e.g. the API's token suffix); the GUI passes "".
 """
 
+from collections import defaultdict
+
 from django.db import transaction
 
 from apps.images import github_releases
@@ -26,6 +28,32 @@ ACTIVE_JOB_STATUSES = [
     ModuleFirmwareImportJob.Status.PENDING,
     ModuleFirmwareImportJob.Status.RUNNING,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Read helpers (page-level, one query each)
+# ---------------------------------------------------------------------------
+
+
+def active_release_keys(type_ids):
+    """Set of (module_type_id, variant, version) of active (non-archived)
+    releases for ``type_ids`` — lets ``firmware_row`` skip a per-row EXISTS."""
+    return set(
+        ModuleFirmwareRelease.objects.filter(module_type_id__in=type_ids).values_list(
+            "module_type_id", "variant", "version"
+        )
+    )
+
+
+def variant_coverage_map(type_ids):
+    """(module_type_id, version) -> variants with an active release ("—" for
+    a blank variant), unsorted."""
+    coverage = defaultdict(list)
+    for type_id, version, variant in ModuleFirmwareRelease.objects.filter(
+        module_type_id__in=type_ids
+    ).values_list("module_type_id", "version", "variant"):
+        coverage[(type_id, version)].append(variant or "—")
+    return coverage
 
 
 # ---------------------------------------------------------------------------
