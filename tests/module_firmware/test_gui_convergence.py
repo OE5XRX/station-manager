@@ -369,10 +369,10 @@ def test_overview_unicode_digit_station_filter(client, applicant, fm):
 def test_release_quarantine_view_noop_when_not_quarantined(client, staff, fm, station_factory):
     # Finding 2: a stale QUARANTINED row on a non-quarantined module -> no-op.
     st = station_factory()
-    rel = _release(fm)
+    _release(fm)
     ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
     m = _module(fm, st, uid="NQ")
-    cs = _quarantine(m, rel)
+    cs = _quarantine(m, _release(fm, version="26.09.01-01"))  # old target, not current
     Module.objects.filter(pk=m.pk).update(firmware_convergence=Module.Convergence.OK)
     client.force_login(staff)
     resp = client.post(
@@ -388,8 +388,9 @@ def test_release_quarantine_view_noop_when_not_quarantined(client, staff, fm, st
 
 def test_release_quarantine_unassigned_module(client, staff, fm, station_factory):
     """Ingest closed the assignment without reconciling: rollup stays
-    QUARANTINED, the button shows (latest-row fallback) — and the POST must
-    release that very row and let the rollup self-heal."""
+    QUARANTINED, the button shows (latest-row fallback) — the POST reconciles
+    first, which self-heals the rollup, so nothing is released (no stale
+    quarantine is ever reset)."""
     st = station_factory()
     rel = _release(fm)
     ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
@@ -404,14 +405,11 @@ def test_release_quarantine_unassigned_module(client, staff, fm, station_factory
     assert release_url in overview.content.decode()
 
     resp = client.post(release_url, follow=True)
-    assert [msg.level_tag for msg in resp.context["messages"]] == ["success"]
+    assert [msg.level_tag for msg in resp.context["messages"]] == ["info"]
     cs.refresh_from_db()
-    assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING
+    assert cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED
     m.refresh_from_db()
     assert m.firmware_convergence != Module.Convergence.QUARANTINED
-    row = StationAuditLog.objects.get(
+    assert not StationAuditLog.objects.filter(
         event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
-    )
-    assert row.module == m
-    assert row.user == staff
-    assert row.station is None
+    ).exists()

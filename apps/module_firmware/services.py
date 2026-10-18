@@ -164,6 +164,11 @@ def release_quarantine(module, *, user, ip_address=None):
     released target versions; an empty list means nothing to release (no-op,
     no audit)."""
     locked = Module.objects.select_for_update().get(pk=module.pk)
+    # Bring the rollup up to date with the CURRENT target first: a target moved
+    # without a reconcile (e.g. station-tag change) must not let the latest-row
+    # fallback release a stale quarantine of the old target.
+    reconcile_module(locked)
+    locked.refresh_from_db(fields=["firmware_convergence"])
     states = list(quarantined_states_qs().filter(module=locked).select_for_update(of=("self",)))
     picked = current_quarantine(locked, states=states)
     if picked is None:
