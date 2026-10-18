@@ -7,7 +7,7 @@ No ``fields="__all__"``: release storage keys (``storage_key``,
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from apps.module_firmware import ops
+from apps.module_firmware import ops, services
 from apps.module_firmware.forms import ModuleTypeForm
 from apps.module_firmware.models import (
     Module,
@@ -188,6 +188,22 @@ class ModuleSerializer(serializers.ModelSerializer):
             quarantine=facts["quarantine"],
         )
         return super().to_representation(row)
+
+
+class ModuleUpdateSerializer(serializers.Serializer):
+    """PATCH input: operator-editable module fields. ``lifecycle_status`` is
+    limited to the operator-settable states (``deployed`` is assignment-derived);
+    the service still has the final say (``ready`` with an open assignment)."""
+
+    notes = serializers.CharField(required=False, allow_blank=True)
+    lifecycle_status = serializers.ChoiceField(
+        required=False,
+        choices=[
+            (value, label)
+            for value, label in Module.Lifecycle.choices
+            if value in services.OPERATOR_LIFECYCLE_VALUES
+        ],
+    )
 
 
 class ModuleFirmwareReleaseSerializer(serializers.ModelSerializer):
