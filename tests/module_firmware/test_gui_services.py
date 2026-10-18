@@ -89,7 +89,11 @@ def test_reconcile_module_type_only_assigned_modules(fm, station_factory):
 def test_release_quarantine_resets_state_and_audits(fm, station_factory, user):
     st = station_factory()
     m = Module.objects.create(
-        uid="Q", module_type=fm, variant="vhf", last_reported_version="26.09.10-01"
+        uid="Q",
+        module_type=fm,
+        variant="vhf",
+        last_reported_version="26.09.10-01",
+        firmware_convergence=Module.Convergence.QUARANTINED,
     )
     ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
     _fleet_target(fm)
@@ -130,7 +134,11 @@ def test_release_quarantine_noop_when_none(fm, user):
 def test_release_quarantine_survives_audit_failure(fm, station_factory, user, monkeypatch):
     st = station_factory()
     m = Module.objects.create(
-        uid="AF", module_type=fm, variant="vhf", last_reported_version="26.09.10-01"
+        uid="AF",
+        module_type=fm,
+        variant="vhf",
+        last_reported_version="26.09.10-01",
+        firmware_convergence=Module.Convergence.QUARANTINED,
     )
     ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
     _fleet_target(fm)
@@ -150,3 +158,77 @@ def test_release_quarantine_survives_audit_failure(fm, station_factory, user, mo
     cs.refresh_from_db()
     assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING
     assert cs.attempts == 0
+
+
+def _quarantined_state(module, release):
+    return ModuleFirmwareConvergenceState.objects.create(
+        module=module,
+        target_release=release,
+        state=ModuleFirmwareConvergenceState.State.QUARANTINED,
+        attempts=3,
+    )
+
+
+def test_release_quarantine_only_releases_current_target(fm, station_factory, user):
+    # Finding 2: a stale quarantined row of an old target stays quarantined.
+    st = station_factory()
+    m = Module.objects.create(
+        uid="TWO",
+        module_type=fm,
+        variant="vhf",
+        last_reported_version="26.09.10-01",
+        firmware_convergence=Module.Convergence.QUARANTINED,
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    v1 = _release(fm, version="26.09.01-01")
+    v2 = _release(fm, version="26.09.15-01")
+    _fleet_target(fm, version=v2.version)
+    old = _quarantined_state(m, v1)
+    cur = _quarantined_state(m, v2)
+    assert services.release_quarantine(m, user=user) == [v2.version]
+    old.refresh_from_db()
+    cur.refresh_from_db()
+    assert old.state == ModuleFirmwareConvergenceState.State.QUARANTINED
+    assert cur.state == ModuleFirmwareConvergenceState.State.UPDATING
+    row = StationAuditLog.objects.get(
+        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
+    )
+    assert row.changes == {"released_targets": [v2.version]}
+
+
+def test_release_quarantine_noop_when_module_not_quarantined(fm, station_factory, user):
+    st = station_factory()
+    m = Module.objects.create(
+        uid="NQ",
+        module_type=fm,
+        variant="vhf",
+        last_reported_version="26.09.10-01",
+        firmware_convergence=Module.Convergence.OK,
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    _fleet_target(fm)
+    stale = _quarantined_state(m, _release(fm))
+    assert services.release_quarantine(m, user=user) == []
+    stale.refresh_from_db()
+    assert stale.state == ModuleFirmwareConvergenceState.State.QUARANTINED
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
+    ).exists()
+
+
+def test_release_quarantine_noop_without_desired_release(fm, station_factory, user):
+    st = station_factory()
+    m = Module.objects.create(
+        uid="ND",
+        module_type=fm,
+        variant="vhf",
+        firmware_convergence=Module.Convergence.QUARANTINED,
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    stale = _quarantined_state(m, _release(fm))  # no target -> no desired release
+    assert services.release_quarantine(m, user=user) == []
+    stale.refresh_from_db()
+    assert stale.state == ModuleFirmwareConvergenceState.State.QUARANTINED
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
+    ).exists()

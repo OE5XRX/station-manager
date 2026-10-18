@@ -161,14 +161,31 @@ def test_type_delete_blocked_by_archived_release(client, staff, mtype):
     assert ModuleType.objects.filter(pk=mtype.pk).exists()
 
 
-def test_form_rejects_untrusted_owner_accepts_case_insensitive(db):
+def test_form_rejects_untrusted_owner_case_sensitive(db):
     from apps.module_firmware.forms import ModuleTypeForm
 
     bad = ModuleTypeForm(_post_data(firmware_repo="evil/FW"))
     assert not bad.is_valid() and "firmware_repo" in bad.errors
     assert "OE5XRX" in bad.errors["firmware_repo"][0]
-    ok = ModuleTypeForm(_post_data(firmware_repo="oe5xrx/FW-RemoteStation"))
+    ok = ModuleTypeForm(_post_data(firmware_repo="OE5XRX/FW-RemoteStation"))
     assert ok.is_valid(), ok.errors
+    # Finding 5: the cosign identity regex is case-sensitive, so is the owner check.
+    lower = ModuleTypeForm(_post_data(firmware_repo="oe5xrx/FW-RemoteStation"))
+    assert not lower.is_valid() and "firmware_repo" in lower.errors
+
+
+def test_repo_validator_rejects_trailing_newline(db):
+    # Finding 7: '$' matches before a trailing newline; the pattern must use \Z.
+    from django.core.exceptions import ValidationError
+
+    from apps.module_firmware.forms import repo_validator
+    from apps.module_firmware.trust import is_valid_repo
+
+    assert not is_valid_repo("OE5XRX/fw\n")
+    assert is_valid_repo("OE5XRX/fw")
+    with pytest.raises(ValidationError):
+        repo_validator("OE5XRX/fw\n")
+    repo_validator("OE5XRX/fw")
 
 
 def test_update_noop_writes_no_audit(client, staff):

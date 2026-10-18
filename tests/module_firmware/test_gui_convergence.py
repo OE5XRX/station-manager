@@ -1,6 +1,7 @@
 import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.module_firmware.models import (
     Module,
@@ -339,3 +340,47 @@ def test_quarantine_prefers_row_for_current_target(fm, station_factory):
     m.refresh_from_db()
     row = firmware_row(m, m.assignments.get())
     assert row["quarantine"] == current
+
+
+def test_station_filter_lists_only_stations_with_modules(client, applicant, fm, station_factory):
+    # Finding 6: no LEFT JOIN leak of stations without (open) assignments.
+    with_module = station_factory()
+    empty = station_factory()
+    closed_only = station_factory()
+    _module(fm, with_module, uid="SF-1")
+    m2 = _module(fm, None, uid="SF-2")
+    ModuleAssignmentHistory.objects.create(
+        module=m2, station=closed_only, slot="slot1", to_ts=timezone.now()
+    )
+    client.force_login(applicant)
+    resp = client.get(reverse("module_firmware:convergence"))
+    pks = {s.pk for s in resp.context["stations"]}
+    assert pks == {with_module.pk}
+    assert empty.pk not in pks
+
+
+def test_overview_unicode_digit_station_filter(client, applicant, fm):
+    # Finding 4: '²'.isdigit() is True but int('²') fails.
+    client.force_login(applicant)
+    resp = client.get(reverse("module_firmware:convergence"), {"station": "²"})
+    assert resp.status_code == 200
+
+
+def test_release_quarantine_view_noop_when_not_quarantined(client, staff, fm, station_factory):
+    # Finding 2: a stale QUARANTINED row on a non-quarantined module -> no-op.
+    st = station_factory()
+    rel = _release(fm)
+    ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    m = _module(fm, st, uid="NQ")
+    cs = _quarantine(m, rel)
+    Module.objects.filter(pk=m.pk).update(firmware_convergence=Module.Convergence.OK)
+    client.force_login(staff)
+    resp = client.post(
+        reverse("module_firmware:module_release_quarantine", args=["NQ"]), follow=True
+    )
+    assert [x.level_tag for x in resp.context["messages"]] == ["info"]
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
+    ).exists()

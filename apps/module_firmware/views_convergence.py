@@ -27,6 +27,12 @@ from .reconciler import effective_target
 _QUARANTINED = ModuleFirmwareConvergenceState.State.QUARANTINED
 
 
+def is_int_param(value):
+    """ASCII-digits-only query param guard. ``str.isdigit()`` also accepts
+    Unicode digits like '²', which ``int()`` then rejects (500)."""
+    return value.isascii() and value.isdecimal()
+
+
 def _quarantined_states_qs():
     return (
         ModuleFirmwareConvergenceState.objects.filter(state=_QUARANTINED)
@@ -104,7 +110,7 @@ class ConvergenceOverviewView(AreaPermissionMixin, ListView):
             qs = qs.filter(module_type__key=g["type"])
         if g.get("state"):
             qs = qs.filter(firmware_convergence=g["state"])
-        if g.get("station", "").isdigit():
+        if is_int_param(g.get("station", "")):
             qs = qs.filter(
                 assignments__station_id=g["station"], assignments__to_ts__isnull=True
             ).distinct()
@@ -139,11 +145,11 @@ class ConvergenceOverviewView(AreaPermissionMixin, ListView):
         ]
         ctx["states"] = Module.Convergence.choices
         ctx["types"] = ModuleType.objects.all()
-        ctx["stations"] = (
-            Station.objects.filter(module_assignments__to_ts__isnull=True)
-            .distinct()
-            .order_by("name")
-        )
+        # pk__in, not a reverse-FK filter: that LEFT JOINs and lists
+        # stations without any assignment.
+        ctx["stations"] = Station.objects.filter(
+            pk__in=ModuleAssignmentHistory.objects.filter(to_ts__isnull=True).values("station_id")
+        ).order_by("name")
         g = self.request.GET
         ctx["filters"] = {
             "type": g.get("type", ""),

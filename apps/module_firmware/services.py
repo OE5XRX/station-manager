@@ -11,7 +11,7 @@ from django.db import transaction
 from apps.stations.models import StationAuditLog
 
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
-from .reconciler import reconcile_module
+from .reconciler import desired_release_for_module, reconcile_module
 
 logger = logging.getLogger(__name__)
 
@@ -92,15 +92,28 @@ def reconcile_module_type(module_type):
 
 @transaction.atomic
 def release_quarantine(module, *, user, ip_address=None):
-    """Release all quarantined convergence states of ``module`` for retry.
+    """Release the quarantine of ``module``'s CURRENT target for retry.
+
+    Only acts when the module's rollup is QUARANTINED, and only on the
+    quarantined row whose target_release is the module's current desired
+    release — stale quarantined rows of old targets stay untouched.
 
     Lock order module → convergence states (same as the reconciler). Returns
-    the released target versions; an empty list means nothing was quarantined
+    the released target versions; an empty list means nothing to release
     (no-op, no audit)."""
     locked = Module.objects.select_for_update().get(pk=module.pk)
+    if locked.firmware_convergence != Module.Convergence.QUARANTINED:
+        return []
+    desired = desired_release_for_module(locked)
+    if desired is None:
+        return []
     states = list(
         ModuleFirmwareConvergenceState.objects.select_for_update()
-        .filter(module=locked, state=ModuleFirmwareConvergenceState.State.QUARANTINED)
+        .filter(
+            module=locked,
+            target_release=desired,
+            state=ModuleFirmwareConvergenceState.State.QUARANTINED,
+        )
         .select_related("target_release")
     )
     if not states:

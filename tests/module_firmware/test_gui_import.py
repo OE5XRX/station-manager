@@ -365,8 +365,8 @@ def test_is_trusted_repo_requires_owner_repo_shape(settings):
 
     settings.MODULE_FIRMWARE_TRUSTED_REPO_OWNERS = ["OE5XRX"]
     assert is_trusted_repo("OE5XRX/FW")
-    assert is_trusted_repo("oe5xrx/FW")
-    for bad in ("OE5XRX", "OE5XRX/", "/FW", "OE5XRX/a/b", "", None, "someone/FW"):
+    # Finding 5: case-sensitive, matching the cosign identity regex.
+    for bad in ("OE5XRX", "OE5XRX/", "/FW", "OE5XRX/a/b", "", None, "someone/FW", "oe5xrx/FW"):
         assert not is_trusted_repo(bad), bad
 
 
@@ -426,3 +426,67 @@ def test_archive_desired_release_reconciles_rollup(client, staff, fm, station_fa
     client.post(reverse("module_firmware:restore", args=[rel.pk]))
     m.refresh_from_db()
     assert m.firmware_convergence == Module.Convergence.QUARANTINED
+
+
+# ---------------------------------------------------------------------------
+# Review-loop round 1: tag validation (finding 3) + Unicode digits (finding 4)
+# ---------------------------------------------------------------------------
+
+
+def test_is_valid_tag():
+    from apps.module_firmware.trust import is_valid_tag
+
+    for good in ("v1", "26.09.15-01", "a" * 64, "fw_1.2-rc3"):
+        assert is_valid_tag(good), good
+    for bad in ("", None, "a" * 65, "../x", "v1..2", "-v1", ".v1", "v1/x", "v1 x", "v1\n", "v²"):
+        assert not is_valid_tag(bad), bad
+
+
+@pytest.mark.parametrize("tag", ["a" * 65, "../evil", "v1..2", "v1/x", "v1?x=1"])
+def test_import_rejects_invalid_tag(client, staff, fm, tag):
+    client.force_login(staff)
+    resp = client.post(
+        reverse("module_firmware:import"), {"module_type": fm.pk, "tag": tag}, follow=True
+    )
+    assert any(m.level_tag == "error" for m in resp.context["messages"])
+    assert not ModuleFirmwareImportJob.objects.exists()
+    assert _config_logs().count() == 0
+
+
+def test_import_release_tag_rejects_invalid_tag_without_fetch(fm):
+    from apps.module_firmware import releases
+
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="../evil"
+    )
+    with mock.patch("apps.module_firmware.releases.fetch_release_by_tag") as fetch:
+        releases.import_release_tag(job)
+    fetch.assert_not_called()
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.FAILED
+    assert "tag" in job.error_message
+
+
+def test_import_unicode_digit_module_type(client, staff, fm):
+    client.force_login(staff)
+    resp = client.post(
+        reverse("module_firmware:import"), {"module_type": "²", "tag": "v1"}, follow=True
+    )
+    assert resp.status_code == 200
+    assert any(m.level_tag == "error" for m in resp.context["messages"])
+    assert not ModuleFirmwareImportJob.objects.exists()
+
+
+def test_gh_partial_unicode_digit_module_type(client, staff, db):
+    client.force_login(staff)
+    with mock.patch(GH_FETCH) as fetch:
+        resp = client.get(reverse("module_firmware:gh_partial"), {"module_type": "²"})
+    assert resp.status_code == 200
+    assert resp.context["error"]
+    fetch.assert_not_called()
+
+
+def test_module_list_unicode_digit_station_filter(client, viewer, db):
+    client.force_login(viewer)
+    resp = client.get(reverse("module_firmware:module_list"), {"station": "²"})
+    assert resp.status_code == 200

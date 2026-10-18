@@ -389,3 +389,17 @@ def test_target_update_noop_writes_no_audit(client, staff, fm, station_factory):
     assert not StationAuditLog.objects.filter(
         event_type=StationAuditLog.EventType.FIRMWARE_TARGET_SET
     ).exists()
+
+
+def test_types_without_target_requires_active_release(client, staff, fm):
+    # Finding 1: no releases / only archived releases -> not listed.
+    no_rel = ModuleType.objects.create(key="norel", display_name="No releases")
+    archived_only = ModuleType.objects.create(key="arch", display_name="Archived only")
+    _release(archived_only, archived=True)
+    _release(fm)
+    client.force_login(staff)
+    resp = client.get(reverse("module_firmware:target_list"))
+    listed = {t.pk for t in resp.context["types_without_target"]}
+    assert listed == {fm.pk}
+    assert no_rel.pk not in listed
+    assert archived_only.pk not in listed

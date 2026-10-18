@@ -91,9 +91,10 @@ class TargetListView(AreaPermissionMixin, ListView):
         context["groups"] = list(groups.values())
         context["has_releases"] = ModuleFirmwareRelease.objects.exists()
         context["types_without_target"] = (
+            # Default manager = non-archived; pk__in avoids the reverse-FK
+            # LEFT JOIN that also matched types with no release at all.
             ModuleType.objects.exclude(pk__in=type_ids)
-            .filter(firmware_releases__archived_at__isnull=True)
-            .distinct()
+            .filter(pk__in=ModuleFirmwareRelease.objects.values("module_type_id"))
             .order_by("display_name")
         )
         return context

@@ -22,8 +22,8 @@ from .models import (
     ModuleType,
 )
 from .releases import parse_variant_assets
-from .trust import import_blockers
-from .views_convergence import firmware_row
+from .trust import import_blockers, is_valid_tag
+from .views_convergence import firmware_row, is_int_param
 
 # ---------------------------------------------------------------------------
 # Module-type helpers
@@ -91,7 +91,7 @@ class ModuleListView(AreaPermissionMixin, ListView):
             qs = qs.filter(registration_status=g["registration"])
         if g.get("uid_source"):
             qs = qs.filter(uid_source=g["uid_source"])
-        if g.get("station", "").isdigit():
+        if is_int_param(g.get("station", "")):
             # Filter by *current* location (open assignment), not history.
             qs = qs.filter(
                 assignments__station_id=g["station"], assignments__to_ts__isnull=True
@@ -280,7 +280,7 @@ class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
 
     def get(self, request):
         module_type_id = request.GET.get("module_type", "")
-        if not module_type_id.isdigit():
+        if not is_int_param(module_type_id):
             return render(
                 request,
                 "module_firmware/_github_releases.html",
@@ -376,8 +376,11 @@ class FirmwareImportView(AreaPermissionMixin, View):
         redirect = HttpResponseRedirect(reverse("module_firmware:release_list"))
         # Blank tag / id guard stays outside the atomic block — these never
         # touch the DB and need no lock.
-        if not tag or not module_type_id.isdigit():
+        if not tag or not is_int_param(module_type_id):
             messages.error(request, _("Select a module type and a release tag to import."))
+            return redirect
+        if not is_valid_tag(tag):
+            messages.error(request, _("Invalid release tag."))
             return redirect
         created = False
         # Resolve + lock the module type row INSIDE the atomic block to
