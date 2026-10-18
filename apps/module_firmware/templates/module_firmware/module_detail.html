@@ -57,6 +57,33 @@
     </div>
   </div>
 
+  <section class="panel mb-24">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot"></span>{% trans "Firmware" %}</div>
+      {% include "module_firmware/_convergence_pill.html" with module=module %}
+    </div>
+    <div class="panel-body">
+      <div class="fw-detail-grid">
+        <div>
+          <div class="summary-key mb-8">{% trans "Running" %}</div>
+          <span class="fw-version{% if firmware.target and module.last_reported_version == firmware.target.version %} fw-version-match{% endif %}">{{ module.last_reported_version|default:"—" }}</span>
+        </div>
+        <div>
+          <div class="summary-key mb-8">{% trans "Variant" %}</div>
+          <span class="t-mono">{{ module.variant|default:"—" }}</span>
+        </div>
+        <div>
+          <div class="summary-key mb-8">{% trans "Target" %}</div>
+          {% include "module_firmware/_target_cell.html" with fw=firmware module=module %}
+          <a href="{% url 'module_firmware:target_list' %}" class="fw-hint">{% trans "Manage firmware targets" %}</a>
+        </div>
+      </div>
+      {% if firmware.quarantine %}
+        {% include "module_firmware/_quarantine_note.html" with module=module quarantine=firmware.quarantine %}
+      {% endif %}
+    </div>
+  </section>
+
   {% if can.modules.manage %}
   <section class="panel mb-24">
     <div class="panel-head">

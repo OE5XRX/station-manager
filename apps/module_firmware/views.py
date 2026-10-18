@@ -22,6 +22,7 @@ from .models import (
     ModuleType,
 )
 from .releases import parse_variant_assets
+from .views_convergence import firmware_row
 
 # ---------------------------------------------------------------------------
 # Module-type helpers
@@ -163,7 +164,10 @@ class ModuleDetailView(AreaPermissionMixin, DetailView):
         ctx = super().get_context_data(**kwargs)
         m = self.object
         ctx["assignments"] = m.assignments.select_related("station").order_by("-from_ts")
-        ctx["current_assignment"] = m.assignments.filter(to_ts__isnull=True).first()
+        ctx["current_assignment"] = (
+            m.assignments.filter(to_ts__isnull=True).select_related("station").first()
+        )
+        ctx["firmware"] = firmware_row(m, ctx["current_assignment"])
         ctx["audit_logs"] = m.audit_logs.select_related("station", "user").all()[:200]
         # Don't offer `ready` while an assignment is open — it's assignment-derived
         # and set_lifecycle rejects it in that state.
