@@ -162,8 +162,49 @@
 
   <div class="grid grid-main">
 
+    {% if all_types_count == 0 or incomplete_types or can.modules.manage and module_types %}
+    <div class="stack-gap-14">
+
+    {% if all_types_count == 0 %}
+    <article class="alert-card severity-warning" id="fw-setup-hint">
+      <div>
+        <h2 class="alert-title">{% trans "No module type configured" %}</h2>
+        <p class="alert-message">{% trans "Firmware is imported per module type. Add a module type with its firmware repository and release asset prefix, then its GitHub releases appear here." %}</p>
+        {% if not can.modules.manage %}
+        <p class="alert-message t-muted">{% trans "Ask a staff member to add one." %}</p>
+        {% endif %}
+      </div>
+      {% if can.modules.manage %}
+      <div class="stack-gap-6">
+        <a href="{% url 'module_firmware:type_create' %}" class="btn btn-sm btn-primary">{% trans "Add module type" %}</a>
+      </div>
+      {% endif %}
+    </article>
+    {% elif incomplete_types %}
+    <article class="alert-card severity-warning" id="fw-setup-hint">
+      <div>
+        <h2 class="alert-title">
+          {% blocktrans count n=incomplete_types|length %}{{ n }} module type can't import firmware yet{% plural %}{{ n }} module types can't import firmware yet{% endblocktrans %}
+        </h2>
+        <ul class="fw-setup-list">
+          {% for entry in incomplete_types %}
+          <li class="row-split">
+            <span class="stack-gap-2">
+              <span class="t-mono">{{ entry.type.display_name }} <span class="t-muted">({{ entry.type.key }})</span></span>
+              <span class="t-mono-sm t-warn">{% trans "Missing:" %} {{ entry.missing|join:", " }}</span>
+            </span>
+            {% if can.modules.manage %}
+            <a href="{% url 'module_firmware:type_update' entry.type.pk %}" class="btn btn-sm">{% trans "Configure" %}</a>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </article>
+    {% endif %}
+
     {% if can.modules.manage and module_types %}
-    <section class="panel mb-24" id="import-panel">
+    <section class="panel" id="import-panel">
       <div class="panel-head">
         <div class="panel-title">
           <span class="dot" style="background:var(--accent);"></span>
@@ -197,57 +238,18 @@
     </section>
     {% endif %}
 
+    </div>
+    {% endif %}
+
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title">
           <span class="dot" style="background:var(--cyan);"></span>
           {% trans "Recent import jobs" %}
         </div>
-        <span class="t-label">{% trans "Last 10" %}</span>
+        <span class="t-label">{% trans "Last 20" %}</span>
       </div>
-      <div class="panel-body flush">
-        {% if recent_jobs %}
-        <ul class="timeline" style="padding:4px 16px;">
-          {% for job in recent_jobs %}
-          <li data-type="{% if job.status == 'failed' %}incident{% elif job.status == 'ready' %}update{% elif job.status == 'running' %}deployment{% else %}note{% endif %}">
-            <div class="tl-head">
-              <span class="tl-title" style="font-family:var(--font-mono);letter-spacing:0.02em;">{{ job.tag }}</span>
-              <span class="t-mono-sm t-muted">·</span>
-              <span class="t-mono-sm t-muted">{{ job.module_type.display_name }}</span>
-              <span style="margin-left:auto;">
-                {% if job.status == "ready" %}
-                  <span class="pill pill-online"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
-                {% elif job.status == "failed" %}
-                  <span class="pill pill-failed"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
-                {% elif job.status == "running" %}
-                  <span class="pill pill-in-progress"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
-                {% else %}
-                  <span class="pill pill-pending">{{ job.get_status_display|upper }}</span>
-                {% endif %}
-              </span>
-            </div>
-            <div class="tl-meta">
-              {{ job.created_at|date:"Y-m-d H:i" }}
-              {% if job.requested_by %} · {{ job.requested_by.username }}{% endif %}
-              {% if job.completed_at %} · {% trans "done" %} {{ job.completed_at|timesince }} {% trans "ago" %}{% endif %}
-            </div>
-            {% if job.error_message %}
-            <div class="tl-message t-danger" style="margin-top:6px;font-family:var(--font-mono);font-size:11.5px;">{{ job.error_message }}</div>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <div class="empty" style="padding:28px 12px;">
-          <div class="empty-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-              <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
-            </svg>
-          </div>
-          <div class="empty-title">{% trans "No import jobs yet" %}</div>
-        </div>
-        {% endif %}
-      </div>
+      {% include "module_firmware/_import_jobs.html" %}
     </section>
 
   </div>

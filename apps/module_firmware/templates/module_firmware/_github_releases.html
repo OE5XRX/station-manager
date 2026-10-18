@@ -30,7 +30,7 @@
     <thead>
       <tr>
         <th>{% trans "Tag" %}</th>
-        <th>{% trans "Assets" %}</th>
+        <th>{% trans "Variants" %}</th>
         <th style="width:1%;">{% trans "Action" %}</th>
       </tr>
     </thead>
@@ -48,8 +48,24 @@
             <span class="pill pill-accent" style="margin-left:6px;">{% trans "LATEST" %}</span>
           {% endif %}
         </td>
-        <td data-label="{% trans 'Assets' %}">
-          <span class="t-mono-sm t-muted">{{ row.release.asset_names|length }} {% trans "assets" %}</span>
+        <td data-label="{% trans 'Variants' %}">
+          {% if row.state == "no_assets" %}
+            <span class="pill pill-muted">{% trans "NO FIRMWARE ASSETS" %}</span>
+            <span class="fw-gh-hint t-muted">
+              {% blocktrans with prefix=module_type.release_asset_prefix %}Expected assets named {{ prefix }}-&lt;variant&gt;.signed.bin + .bundle{% endblocktrans %}
+            </span>
+          {% else %}
+            <span class="fw-variants">
+              {% for v in row.variants %}
+                <span class="tag t-mono">{% if v %}{{ v }}{% else %}{% trans "(bandless)" %}{% endif %}</span>
+              {% endfor %}
+            </span>
+            {% if row.missing_variants %}
+            <span class="fw-gh-hint t-warn">
+              {% blocktrans with variants=row.missing_variants|join:", " count n=row.missing_variants|length %}No build for fleet variant {{ variants }}{% plural %}No build for fleet variants {{ variants }}{% endblocktrans %}
+            </span>
+            {% endif %}
+          {% endif %}
         </td>
         <td class="actions" data-label="{% trans 'Action' %}">
           {% if row.state == "ready" %}
@@ -65,6 +81,8 @@
             <span class="pill pill-pending"><span class="dot"></span>{% trans "QUEUED" %}</span>
           {% elif row.state == "imported" %}
             <span class="pill pill-online"><span class="dot"></span>{% trans "IMPORTED" %}</span>
+          {% elif row.state == "no_assets" %}
+            <span class="t-mono-sm t-muted">—</span>
           {% endif %}
         </td>
       </tr>
@@ -82,7 +100,7 @@
   </button>
 </div>
 <div class="empty" style="padding:28px 12px;">
-  <div class="empty-title">{% trans "No new releases to import" %}</div>
-  <div>{% trans "All current GitHub releases are already imported or queued." %}</div>
+  <div class="empty-title">{% trans "No releases on GitHub" %}</div>
+  <div>{% blocktrans with repo=module_type.firmware_repo %}{{ repo }} has no published releases yet.{% endblocktrans %}</div>
 </div>
 {% endif %}

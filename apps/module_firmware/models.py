@@ -208,9 +208,10 @@ class ModuleFirmwareRelease(models.Model):
     def __str__(self):
         return f"{self.module_type.key}/{self.variant or '-'} {self.version}"
 
-    def archive(self):
+    def archive(self) -> bool:
+        """Soft-delete. Returns True only if THIS call changed the state."""
         if self.archived_at is not None:
-            return
+            return False
         now = timezone.now()
         with transaction.atomic():
             rows = (
@@ -220,14 +221,21 @@ class ModuleFirmwareRelease(models.Model):
             )
             if rows == 0:
                 self.refresh_from_db(fields=["archived_at"])
-                return
+                return False
             self.archived_at = now
+        return True
 
-    def restore(self):
+    def restore(self) -> bool:
+        """Un-archive. Returns True only if THIS call changed the state."""
         if self.archived_at is None:
-            return
+            return False
+        rows = (
+            type(self)
+            .all_objects.filter(pk=self.pk, archived_at__isnull=False)
+            .update(archived_at=None)
+        )
         self.archived_at = None
-        self.save(update_fields=["archived_at"])
+        return rows == 1
 
 
 class ModuleFirmwareImportJob(models.Model):

@@ -1,8 +1,10 @@
+from django.contrib import messages
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils.translation import gettext as _
 from django.views import View
 from django.views.generic import DetailView, ListView
 
@@ -10,7 +12,8 @@ from apps.accounts.permissions import AreaPermissionMixin
 from apps.images import github_releases
 from apps.stations.models import Station
 
-from . import services
+from . import services, trust
+from .audit import audit_config
 from .models import (
     Module,
     ModuleAssignmentHistory,
@@ -25,13 +28,44 @@ from .releases import parse_variant_assets
 # ---------------------------------------------------------------------------
 
 
-def _importable_module_types():
-    """Module types that have BOTH firmware_repo and release_asset_prefix set.
+def _trusted_repo_q():
+    """Q matching module types whose firmware_repo owner is a trusted signer."""
+    q = Q(pk__in=[])
+    for owner in trust.trusted_owners():
+        q |= Q(firmware_repo__istartswith=f"{owner}/")
+    return q
 
-    Only fully-configured types can ever produce a successful import job, so
-    restricting the UI to this set avoids offering doomed imports.
+
+def _importable_module_types():
+    """Module types that can actually produce a successful import job.
+
+    Requires firmware_repo AND release_asset_prefix, and a firmware_repo owner
+    in MODULE_FIRMWARE_TRUSTED_REPO_OWNERS (the importer rejects anything else),
+    so the UI never offers doomed imports.
     """
-    return ModuleType.objects.exclude(firmware_repo="").exclude(release_asset_prefix="")
+    return (
+        ModuleType.objects.exclude(firmware_repo="")
+        .exclude(release_asset_prefix="")
+        .filter(_trusted_repo_q())
+    )
+
+
+def import_blockers(module_type):
+    """Human-readable reasons why ``module_type`` is not import-ready ([] = ready)."""
+    reasons = []
+    if not module_type.firmware_repo:
+        reasons.append(str(ModuleType._meta.get_field("firmware_repo").verbose_name))
+    if not module_type.release_asset_prefix:
+        reasons.append(str(ModuleType._meta.get_field("release_asset_prefix").verbose_name))
+    if module_type.firmware_repo and not trust.is_trusted_repo(module_type.firmware_repo):
+        reasons.append(_("untrusted repo owner"))
+    return reasons
+
+
+_ACTIVE_JOB_STATUSES = [
+    ModuleFirmwareImportJob.Status.PENDING,
+    ModuleFirmwareImportJob.Status.RUNNING,
+]
 
 
 # Lifecycle states an operator may set by hand. ``deployed`` is excluded: it is
@@ -225,10 +259,38 @@ class FirmwareReleaseListView(AreaPermissionMixin, ListView):
             "type": g.get("type", ""),
             "variant": g.get("variant", ""),
         }
-        ctx["recent_jobs"] = ModuleFirmwareImportJob.objects.select_related(
-            "module_type", "requested_by"
-        )[:10]
+        all_types = list(ModuleType.objects.all())
+        ctx["all_types_count"] = len(all_types)
+        ctx["incomplete_types"] = [
+            {"type": t, "missing": missing} for t in all_types if (missing := import_blockers(t))
+        ]
+        ctx.update(_import_jobs_context())
         return ctx
+
+
+def _import_jobs_context():
+    jobs = list(
+        ModuleFirmwareImportJob.objects.select_related("module_type", "requested_by", "release")[
+            :20
+        ]
+    )
+    # has_active is queried over ALL jobs, not just the 20 shown: an old
+    # still-running job must keep the panel polling.
+    has_active = ModuleFirmwareImportJob.objects.filter(status__in=_ACTIVE_JOB_STATUSES).exists()
+    return {"jobs": jobs, "has_active": has_active}
+
+
+class ImportJobsPartialView(AreaPermissionMixin, View):
+    """HTMX partial: last 20 import jobs; self-polls while any is pending/running."""
+
+    area = "modules"
+
+    def get(self, request):
+        ctx = _import_jobs_context()
+        # Only the self-poll fetches this partial via HTMX; when that poll sees
+        # the queue drained, prompt a reload so the release table catches up.
+        ctx["polled"] = request.headers.get("HX-Request") == "true"
+        return render(request, "module_firmware/_import_jobs.html", ctx)
 
 
 class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
@@ -247,21 +309,14 @@ class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
                 },
             )
         module_type = get_object_or_404(ModuleType, pk=module_type_id)
-        if not module_type.firmware_repo:
+        blockers = import_blockers(module_type)
+        if blockers:
             return render(
                 request,
                 "module_firmware/_github_releases.html",
                 {
-                    "error": "This module type has no firmware repo configured.",
-                    "module_type": module_type,
-                },
-            )
-        if not module_type.release_asset_prefix:
-            return render(
-                request,
-                "module_firmware/_github_releases.html",
-                {
-                    "error": "This module type has no release asset prefix configured.",
+                    "error": _("This module type is not ready for import: %(reasons)s.")
+                    % {"reasons": ", ".join(blockers)},
                     "module_type": module_type,
                 },
             )
@@ -276,38 +331,48 @@ class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
 
         in_flight_tags = set(
             ModuleFirmwareImportJob.objects.filter(
-                module_type=module_type,
-                status__in=[
-                    ModuleFirmwareImportJob.Status.PENDING,
-                    ModuleFirmwareImportJob.Status.RUNNING,
-                ],
+                module_type=module_type, status__in=_ACTIVE_JOB_STATUSES
             ).values_list("tag", flat=True)
+        )
+        # Variants actually present in the fleet for this type — a release
+        # lacking one of them would leave those modules without a candidate.
+        fleet_variants = set(
+            Module.objects.filter(module_type=module_type)
+            .exclude(variant="")
+            .values_list("variant", flat=True)
+        )
+        existing = set(
+            ModuleFirmwareRelease.objects.filter(module_type=module_type).values_list(
+                "source_tag", "variant"
+            )
         )
 
         rows = []
         for rel in releases:
-            # Determine per-release state by checking whether ALL parsed
-            # variants have an active (non-archived) row.  A tag is only
-            # "imported" if every variant the release offers has a live row;
-            # a partial import (e.g. vhf active, uhf missing/archived) must
-            # remain importable so the operator can fill the gap.
             parsed_variants = parse_variant_assets(
                 set(rel.asset_names), module_type.release_asset_prefix
             )
-            if parsed_variants and all(
-                ModuleFirmwareRelease.objects.filter(
-                    module_type=module_type,
-                    source_tag=rel.tag,
-                    variant=va.variant,
-                ).exists()
-                for va in parsed_variants
-            ):
+            variants = [va.variant for va in parsed_variants]
+            # no_assets first: a release with no matching asset pair can never
+            # import, whatever job history it has.  A tag is only "imported"
+            # once EVERY variant it offers has an active row; a
+            # partial import stays importable so the operator can fill the gap.
+            if not parsed_variants:
+                state = "no_assets"
+            elif all((rel.tag, v) in existing for v in variants):
                 state = "imported"
             elif rel.tag in in_flight_tags:
                 state = "queued"
             else:
                 state = "ready"
-            rows.append({"release": rel, "state": state})
+            rows.append(
+                {
+                    "release": rel,
+                    "state": state,
+                    "variants": variants,
+                    "missing_variants": sorted(fleet_variants - set(variants)),
+                }
+            )
 
         return render(
             request,
@@ -327,32 +392,37 @@ class FirmwareImportView(AreaPermissionMixin, View):
     def post(self, request):
         module_type_id = request.POST.get("module_type")
         tag = request.POST.get("tag", "").strip()
+        redirect = HttpResponseRedirect(reverse("module_firmware:release_list"))
         # Blank tag / id guard stays outside the atomic block — these never
         # touch the DB and need no lock.
         if not tag or not module_type_id:
-            return HttpResponseRedirect(reverse("module_firmware:release_list"))
-        # Finding 7: resolve + lock the module type row INSIDE the atomic block
-        # to serialise concurrent POSTs for the same type on Postgres.  SQLite
+            messages.error(request, _("Select a module type and a release tag to import."))
+            return redirect
+        created = False
+        # Resolve + lock the module type row INSIDE the atomic block to
+        # serialise concurrent POSTs for the same type on Postgres.  SQLite
         # silently ignores select_for_update but stays green.
         with transaction.atomic():
             module_type = ModuleType.objects.select_for_update().filter(pk=module_type_id).first()
             if module_type is None:
-                return HttpResponseRedirect(reverse("module_firmware:release_list"))
-            # Finding 3: reject partially-configured module types — a doomed job
-            # can never succeed and just adds noise to the queue.
-            if not module_type.firmware_repo or not module_type.release_asset_prefix:
-                return HttpResponseRedirect(reverse("module_firmware:release_list"))
+                messages.error(request, _("Module type not found."))
+                return redirect
+            # Reject not-import-ready types (missing repo/prefix, untrusted
+            # owner) — a doomed job can never succeed and just adds noise.
+            blockers = import_blockers(module_type)
+            if blockers:
+                messages.error(
+                    request,
+                    _("%(type)s is not ready for import: %(reasons)s.")
+                    % {"type": module_type, "reasons": ", ".join(blockers)},
+                )
+                return redirect
             # Dedup: only prevent duplicate in-flight work.  The importer is
             # per-variant idempotent (skips active variants, restores archived),
             # so we do NOT block on active-release existence — a tag with some
             # variants active and others archived/missing must be re-importable.
             in_flight_exists = ModuleFirmwareImportJob.objects.filter(
-                module_type=module_type,
-                tag=tag,
-                status__in=[
-                    ModuleFirmwareImportJob.Status.PENDING,
-                    ModuleFirmwareImportJob.Status.RUNNING,
-                ],
+                module_type=module_type, tag=tag, status__in=_ACTIVE_JOB_STATUSES
             ).exists()
             if not in_flight_exists:
                 ModuleFirmwareImportJob.objects.create(
@@ -362,7 +432,35 @@ class FirmwareImportView(AreaPermissionMixin, View):
                     status=ModuleFirmwareImportJob.Status.PENDING,
                     requested_by=request.user,
                 )
-        return HttpResponseRedirect(reverse("module_firmware:release_list"))
+                created = True
+        if created:
+            audit_config(
+                request,
+                obj="module_firmware_import",
+                action="queued",
+                message=f"Firmware import queued: {module_type.key} {tag}",
+                details={"module_type": module_type.key, "tag": tag},
+            )
+            messages.success(request, _("Import of %(tag)s queued.") % {"tag": tag})
+        else:
+            messages.info(
+                request, _("An import of %(tag)s is already in progress.") % {"tag": tag}
+            )
+        return redirect
+
+
+def _audit_release(request, release, action):
+    audit_config(
+        request,
+        obj="module_firmware_release",
+        action=action,
+        message=f"Firmware release {action}: {release}",
+        details={
+            "module_type": release.module_type.key,
+            "variant": release.variant,
+            "version": release.version,
+        },
+    )
 
 
 class FirmwareArchiveView(AreaPermissionMixin, View):
@@ -370,8 +468,14 @@ class FirmwareArchiveView(AreaPermissionMixin, View):
     verb = "manage"
 
     def post(self, request, pk):
-        release = get_object_or_404(ModuleFirmwareRelease.all_objects, pk=pk)
-        release.archive()
+        release = get_object_or_404(
+            ModuleFirmwareRelease.all_objects.select_related("module_type"), pk=pk
+        )
+        if release.archive():
+            _audit_release(request, release, "archived")
+            messages.success(request, _("Release %(rel)s archived.") % {"rel": release})
+        else:
+            messages.info(request, _("Release %(rel)s was already archived.") % {"rel": release})
         return HttpResponseRedirect(reverse("module_firmware:release_list"))
 
 
@@ -380,6 +484,12 @@ class FirmwareRestoreView(AreaPermissionMixin, View):
     verb = "manage"
 
     def post(self, request, pk):
-        release = get_object_or_404(ModuleFirmwareRelease.all_objects, pk=pk)
-        release.restore()
+        release = get_object_or_404(
+            ModuleFirmwareRelease.all_objects.select_related("module_type"), pk=pk
+        )
+        if release.restore():
+            _audit_release(request, release, "restored")
+            messages.success(request, _("Release %(rel)s restored.") % {"rel": release})
+        else:
+            messages.info(request, _("Release %(rel)s is not archived.") % {"rel": release})
         return HttpResponseRedirect(reverse("module_firmware:release_list"))
