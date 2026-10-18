@@ -186,3 +186,26 @@ def test_confirm_registration_and_set_lifecycle_audit_suffix(fm, user):
     lc = StationAuditLog.objects.get(event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED)
     assert lc.message.endswith(suffix)
     assert lc.ip_address == "10.0.0.2"
+
+
+def test_after_target_updated_cross_type_move_reconciles_both_types(fm, user, monkeypatch):
+    other = ModuleType.objects.create(key="pwr", display_name="Power")
+    target = ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
+    )
+    before = ModuleFirmwareTarget.objects.select_related("module_type").get(pk=target.pk)
+    reconciled = []
+    monkeypatch.setattr(ops, "reconcile_module_type", lambda mt: reconciled.append(mt.key))
+
+    target.module_type = other
+    target.save()
+    assert ops.after_target_updated(_request(user), before, target) is True
+    assert sorted(reconciled) == ["fm", "pwr"]
+
+    reconciled.clear()
+    target.version = "26.09.16-01"
+    target.save()
+    same_type_before = ModuleFirmwareTarget.objects.select_related("module_type").get(pk=target.pk)
+    same_type_before.version = "26.09.15-01"
+    assert ops.after_target_updated(_request(user), same_type_before, target) is True
+    assert reconciled == ["pwr"]
