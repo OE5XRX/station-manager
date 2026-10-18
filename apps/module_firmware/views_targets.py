@@ -10,49 +10,18 @@ from django.views import View
 from django.views.generic import CreateView, ListView, UpdateView
 
 from apps.accounts.permissions import AreaPermissionMixin
-from apps.stations.models import StationAuditLog
 
-from .audit import audit_config, audit_station
+from . import ops
 from .forms import ModuleFirmwareTargetForm
 from .models import ModuleFirmwareRelease, ModuleFirmwareTarget, ModuleType
-from .services import reconcile_module_type
+from .ops import target_details
+from .ops import target_label as _target_label
 
 SCOPE_ORDER = {
     ModuleFirmwareTarget.Scope.FLEET: 0,
     ModuleFirmwareTarget.Scope.TAG: 1,
     ModuleFirmwareTarget.Scope.STATION: 2,
 }
-
-
-def target_details(target):
-    """Audit payload describing a target (slugs/names, not pks)."""
-    return {
-        "module_type": target.module_type.key,
-        "scope": target.scope,
-        "version": target.version,
-        "tag": target.tag.slug if target.tag_id else None,
-        "station": target.station.name if target.station_id else None,
-        "canary_tag": target.canary_tag.slug if target.canary_tag_id else None,
-    }
-
-
-def _target_label(target):
-    if target.scope == ModuleFirmwareTarget.Scope.TAG:
-        return f"{target.module_type.key} tag {target.tag.slug}"
-    if target.scope == ModuleFirmwareTarget.Scope.STATION:
-        return f"{target.module_type.key} station {target.station.name}"
-    return f"{target.module_type.key} fleet"
-
-
-def _audit_station_scope(request, target, event_type, message):
-    if target.scope == ModuleFirmwareTarget.Scope.STATION and target.station_id:
-        audit_station(
-            request,
-            event_type=event_type,
-            station=target.station,
-            message=message,
-            changes={"module_type": target.module_type.key, "version": target.version},
-        )
 
 
 class TargetListView(AreaPermissionMixin, ListView):
@@ -119,21 +88,7 @@ class TargetCreateView(AreaPermissionMixin, _TargetFormMixin, CreateView):
     def form_valid(self, form):
         form.instance.created_by = self.request.user
         response = super().form_valid(form)
-        target = self.object
-        audit_config(
-            self.request,
-            obj="module_firmware_target",
-            action="created",
-            message=f"Firmware target {_target_label(target)} = {target.version} created",
-            details=target_details(target),
-        )
-        _audit_station_scope(
-            self.request,
-            target,
-            StationAuditLog.EventType.FIRMWARE_TARGET_SET,
-            f"Firmware target {target.module_type.key} = {target.version} set for station.",
-        )
-        reconcile_module_type(target.module_type)
+        ops.after_target_created(self.request, self.object)
         messages.success(self.request, _("Firmware target created."))
         return response
 
@@ -151,41 +106,10 @@ class TargetUpdateView(AreaPermissionMixin, _TargetFormMixin, UpdateView):
         before = ModuleFirmwareTarget.objects.select_related(
             "module_type", "tag", "station", "canary_tag"
         ).get(pk=self.object.pk)
-        old = target_details(before)
         response = super().form_valid(form)
-        target = self.object
-        new = target_details(target)
-        changes = {k: {"old": old[k], "new": new[k]} for k in new if old[k] != new[k]}
-        if not form.has_changed() or not changes:
-            # No-op save: nothing to audit, nothing to reconcile.
-            messages.success(self.request, _("Firmware target updated."))
-            return response
-        audit_config(
-            self.request,
-            obj="module_firmware_target",
-            action="updated",
-            message=f"Firmware target {_target_label(target)} = {target.version} updated",
-            details={**new, "changes": changes},
-        )
-        _audit_station_scope(
-            self.request,
-            target,
-            StationAuditLog.EventType.FIRMWARE_TARGET_SET,
-            f"Firmware target {target.module_type.key} = {target.version} set for station.",
-        )
-        if before.station_id and before.station_id != target.station_id:
-            # Moved off a station (other station or other scope): that station
-            # lost its override.
-            _audit_station_scope(
-                self.request,
-                before,
-                StationAuditLog.EventType.FIRMWARE_TARGET_REMOVED,
-                f"Firmware target {before.module_type.key} = {before.version} removed "
-                "for station.",
-            )
-        reconcile_module_type(target.module_type)
-        if before.module_type_id != target.module_type_id:
-            reconcile_module_type(before.module_type)
+        if form.has_changed():
+            # The op itself no-ops (no audit/reconcile) when no audited field changed.
+            ops.after_target_updated(self.request, before, self.object)
         messages.success(self.request, _("Firmware target updated."))
         return response
 
@@ -210,19 +134,6 @@ class TargetDeleteView(AreaPermissionMixin, View):
         details = target_details(target)
         label = _target_label(target)
         target.delete()
-        audit_config(
-            request,
-            obj="module_firmware_target",
-            action="deleted",
-            message=f"Firmware target {label} = {details['version']} deleted",
-            details=details,
-        )
-        _audit_station_scope(
-            request,
-            target,
-            StationAuditLog.EventType.FIRMWARE_TARGET_REMOVED,
-            f"Firmware target {target.module_type.key} = {target.version} removed for station.",
-        )
-        reconcile_module_type(target.module_type)
+        ops.after_target_deleted(request, target, details, label)
         messages.success(request, _("Firmware target deleted."))
         return redirect("module_firmware:target_list")

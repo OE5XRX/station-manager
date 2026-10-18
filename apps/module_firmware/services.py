@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
-def confirm_registration(module, *, user):
+def confirm_registration(module, *, user, ip_address=None, audit_suffix=""):
     """Mark a module as registered. Idempotent — no-op if already registered.
 
     Reloads the module under ``select_for_update`` so two concurrent
@@ -32,7 +32,8 @@ def confirm_registration(module, *, user):
         module=locked,
         user=user,
         event_type=StationAuditLog.EventType.MODULE_REGISTERED,
-        message=f"Module {locked.uid} registration confirmed.",
+        message=f"Module {locked.uid} registration confirmed.{audit_suffix}",
+        ip_address=ip_address,
     )
 
 
@@ -42,7 +43,7 @@ OPERATOR_LIFECYCLE_VALUES = frozenset(Module.Lifecycle.values) - {Module.Lifecyc
 
 
 @transaction.atomic
-def set_lifecycle(module, status, *, user):
+def set_lifecycle(module, status, *, user, ip_address=None, audit_suffix=""):
     """Set the lifecycle status (operator override, sticky states allowed).
 
     Validates ``status`` against the operator-settable choices — ``deployed`` is
@@ -69,8 +70,9 @@ def set_lifecycle(module, status, *, user):
         module=locked,
         user=user,
         event_type=StationAuditLog.EventType.MODULE_LIFECYCLE_CHANGED,
-        message=f"Lifecycle {old} → {status} for module {locked.uid}.",
+        message=f"Lifecycle {old} → {status} for module {locked.uid}.{audit_suffix}",
         changes={"lifecycle_status": {"old": old, "new": status}},
+        ip_address=ip_address,
     )
 
 
@@ -150,7 +152,7 @@ def current_quarantine(module, *, states=None, target=_UNSET):
 
 
 @transaction.atomic
-def release_quarantine(module, *, user, ip_address=None):
+def release_quarantine(module, *, user, ip_address=None, audit_suffix=""):
     """Release ``module``'s live quarantine (``current_quarantine``) for retry.
 
     Acts only while the rollup is QUARANTINED and only on the row
@@ -199,7 +201,10 @@ def release_quarantine(module, *, user, ip_address=None):
                 station=open_assignment.station if open_assignment else None,
                 module=locked,
                 event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED,
-                message=f"Quarantine released for module {locked.uid}: {', '.join(versions)}.",
+                message=(
+                    f"Quarantine released for module {locked.uid}: "
+                    f"{', '.join(versions)}.{audit_suffix}"
+                ),
                 changes={"released_targets": versions},
                 user=user,
                 ip_address=ip_address,
