@@ -179,7 +179,8 @@ def _carry_over_moved(station, tracked_rows, before):
     in a different place than before:
 
     - ``last_state``: its previous settings that are still setting caps in the new
-      descriptor, overlaid by the freshly reported state (the live value wins).
+      descriptor and have no persisted calibration, overlaid by the freshly reported
+      state (the live value wins).
     - ``PersistedCapability`` (what the drift re-apply sends from) is rewritten as a
       whole for all involved keys: each destination gets exactly the mover's rows
       (leftovers of a previous occupant go), a source that nobody moved into ends up
@@ -225,10 +226,14 @@ def _carry_over_moved(station, tracked_rows, before):
     )
 
     for sm, tracked, src, dest, prev_state in moves:
+        # Persisted caps are NOT carried over: the re-apply restores them, and a copied
+        # value would make the deferred retry (which diffs against last_state) see no
+        # drift and skip the restore.
+        persisted = {row.capability for row in calibration.get(src, [])}
         merged = {
             k: v
             for k, v in (prev_state or {}).items()
-            if is_setting_cap(sm.capability_descriptor, k)
+            if k not in persisted and is_setting_cap(sm.capability_descriptor, k)
         }
         merged.update(sm.last_state or {})
         if merged != sm.last_state:

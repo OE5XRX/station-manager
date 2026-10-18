@@ -456,3 +456,25 @@ def test_outage_flag_survives_empty_snapshot(fm_type, station):
     missed = StationModule.objects.get(station=station, slot="slot2")
     assert timezone.now() - missed.last_seen < timedelta(minutes=1)
     assert missed.offline_with_station is False
+
+
+@pytest.mark.django_db
+def test_replug_does_not_carry_persisted_cap_into_last_state(fm_type, station):
+    """A persisted cap the module no longer reports stays out of last_state, so the
+    deferred re-apply retry (diffing against last_state) still restores it."""
+    registry.apply_inventory(station, _inv(slot1=[_fm(state={"frequency": 145.5, "volume": 3})]))
+    _calibrate(station, "slot1", 3)
+
+    registry.apply_inventory(station, _inv(slot2=[_fm(state={"frequency": 145.5})]))
+
+    assert StationModule.objects.get(station=station, slot="slot2").last_state == {
+        "frequency": 145.5
+    }
+    from apps.control import persistence, serializers
+
+    slots = [
+        {"slot": e["slot"], "modules": [m for m in e["modules"] if m.get("online")]}
+        for e in serializers.snapshot(station)
+    ]
+    frames = persistence.reapply_frames(station, slots)
+    assert [(f["slot"], f["capability"], f["value"]) for f in frames] == [("slot2", "volume", 3)]
