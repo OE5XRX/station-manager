@@ -404,3 +404,25 @@ def test_create_scope_defaults_to_fleet(api_topology, bearer, rel1, reconciled):
     resp = bearer(api_topology["staff"]).post(reverse(LIST), {"release": rel1.pk}, format="json")
     assert resp.status_code == 201, resp.content
     assert resp.json()["scope"] == "fleet"
+
+
+def test_create_unique_race_returns_409_not_500(
+    api_topology, bearer, rel1, reconciled, monkeypatch
+):
+    """Two concurrent fleet-target creates both pass the form's unique check;
+    the loser's IntegrityError must be a 409 (no audit, no reconcile)."""
+    from django.db import IntegrityError
+
+    from apps.module_firmware.forms import ModuleFirmwareTargetForm
+
+    def _raise(self, *a, **k):
+        raise IntegrityError("duplicate key value violates unique constraint")
+
+    monkeypatch.setattr(ModuleFirmwareTargetForm, "save", _raise)
+    resp = bearer(api_topology["staff"]).post(
+        reverse(LIST), {"release": rel1.pk, "scope": "fleet"}, format="json"
+    )
+    assert resp.status_code == 409, resp.content
+    assert not ModuleFirmwareTarget.objects.exists()
+    assert not _audits().exists()
+    assert reconciled == []

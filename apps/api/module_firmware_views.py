@@ -4,7 +4,7 @@ Reads need ``modules.view``, writes ``modules.manage``; no topology scoping
 (same as the GUI). Every mutation audits via the GUI helpers plus token origin.
 """
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch
 from django.db.models.deletion import ProtectedError
 from django.shortcuts import get_object_or_404
@@ -62,6 +62,19 @@ def _conflict(detail):
     return err
 
 
+def _save_or_conflict(serializer, **kwargs):
+    """Save; a unique-constraint race the form check could not see → 409.
+
+    The form validates uniqueness, but two concurrent requests can both pass
+    it — the loser's INSERT/UPDATE then raises IntegrityError (500 without
+    this). The savepoint keeps the outer request transaction usable."""
+    try:
+        with transaction.atomic():
+            return serializer.save(**kwargs)
+    except IntegrityError as exc:
+        raise _conflict("Conflicts with a concurrently created entry; retry.") from exc
+
+
 def _bad_gateway(detail):
     err = APIException(detail=detail)
     err.status_code = http_status.HTTP_502_BAD_GATEWAY
@@ -115,7 +128,7 @@ class ModuleTypeViewSet(
         return super().partial_update(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        obj = serializer.save()
+        obj = _save_or_conflict(serializer)
         audit_config(
             self.request,
             obj="module_type",
@@ -128,13 +141,13 @@ class ModuleTypeViewSet(
         form = serializer.form
         if not form.has_changed():
             # Nothing changed: save is harmless, but no audit row for a no-op.
-            serializer.save()
+            _save_or_conflict(serializer)
             return
         changes = {
             f: {"old": str(form.initial.get(f, "")), "new": str(form.cleaned_data.get(f, ""))}
             for f in form.changed_data
         }
-        obj = serializer.save()
+        obj = _save_or_conflict(serializer)
         audit_config(
             self.request,
             obj="module_type",
@@ -495,7 +508,7 @@ class ModuleFirmwareTargetViewSet(
         return super().partial_update(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        target = serializer.save(created_by=self.request.user)
+        target = _save_or_conflict(serializer, created_by=self.request.user)
         ops.after_target_created(self.request, target, via=_token_suffix(self.request))
 
     def perform_update(self, serializer):
@@ -504,7 +517,7 @@ class ModuleFirmwareTargetViewSet(
         before = ModuleFirmwareTarget.objects.select_related(*self._AUDIT_RELATED).get(
             pk=serializer.instance.pk
         )
-        target = serializer.save()
+        target = _save_or_conflict(serializer)
         # No-op (no audited field changed) → no audit, no reconcile.
         ops.after_target_updated(self.request, before, target, via=_token_suffix(self.request))
 

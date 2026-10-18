@@ -191,3 +191,19 @@ def test_delete_with_archived_release_409(api_topology, bearer, fm):
     assert "detail" in resp.json()
     assert ModuleType.objects.filter(pk=fm.pk).exists()
     assert not _audits().exists()
+
+
+def test_create_unique_race_returns_409_not_500(api_topology, bearer, monkeypatch):
+    """A concurrent create that passes the form's unique check but loses the
+    INSERT race must surface as 409, with no audit row."""
+    from django.db import IntegrityError
+
+    from apps.module_firmware.forms import ModuleTypeForm
+
+    def _raise(self, *a, **k):
+        raise IntegrityError("duplicate key value violates unique constraint")
+
+    monkeypatch.setattr(ModuleTypeForm, "save", _raise)
+    resp = bearer(api_topology["staff"]).post(reverse(LIST), _payload(), format="json")
+    assert resp.status_code == 409, resp.content
+    assert not _audits().exists()
