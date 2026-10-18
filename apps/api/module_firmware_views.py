@@ -1,16 +1,25 @@
 """Module firmware viewsets for the user/automation API (area ``modules``).
 
-Reads need ``modules.view``; no topology scoping (same as the GUI).
+Reads need ``modules.view``, writes ``modules.manage``; no topology scoping
+(same as the GUI). Every mutation audits via the GUI helpers plus token origin.
 """
 
 from django.db.models import Count, Prefetch
+from django.db.models.deletion import ProtectedError
+from drf_spectacular.utils import extend_schema
+from rest_framework import status as http_status
+from rest_framework.exceptions import APIException
+from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, UpdateModelMixin
+from rest_framework.response import Response
 
+from apps.api.audit import _token_suffix
 from apps.api.module_firmware_serializers import (
     ModuleFirmwareImportJobSerializer,
     ModuleFirmwareReleaseSerializer,
     ModuleFirmwareTargetSerializer,
     ModuleSerializer,
     ModuleTypeSerializer,
+    ModuleTypeWriteSerializer,
 )
 from apps.api.read_filters import (
     ModuleFilter,
@@ -19,7 +28,9 @@ from apps.api.read_filters import (
     ModuleFirmwareTargetFilter,
 )
 from apps.api.read_views import AreaReadOnlyViewSet
+from apps.api.write_views import AreaWriteViewSet
 from apps.module_firmware import services
+from apps.module_firmware.audit import audit_config
 from apps.module_firmware.models import (
     Module,
     ModuleAssignmentHistory,
@@ -28,11 +39,25 @@ from apps.module_firmware.models import (
     ModuleFirmwareTarget,
     ModuleType,
 )
+from apps.module_firmware.views_types import type_in_use
 
 
-class ModuleTypeViewSet(AreaReadOnlyViewSet):
+def _conflict(detail):
+    err = APIException(detail=detail)
+    err.status_code = http_status.HTTP_409_CONFLICT
+    return err
+
+
+class ModuleTypeViewSet(
+    AreaWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    AreaReadOnlyViewSet,
+):
     area = "modules"
     serializer_class = ModuleTypeSerializer
+    write_serializer_class = ModuleTypeWriteSerializer
     search_fields = ["key", "display_name"]
     ordering_fields = ["key", "display_name", "created_at"]
 
@@ -43,6 +68,79 @@ class ModuleTypeViewSet(AreaReadOnlyViewSet):
             release_count=Count("firmware_releases", distinct=True),
             target_count=Count("firmware_targets", distinct=True),
         ).order_by("key")
+
+    def _read_response(self, obj, status):
+        """Respond with the read shape (import_blockers + annotated counts)."""
+        obj = self.get_queryset().get(pk=obj.pk)
+        data = ModuleTypeSerializer(obj, context=self.get_serializer_context()).data
+        return Response(data, status=status)
+
+    @extend_schema(request=ModuleTypeWriteSerializer, responses={201: ModuleTypeSerializer})
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return self._read_response(serializer.instance, http_status.HTTP_201_CREATED)
+
+    @extend_schema(request=ModuleTypeWriteSerializer, responses={200: ModuleTypeSerializer})
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        serializer = self.get_serializer(self.get_object(), data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return self._read_response(serializer.instance, http_status.HTTP_200_OK)
+
+    @extend_schema(request=ModuleTypeWriteSerializer, responses={200: ModuleTypeSerializer})
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        obj = serializer.save()
+        audit_config(
+            self.request,
+            obj="module_type",
+            action="created",
+            message=f"Module type {obj.key} created" + _token_suffix(self.request),
+            details={"key": obj.key},
+        )
+
+    def perform_update(self, serializer):
+        form = serializer.form
+        if not form.has_changed():
+            # Nothing changed: save is harmless, but no audit row for a no-op.
+            serializer.save()
+            return
+        changes = {
+            f: {"old": str(form.initial.get(f, "")), "new": str(form.cleaned_data.get(f, ""))}
+            for f in form.changed_data
+        }
+        obj = serializer.save()
+        audit_config(
+            self.request,
+            obj="module_type",
+            action="updated",
+            message=f"Module type {obj.key} updated" + _token_suffix(self.request),
+            details={"key": obj.key, "changes": changes},
+        )
+
+    def perform_destroy(self, instance):
+        in_use = _conflict(
+            "This module type is in use by modules, releases or targets and cannot be deleted."
+        )
+        if type_in_use(instance):
+            raise in_use
+        key = instance.key
+        try:
+            instance.delete()
+        except ProtectedError as exc:
+            raise in_use from exc
+        audit_config(
+            self.request,
+            obj="module_type",
+            action="deleted",
+            message=f"Module type {key} deleted" + _token_suffix(self.request),
+            details={"key": key},
+        )
 
 
 class ModuleViewSet(AreaReadOnlyViewSet):

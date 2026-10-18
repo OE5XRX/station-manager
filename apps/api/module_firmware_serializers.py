@@ -1,4 +1,4 @@
-"""Explicit read serializers for the module firmware API (area ``modules``).
+"""Explicit serializers for the module firmware API (area ``modules``).
 
 No ``fields="__all__"``: release storage keys (``storage_key``,
 ``cosign_bundle_key``) are structurally absent.
@@ -8,6 +8,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.module_firmware import ops
+from apps.module_firmware.forms import ModuleTypeForm
 from apps.module_firmware.models import (
     Module,
     ModuleAssignmentHistory,
@@ -51,6 +52,46 @@ class ModuleTypeSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_import_blockers(self, obj):
         return [str(r) for r in import_blockers(obj)]
+
+
+class ModuleTypeWriteSerializer(serializers.ModelSerializer):
+    """Create/update input; validation and save go through the GUI's
+    ``ModuleTypeForm`` (repo/prefix shape, trusted owner, unique key, ``key``
+    immutable on edit) so API and GUI cannot drift.
+
+    After ``is_valid()``, ``self.form`` is the bound form (``has_changed()`` /
+    ``changed_data`` / ``initial`` feed the update audit)."""
+
+    _FIELDS = ("key", "display_name", "hw_repo", "firmware_repo", "release_asset_prefix")
+
+    class Meta:
+        model = ModuleType
+        fields = ["key", "display_name", "hw_repo", "firmware_repo", "release_asset_prefix"]
+        # The form is the single validator (incl. unique key); no duplicate
+        # model-derived validators on the serializer side.
+        extra_kwargs = {name: {"validators": []} for name in fields}
+
+    def validate(self, attrs):
+        data = {}
+        if self.instance is not None:
+            data = {name: getattr(self.instance, name) for name in self._FIELDS}
+        data.update(attrs)
+        form = ModuleTypeForm(data=data, instance=self.instance)
+        if not form.is_valid():
+            raise serializers.ValidationError(
+                {
+                    ("non_field_errors" if field == "__all__" else field): list(errors)
+                    for field, errors in form.errors.items()
+                }
+            )
+        self.form = form
+        return form.cleaned_data
+
+    def create(self, validated_data):
+        return self.form.save()
+
+    def update(self, instance, validated_data):
+        return self.form.save()
 
 
 class _AssignmentSerializer(serializers.Serializer):
