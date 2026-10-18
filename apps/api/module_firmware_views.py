@@ -7,7 +7,9 @@ Reads need ``modules.view``, writes ``modules.manage``; no topology scoping
 from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.db.models.deletion import ProtectedError
-from drf_spectacular.utils import extend_schema, inline_serializer
+from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers as rf_serializers
 from rest_framework import status as http_status
 from rest_framework.decorators import action
@@ -18,6 +20,7 @@ from rest_framework.response import Response
 from apps.accounts.client_ip import client_ip
 from apps.api.audit import _token_suffix
 from apps.api.module_firmware_serializers import (
+    ModuleFirmwareImportInputSerializer,
     ModuleFirmwareImportJobSerializer,
     ModuleFirmwareReleaseSerializer,
     ModuleFirmwareTargetSerializer,
@@ -34,7 +37,8 @@ from apps.api.read_filters import (
 )
 from apps.api.read_views import AreaReadOnlyViewSet
 from apps.api.write_views import AreaWriteViewSet
-from apps.module_firmware import services
+from apps.images import github_releases
+from apps.module_firmware import ops, services
 from apps.module_firmware.audit import audit_config, audit_station
 from apps.module_firmware.models import (
     Module,
@@ -44,6 +48,8 @@ from apps.module_firmware.models import (
     ModuleFirmwareTarget,
     ModuleType,
 )
+from apps.module_firmware.trust import import_blockers
+from apps.module_firmware.views_convergence import is_int_param
 from apps.module_firmware.views_types import type_in_use
 from apps.stations.models import StationAuditLog
 
@@ -51,6 +57,12 @@ from apps.stations.models import StationAuditLog
 def _conflict(detail):
     err = APIException(detail=detail)
     err.status_code = http_status.HTTP_409_CONFLICT
+    return err
+
+
+def _bad_gateway(detail):
+    err = APIException(detail=detail)
+    err.status_code = http_status.HTTP_502_BAD_GATEWAY
     return err
 
 
@@ -275,6 +287,132 @@ class ModuleFirmwareReleaseViewSet(AreaReadOnlyViewSet):
         if self.action != "list":
             return queryset
         return super().filter_queryset(queryset)
+
+    # Writes: archive/restore + the GitHub import pair below. No create/PUT/
+    # DELETE — releases only come from the importer (DELETE → 405).
+
+    def _release_data(self, release):
+        return ModuleFirmwareReleaseSerializer(release, context=self.get_serializer_context()).data
+
+    @extend_schema(request=None, responses={200: ModuleFirmwareReleaseSerializer})
+    @action(detail=True, methods=["post"], url_path="archive", verb="manage")
+    def archive(self, request, pk=None):
+        """Archive a release (hidden from targets/convergence). Idempotent:
+        audit + reconcile only when the state actually changed."""
+        release = self.get_object()
+        ops.archive_release(request, release, via=_token_suffix(request))
+        return Response(self._release_data(release))
+
+    @extend_schema(request=None, responses={200: ModuleFirmwareReleaseSerializer})
+    @action(detail=True, methods=["post"], url_path="restore", verb="manage")
+    def restore(self, request, pk=None):
+        """Undo an archive. Idempotent (no audit on a no-op)."""
+        release = self.get_object()
+        ops.restore_release(request, release, via=_token_suffix(request))
+        return Response(self._release_data(release))
+
+    @staticmethod
+    def _require_import_ready(module_type):
+        blockers = import_blockers(module_type)
+        if blockers:
+            raise ValidationError({"module_type": blockers})
+
+    @staticmethod
+    def _github_rows(module_type):
+        try:
+            return ops.github_release_rows(module_type)
+        except github_releases.GitHubAPIError as exc:
+            raise _bad_gateway(f"GitHub releases unavailable: {exc}") from exc
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "module_type", OpenApiTypes.INT, OpenApiParameter.QUERY, required=True
+            )
+        ],
+        responses={
+            200: inline_serializer(
+                "ModuleFirmwareGitHubRelease",
+                fields={
+                    "tag": rf_serializers.CharField(),
+                    "html_url": rf_serializers.URLField(),
+                    "is_latest": rf_serializers.BooleanField(),
+                    "state": rf_serializers.ChoiceField(
+                        choices=["ready", "queued", "imported", "no_assets", "invalid_tag"]
+                    ),
+                    "variants": rf_serializers.ListField(child=rf_serializers.CharField()),
+                    "missing_variants": rf_serializers.ListField(child=rf_serializers.CharField()),
+                },
+                many=True,
+            )
+        },
+    )
+    @action(detail=False, methods=["get"], url_path="available", verb="manage")
+    def available(self, request):
+        """GitHub releases of the module type's firmware repo with their import
+        state (only ``ready`` rows can be imported). ``missing_variants`` lists
+        fleet variants a release has no asset for."""
+        module_type_id = request.query_params.get("module_type", "")
+        if not is_int_param(module_type_id):
+            raise ValidationError({"module_type": ["A module type id is required."]})
+        module_type = get_object_or_404(ModuleType, pk=module_type_id)
+        self._require_import_ready(module_type)
+        data = [
+            {
+                "tag": row["release"].tag,
+                "html_url": row["release"].html_url,
+                "is_latest": row["release"].is_latest,
+                "state": row["state"],
+                "variants": row["variants"],
+                "missing_variants": row["missing_variants"],
+            }
+            for row in self._github_rows(module_type)
+        ]
+        return Response(data)
+
+    @extend_schema(
+        request=ModuleFirmwareImportInputSerializer,
+        responses={202: ModuleFirmwareImportJobSerializer},
+    )
+    @action(detail=False, methods=["post"], url_path="import", url_name="import", verb="manage")
+    def import_release(self, request):
+        """Queue an import job for a ``ready`` GitHub release tag (see
+        ``available/``). 409 when the tag is already imported or in flight."""
+        serializer = ModuleFirmwareImportInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        module_type_id = serializer.validated_data["module_type"]
+        tag = serializer.validated_data["tag"]
+
+        module_type = ModuleType.objects.filter(pk=module_type_id).first()
+        if module_type is None:
+            raise ValidationError({"module_type": ["Unknown module type."]})
+        self._require_import_ready(module_type)
+
+        row = next((r for r in self._github_rows(module_type) if r["release"].tag == tag), None)
+        if row is None:
+            raise ValidationError({"tag": [f"Tag '{tag}' not found in the GitHub releases."]})
+        state = row["state"]
+        if state == "invalid_tag":
+            raise ValidationError({"tag": ["Invalid release tag."]})
+        if state == "no_assets":
+            raise ValidationError({"tag": ["Release has no importable firmware assets."]})
+        if state == "imported":
+            raise _conflict(f"Release {tag} is already imported.")
+        if state == "queued":
+            raise _conflict(f"An import of {tag} is already in progress.")
+
+        try:
+            job, created = ops.queue_import(
+                request, module_type_id, tag, via=_token_suffix(request)
+            )
+        except ops.ImportRejected as exc:
+            raise ValidationError({exc.field: [str(exc)]}) from exc
+        except ModuleType.DoesNotExist as exc:
+            raise ValidationError({"module_type": ["Unknown module type."]}) from exc
+        if not created:
+            raise _conflict(f"An import of {tag} is already in progress.")
+        data = ModuleFirmwareImportJobSerializer(job, context=self.get_serializer_context()).data
+        return Response(data, status=http_status.HTTP_202_ACCEPTED)
 
 
 class ModuleFirmwareImportJobViewSet(AreaReadOnlyViewSet):

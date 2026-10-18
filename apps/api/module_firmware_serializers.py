@@ -249,6 +249,15 @@ class ModuleFirmwareImportJobSerializer(serializers.ModelSerializer):
         ]
 
 
+class ModuleFirmwareImportInputSerializer(serializers.Serializer):
+    """POST module-firmware-releases/import/ input. ``module_type`` is an int
+    field on purpose: ``ops.queue_import`` does a ``pk`` lookup that would
+    raise ``ValueError`` on a non-numeric id."""
+
+    module_type = serializers.IntegerField(min_value=1)
+    tag = serializers.CharField(max_length=64)
+
+
 class ModuleFirmwareTargetListSerializer(serializers.ListSerializer):
     """One coverage query per page instead of one per target."""
 
