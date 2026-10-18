@@ -30,6 +30,7 @@ from apps.api.module_firmware_serializers import (
     ModuleTypeWriteSerializer,
     ModuleUpdateSerializer,
 )
+from apps.api.pagination import StandardResultsSetPagination
 from apps.api.read_filters import (
     ModuleFilter,
     ModuleFirmwareImportJobFilter,
@@ -162,8 +163,15 @@ class ModuleTypeViewSet(
         )
 
 
+class ModulePagination(StandardResultsSetPagination):
+    # firmware_row resolves the effective target per row (a few queries each),
+    # so cap the page at the GUI convergence overview's size instead of 200.
+    max_page_size = 50
+
+
 class ModuleViewSet(AreaReadOnlyViewSet):
     area = "modules"
+    pagination_class = ModulePagination
     serializer_class = ModuleSerializer
     filterset_class = ModuleFilter
     search_fields = ["uid"]

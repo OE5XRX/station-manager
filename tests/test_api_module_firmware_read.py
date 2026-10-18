@@ -243,3 +243,13 @@ def test_openapi_types_computed_fields():
     coverage = schemas["ModuleFirmwareTarget"]["properties"]["variant_coverage"]
     assert coverage["type"] == "array"
     assert coverage["items"]["type"] == "string"
+
+
+def test_module_list_page_size_capped_at_50(api_topology, bearer):
+    from apps.module_firmware.models import Module, ModuleType
+
+    mtype = ModuleType.objects.create(key="cap", display_name="Cap")
+    Module.objects.bulk_create([Module(uid=f"cap-{i:03d}", module_type=mtype) for i in range(60)])
+    r = bearer(api_topology["admin"]).get(reverse("api:module-list"), {"page_size": 200})
+    assert r.status_code == 200
+    assert len(r.json()["results"]) == 50
