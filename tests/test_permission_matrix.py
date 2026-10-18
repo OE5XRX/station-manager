@@ -102,6 +102,7 @@ API = {
     ("users", "view"): ("GET", "/api/v1/users/", None),
     ("users", "manage"): ("PATCH", "/api/v1/users/{other_user}/", {"first_name": "Z"}),
     ("control", "manage"): ("POST", "/api/v1/stations/{station}/audio-diagnostics/", {}),
+    ("modules", "view"): ("GET", "/api/v1/modules/", None),
 }
 
 # (ws path builder, area, verb, action)

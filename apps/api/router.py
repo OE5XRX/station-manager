@@ -4,7 +4,7 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.routers import APIRootView, DefaultRouter
 
 from apps.accounts.permissions import AreaPermission
-from apps.api import read_views, write_views
+from apps.api import module_firmware_views, read_views, write_views
 from apps.api.authentication import PersonalAccessTokenAuthentication
 
 
@@ -65,4 +65,21 @@ router.register(
     r"station-photos",
     write_views.StationPhotoViewSet,
     basename="station-photo",
+)
+router.register(r"module-types", module_firmware_views.ModuleTypeViewSet, basename="module-type")
+router.register(r"modules", module_firmware_views.ModuleViewSet, basename="module")
+router.register(
+    r"module-firmware-releases",
+    module_firmware_views.ModuleFirmwareReleaseViewSet,
+    basename="module-firmware-release",
+)
+router.register(
+    r"module-firmware-import-jobs",
+    module_firmware_views.ModuleFirmwareImportJobViewSet,
+    basename="module-firmware-import-job",
+)
+router.register(
+    r"module-firmware-targets",
+    module_firmware_views.ModuleFirmwareTargetViewSet,
+    basename="module-firmware-target",
 )
