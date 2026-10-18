@@ -4,11 +4,12 @@ No async / no I/O beyond the ORM — call from consumers via
 ``database_sync_to_async`` and directly from unit tests.
 """
 
+from collections import Counter
 from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max, Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.module_firmware.ingest import ingest_module, reconcile_station
@@ -41,13 +42,13 @@ def apply_inventory(station, slots):
     :func:`_prune_expired`).
     """
     now = timezone.now()
-    # No module online yet = first snapshot after the station was offline (see below).
-    # ``Max`` over all rows = the moment ``mark_station_offline`` stamped them.
-    reconnect_ts = None
-    if not StationModule.objects.filter(station=station, online=True).exists():
-        reconnect_ts = StationModule.objects.filter(station=station).aggregate(
-            ts=Max("last_seen")
-        )["ts"]
+    # Where each tracked module sat (and its settings) BEFORE this snapshot re-links
+    # rows — the re-plug carry-over needs it (see _carry_over_moved). Newest row wins.
+    before = {}
+    for row in StationModule.objects.filter(
+        station=station, tracked_module__isnull=False
+    ).order_by(F("last_seen").asc(nulls_first=True)):
+        before[row.tracked_module_id] = (row.slot, row.module_id, dict(row.last_state or {}))
     reported = []
     # (row, tracked Module) for every reported, uid-tracked module — re-plug candidates.
     tracked_rows = []
@@ -85,6 +86,7 @@ def apply_inventory(station, slots):
                     "last_state": filtered_state,
                     "online": True,
                     "last_seen": now,
+                    "offline_with_station": False,
                 },
             )
             tracked = ingest_module(station, slot, module_id, identity, now=now)
@@ -114,29 +116,23 @@ def apply_inventory(station, slots):
                     sm.save(update_fields=["tracked_module"])
             reported.append((slot, module_id))
 
-    reported_pks = {sm.pk for sm, _ in tracked_rows}
     qs = StationModule.objects.filter(station=station, online=True)
     for slot, module_id in reported:
         qs = qs.exclude(slot=slot, module_id=module_id)
     # A module that drops out was present until now: stamp ``last_seen`` so the stale
     # TTL counts from going offline, not from its last (rare) inventory frame.
     qs.update(online=False, last_seen=now)
-    if reconnect_ts is not None:
-        # Modules present when the station dropped are first seen missing *now*; the
-        # outage itself must not count towards the TTL (a module transiently missed
-        # in the reconnect snapshot after a >TTL outage would be pruned at once).
-        # Rows already offline before the outage keep their older last_seen. (If no
-        # module was online at the drop, the newest offline rows get one extra TTL.)
-        unreported = StationModule.objects.filter(station=station, last_seen=reconnect_ts)
-        for slot, module_id in reported:
-            unreported = unreported.exclude(slot=slot, module_id=module_id)
-        unreported.update(last_seen=now)
 
     # Same guard as reconcile below: ``slots == []`` may be a transient discovery
     # failure and must never delete anything.
     if slots:
-        for sm, tracked in tracked_rows:
-            _carry_over_moved(station, sm, tracked, reported, reported_pks)
+        # Modules that went offline together with the station are first seen missing
+        # NOW: the outage must not count towards the TTL (a module transiently missed
+        # in the reconnect snapshot after a >TTL outage would be pruned at once).
+        StationModule.objects.filter(station=station, offline_with_station=True).update(
+            last_seen=now, offline_with_station=False
+        )
+        _carry_over_moved(station, tracked_rows, before)
         _prune_expired(station, now)
 
     # Reconcile tracked-module assignments against the snapshot. Guarded on
@@ -173,71 +169,87 @@ def apply_state(station, slot, module_id, values):
         module.save(update_fields=["last_state", "updated_at"])
 
 
-def _carry_over_moved(station, sm, tracked, reported, reported_pks):
-    """Re-plug: ``tracked`` (same uid) is now reported in ``sm``'s slot — delete its
-    rows in other, no-longer-reported slots of this station and carry their settings over.
+def _carry_over_moved(station, tracked_rows, before):
+    """Re-plug: settings follow the physical module (uid) to its new slot.
 
-    Merge rule for ``last_state``: the old row's settings that are still setting caps in
-    the new descriptor, overlaid by the freshly reported state (the module's live value
-    always wins). Persisted calibration (``PersistedCapability``, the source the drift
-    re-apply sends from) moves to the new slot and replaces any leftover rows there —
-    those belonged to the slot's previous occupant, not to this physical module. The
-    consumer runs the re-apply right after this inventory, so a module that lost its
-    calibration while unplugged gets it back in its new slot.
+    ``before`` maps tracked-module id -> (slot, module_id, last_state) as it was BEFORE
+    this snapshot re-linked rows — ``update_or_create`` reuses a (slot, module_id) row
+    for whichever module now sits there, so in a rotation/swap the old row is gone or
+    belongs to another module by now. For every tracked module reported exactly once,
+    in a different place than before:
 
-    Known gap: a *swap* (A and B exchange slots in one snapshot) reports both rows, so
-    nothing is carried over and calibration stays slot-bound as before this cleanup.
+    - ``last_state``: its previous settings that are still setting caps in the new
+      descriptor, overlaid by the freshly reported state (the live value wins).
+    - ``PersistedCapability`` (what the drift re-apply sends from) is rewritten as a
+      whole for all involved keys: each destination gets exactly the mover's rows
+      (leftovers of a previous occupant go), a source that nobody moved into ends up
+      empty. The consumer runs the re-apply right after this inventory, so calibration
+      lost while unplugged is restored in the new slot.
+    - Its rows in no-longer-reported slots are deleted (the stale panel cards).
     """
-    reported_keys = {(str(slot), module_id) for slot, module_id in reported}
-    olds = [
-        old
-        for old in StationModule.objects.filter(station=station, tracked_module=tracked)
-        .exclude(pk__in=reported_pks)
-        .order_by("last_seen")
-        if (old.slot, old.module_id) not in reported_keys
-    ]
-    if not olds:
-        return
-    merged = {}
-    for old in olds:  # oldest first: the most recently seen row wins a conflict
-        merged.update(
-            {
-                k: v
-                for k, v in (old.last_state or {}).items()
-                if is_setting_cap(sm.capability_descriptor, k)
-            }
-        )
-    merged.update(sm.last_state or {})
-    if merged != sm.last_state:
-        sm.last_state = merged
-        sm.save(update_fields=["last_state", "updated_at"])
-
     from apps.stations.models import StationAuditLog
 
-    # Everything persisted at the new slot belonged to its previous occupant — drop it
-    # all (not just colliding caps), even if the moved module brings no calibration.
+    counts = Counter(tracked.id for _, tracked in tracked_rows)
+    reported_pks = {sm.pk for sm, _ in tracked_rows}
+    moves = []
+    for sm, tracked in tracked_rows:
+        prev = before.get(tracked.id)
+        if prev is None or counts[tracked.id] != 1:
+            continue
+        src, dest = (prev[0], prev[1]), (str(sm.slot), sm.module_id)
+        if src != dest:
+            moves.append((sm, tracked, src, dest, prev[2]))
+    if not moves:
+        return
+
+    calibration = {}
+    for row in PersistedCapability.objects.filter(station=station):
+        calibration.setdefault((row.slot, row.module_id), []).append(row)
+    involved = {m[2] for m in moves} | {m[3] for m in moves}
     PersistedCapability.objects.filter(
-        station=station, slot=sm.slot, module_id=sm.module_id
+        pk__in=[row.pk for key in involved for row in calibration.get(key, [])]
     ).delete()
-    for old in olds:
-        moved = PersistedCapability.objects.filter(
-            station=station, slot=old.slot, module_id=old.module_id
+    PersistedCapability.objects.bulk_create(
+        [
+            PersistedCapability(
+                station=station,
+                slot=dest[0],
+                module_id=dest[1],
+                capability=row.capability,
+                value=row.value,
+                updated_by_id=row.updated_by_id,
+            )
+            for _, _, src, dest, _ in moves
+            for row in calibration.get(src, [])
+        ]
+    )
+
+    for sm, tracked, src, dest, prev_state in moves:
+        merged = {
+            k: v
+            for k, v in (prev_state or {}).items()
+            if is_setting_cap(sm.capability_descriptor, k)
+        }
+        merged.update(sm.last_state or {})
+        if merged != sm.last_state:
+            sm.last_state = merged
+            sm.save(update_fields=["last_state", "updated_at"])
+        stale = StationModule.objects.filter(station=station, tracked_module=tracked).exclude(
+            pk__in=reported_pks
         )
-        for row in moved:  # several old rows: the most recently seen one wins
-            PersistedCapability.objects.filter(
-                station=station, slot=sm.slot, module_id=sm.module_id, capability=row.capability
-            ).delete()
-        moved.update(slot=sm.slot, module_id=sm.module_id)
-        old.delete()
+        removed = [f"{row.slot}/{row.module_id}" for row in stale]
+        stale.delete()
+        message = (
+            f"Control panel: module {tracked.uid} moved from slot {src[0]} to slot "
+            f"{dest[0]}; settings carried over."
+        )
+        if removed:
+            message += f" Stale entry {', '.join(removed)} removed."
         StationAuditLog.log(
             station=station,
             module=tracked,
             event_type=StationAuditLog.EventType.MODULE_SWAPPED,
-            message=(
-                f"Control panel: module {tracked.uid} moved from slot {old.slot} to "
-                f"slot {sm.slot}; stale entry {old.slot}/{old.module_id} removed, "
-                "settings carried over."
-            ),
+            message=message,
         )
 
 
@@ -267,8 +279,9 @@ def _prune_expired(station, now):
 
 
 def mark_station_offline(station):
-    # Stamp ``last_seen`` only on the online→offline transition: modules were present
-    # until the station dropped; already-offline rows keep their TTL running.
+    # Only the online→offline transition: modules were present until the station
+    # dropped and are flagged so the next non-empty snapshot restarts their TTL (the
+    # outage does not count). Already-offline rows keep their TTL running.
     StationModule.objects.filter(station=station, online=True).update(
-        online=False, last_seen=timezone.now()
+        online=False, last_seen=timezone.now(), offline_with_station=True
     )

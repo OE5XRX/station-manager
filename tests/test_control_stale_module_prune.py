@@ -359,3 +359,100 @@ def test_ttl_does_not_count_station_outage(fm_type, station):
     assert missed.online is False
     assert timezone.now() - missed.last_seen < timedelta(minutes=1)
     assert not StationModule.objects.filter(pk=ancient.pk).exists()
+
+
+def _calibration(station):
+    return sorted(
+        PersistedCapability.objects.filter(station=station).values_list(
+            "slot", "capability", "value"
+        )
+    )
+
+
+def _calibrate(station, slot, value, capability="volume"):
+    PersistedCapability.objects.create(
+        station=station, slot=slot, module_id="fm", capability=capability, value=value
+    )
+
+
+@pytest.mark.django_db
+def test_rotation_moves_each_modules_calibration(fm_type, station):
+    """A slot1->slot2 while B slot2->slot3: the (slot2, fm) row is reused for A, yet B
+    keeps its own calibration and A brings its own."""
+    registry.apply_inventory(station, _inv(slot1=[_fm("UID-A")], slot2=[_fm("UID-B")]))
+    _calibrate(station, "slot1", 6)
+    _calibrate(station, "slot2", 3)
+
+    registry.apply_inventory(station, _inv(slot2=[_fm("UID-A")], slot3=[_fm("UID-B")]))
+
+    assert _calibration(station) == [("slot2", "volume", 6), ("slot3", "volume", 3)]
+    assert sorted(
+        StationModule.objects.filter(station=station).values_list("slot", flat=True)
+    ) == [
+        "slot2",
+        "slot3",
+    ]
+
+
+@pytest.mark.django_db
+def test_rotation_carries_last_state_of_reused_row(fm_type, station):
+    registry.apply_inventory(
+        station,
+        _inv(slot1=[_fm("UID-A", state={"volume": 6})], slot2=[_fm("UID-B", state={"volume": 3})]),
+    )
+    registry.apply_inventory(station, _inv(slot2=[_fm("UID-A")], slot3=[_fm("UID-B")]))
+
+    assert StationModule.objects.get(station=station, slot="slot2").last_state == {"volume": 6}
+    assert StationModule.objects.get(station=station, slot="slot3").last_state == {"volume": 3}
+
+
+@pytest.mark.django_db
+def test_swap_exchanges_calibration(fm_type, station):
+    registry.apply_inventory(station, _inv(slot1=[_fm("UID-A")], slot2=[_fm("UID-B")]))
+    _calibrate(station, "slot1", 6)
+    _calibrate(station, "slot2", 3)
+
+    registry.apply_inventory(station, _inv(slot1=[_fm("UID-B")], slot2=[_fm("UID-A")]))
+
+    assert _calibration(station) == [("slot1", "volume", 3), ("slot2", "volume", 6)]
+
+
+@pytest.mark.django_db
+def test_new_module_in_vacated_slot_gets_no_calibration(fm_type, station):
+    """Calibration left with its module; a new module in the old slot starts clean."""
+    registry.apply_inventory(station, _inv(slot1=[_fm("UID-A")]))
+    _calibrate(station, "slot1", 6)
+
+    registry.apply_inventory(station, _inv(slot1=[_fm("UID-N")], slot2=[_fm("UID-A")]))
+
+    assert _calibration(station) == [("slot2", "volume", 6)]
+
+
+@pytest.mark.django_db
+def test_ttl_expires_without_outage_when_no_module_is_online(fm_type, station):
+    """The only module was removed while the station stayed up: repeated non-empty
+    snapshots must not keep restarting its TTL."""
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+    registry.apply_inventory(station, [{"slot": "slot1", "modules": []}])
+    sm = StationModule.objects.get(station=station, slot="slot1")
+    _set_age(sm, TTL * 3)
+
+    registry.apply_inventory(station, [{"slot": "slot1", "modules": []}])
+
+    assert not StationModule.objects.filter(pk=sm.pk).exists()
+
+
+@pytest.mark.django_db
+def test_outage_flag_survives_empty_snapshot(fm_type, station):
+    """``slots == []`` (transient discovery failure) neither prunes nor consumes the
+    outage flag; the next real snapshot restarts the TTL."""
+    registry.apply_inventory(station, _inv(slot1=[_fm()], slot2=[_fm("UID-B")]))
+    registry.mark_station_offline(station)
+    StationModule.objects.filter(station=station).update(last_seen=timezone.now() - TTL * 2)
+
+    registry.apply_inventory(station, [])
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+
+    missed = StationModule.objects.get(station=station, slot="slot2")
+    assert timezone.now() - missed.last_seen < timedelta(minutes=1)
+    assert missed.offline_with_station is False

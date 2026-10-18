@@ -41,6 +41,10 @@ class StationModule(models.Model):
 
     online = models.BooleanField(_("online"), default=False)
     last_seen = models.DateTimeField(_("last seen"), null=True, blank=True)
+    # Went offline because the whole station dropped (not seen missing in a snapshot):
+    # the next non-empty inventory restarts ``last_seen`` so the outage does not count
+    # towards the stale-module TTL (``apps.control.registry``).
+    offline_with_station = models.BooleanField(_("offline with station"), default=False)
 
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)
