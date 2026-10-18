@@ -519,3 +519,26 @@ def test_migration_flags_existing_offline_rows(station):
     on.refresh_from_db()
     assert off.offline_with_station is True
     assert on.offline_with_station is False
+
+
+@pytest.mark.django_db
+def test_stale_duplicate_never_overwrites_live_slot_calibration(fm_type, station):
+    """Legacy stale duplicate + live row end up with equal (bulk-stamped) last_seen:
+    the module reported in its own slot is no move, the duplicate only goes away."""
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+    tracked = StationModule.objects.get(station=station, slot="slot1").tracked_module
+    StationModule.objects.create(
+        station=station, slot="slot0", module_id="fm", tracked_module=tracked, online=True
+    )
+    _calibrate(station, "slot1", 6)
+    _calibrate(station, "slot0", 2)
+    registry.mark_station_offline(station)  # equal last_seen on both rows
+    registry.apply_inventory(station, _inv(slot3=[_fm("UID-B")]))
+
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+
+    assert ("slot1", "volume", 6) in _calibration(station)
+    assert not StationModule.objects.filter(station=station, slot="slot0").exists()
+    assert not StationAuditLog.objects.filter(
+        station=station, message__icontains="moved from slot slot0"
+    ).exists()

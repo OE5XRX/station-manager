@@ -43,12 +43,19 @@ def apply_inventory(station, slots):
     """
     now = timezone.now()
     # Where each tracked module sat (and its settings) BEFORE this snapshot re-links
-    # rows — the re-plug carry-over needs it (see _carry_over_moved). Newest row wins.
+    # rows — the re-plug carry-over needs it (see _carry_over_moved). Per module: all
+    # its keys, plus the most recently seen row (deterministic tie-break on bulk-stamped
+    # equal ``last_seen``: newer ``updated_at``, then higher pk).
     before = {}
     for row in StationModule.objects.filter(
         station=station, tracked_module__isnull=False
-    ).order_by(F("last_seen").asc(nulls_first=True)):
-        before[row.tracked_module_id] = (row.slot, row.module_id, dict(row.last_state or {}))
+    ).order_by(F("last_seen").asc(nulls_first=True), "updated_at", "pk"):
+        keys = before.get(row.tracked_module_id, (None, set()))[1]
+        keys.add((row.slot, row.module_id))
+        before[row.tracked_module_id] = (
+            (row.slot, row.module_id, dict(row.last_state or {})),
+            keys,
+        )
     reported = []
     # (row, tracked Module) for every reported, uid-tracked module — re-plug candidates.
     tracked_rows = []
@@ -172,11 +179,12 @@ def apply_state(station, slot, module_id, values):
 def _carry_over_moved(station, tracked_rows, before):
     """Re-plug: settings follow the physical module (uid) to its new slot.
 
-    ``before`` maps tracked-module id -> (slot, module_id, last_state) as it was BEFORE
+    ``before`` maps tracked-module id -> ((slot, module_id, last_state) of its most
+    recently seen row, all its (slot, module_id) keys) as it was BEFORE
     this snapshot re-linked rows — ``update_or_create`` reuses a (slot, module_id) row
     for whichever module now sits there, so in a rotation/swap the old row is gone or
     belongs to another module by now. For every tracked module reported exactly once,
-    in a different place than before:
+    at a key where it had no row before:
 
     - ``last_state``: its previous settings that are still setting caps in the new
       descriptor and have no persisted calibration, overlaid by the freshly reported
@@ -196,12 +204,14 @@ def _carry_over_moved(station, tracked_rows, before):
     reported_pks = {sm.pk for sm, _ in tracked_rows}
     moves = []
     for sm, tracked in tracked_rows:
-        prev = before.get(tracked.id)
-        if prev is None or counts[tracked.id] != 1:
+        if tracked.id not in before or counts[tracked.id] != 1:
             continue
-        src, dest = (prev[0], prev[1]), (str(sm.slot), sm.module_id)
-        if src != dest:
-            moves.append((sm, tracked, src, dest, prev[2]))
+        (slot, module_id, prev_state), keys = before[tracked.id]
+        dest = (str(sm.slot), sm.module_id)
+        # Reported where it already had a row: not a move — any other rows are stale
+        # duplicates whose settings must not overwrite the live slot's.
+        if dest not in keys:
+            moves.append((sm, tracked, (slot, module_id), dest, prev_state))
     if moves:
         _move_settings(station, moves)
 
