@@ -127,16 +127,18 @@ def release_quarantine(module, *, user, ip_address=None):
         .select_related("station")
         .first()
     )
-    StationAuditLog.log(
-        station=open_assignment.station if open_assignment else None,
-        module=locked,
-        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED,
-        message=f"Quarantine released for module {locked.uid}: {', '.join(versions)}.",
-        changes={"released_targets": versions},
-        user=user,
-        ip_address=ip_address,
-    )
-    module.firmware_convergence = Module.objects.values_list(
-        "firmware_convergence", flat=True
-    ).get(pk=module.pk)
+    try:
+        with transaction.atomic():
+            StationAuditLog.log(
+                station=open_assignment.station if open_assignment else None,
+                module=locked,
+                event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED,
+                message=f"Quarantine released for module {locked.uid}: {', '.join(versions)}.",
+                changes={"released_targets": versions},
+                user=user,
+                ip_address=ip_address,
+            )
+    except Exception:
+        logger.warning("release_quarantine: audit write failed", exc_info=True)
+    module.firmware_convergence = locked.firmware_convergence
     return versions

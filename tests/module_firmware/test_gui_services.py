@@ -125,3 +125,28 @@ def test_release_quarantine_noop_when_none(fm, user):
     assert not StationAuditLog.objects.filter(
         event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
     ).exists()
+
+
+def test_release_quarantine_survives_audit_failure(fm, station_factory, user, monkeypatch):
+    st = station_factory()
+    m = Module.objects.create(
+        uid="AF", module_type=fm, variant="vhf", last_reported_version="26.09.10-01"
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    _fleet_target(fm)
+    rel = _release(fm)
+    cs = ModuleFirmwareConvergenceState.objects.create(
+        module=m,
+        target_release=rel,
+        state=ModuleFirmwareConvergenceState.State.QUARANTINED,
+        attempts=3,
+    )
+
+    def boom(*a, **k):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr(StationAuditLog, "log", boom)
+    assert services.release_quarantine(m, user=user) == [rel.version]
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING
+    assert cs.attempts == 0
