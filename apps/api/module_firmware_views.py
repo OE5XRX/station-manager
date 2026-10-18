@@ -24,6 +24,7 @@ from apps.api.module_firmware_serializers import (
     ModuleFirmwareImportJobSerializer,
     ModuleFirmwareReleaseSerializer,
     ModuleFirmwareTargetSerializer,
+    ModuleFirmwareTargetWriteSerializer,
     ModuleSerializer,
     ModuleTypeSerializer,
     ModuleTypeWriteSerializer,
@@ -427,13 +428,78 @@ class ModuleFirmwareImportJobViewSet(AreaReadOnlyViewSet):
         )
 
 
-class ModuleFirmwareTargetViewSet(AreaReadOnlyViewSet):
+class ModuleFirmwareTargetViewSet(
+    AreaWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    AreaReadOnlyViewSet,
+):
     area = "modules"
     serializer_class = ModuleFirmwareTargetSerializer
+    write_serializer_class = ModuleFirmwareTargetWriteSerializer
     filterset_class = ModuleFirmwareTargetFilter
     ordering_fields = ["created_at", "updated_at"]
 
+    # Same related rows the GUI target views load (audit details/labels).
+    _AUDIT_RELATED = ("module_type", "tag", "station", "canary_tag")
+
     def get_queryset(self):
-        return ModuleFirmwareTarget.objects.select_related("module_type", "created_by").order_by(
-            "module_type__key", "scope", "pk"
+        return ModuleFirmwareTarget.objects.select_related(
+            *self._AUDIT_RELATED, "created_by"
+        ).order_by("module_type__key", "scope", "pk")
+
+    def _read_response(self, obj, status):
+        obj = self.get_queryset().get(pk=obj.pk)
+        data = ModuleFirmwareTargetSerializer(obj, context=self.get_serializer_context()).data
+        return Response(data, status=status)
+
+    @extend_schema(
+        request=ModuleFirmwareTargetWriteSerializer,
+        responses={201: ModuleFirmwareTargetSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return self._read_response(serializer.instance, http_status.HTTP_201_CREATED)
+
+    @extend_schema(
+        request=ModuleFirmwareTargetWriteSerializer,
+        responses={200: ModuleFirmwareTargetSerializer},
+    )
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        serializer = self.get_serializer(self.get_object(), data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return self._read_response(serializer.instance, http_status.HTTP_200_OK)
+
+    @extend_schema(
+        request=ModuleFirmwareTargetWriteSerializer,
+        responses={200: ModuleFirmwareTargetSerializer},
+    )
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        target = serializer.save(created_by=self.request.user)
+        ops.after_target_created(self.request, target, via=_token_suffix(self.request))
+
+    def perform_update(self, serializer):
+        # Fresh snapshot: the form already wrote the new values onto
+        # serializer.instance during validation.
+        before = ModuleFirmwareTarget.objects.select_related(*self._AUDIT_RELATED).get(
+            pk=serializer.instance.pk
+        )
+        target = serializer.save()
+        # No-op (no audited field changed) → no audit, no reconcile.
+        ops.after_target_updated(self.request, before, target, via=_token_suffix(self.request))
+
+    def perform_destroy(self, instance):
+        details = ops.target_details(instance)
+        label = ops.target_label(instance)
+        instance.delete()
+        ops.after_target_deleted(
+            self.request, instance, details, label, via=_token_suffix(self.request)
         )

@@ -8,7 +8,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.module_firmware import ops, services
-from apps.module_firmware.forms import ModuleTypeForm
+from apps.module_firmware.forms import ModuleFirmwareTargetForm, ModuleTypeForm, release_value
 from apps.module_firmware.models import (
     Module,
     ModuleAssignmentHistory,
@@ -300,3 +300,65 @@ class ModuleFirmwareTargetSerializer(serializers.ModelSerializer):
         return super().to_representation(
             _Row(instance, variant_coverage=sorted(coverage.get(key, [])))
         )
+
+
+class ModuleFirmwareTargetWriteSerializer(serializers.ModelSerializer):
+    """Create/update input; validation and save go through the GUI's
+    ``ModuleFirmwareTargetForm`` (release pair choices, scope/ref coherence,
+    canary only on fleet, one target per type+scope) so API and GUI cannot
+    drift.
+
+    ``release`` is any release row of the wanted (module type, version) pair.
+    It resolves over ``all_objects`` so an archived id gets the form's
+    "select a valid firmware release" error; the form still accepts the
+    target's current pair even when archived. On PATCH without ``release`` the
+    current pair is kept. After ``is_valid()``, ``self.form`` is the bound
+    form."""
+
+    release = serializers.PrimaryKeyRelatedField(
+        queryset=ModuleFirmwareRelease.all_objects.all(),
+        write_only=True,
+        help_text="Release id; the target follows its (module type, version).",
+    )
+
+    _REF_FIELDS = ("tag", "station", "canary_tag")
+
+    class Meta:
+        model = ModuleFirmwareTarget
+        fields = ["release", "scope", "tag", "station", "canary_tag"]
+        # The form is the single validator (incl. the conditional uniques).
+        validators = []
+
+    def validate(self, attrs):
+        # Omitted fields keep the instance's value (create: model defaults,
+        # i.e. fleet scope, no refs).
+        target = self.instance or ModuleFirmwareTarget()
+        if "release" in attrs:
+            rel = attrs["release"]
+            pair = (rel.module_type_id, rel.version)
+        else:  # PATCH without release (PUT/create require it)
+            pair = (target.module_type_id, target.version)
+        data = {
+            "release": release_value(*pair),
+            "scope": attrs.get("scope", target.scope),
+        }
+        for name in self._REF_FIELDS:
+            obj = attrs.get(name, getattr(target, name))
+            data[name] = obj.pk if obj is not None else ""
+        form = ModuleFirmwareTargetForm(data=data, instance=target)
+        if not form.is_valid():
+            raise serializers.ValidationError(
+                {
+                    ("non_field_errors" if field == "__all__" else field): list(errors)
+                    for field, errors in form.errors.items()
+                }
+            )
+        self.form = form
+        return form.cleaned_data
+
+    def create(self, validated_data):
+        self.form.instance.created_by = validated_data.get("created_by")
+        return self.form.save()
+
+    def update(self, instance, validated_data):
+        return self.form.save()
