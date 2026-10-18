@@ -4,11 +4,16 @@ Kept separate from ingest.py: these are user-driven, audited with the acting
 user, and always allowed (including sticky lifecycle states).
 """
 
+import logging
+
 from django.db import transaction
 
 from apps.stations.models import StationAuditLog
 
-from .models import Module
+from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
+from .reconciler import reconcile_module
+
+logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
@@ -67,3 +72,71 @@ def set_lifecycle(module, status, *, user):
         message=f"Lifecycle {old} → {status} for module {locked.uid}.",
         changes={"lifecycle_status": {"old": old, "new": status}},
     )
+
+
+def reconcile_module_type(module_type):
+    """Reconcile every module of ``module_type`` that has an open assignment.
+
+    Per-module failures are logged, not raised, so one bad module can't block
+    the rest. Returns the number reconciled without error."""
+    ok = 0
+    open_ids = ModuleAssignmentHistory.objects.filter(to_ts__isnull=True).values("module_id")
+    for module in Module.objects.filter(module_type=module_type, pk__in=open_ids):
+        try:
+            reconcile_module(module)
+            ok += 1
+        except Exception:
+            logger.warning("reconcile_module_type: module %s failed", module.pk, exc_info=True)
+    return ok
+
+
+@transaction.atomic
+def release_quarantine(module, *, user, ip_address=None):
+    """Release all quarantined convergence states of ``module`` for retry.
+
+    Lock order module → convergence states (same as the reconciler). Returns
+    the released target versions; an empty list means nothing was quarantined
+    (no-op, no audit)."""
+    locked = Module.objects.select_for_update().get(pk=module.pk)
+    states = list(
+        ModuleFirmwareConvergenceState.objects.select_for_update()
+        .filter(module=locked, state=ModuleFirmwareConvergenceState.State.QUARANTINED)
+        .select_related("target_release")
+    )
+    if not states:
+        return []
+    versions = []
+    for cs in states:
+        cs.state = ModuleFirmwareConvergenceState.State.UPDATING
+        cs.attempts = 0
+        cs.last_error_mode = ""
+        cs.last_error_message = ""
+        cs.save(
+            update_fields=[
+                "state",
+                "attempts",
+                "last_error_mode",
+                "last_error_message",
+                "updated_at",
+            ]
+        )
+        versions.append(cs.target_release.version)
+    reconcile_module(locked)
+    open_assignment = (
+        ModuleAssignmentHistory.objects.filter(module=locked, to_ts__isnull=True)
+        .select_related("station")
+        .first()
+    )
+    StationAuditLog.log(
+        station=open_assignment.station if open_assignment else None,
+        module=locked,
+        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED,
+        message=f"Quarantine released for module {locked.uid}: {', '.join(versions)}.",
+        changes={"released_targets": versions},
+        user=user,
+        ip_address=ip_address,
+    )
+    module.firmware_convergence = Module.objects.values_list(
+        "firmware_convergence", flat=True
+    ).get(pk=module.pk)
+    return versions

@@ -333,6 +333,8 @@ class StationAuditLog(models.Model):
         MODULE_FLASH_REJECTED = "module_flash_rejected", _("Module Flash Rejected")
         MODULE_FLASH_FAILED = "module_flash_failed", _("Module Flash Failed")
         MODULE_QUARANTINED = "module_quarantined", _("Module Quarantined")
+        FIRMWARE_TARGET_REMOVED = "firmware_target_removed", _("Firmware Target Removed")
+        MODULE_QUARANTINE_RELEASED = "module_quarantine_released", _("Module Quarantine Released")
         REBOOT = "reboot", _("Reboot")
 
     station = models.ForeignKey(
