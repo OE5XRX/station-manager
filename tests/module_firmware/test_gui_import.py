@@ -345,3 +345,84 @@ def test_archive_restore_audited_once(client, staff, fm):
     assert _config_logs().filter(details__action="restored").count() == 1
     rel.refresh_from_db()
     assert rel.archived_at is None
+
+
+def test_release_list_slashless_repo_is_blocked(client, staff, fm):
+    bad = ModuleType.objects.create(
+        key="bad", display_name="Bad", firmware_repo="OE5XRX", release_asset_prefix="b"
+    )
+    client.force_login(staff)
+    resp = client.get(reverse("module_firmware:release_list"))
+    incomplete = {e["type"].pk: e["missing"] for e in resp.context["incomplete_types"]}
+    assert bad.pk in incomplete
+    assert incomplete[bad.pk]
+    assert bad.pk not in {t.pk for t in resp.context["module_types"]}
+    assert fm.pk in {t.pk for t in resp.context["module_types"]}
+
+
+def test_is_trusted_repo_requires_owner_repo_shape(settings):
+    from apps.module_firmware.trust import is_trusted_repo
+
+    settings.MODULE_FIRMWARE_TRUSTED_REPO_OWNERS = ["OE5XRX"]
+    assert is_trusted_repo("OE5XRX/FW")
+    assert is_trusted_repo("oe5xrx/FW")
+    for bad in ("OE5XRX", "OE5XRX/", "/FW", "OE5XRX/a/b", "", None, "someone/FW"):
+        assert not is_trusted_repo(bad), bad
+
+
+def test_gh_partial_non_integer_module_type(client, staff, db):
+    client.force_login(staff)
+    with mock.patch(GH_FETCH) as fetch:
+        resp = client.get(reverse("module_firmware:gh_partial") + "?module_type=abc")
+    assert resp.status_code == 200
+    assert resp.context["error"]
+    fetch.assert_not_called()
+
+
+def test_import_non_integer_module_type(client, staff, db):
+    client.force_login(staff)
+    resp = client.post(reverse("module_firmware:import"), {"module_type": "abc", "tag": "v1"})
+    assert resp.status_code == 302
+    resp = client.get(resp.url)
+    assert any(m.level_tag == "error" for m in resp.context["messages"])
+    assert not ModuleFirmwareImportJob.objects.exists()
+
+
+def test_archive_desired_release_reconciles_rollup(client, staff, fm, station_factory):
+    from apps.module_firmware.models import (
+        ModuleAssignmentHistory,
+        ModuleFirmwareConvergenceState,
+        ModuleFirmwareTarget,
+    )
+
+    rel = ModuleFirmwareRelease.objects.create(
+        module_type=fm,
+        variant="vhf",
+        version="2.0",
+        storage_key="k2",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="2.0",
+    )
+    ModuleFirmwareTarget.objects.create(module_type=fm, version="2.0")
+    st = station_factory()
+    m = Module.objects.create(
+        uid="ARC",
+        module_type=fm,
+        variant="vhf",
+        last_reported_version="1.0",
+        firmware_convergence=Module.Convergence.QUARANTINED,
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    ModuleFirmwareConvergenceState.objects.create(
+        module=m, target_release=rel, state=ModuleFirmwareConvergenceState.State.QUARANTINED
+    )
+    client.force_login(staff)
+    client.post(reverse("module_firmware:archive", args=[rel.pk]))
+    m.refresh_from_db()
+    # Desired release gone: drift stays visible, but no longer quarantined on it.
+    assert m.firmware_convergence == Module.Convergence.UPDATING
+    client.post(reverse("module_firmware:restore", args=[rel.pk]))
+    m.refresh_from_db()
+    assert m.firmware_convergence == Module.Convergence.QUARANTINED

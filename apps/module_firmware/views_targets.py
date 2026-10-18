@@ -155,6 +155,10 @@ class TargetUpdateView(AreaPermissionMixin, _TargetFormMixin, UpdateView):
         target = self.object
         new = target_details(target)
         changes = {k: {"old": old[k], "new": new[k]} for k in new if old[k] != new[k]}
+        if not form.has_changed() or not changes:
+            # No-op save: nothing to audit, nothing to reconcile.
+            messages.success(self.request, _("Firmware target updated."))
+            return response
         audit_config(
             self.request,
             obj="module_firmware_target",

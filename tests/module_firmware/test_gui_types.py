@@ -169,3 +169,41 @@ def test_form_rejects_untrusted_owner_accepts_case_insensitive(db):
     assert "OE5XRX" in bad.errors["firmware_repo"][0]
     ok = ModuleTypeForm(_post_data(firmware_repo="oe5xrx/FW-RemoteStation"))
     assert ok.is_valid(), ok.errors
+
+
+def test_update_noop_writes_no_audit(client, staff):
+    t = ModuleType.objects.create(
+        key="fm",
+        display_name="FM",
+        firmware_repo="OE5XRX/FW-RemoteStation",
+        release_asset_prefix="fm",
+    )
+    client.force_login(staff)
+    resp = client.post(
+        reverse("module_firmware:type_update", args=[t.pk]),
+        _post_data(key="fm", display_name="FM", release_asset_prefix="fm"),
+    )
+    assert resp.status_code == 302
+    assert not AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED
+    ).exists()
+
+
+def test_type_list_untrusted_owner_not_import_ready(client, staff):
+    ModuleType.objects.create(
+        key="evil", display_name="Evil", firmware_repo="someone/FW", release_asset_prefix="e"
+    )
+    ModuleType.objects.create(
+        key="good",
+        display_name="Good",
+        firmware_repo="OE5XRX/FW-RemoteStation",
+        release_asset_prefix="g",
+    )
+    client.force_login(staff)
+    resp = client.get(reverse("module_firmware:type_list"))
+    by_key = {t.key: t for t in resp.context["types"]}
+    assert by_key["evil"].import_blockers == ["untrusted repo owner"]
+    assert by_key["good"].import_blockers == []
+    body = resp.content.decode()
+    assert body.count("import-ready") == 1
+    assert "untrusted repo owner" in body

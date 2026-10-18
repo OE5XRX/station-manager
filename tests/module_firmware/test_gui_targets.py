@@ -353,3 +353,39 @@ def test_update_moving_station_override_audits_removal(client, staff, fm, statio
     assert not StationAuditLog.objects.filter(
         event_type=StationAuditLog.EventType.FIRMWARE_TARGET_SET
     ).exists()
+
+
+def test_fleet_target_delete_reconciles_rollup(client, staff, fm, station_factory):
+    _release(fm)
+    st = station_factory()
+    m = Module.objects.create(
+        uid="DEL", module_type=fm, variant="vhf", last_reported_version="0.1.0"
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    client.force_login(staff)
+    client.post(reverse("module_firmware:target_create"), _data(fm))
+    m.refresh_from_db()
+    assert m.firmware_convergence == Module.Convergence.UPDATING
+    target = ModuleFirmwareTarget.objects.get()
+    resp = client.post(reverse("module_firmware:target_delete", args=[target.pk]))
+    assert resp.status_code == 302
+    m.refresh_from_db()
+    assert m.firmware_convergence != Module.Convergence.UPDATING
+
+
+def test_target_update_noop_writes_no_audit(client, staff, fm, station_factory):
+    _release(fm)
+    st = station_factory()
+    target = ModuleFirmwareTarget.objects.create(
+        module_type=fm, version="1.0.0", scope="station", station=st
+    )
+    client.force_login(staff)
+    resp = client.post(
+        reverse("module_firmware:target_update", args=[target.pk]),
+        _data(fm, scope="station", station=st.pk),
+    )
+    assert resp.status_code == 302
+    assert not _config_logs().exists()
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.FIRMWARE_TARGET_SET
+    ).exists()

@@ -40,9 +40,10 @@ def firmware_row(module, assignment, *, release_keys=None):
 
     ``target``: effective ModuleFirmwareTarget (None without an assigned
     station or when nothing applies). ``has_release``: an active release for
-    the module's variant at the target version exists. ``quarantine``: the
-    latest QUARANTINED convergence state, or None. Uses a
-    ``quarantined_states`` prefetch (to_attr) on ``module`` when present, and
+    the module's variant at the target version exists. ``quarantine``: only
+    while the module's rollup is QUARANTINED — the QUARANTINED convergence
+    state for the current target release, falling back to the latest; else
+    None. Uses a ``quarantined_states`` prefetch (to_attr) on ``module`` when present, and
     a precomputed ``release_keys`` set of active (module_type_id, variant,
     version) tuples instead of a per-row EXISTS query when given."""
     target = None
@@ -58,11 +59,24 @@ def firmware_row(module, assignment, *, release_keys=None):
             variant=module.variant,
             version=target.version,
         ).exists()
-    prefetched = getattr(module, "quarantined_states", None)
-    if prefetched is not None:
-        quarantine = prefetched[0] if prefetched else None
-    else:
-        quarantine = _quarantined_states_qs().filter(module=module).first()
+    quarantine = None
+    # Only a module whose rollup IS quarantined has a live quarantine. Older
+    # QUARANTINED rows survive a fix-by-new-target (the reconciler never
+    # touches them), so without this gate a healed module would still show —
+    # and offer to release — a stale quarantine.
+    if module.firmware_convergence == Module.Convergence.QUARANTINED:
+        states = getattr(module, "quarantined_states", None)
+        if states is None:
+            states = list(_quarantined_states_qs().filter(module=module))
+        # Prefer the row for the current desired release; else the latest.
+        current = [
+            cs
+            for cs in states
+            if target is not None
+            and cs.target_release.version == target.version
+            and cs.target_release.variant == module.variant
+        ]
+        quarantine = (current or states or [None])[0]
     return {"target": target, "has_release": has_release, "quarantine": quarantine}
 
 
@@ -120,7 +134,6 @@ class ConvergenceOverviewView(AreaPermissionMixin, ListView):
         ctx["rows"] = rows
         # One aggregate over the whole fleet (not the filtered page).
         counts = dict(Module.objects.values_list("firmware_convergence").annotate(n=Count("id")))
-        ctx["kpis"] = {value: counts.get(value, 0) for value in Module.Convergence.values}
         ctx["kpi_list"] = [
             (value, label, counts.get(value, 0)) for value, label in Module.Convergence.choices
         ]

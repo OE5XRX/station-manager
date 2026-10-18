@@ -5,10 +5,10 @@ from django.db.models import UniqueConstraint
 from django.utils.translation import gettext_lazy as _
 
 from .models import ModuleFirmwareRelease, ModuleFirmwareTarget, ModuleType
-from .trust import is_trusted_repo, trusted_owners
+from .trust import REPO_PATTERN, is_trusted_repo, trusted_owners
 
 repo_validator = RegexValidator(
-    r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$",
+    REPO_PATTERN,
     _("Use the GitHub form owner/repo, e.g. OE5XRX/FW-RemoteStation."),
 )
 prefix_validator = RegexValidator(

@@ -12,7 +12,7 @@ from apps.accounts.permissions import AreaPermissionMixin
 from apps.images import github_releases
 from apps.stations.models import Station
 
-from . import services, trust
+from . import services
 from .audit import audit_config
 from .models import (
     Module,
@@ -22,6 +22,7 @@ from .models import (
     ModuleType,
 )
 from .releases import parse_variant_assets
+from .trust import import_blockers
 from .views_convergence import firmware_row
 
 # ---------------------------------------------------------------------------
@@ -29,38 +30,14 @@ from .views_convergence import firmware_row
 # ---------------------------------------------------------------------------
 
 
-def _trusted_repo_q():
-    """Q matching module types whose firmware_repo owner is a trusted signer."""
-    q = Q(pk__in=[])
-    for owner in trust.trusted_owners():
-        q |= Q(firmware_repo__istartswith=f"{owner}/")
-    return q
-
-
 def _importable_module_types():
     """Module types that can actually produce a successful import job.
 
-    Requires firmware_repo AND release_asset_prefix, and a firmware_repo owner
-    in MODULE_FIRMWARE_TRUSTED_REPO_OWNERS (the importer rejects anything else),
-    so the UI never offers doomed imports.
+    Built from :func:`trust.import_blockers` (repo + prefix set, repo in
+    ``owner/repo`` form, owner trusted) so the dropdown, the setup hints and
+    the importer share one rule and the UI never offers doomed imports.
     """
-    return (
-        ModuleType.objects.exclude(firmware_repo="")
-        .exclude(release_asset_prefix="")
-        .filter(_trusted_repo_q())
-    )
-
-
-def import_blockers(module_type):
-    """Human-readable reasons why ``module_type`` is not import-ready ([] = ready)."""
-    reasons = []
-    if not module_type.firmware_repo:
-        reasons.append(str(ModuleType._meta.get_field("firmware_repo").verbose_name))
-    if not module_type.release_asset_prefix:
-        reasons.append(str(ModuleType._meta.get_field("release_asset_prefix").verbose_name))
-    if module_type.firmware_repo and not trust.is_trusted_repo(module_type.firmware_repo):
-        reasons.append(_("untrusted repo owner"))
-    return reasons
+    return [t for t in ModuleType.objects.order_by("key") if not import_blockers(t)]
 
 
 _ACTIVE_JOB_STATUSES = [
@@ -302,8 +279,8 @@ class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
     verb = "manage"
 
     def get(self, request):
-        module_type_id = request.GET.get("module_type")
-        if not module_type_id:
+        module_type_id = request.GET.get("module_type", "")
+        if not module_type_id.isdigit():
             return render(
                 request,
                 "module_firmware/_github_releases.html",
@@ -394,12 +371,12 @@ class FirmwareImportView(AreaPermissionMixin, View):
     verb = "manage"
 
     def post(self, request):
-        module_type_id = request.POST.get("module_type")
+        module_type_id = request.POST.get("module_type", "")
         tag = request.POST.get("tag", "").strip()
         redirect = HttpResponseRedirect(reverse("module_firmware:release_list"))
         # Blank tag / id guard stays outside the atomic block — these never
         # touch the DB and need no lock.
-        if not tag or not module_type_id:
+        if not tag or not module_type_id.isdigit():
             messages.error(request, _("Select a module type and a release tag to import."))
             return redirect
         created = False
@@ -477,6 +454,7 @@ class FirmwareArchiveView(AreaPermissionMixin, View):
         )
         if release.archive():
             _audit_release(request, release, "archived")
+            services.reconcile_module_type(release.module_type)
             messages.success(request, _("Release %(rel)s archived.") % {"rel": release})
         else:
             messages.info(request, _("Release %(rel)s was already archived.") % {"rel": release})
@@ -493,6 +471,7 @@ class FirmwareRestoreView(AreaPermissionMixin, View):
         )
         if release.restore():
             _audit_release(request, release, "restored")
+            services.reconcile_module_type(release.module_type)
             messages.success(request, _("Release %(rel)s restored.") % {"rel": release})
         else:
             messages.info(request, _("Release %(rel)s is not archived.") % {"rel": release})

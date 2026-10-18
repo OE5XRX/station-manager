@@ -55,10 +55,11 @@
             <td class="t-mono" data-label="{% trans 'Firmware repo' %}">{{ t.firmware_repo|default:"—" }}</td>
             <td class="t-mono" data-label="{% trans 'Asset prefix' %}">{{ t.release_asset_prefix|default:"—" }}</td>
             <td data-label="{% trans 'Import' %}">
-              {% if t.firmware_repo and t.release_asset_prefix %}
+              {% if not t.import_blockers %}
               <span class="pill pill-success">{% trans "import-ready" %}</span>
               {% else %}
-              <span class="pill pill-warn">{% trans "repo/prefix missing" %}</span>
+              <span class="pill pill-warn">{% trans "not ready" %}</span>
+              <div class="t-mono-sm t-muted">{{ t.import_blockers|join:", " }}</div>
               {% endif %}
             </td>
             <td class="t-mono num" data-label="{% trans 'Modules' %}">{{ t.module_count }}</td>

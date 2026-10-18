@@ -98,7 +98,8 @@ def test_overview_kpi_counts(client, applicant, fm):
     Module.objects.create(uid="C", module_type=fm, firmware_convergence="quarantined")
     client.force_login(applicant)
     resp = client.get(reverse("module_firmware:convergence"))
-    kpis = resp.context["kpis"]
+    assert "kpis" not in resp.context
+    kpis = {value: n for value, _label, n in resp.context["kpi_list"]}
     assert kpis["ok"] == 2
     assert kpis["quarantined"] == 1
     assert kpis["updating"] == 0
@@ -291,3 +292,50 @@ def test_detail_quarantine_release_button_for_staff(client, staff, fm, station_f
     assert reverse("module_firmware:module_release_quarantine", args=["DQ"]) in body
     assert "data-confirm" in body
     assert "signature mismatch" in body
+
+
+def test_stale_quarantine_hidden_after_fix_by_new_target(client, staff, fm, station_factory):
+    """Quarantine on v1, target moved to v2 and module reports v2 -> OK: the old
+    QUARANTINED row must neither be shown nor offered for release."""
+    from apps.module_firmware.reconciler import reconcile_module
+
+    st = station_factory()
+    rel1 = _release(fm)
+    target = ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    m = _module(fm, st, uid="STALE")
+    _quarantine(m, rel1)
+    fixed = "26.09.20-01"
+    _release(fm, version=fixed)
+    target.version = fixed
+    target.save()
+    Module.objects.filter(pk=m.pk).update(last_reported_version=fixed)
+    m.refresh_from_db()
+    reconcile_module(m)
+    m.refresh_from_db()
+    assert m.firmware_convergence == Module.Convergence.OK
+    client.force_login(staff)
+    release_url = reverse("module_firmware:module_release_quarantine", args=["STALE"])
+
+    overview = client.get(reverse("module_firmware:convergence"))
+    assert overview.context["rows"][0]["quarantine"] is None
+    assert release_url not in overview.content.decode()
+    assert "signature mismatch" not in overview.content.decode()
+
+    detail = client.get(reverse("module_firmware:module_detail", args=["STALE"]))
+    assert detail.context["firmware"]["quarantine"] is None
+    assert release_url not in detail.content.decode()
+
+
+def test_quarantine_prefers_row_for_current_target(fm, station_factory):
+    st = station_factory()
+    rel1 = _release(fm)
+    other = "26.09.20-01"
+    rel2 = _release(fm, version=other)
+    ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    m = _module(fm, st, uid="PREF")
+    current = _quarantine(m, rel1)
+    stale = _quarantine(m, rel2)  # newer updated_at, but not the current target
+    assert stale.updated_at >= current.updated_at
+    m.refresh_from_db()
+    row = firmware_row(m, m.assignments.get())
+    assert row["quarantine"] == current

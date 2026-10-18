@@ -13,6 +13,7 @@ from apps.accounts.permissions import AreaPermissionMixin
 from .audit import audit_config
 from .forms import ModuleTypeForm
 from .models import ModuleFirmwareRelease, ModuleType
+from .trust import import_blockers
 
 
 def type_in_use(module_type):
@@ -36,6 +37,13 @@ class ModuleTypeListView(AreaPermissionMixin, ListView):
             release_count=Count("firmware_releases", distinct=True),
             target_count=Count("firmware_targets", distinct=True),
         ).order_by("key")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Same readiness rule as the importer (repo shape + trusted owner).
+        for t in context["types"]:
+            t.import_blockers = import_blockers(t)
+        return context
 
 
 class ModuleTypeCreateView(AreaPermissionMixin, CreateView):
@@ -73,6 +81,10 @@ class ModuleTypeUpdateView(AreaPermissionMixin, UpdateView):
     success_url = reverse_lazy("module_firmware:type_list")
 
     def form_valid(self, form):
+        if not form.has_changed():
+            # Nothing changed: save is harmless, but no audit row for a no-op.
+            messages.success(self.request, _("Module type updated."))
+            return super().form_valid(form)
         changes = {
             f: {
                 "old": str(form.initial.get(f, "")),
