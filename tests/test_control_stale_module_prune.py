@@ -186,8 +186,14 @@ def test_legacy_module_without_uid_is_never_moved(station):
 # -- (2) TTL fallback ---------------------------------------------------------------
 
 
+def _online(station):
+    """Station is up with a module online — a regular (non-reconnect) snapshot follows."""
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+
+
 @pytest.mark.django_db
 def test_ttl_prunes_old_offline_row_on_nonempty_snapshot(fm_type, station):
+    _online(station)
     stale = StationModule.objects.create(station=station, slot="slot9", module_id="gps")
     _set_age(stale, TTL + timedelta(minutes=1))
 
@@ -199,6 +205,7 @@ def test_ttl_prunes_old_offline_row_on_nonempty_snapshot(fm_type, station):
 
 @pytest.mark.django_db
 def test_ttl_keeps_recent_offline_row(fm_type, station):
+    _online(station)
     recent = StationModule.objects.create(station=station, slot="slot9", module_id="gps")
     _set_age(recent, TTL - timedelta(minutes=5))
 
@@ -209,6 +216,7 @@ def test_ttl_keeps_recent_offline_row(fm_type, station):
 
 @pytest.mark.django_db
 def test_ttl_null_last_seen_falls_back_to_updated_at(fm_type, station):
+    _online(station)
     old = StationModule.objects.create(station=station, slot="slot8", module_id="gps")
     _set_age(old, TTL + timedelta(hours=1), last_seen=False)
     young = StationModule.objects.create(station=station, slot="slot7", module_id="gps")
@@ -290,6 +298,7 @@ def test_station_offline_stamps_last_seen_of_online_modules(station):
 
 @pytest.mark.django_db
 def test_ttl_is_configurable(fm_type, station, settings):
+    _online(station)
     settings.CONTROL_STALE_MODULE_TTL_SECONDS = 3600
     stale = StationModule.objects.create(station=station, slot="slot9", module_id="gps")
     _set_age(stale, timedelta(hours=2))
@@ -301,6 +310,7 @@ def test_ttl_is_configurable(fm_type, station, settings):
 
 @pytest.mark.django_db
 def test_ttl_prune_keeps_persisted_capabilities(fm_type, station):
+    _online(station)
     """Calibration is keyed by slot and survives a TTL prune (a module back from repair
     in the same slot gets it re-applied) — only the panel row goes."""
     stale = StationModule.objects.create(station=station, slot="slot9", module_id="fm")
@@ -313,3 +323,39 @@ def test_ttl_prune_keeps_persisted_capabilities(fm_type, station):
 
     assert not StationModule.objects.filter(pk=stale.pk).exists()
     assert PersistedCapability.objects.filter(station=station, slot="slot9").exists()
+
+
+@pytest.mark.django_db
+def test_replug_drops_all_leftover_calibration_of_new_slot(fm_type, station):
+    """Leftovers of the new slot's previous occupant go entirely — also caps the moved
+    module has no value for, and also when it brings no calibration at all."""
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+    PersistedCapability.objects.create(
+        station=station, slot="slot2", module_id="fm", capability="volume", value=2
+    )
+    PersistedCapability.objects.create(
+        station=station, slot="slot2", module_id="fm", capability="squelch", value=3
+    )
+
+    registry.apply_inventory(station, _inv(slot2=[_fm()]))
+
+    assert not PersistedCapability.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db
+def test_ttl_does_not_count_station_outage(fm_type, station):
+    """After an outage longer than the TTL, a module missing from the reconnect
+    snapshot starts its TTL now — it was present when the station dropped."""
+    registry.apply_inventory(station, _inv(slot1=[_fm()], slot2=[_fm(uid="UID-B")]))
+    registry.mark_station_offline(station)
+    StationModule.objects.filter(station=station).update(last_seen=timezone.now() - TTL * 2)
+    # A row that was already gone long before the outage still expires.
+    ancient = StationModule.objects.create(station=station, slot="slot9", module_id="gps")
+    _set_age(ancient, TTL * 5)
+
+    registry.apply_inventory(station, _inv(slot1=[_fm()]))
+
+    missed = StationModule.objects.get(station=station, slot="slot2")
+    assert missed.online is False
+    assert timezone.now() - missed.last_seen < timedelta(minutes=1)
+    assert not StationModule.objects.filter(pk=ancient.pk).exists()

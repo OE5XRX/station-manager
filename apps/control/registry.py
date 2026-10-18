@@ -8,7 +8,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Max, Q
 from django.utils import timezone
 
 from apps.module_firmware.ingest import ingest_module, reconcile_station
@@ -41,6 +41,13 @@ def apply_inventory(station, slots):
     :func:`_prune_expired`).
     """
     now = timezone.now()
+    # No module online yet = first snapshot after the station was offline (see below).
+    # ``Max`` over all rows = the moment ``mark_station_offline`` stamped them.
+    reconnect_ts = None
+    if not StationModule.objects.filter(station=station, online=True).exists():
+        reconnect_ts = StationModule.objects.filter(station=station).aggregate(
+            ts=Max("last_seen")
+        )["ts"]
     reported = []
     # (row, tracked Module) for every reported, uid-tracked module — re-plug candidates.
     tracked_rows = []
@@ -114,6 +121,16 @@ def apply_inventory(station, slots):
     # A module that drops out was present until now: stamp ``last_seen`` so the stale
     # TTL counts from going offline, not from its last (rare) inventory frame.
     qs.update(online=False, last_seen=now)
+    if reconnect_ts is not None:
+        # Modules present when the station dropped are first seen missing *now*; the
+        # outage itself must not count towards the TTL (a module transiently missed
+        # in the reconnect snapshot after a >TTL outage would be pruned at once).
+        # Rows already offline before the outage keep their older last_seen. (If no
+        # module was online at the drop, the newest offline rows get one extra TTL.)
+        unreported = StationModule.objects.filter(station=station, last_seen=reconnect_ts)
+        for slot, module_id in reported:
+            unreported = unreported.exclude(slot=slot, module_id=module_id)
+        unreported.update(last_seen=now)
 
     # Same guard as reconcile below: ``slots == []`` may be a transient discovery
     # failure and must never delete anything.
@@ -167,6 +184,9 @@ def _carry_over_moved(station, sm, tracked, reported, reported_pks):
     those belonged to the slot's previous occupant, not to this physical module. The
     consumer runs the re-apply right after this inventory, so a module that lost its
     calibration while unplugged gets it back in its new slot.
+
+    Known gap: a *swap* (A and B exchange slots in one snapshot) reports both rows, so
+    nothing is carried over and calibration stays slot-bound as before this cleanup.
     """
     reported_keys = {(str(slot), module_id) for slot, module_id in reported}
     olds = [
@@ -194,11 +214,16 @@ def _carry_over_moved(station, sm, tracked, reported, reported_pks):
 
     from apps.stations.models import StationAuditLog
 
+    # Everything persisted at the new slot belonged to its previous occupant — drop it
+    # all (not just colliding caps), even if the moved module brings no calibration.
+    PersistedCapability.objects.filter(
+        station=station, slot=sm.slot, module_id=sm.module_id
+    ).delete()
     for old in olds:
         moved = PersistedCapability.objects.filter(
             station=station, slot=old.slot, module_id=old.module_id
         )
-        for row in moved:
+        for row in moved:  # several old rows: the most recently seen one wins
             PersistedCapability.objects.filter(
                 station=station, slot=sm.slot, module_id=sm.module_id, capability=row.capability
             ).delete()
