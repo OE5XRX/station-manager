@@ -25,7 +25,7 @@ Fehlende Objekte → 404; Rechte-Fehler → 403 mit `required: "modules.manage"`
 | `modules` | list/retrieve (inkl. Ist-Version, Variante, Zustand, offene Station/Slot, effektives Ziel, live Quarantäne); PATCH `notes`/`lifecycle_status`; POST `{id}/confirm-registration/`, `{id}/release-quarantine/`. Kein create/delete (Ingest-owned) |
 | `module-firmware-releases` | list/retrieve (`?include_archived=true`); POST `{id}/archive/`, `{id}/restore/` (idempotent, reconcile); GET `available/?module_type=<id>`; POST `import/` → 202 ImportJob. Kein create/update/delete (405) |
 | `module-firmware-import-jobs` | list/retrieve |
-| `module-firmware-targets` | full CRUD; Release per ID (`release` = PK eines nicht-archivierten `ModuleFirmwareRelease`), kein Freitext |
+| `module-firmware-targets` | full CRUD; Release per ID (`release` = ID einer beliebigen `ModuleFirmwareRelease`-Zeile des gewünschten (Modultyp, Version)-Paars; das Paar muss vom Formular angeboten werden, d.h. eine nicht-archivierte Variante haben oder das aktuelle Paar des Targets sein), kein Freitext |
 
 ## Wiederverwendung statt Duplikat
 - ModuleType-Validierung = `ModuleTypeForm` (Repo-Form, Trusted Owner, `key` nach Anlage unveränderlich).

@@ -225,6 +225,17 @@ SPECTACULAR_SETTINGS = {
     "SWAGGER_UI_DIST": "SIDECAR",
     "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
     "REDOC_DIST": "SIDECAR",
+    # Stable names for choice sets whose field names ("status", "role")
+    # collide across components; without these drf-spectacular emits hashed
+    # names (e.g. "StatusEc9Enum") plus a collision warning. Enums are matched
+    # by their value set, so ImageImportJob.Status and the identical
+    # ModuleFirmwareImportJob.Status share ImportJobStatusEnum.
+    "ENUM_NAME_OVERRIDES": {
+        "StationStatusEnum": "apps.stations.models.Station.Status",
+        "ImportJobStatusEnum": "apps.images.models.ImageImportJob.Status",
+        "StationAssignmentRoleEnum": "apps.stations.models.StationAssignment.Role",
+        "RegionAssignmentRoleEnum": "apps.stations.models.RegionAssignment.Role",
+    },
 }
 
 # Django Channels

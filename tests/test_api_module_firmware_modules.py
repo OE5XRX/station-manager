@@ -192,6 +192,20 @@ def test_patch_unchanged_notes_no_audit(api_topology, bearer, module):
     assert not _module_audits().exists()
 
 
+def test_patch_notes_whitespace_only_edit_applied_and_audited(api_topology, bearer, module):
+    """Notes are stored raw (like the GUI form): a trailing-space edit is a
+    real change, not stripped back to the old value and silently dropped."""
+    Module.objects.filter(pk=module.pk).update(notes="same")
+    client = bearer(api_topology["staff"])
+    resp = client.patch(reverse(DETAIL, args=[module.pk]), {"notes": "same "}, format="json")
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["notes"] == "same "
+    module.refresh_from_db()
+    assert module.notes == "same "
+    (log,) = _module_audits()
+    assert log.changes == {"notes": {"old": "same", "new": "same "}}
+
+
 def test_put_not_allowed(api_topology, bearer, module):
     client = bearer(api_topology["staff"])
     resp = client.put(reverse(DETAIL, args=[module.pk]), {"notes": "x"}, format="json")

@@ -352,7 +352,9 @@ class ModuleFirmwareReleaseViewSet(AreaReadOnlyViewSet):
     def available(self, request):
         """GitHub releases of the module type's firmware repo with their import
         state (only ``ready`` rows can be imported). ``missing_variants`` lists
-        fleet variants a release has no asset for."""
+        fleet variants a release has no asset for. Only the newest releases
+        returned by ``github_releases.fetch_releases`` (its default limit) are
+        listed; older tags are not considered."""
         module_type_id = request.query_params.get("module_type", "")
         if not is_int_param(module_type_id):
             raise ValidationError({"module_type": ["A module type id is required."]})
@@ -378,7 +380,9 @@ class ModuleFirmwareReleaseViewSet(AreaReadOnlyViewSet):
     @action(detail=False, methods=["post"], url_path="import", url_name="import", verb="manage")
     def import_release(self, request):
         """Queue an import job for a ``ready`` GitHub release tag (see
-        ``available/``). 409 when the tag is already imported or in flight."""
+        ``available/``). 409 when the tag is already imported or in flight.
+        Only the newest releases returned by ``github_releases.fetch_releases``
+        (its default limit) are considered; an older tag is "not found"."""
         serializer = ModuleFirmwareImportInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         module_type_id = serializer.validated_data["module_type"]

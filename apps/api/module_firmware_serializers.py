@@ -195,7 +195,9 @@ class ModuleUpdateSerializer(serializers.Serializer):
     limited to the operator-settable states (``deployed`` is assignment-derived);
     the service still has the final say (``ready`` with an open assignment)."""
 
-    notes = serializers.CharField(required=False, allow_blank=True)
+    # Raw text like the GUI form; DRF's default trimming would turn a
+    # whitespace-only edit into a silent no-op.
+    notes = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     lifecycle_status = serializers.ChoiceField(
         required=False,
         choices=[
@@ -318,7 +320,11 @@ class ModuleFirmwareTargetWriteSerializer(serializers.ModelSerializer):
     release = serializers.PrimaryKeyRelatedField(
         queryset=ModuleFirmwareRelease.all_objects.all(),
         write_only=True,
-        help_text="Release id; the target follows its (module type, version).",
+        help_text=(
+            "ID of any release row of the desired (module type, version) pair; "
+            "the target follows that pair. The pair must be offered by the form: "
+            "it has a non-archived variant or is the target's current pair."
+        ),
     )
 
     _REF_FIELDS = ("tag", "station", "canary_tag")
