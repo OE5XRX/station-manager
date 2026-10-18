@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Firmware targets" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Firmware targets" %}</span>
+{% endblock %}
+
+{% block content %}
+<div>
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">{% trans "Fleet" %} · {% trans "Firmware library" %}</div>
+      <h1 class="page-title">{% trans "Firmware targets" %}</h1>
+      <p class="page-sub">{% trans "The firmware version each module type should run. A station override beats a tag override, which beats the fleet default. While a fleet default has a canary tag, it only applies to stations in that tag." %}</p>
+    </div>
+    <div class="page-head-actions">
+      {% if can.modules.manage %}
+        {% if has_releases %}
+        <a href="{% url 'module_firmware:target_create' %}" class="btn btn-primary">{% trans "New target" %}</a>
+        {% endif %}
+      {% else %}
+      {% include "includes/readonly_badge.html" %}
+      {% endif %}
+    </div>
+  </div>
+
+  {% for group in groups %}
+  <section class="panel mb-24">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span class="dot"></span>
+        {{ group.module_type.display_name }}
+        <span class="t-mono-sm t-muted">{{ group.module_type.key }}</span>
+      </div>
+      <span class="t-label">
+        {% blocktrans count n=group.targets|length %}{{ n }} target{% plural %}{{ n }} targets{% endblocktrans %}
+      </span>
+    </div>
+    <div class="panel-body flush">
+      <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "Applies to" %}</th>
+              <th>{% trans "Version" %}</th>
+              <th>{% trans "Variants with this version" %}</th>
+              <th>{% trans "Last change" %}</th>
+              <th style="width:1%;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in group.targets %}
+            <tr>
+              <td data-label="{% trans 'Applies to' %}">
+                {% if t.scope == "fleet" %}
+                  <span class="pill pill-accent">{% trans "Fleet default" %}</span>
+                  {% if t.canary_tag %}
+                  <div style="margin-top:6px;" class="row-gap-8">
+                    <span class="t-mono-sm t-muted">{% trans "canary" %}</span>
+                    <span class="tag" style="--tag-color: {{ t.canary_tag.color }};">{{ t.canary_tag.name }}</span>
+                  </div>
+                  {% endif %}
+                {% elif t.scope == "tag" %}
+                  <span class="pill pill-violet">{% trans "Tag" %}</span>
+                  <span class="tag" style="--tag-color: {{ t.tag.color }};">{{ t.tag.name }}</span>
+                {% else %}
+                  <span class="pill pill-muted">{% trans "Station" %}</span>
+                  <a href="{% url 'stations:station_detail' t.station.pk %}">{{ t.station.name }}</a>
+                {% endif %}
+              </td>
+              <td data-primary data-label="{% trans 'Version' %}">
+                <span style="font-weight:600;color:var(--ink-0);font-family:var(--font-mono);letter-spacing:0.02em;">{{ t.version }}</span>
+              </td>
+              <td data-label="{% trans 'Variants with this version' %}">
+                {% if t.variant_coverage %}
+                  <span class="t-mono">{{ t.variant_coverage|join:", " }}</span>
+                {% else %}
+                  <span class="pill pill-warn" title="{% trans 'No non-archived release of this version is imported; modules of this type cannot be updated to it.' %}">{% trans "no release" %}</span>
+                {% endif %}
+              </td>
+              <td class="t-mono-sm t-muted" data-label="{% trans 'Last change' %}">
+                {{ t.updated_at|date:"Y-m-d H:i" }}
+                {% if t.created_by %}<div>{% blocktrans with user=t.created_by.get_username %}created by {{ user }}{% endblocktrans %}</div>{% endif %}
+              </td>
+              <td class="actions">
+                {% if can.modules.manage %}
+                <a href="{% url 'module_firmware:target_update' t.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+                <form method="post"
+                      action="{% url 'module_firmware:target_delete' t.pk %}"
+                      style="display:inline;margin:0;"
+                      data-confirm="{% trans 'Delete this firmware target? Affected modules fall back to the next matching target.' %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-ghost">{% trans "Delete" %}</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  {% empty %}
+  <section class="panel mb-24">
+    <div class="panel-body">
+      <div class="empty">
+        <div class="empty-title">{% trans "No firmware targets yet" %}</div>
+        {% if has_releases %}
+        <div>{% trans "Without a target, modules keep whatever firmware they run. Set a fleet default to start updating them." %}</div>
+        {% if can.modules.manage %}
+        <div style="margin-top:12px;"><a href="{% url 'module_firmware:target_create' %}" class="btn btn-primary">{% trans "New target" %}</a></div>
+        {% endif %}
+        {% else %}
+        <div>{% trans "A target points at an imported firmware release. Import a release first." %}</div>
+        <div style="margin-top:12px;"><a href="{% url 'module_firmware:release_list' %}" class="btn">{% trans "Go to firmware releases" %}</a></div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if groups and types_without_target %}
+  <p class="t-muted">
+    {% trans "Imported releases but no target:" %}
+    {% for mt in types_without_target %}{{ mt.display_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
