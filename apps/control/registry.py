@@ -186,7 +186,9 @@ def _carry_over_moved(station, tracked_rows, before):
       (leftovers of a previous occupant go), a source that nobody moved into ends up
       empty. The consumer runs the re-apply right after this inventory, so calibration
       lost while unplugged is restored in the new slot.
-    - Its rows in no-longer-reported slots are deleted (the stale panel cards).
+
+    Independently of a move, rows of a module reported (once) elsewhere are deleted —
+    they are the stale panel cards.
     """
     from apps.stations.models import StationAuditLog
 
@@ -200,9 +202,47 @@ def _carry_over_moved(station, tracked_rows, before):
         src, dest = (prev[0], prev[1]), (str(sm.slot), sm.module_id)
         if src != dest:
             moves.append((sm, tracked, src, dest, prev[2]))
-    if not moves:
-        return
+    if moves:
+        _move_settings(station, moves)
 
+    # Rows of a module reported (once) elsewhere are stale cards — also when the move
+    # itself happened before this snapshot (e.g. before this cleanup was deployed).
+    moved_from = {m[1].id: m[2] for m in moves}
+    single = [(sm, tracked) for sm, tracked in tracked_rows if counts[tracked.id] == 1]
+    stale_by_module = {}
+    for row in StationModule.objects.filter(
+        station=station, tracked_module_id__in=[t.id for _, t in single]
+    ).exclude(pk__in=reported_pks):
+        stale_by_module.setdefault(row.tracked_module_id, []).append(row)
+    for sm, tracked in single:
+        stale = stale_by_module.get(tracked.id, [])
+        removed = [f"{row.slot}/{row.module_id}" for row in stale]
+        src = moved_from.get(tracked.id)
+        if not removed and src is None:
+            continue
+        StationModule.objects.filter(pk__in=[row.pk for row in stale]).delete()
+        if src is not None:
+            message = (
+                f"Control panel: module {tracked.uid} moved from slot {src[0]} to slot "
+                f"{sm.slot}; settings carried over."
+            )
+            if removed:
+                message += f" Stale entry {', '.join(removed)} removed."
+        else:
+            message = (
+                f"Control panel: removed stale entry {', '.join(removed)} of module "
+                f"{tracked.uid} (now in slot {sm.slot})."
+            )
+        StationAuditLog.log(
+            station=station,
+            module=tracked,
+            event_type=StationAuditLog.EventType.MODULE_SWAPPED,
+            message=message,
+        )
+
+
+def _move_settings(station, moves):
+    """Rewrite calibration + merge ``last_state`` for ``moves`` (see _carry_over_moved)."""
     calibration = {}
     for row in PersistedCapability.objects.filter(station=station):
         calibration.setdefault((row.slot, row.module_id), []).append(row)
@@ -225,7 +265,7 @@ def _carry_over_moved(station, tracked_rows, before):
         ]
     )
 
-    for sm, tracked, src, dest, prev_state in moves:
+    for sm, _, src, _, prev_state in moves:
         # Persisted caps are NOT carried over: the re-apply restores them, and a copied
         # value would make the deferred retry (which diffs against last_state) see no
         # drift and skip the restore.
@@ -239,23 +279,6 @@ def _carry_over_moved(station, tracked_rows, before):
         if merged != sm.last_state:
             sm.last_state = merged
             sm.save(update_fields=["last_state", "updated_at"])
-        stale = StationModule.objects.filter(station=station, tracked_module=tracked).exclude(
-            pk__in=reported_pks
-        )
-        removed = [f"{row.slot}/{row.module_id}" for row in stale]
-        stale.delete()
-        message = (
-            f"Control panel: module {tracked.uid} moved from slot {src[0]} to slot "
-            f"{dest[0]}; settings carried over."
-        )
-        if removed:
-            message += f" Stale entry {', '.join(removed)} removed."
-        StationAuditLog.log(
-            station=station,
-            module=tracked,
-            event_type=StationAuditLog.EventType.MODULE_SWAPPED,
-            message=message,
-        )
 
 
 def _prune_expired(station, now):

@@ -478,3 +478,44 @@ def test_replug_does_not_carry_persisted_cap_into_last_state(fm_type, station):
     ]
     frames = persistence.reapply_frames(station, slots)
     assert [(f["slot"], f["capability"], f["value"]) for f in frames] == [("slot2", "volume", 3)]
+
+
+@pytest.mark.django_db
+def test_stale_row_from_earlier_move_is_removed(fm_type, station):
+    """The module moved before this cleanup existed: it is already online in slot2 and
+    its old slot1 row lingers offline. The next snapshot removes the stale card."""
+    registry.apply_inventory(station, _inv(slot2=[_fm()]))
+    tracked = StationModule.objects.get(station=station, slot="slot2").tracked_module
+    stale = StationModule.objects.create(
+        station=station, slot="slot1", module_id="fm", tracked_module=tracked
+    )
+    _set_age(stale, timedelta(hours=1))
+    _calibrate(station, "slot2", 5)
+
+    registry.apply_inventory(station, _inv(slot2=[_fm()]))
+
+    assert not StationModule.objects.filter(pk=stale.pk).exists()
+    assert _calibration(station) == [("slot2", "volume", 5)]  # no move, untouched
+    assert StationAuditLog.objects.filter(
+        station=station, message__icontains="removed stale entry slot1/fm"
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_migration_flags_existing_offline_rows(station):
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    migration = importlib.import_module(
+        "apps.control.migrations.0008_stationmodule_offline_with_station"
+    )
+    off = StationModule.objects.create(station=station, slot="slot1", module_id="fm")
+    on = StationModule.objects.create(station=station, slot="slot2", module_id="fm", online=True)
+
+    migration.flag_existing_offline_rows(django_apps, None)
+
+    off.refresh_from_db()
+    on.refresh_from_db()
+    assert off.offline_with_station is True
+    assert on.offline_with_station is False

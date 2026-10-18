@@ -3,6 +3,14 @@
 from django.db import migrations, models
 
 
+def flag_existing_offline_rows(apps, schema_editor):
+    # Rows already offline at deploy carry a pre-cleanup ``last_seen`` (last inventory
+    # frame, possibly weeks old): treat them like an outage so the stale-module TTL
+    # restarts at the next non-empty snapshot instead of pruning them right away.
+    StationModule = apps.get_model("control", "StationModule")
+    StationModule.objects.filter(online=False).update(offline_with_station=True)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -15,4 +23,5 @@ class Migration(migrations.Migration):
             name='offline_with_station',
             field=models.BooleanField(default=False, verbose_name='offline with station'),
         ),
+        migrations.RunPython(flag_existing_offline_rows, migrations.RunPython.noop),
     ]
