@@ -49,7 +49,12 @@
           {% endif %}
         </td>
         <td data-label="{% trans 'Variants' %}">
-          {% if row.state == "no_assets" %}
+          {% if row.state == "invalid_tag" %}
+            <span class="pill pill-muted">{% trans "UNSUPPORTED TAG" %}</span>
+            <span class="fw-gh-hint t-muted">
+              {% trans "Tags may only contain letters, digits, '.', '_' and '-' (max 64 characters)." %}
+            </span>
+          {% elif row.state == "no_assets" %}
             <span class="pill pill-muted">{% trans "NO FIRMWARE ASSETS" %}</span>
             <span class="fw-gh-hint t-muted">
               {% blocktrans with prefix=module_type.release_asset_prefix %}Expected assets named {{ prefix }}-&lt;variant&gt;.signed.bin + .bundle{% endblocktrans %}
@@ -81,7 +86,7 @@
             <span class="pill pill-pending"><span class="dot"></span>{% trans "QUEUED" %}</span>
           {% elif row.state == "imported" %}
             <span class="pill pill-online"><span class="dot"></span>{% trans "IMPORTED" %}</span>
-          {% elif row.state == "no_assets" %}
+          {% elif row.state == "no_assets" or row.state == "invalid_tag" %}
             <span class="t-mono-sm t-muted">—</span>
           {% endif %}
         </td>

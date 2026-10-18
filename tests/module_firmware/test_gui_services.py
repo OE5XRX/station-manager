@@ -216,7 +216,9 @@ def test_release_quarantine_noop_when_module_not_quarantined(fm, station_factory
     ).exists()
 
 
-def test_release_quarantine_noop_without_desired_release(fm, station_factory, user):
+def test_release_quarantine_without_desired_release_releases_latest(fm, station_factory, user):
+    # No desired release (no target): the row the GUI shows (latest quarantined)
+    # is the row that gets released, and the rollup self-heals.
     st = station_factory()
     m = Module.objects.create(
         uid="ND",
@@ -226,9 +228,36 @@ def test_release_quarantine_noop_without_desired_release(fm, station_factory, us
     )
     ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
     stale = _quarantined_state(m, _release(fm))  # no target -> no desired release
-    assert services.release_quarantine(m, user=user) == []
+    assert services.current_quarantine(m) == stale
+    assert services.release_quarantine(m, user=user) == [stale.target_release.version]
     stale.refresh_from_db()
-    assert stale.state == ModuleFirmwareConvergenceState.State.QUARANTINED
-    assert not StationAuditLog.objects.filter(
-        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
-    ).exists()
+    assert stale.state == ModuleFirmwareConvergenceState.State.UPDATING
+    m.refresh_from_db()
+    assert m.firmware_convergence != Module.Convergence.QUARANTINED
+
+
+def test_current_quarantine_none_unless_rollup_quarantined(fm, station_factory):
+    st = station_factory()
+    m = Module.objects.create(
+        uid="CQ", module_type=fm, variant="vhf", firmware_convergence=Module.Convergence.OK
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    _quarantined_state(m, _release(fm))
+    assert services.current_quarantine(m) is None
+
+
+def test_current_quarantine_prefers_desired_release(fm, station_factory):
+    st = station_factory()
+    m = Module.objects.create(
+        uid="CQ2",
+        module_type=fm,
+        variant="vhf",
+        firmware_convergence=Module.Convergence.QUARANTINED,
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    v2 = _release(fm, version="26.09.15-01")
+    v1 = _release(fm, version="26.09.01-01")
+    _fleet_target(fm, version=v2.version)
+    cur = _quarantined_state(m, v2)
+    _quarantined_state(m, v1)  # newer row, but not the desired release
+    assert services.current_quarantine(m) == cur

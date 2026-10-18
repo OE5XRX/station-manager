@@ -334,11 +334,15 @@ class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
                 set(rel.asset_names), module_type.release_asset_prefix
             )
             variants = [va.variant for va in parsed_variants]
-            # no_assets first: a release with no matching asset pair can never
-            # import, whatever job history it has.  A tag is only "imported"
+            # invalid_tag first: FirmwareImportView refuses such a tag, so it
+            # must never get an Import button.  Then no_assets: a release with
+            # no matching asset pair can never import, whatever job history it
+            # has.  A tag is only "imported"
             # once EVERY variant it offers has an active row; a
             # partial import stays importable so the operator can fill the gap.
-            if not parsed_variants:
+            if not is_valid_tag(rel.tag):
+                state = "invalid_tag"
+            elif not parsed_variants:
                 state = "no_assets"
             elif all((rel.tag, v) in existing for v in variants):
                 state = "imported"

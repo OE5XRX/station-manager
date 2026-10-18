@@ -11,7 +11,7 @@ from django.db import transaction
 from apps.stations.models import StationAuditLog
 
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
-from .reconciler import desired_release_for_module, reconcile_module
+from .reconciler import effective_target, reconcile_module
 
 logger = logging.getLogger(__name__)
 
@@ -90,50 +90,98 @@ def reconcile_module_type(module_type):
     return ok
 
 
-@transaction.atomic
-def release_quarantine(module, *, user, ip_address=None):
-    """Release the quarantine of ``module``'s CURRENT target for retry.
+_UNSET = object()
 
-    Only acts when the module's rollup is QUARANTINED, and only on the
-    quarantined row whose target_release is the module's current desired
-    release — stale quarantined rows of old targets stay untouched.
 
-    Lock order module → convergence states (same as the reconciler). Returns
-    the released target versions; an empty list means nothing to release
-    (no-op, no audit)."""
-    locked = Module.objects.select_for_update().get(pk=module.pk)
-    if locked.firmware_convergence != Module.Convergence.QUARANTINED:
-        return []
-    desired = desired_release_for_module(locked)
-    if desired is None:
-        return []
-    states = list(
-        ModuleFirmwareConvergenceState.objects.select_for_update()
-        .filter(
-            module=locked,
-            target_release=desired,
-            state=ModuleFirmwareConvergenceState.State.QUARANTINED,
+def quarantined_states_qs():
+    """All QUARANTINED convergence rows, latest first (the GUI's fallback order)."""
+    return (
+        ModuleFirmwareConvergenceState.objects.filter(
+            state=ModuleFirmwareConvergenceState.State.QUARANTINED
         )
         .select_related("target_release")
+        .order_by("-updated_at", "-pk")
     )
+
+
+def _open_assignment_target(module):
+    assignment = (
+        ModuleAssignmentHistory.objects.filter(module=module, to_ts__isnull=True)
+        .select_related("station")
+        .first()
+    )
+    if assignment is None or assignment.station is None:
+        return None
+    return effective_target(assignment.station, module.module_type)
+
+
+def current_quarantine(module, *, states=None, target=_UNSET):
+    """The single live quarantine of ``module`` — the row the GUI shows AND the
+    row ``release_quarantine`` releases (one source of truth).
+
+    None unless the module's rollup is QUARANTINED (older QUARANTINED rows
+    survive a fix-by-new-target and must not count). Otherwise the QUARANTINED
+    row for the current desired release when one exists, else the latest
+    QUARANTINED row (e.g. the module lost its assignment and ingest has not
+    reconciled yet).
+
+    ``states``: optional pre-fetched QUARANTINED rows of this module, latest
+    first (see ``quarantined_states_qs``). ``target``: optional pre-resolved
+    effective ModuleFirmwareTarget (None = no target); resolved from the open
+    assignment when omitted."""
+    if module.firmware_convergence != Module.Convergence.QUARANTINED:
+        return None
+    if states is None:
+        states = list(quarantined_states_qs().filter(module=module))
     if not states:
+        return None
+    if target is _UNSET:
+        target = _open_assignment_target(module)
+    if target is not None:
+        for cs in states:
+            rel = cs.target_release
+            if (
+                rel.module_type_id == module.module_type_id
+                and rel.variant == module.variant
+                and rel.version == target.version
+            ):
+                return cs
+    return states[0]
+
+
+@transaction.atomic
+def release_quarantine(module, *, user, ip_address=None):
+    """Release ``module``'s live quarantine (``current_quarantine``) for retry.
+
+    Acts only while the rollup is QUARANTINED and only on the row
+    ``current_quarantine`` picks — the very row the GUI shows — so stale
+    quarantined rows of old targets stay untouched. Always reconciles after
+    releasing so the rollup self-heals (an unassigned module drops out of
+    QUARANTINED).
+
+    Lock order module → convergence states (same as the reconciler); the pick
+    is re-read inside the transaction under the module lock. Returns the
+    released target versions; an empty list means nothing to release (no-op,
+    no audit)."""
+    locked = Module.objects.select_for_update().get(pk=module.pk)
+    states = list(quarantined_states_qs().filter(module=locked).select_for_update(of=("self",)))
+    picked = current_quarantine(locked, states=states)
+    if picked is None:
         return []
-    versions = []
-    for cs in states:
-        cs.state = ModuleFirmwareConvergenceState.State.UPDATING
-        cs.attempts = 0
-        cs.last_error_mode = ""
-        cs.last_error_message = ""
-        cs.save(
-            update_fields=[
-                "state",
-                "attempts",
-                "last_error_mode",
-                "last_error_message",
-                "updated_at",
-            ]
-        )
-        versions.append(cs.target_release.version)
+    picked.state = ModuleFirmwareConvergenceState.State.UPDATING
+    picked.attempts = 0
+    picked.last_error_mode = ""
+    picked.last_error_message = ""
+    picked.save(
+        update_fields=[
+            "state",
+            "attempts",
+            "last_error_mode",
+            "last_error_message",
+            "updated_at",
+        ]
+    )
+    versions = [picked.target_release.version]
     reconcile_module(locked)
     open_assignment = (
         ModuleAssignmentHistory.objects.filter(module=locked, to_ts__isnull=True)

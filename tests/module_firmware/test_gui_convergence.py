@@ -384,3 +384,34 @@ def test_release_quarantine_view_noop_when_not_quarantined(client, staff, fm, st
     assert not StationAuditLog.objects.filter(
         event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
     ).exists()
+
+
+def test_release_quarantine_unassigned_module(client, staff, fm, station_factory):
+    """Ingest closed the assignment without reconciling: rollup stays
+    QUARANTINED, the button shows (latest-row fallback) — and the POST must
+    release that very row and let the rollup self-heal."""
+    st = station_factory()
+    rel = _release(fm)
+    ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    m = _module(fm, st, uid="UNASSIGNED")
+    cs = _quarantine(m, rel)
+    ModuleAssignmentHistory.objects.filter(module=m).update(to_ts=timezone.now())
+    client.force_login(staff)
+    release_url = reverse("module_firmware:module_release_quarantine", args=["UNASSIGNED"])
+
+    overview = client.get(reverse("module_firmware:convergence"))
+    assert overview.context["rows"][0]["quarantine"] == cs
+    assert release_url in overview.content.decode()
+
+    resp = client.post(release_url, follow=True)
+    assert [msg.level_tag for msg in resp.context["messages"]] == ["success"]
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING
+    m.refresh_from_db()
+    assert m.firmware_convergence != Module.Convergence.QUARANTINED
+    row = StationAuditLog.objects.get(
+        event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED
+    )
+    assert row.module == m
+    assert row.user == staff
+    assert row.station is None

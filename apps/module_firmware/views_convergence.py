@@ -18,27 +18,16 @@ from . import services
 from .models import (
     Module,
     ModuleAssignmentHistory,
-    ModuleFirmwareConvergenceState,
     ModuleFirmwareRelease,
     ModuleType,
 )
 from .reconciler import effective_target
-
-_QUARANTINED = ModuleFirmwareConvergenceState.State.QUARANTINED
 
 
 def is_int_param(value):
     """ASCII-digits-only query param guard. ``str.isdigit()`` also accepts
     Unicode digits like '²', which ``int()`` then rejects (500)."""
     return value.isascii() and value.isdecimal()
-
-
-def _quarantined_states_qs():
-    return (
-        ModuleFirmwareConvergenceState.objects.filter(state=_QUARANTINED)
-        .select_related("target_release")
-        .order_by("-updated_at")
-    )
 
 
 def firmware_row(module, assignment, *, release_keys=None):
@@ -49,9 +38,10 @@ def firmware_row(module, assignment, *, release_keys=None):
     the module's variant at the target version exists. ``quarantine``: only
     while the module's rollup is QUARANTINED — the QUARANTINED convergence
     state for the current target release, falling back to the latest; else
-    None. Uses a ``quarantined_states`` prefetch (to_attr) on ``module`` when present, and
-    a precomputed ``release_keys`` set of active (module_type_id, variant,
-    version) tuples instead of a per-row EXISTS query when given."""
+    None (``services.current_quarantine``). Uses a ``quarantined_states``
+    prefetch (to_attr) on ``module`` when present, and a precomputed
+    ``release_keys`` set of active (module_type_id, variant, version) tuples
+    instead of a per-row EXISTS query when given."""
     target = None
     if assignment is not None and assignment.station is not None:
         target = effective_target(assignment.station, module.module_type)
@@ -65,24 +55,11 @@ def firmware_row(module, assignment, *, release_keys=None):
             variant=module.variant,
             version=target.version,
         ).exists()
-    quarantine = None
-    # Only a module whose rollup IS quarantined has a live quarantine. Older
-    # QUARANTINED rows survive a fix-by-new-target (the reconciler never
-    # touches them), so without this gate a healed module would still show —
-    # and offer to release — a stale quarantine.
-    if module.firmware_convergence == Module.Convergence.QUARANTINED:
-        states = getattr(module, "quarantined_states", None)
-        if states is None:
-            states = list(_quarantined_states_qs().filter(module=module))
-        # Prefer the row for the current desired release; else the latest.
-        current = [
-            cs
-            for cs in states
-            if target is not None
-            and cs.target_release.version == target.version
-            and cs.target_release.variant == module.variant
-        ]
-        quarantine = (current or states or [None])[0]
+    # Same row selection as release_quarantine (services.current_quarantine),
+    # so the shown Release button always acts on the shown row.
+    quarantine = services.current_quarantine(
+        module, states=getattr(module, "quarantined_states", None), target=target
+    )
     return {"target": target, "has_release": has_release, "quarantine": quarantine}
 
 
@@ -101,7 +78,7 @@ class ConvergenceOverviewView(AreaPermissionMixin, ListView):
             Prefetch("assignments", queryset=open_assignments, to_attr="open_assignments"),
             Prefetch(
                 "convergence_states",
-                queryset=_quarantined_states_qs(),
+                queryset=services.quarantined_states_qs(),
                 to_attr="quarantined_states",
             ),
         )

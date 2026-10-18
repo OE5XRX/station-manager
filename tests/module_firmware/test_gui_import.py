@@ -490,3 +490,20 @@ def test_module_list_unicode_digit_station_filter(client, viewer, db):
     client.force_login(viewer)
     resp = client.get(reverse("module_firmware:module_list"), {"station": "²"})
     assert resp.status_code == 200
+
+
+@pytest.mark.parametrize("tag", ["v1.0+build", "release/1.0"])
+def test_gh_partial_invalid_tag_not_importable(client, staff, fm, tag):
+    # A tag is_valid_tag refuses must not be offered for import (the POST
+    # would only answer "Invalid release tag") — invalid_tag beats every state.
+    ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag=tag, requested_by=staff
+    )
+    rel = _gh_release(tag, "fm-sa818-vhf.signed.bin")
+    client.force_login(staff)
+    with mock.patch(GH_FETCH, return_value=[rel]):
+        resp = client.get(reverse("module_firmware:gh_partial") + f"?module_type={fm.pk}")
+    assert resp.context["rows"][0]["state"] == "invalid_tag"
+    body = resp.content.decode()
+    assert 'name="tag"' not in body
+    assert "max 64 characters" in body
