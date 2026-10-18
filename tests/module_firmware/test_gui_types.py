@@ -159,3 +159,13 @@ def test_type_delete_blocked_by_archived_release(client, staff, mtype):
     client.force_login(staff)
     client.post(reverse("module_firmware:type_delete", args=[mtype.pk]))
     assert ModuleType.objects.filter(pk=mtype.pk).exists()
+
+
+def test_form_rejects_untrusted_owner_accepts_case_insensitive(db):
+    from apps.module_firmware.forms import ModuleTypeForm
+
+    bad = ModuleTypeForm(_post_data(firmware_repo="evil/FW"))
+    assert not bad.is_valid() and "firmware_repo" in bad.errors
+    assert "OE5XRX" in bad.errors["firmware_repo"][0]
+    ok = ModuleTypeForm(_post_data(firmware_repo="oe5xrx/FW-RemoteStation"))
+    assert ok.is_valid(), ok.errors

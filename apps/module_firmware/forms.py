@@ -5,6 +5,7 @@ from django.db.models import UniqueConstraint
 from django.utils.translation import gettext_lazy as _
 
 from .models import ModuleFirmwareRelease, ModuleFirmwareTarget, ModuleType
+from .trust import is_trusted_repo, trusted_owners
 
 repo_validator = RegexValidator(
     r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$",
@@ -35,6 +36,15 @@ class ModuleTypeForm(forms.ModelForm):
         self.fields["release_asset_prefix"].validators.append(prefix_validator)
         if self.instance and self.instance.pk:
             self.fields["key"].disabled = True
+
+    def clean_firmware_repo(self):
+        repo = self.cleaned_data.get("firmware_repo", "")
+        if repo and not is_trusted_repo(repo):
+            raise forms.ValidationError(
+                _("Firmware repo owner must be one of: %(owners)s."),
+                params={"owners": ", ".join(trusted_owners())},
+            )
+        return repo
 
 
 def release_value(module_type_id, version):

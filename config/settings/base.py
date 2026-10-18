@@ -372,3 +372,11 @@ OAUTH2_PROVIDER_ACCESS_TOKEN_MODEL = "oauth2_provider.AccessToken"
 OAUTH2_PROVIDER_ID_TOKEN_MODEL = "oauth2_provider.IDToken"
 OAUTH2_PROVIDER_GRANT_MODEL = "oauth2_provider.Grant"
 OAUTH2_PROVIDER_REFRESH_TOKEN_MODEL = "oauth2_provider.RefreshToken"
+
+# Firmware signer trust root: only repos owned by these GitHub owners may be set as a
+# module type's firmware_repo or imported from (case-insensitive, comma-separated env).
+MODULE_FIRMWARE_TRUSTED_REPO_OWNERS = [
+    o.strip()
+    for o in os.environ.get("MODULE_FIRMWARE_TRUSTED_REPO_OWNERS", "OE5XRX").split(",")
+    if o.strip()
+]
