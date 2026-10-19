@@ -428,11 +428,37 @@
   });
 
   // ---------------------------------------------------------------------------
+  // Scope toggle (firmware target form): show only the fields that belong to
+  // the selected scope. Hidden selects are disabled so stale values aren't
+  // submitted; without JS all fields stay visible and the server validates.
+  // ---------------------------------------------------------------------------
+  function applyScope(sel) {
+    var form = sel.closest("form");
+    if (!form) return;
+    var scope = sel.value;
+    form.querySelectorAll("[data-scope-field]").forEach(function (field) {
+      var name = field.getAttribute("data-scope-field");
+      var show = name === "canary_tag" ? scope === "fleet" : name === scope;
+      var group = field.closest(".form-group") || field;
+      group.hidden = !show;
+      field.disabled = !show;
+    });
+  }
+  document.addEventListener("change", function (e) {
+    var sel = e.target.closest("[data-scope-select]");
+    if (sel) applyScope(sel);
+  });
+  function initScopeSelects() {
+    document.querySelectorAll("[data-scope-select]").forEach(applyScope);
+  }
+
+  // ---------------------------------------------------------------------------
   // Boot
   // ---------------------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", function () {
     connectStationsWS();
     connectDeploymentsWS();
     initTerminal();
+    initScopeSelects();
   });
 })();

@@ -1,0 +1,65 @@
+{% load i18n %}
+{% comment %}
+  HTMX partial: last 20 firmware import jobs (ImportJobsPartialView).
+  Included by release_list.html and re-fetched by itself. The wrapper only
+  carries the polling attributes while a job is pending/running, so polling
+  stops on its own once the queue drains (the outerHTML swap replaces the
+  polling element with a non-polling one).
+{% endcomment %}
+<div id="fw-import-jobs" class="panel-body"
+     {% if has_active %}hx-get="{% url 'module_firmware:import_jobs' %}" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+  {% if polled and not has_active %}
+  <div class="onboarding-hint" role="status">
+    <div class="onboarding-hint-text">
+      {% trans "All imports have finished." %}
+      <a href="{% url 'module_firmware:release_list' %}">{% trans "Reload to see the imported releases" %}</a>
+    </div>
+  </div>
+  {% endif %}
+  {% if jobs %}
+  <ul class="timeline">
+    {% for job in jobs %}
+    <li data-type="{% if job.status == 'failed' %}incident{% elif job.status == 'ready' %}update{% elif job.status == 'running' %}deployment{% else %}note{% endif %}">
+      <div class="tl-head row-split">
+        <span class="row-gap-8">
+          <span class="tl-title t-mono">{{ job.tag }}</span>
+          <span class="t-mono-sm t-muted">{{ job.module_type.display_name }}</span>
+        </span>
+        {% if job.status == "ready" %}
+          <span class="pill pill-online"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+        {% elif job.status == "failed" %}
+          <span class="pill pill-failed"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+        {% elif job.status == "running" %}
+          <span class="pill pill-in-progress"><span class="dot"></span>{{ job.get_status_display|upper }}</span>
+        {% else %}
+          <span class="pill pill-pending">{{ job.get_status_display|upper }}</span>
+        {% endif %}
+      </div>
+      <div class="tl-meta">
+        {{ job.created_at|date:"Y-m-d H:i" }}
+        {% if job.requested_by %} · {{ job.requested_by.username }}{% endif %}
+        {% if job.completed_at %} · {% blocktrans with since=job.completed_at|timesince %}done {{ since }} ago{% endblocktrans %}{% endif %}
+      </div>
+      {% if job.status == "ready" and job.release %}
+      <div class="row-gap-8 mt-10">
+        <span class="t-mono-sm t-muted">{% trans "Imported version" %}</span>
+        <span class="tag t-mono">{{ job.release.version }}</span>
+      </div>
+      {% endif %}
+      {% if job.error_message %}
+      <div class="tl-message t-danger t-mono-sm mt-10">{{ job.error_message }}</div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty">
+    <div class="empty-icon">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+      </svg>
+    </div>
+    <div class="empty-title">{% trans "No import jobs yet" %}</div>
+  </div>
+  {% endif %}
+</div>

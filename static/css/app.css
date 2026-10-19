@@ -1780,3 +1780,49 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
 }
 .onboarding-hint-icon { flex: 0 0 auto; line-height: 1.4; }
 .onboarding-hint-text { flex: 1; line-height: 1.4; }
+
+/* ---------------------------------------------------------------------------
+   Module firmware — import setup hints + GitHub variant preview
+   --------------------------------------------------------------------------- */
+.fw-setup-list { list-style: none; padding: 0; margin: 10px 0 0; }
+.fw-setup-list li { padding: 8px 0; border-top: 1px solid var(--line); }
+.fw-variants { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.fw-gh-hint { display: block; margin-top: 4px; font-size: 11.5px; }
+
+/* ---------------------------------------------------------------------------
+   Module firmware — convergence overview + module-detail firmware panel
+   --------------------------------------------------------------------------- */
+.fw-kpi { color: inherit; text-decoration: none; }
+.fw-kpi.is-active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.fw-kpi:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fw-filter-select { width: auto; min-width: 150px; }
+.fw-uid-link { color: inherit; text-decoration: none; }
+.fw-uid-link:hover { text-decoration: underline; }
+.fw-version {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-0);
+}
+.fw-version-match { color: var(--signal); }
+.fw-target { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fw-hint { display: block; margin-top: 4px; font-size: 11.5px; color: var(--ink-2); }
+.fw-hint-warn { color: var(--warn); }
+.fw-quarantine {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--danger);
+  background: var(--danger-soft);
+  border-radius: 0 4px 4px 0;
+  font-size: 12.5px;
+  color: var(--ink-1);
+  max-width: 60ch;
+}
+.fw-quarantine-meta { font-family: var(--font-mono); font-size: 11.5px; color: var(--danger); }
+.fw-quarantine-msg { margin-top: 4px; overflow-wrap: anywhere; }
+.fw-quarantine-form { margin: 8px 0 0; }
+.fw-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}

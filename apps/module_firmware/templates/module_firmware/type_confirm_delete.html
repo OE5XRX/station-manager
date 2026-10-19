@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Delete module type" %} {{ mtype.key }}{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'module_firmware:type_list' %}">{% trans "Module types" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Delete" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow t-danger">{% trans "Danger zone" %}</div>
+  <h1 class="page-title">{% trans "Delete module type" %}</h1>
+  {% if in_use %}
+  <p class="page-sub">{% blocktrans with name=mtype.display_name %}"{{ name }}" is still referenced by modules, firmware releases (including archived ones) or rollout targets. Remove or reassign those first; the type cannot be deleted while it is in use.{% endblocktrans %}</p>
+  {% else %}
+  <p class="page-sub">{% blocktrans with name=mtype.display_name %}Delete module type "{{ name }}"? Nothing references it.{% endblocktrans %}</p>
+  {% endif %}
+</div></div>
+<form method="post" class="panel" style="max-width:520px;border-left:3px solid var(--danger);">
+  {% csrf_token %}
+  <div class="panel-body"><span class="t-mono">{{ mtype.key }}</span></div>
+  <div class="panel-foot row-gap-8">
+    {% if not in_use %}
+    <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Delete this module type?' %}">{% trans "Delete" %}</button>
+    {% endif %}
+    <a href="{% url 'module_firmware:type_list' %}" class="btn btn-ghost">{% trans "Back" %}</a>
+  </div>
+</form>
+{% endblock %}

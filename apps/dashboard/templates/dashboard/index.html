@@ -86,7 +86,7 @@
           <a href="{% url 'module_firmware:module_list' %}" class="t-mono stat-warn">{% blocktrans count n=module_stats.attention %}{{ n }} needs attention{% plural %}{{ n }} need attention{% endblocktrans %} →</a>
         {% endif %}
         {% if module_stats.quarantined > 0 %}
-          <a href="{% url 'module_firmware:module_list' %}" class="t-mono stat-warn">{% blocktrans count n=module_stats.quarantined %}{{ n }} quarantined{% plural %}{{ n }} quarantined{% endblocktrans %} →</a>
+          <a href="{% url 'module_firmware:convergence' %}?state=quarantined" class="t-mono stat-warn">{% blocktrans count n=module_stats.quarantined %}{{ n }} quarantined{% plural %}{{ n }} quarantined{% endblocktrans %} →</a>
         {% endif %}
         {% if module_stats.unregistered > 0 %}
           <a href="{% url 'module_firmware:module_list' %}?registration=unregistered" class="t-mono">{% blocktrans count n=module_stats.unregistered %}{{ n }} unregistered{% plural %}{{ n }} unregistered{% endblocktrans %} →</a>

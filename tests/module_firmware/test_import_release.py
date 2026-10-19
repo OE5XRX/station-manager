@@ -367,3 +367,23 @@ def test_cosign_failure_marks_job_failed_no_rows_no_uploads(fm):
     assert ModuleFirmwareRelease.objects.count() == 0
     # Stage loop aborts at verify step — no upload ever reached
     mock_upload.assert_not_called()
+
+
+def test_untrusted_source_repo_fails_before_download(fm):
+    from unittest import mock as m
+
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo="evil/FW", tag="26.07.04-01"
+    )
+    with (
+        m.patch("apps.module_firmware.releases.fetch_release_by_tag") as fetch,
+        m.patch("apps.module_firmware.releases._download") as dl,
+        m.patch("apps.module_firmware.releases.verify_blob_identity") as vbi,
+    ):
+        releases.import_release_tag(job)
+    job.refresh_from_db()
+    assert job.status == ModuleFirmwareImportJob.Status.FAILED
+    assert "trusted" in job.error_message
+    fetch.assert_not_called()
+    dl.assert_not_called()
+    vbi.assert_not_called()

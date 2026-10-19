@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Firmware convergence" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Firmware convergence" %}</span>
+{% endblock %}
+
+{% block content %}
+<div>
+
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">{% trans "Fleet" %} · {% trans "Firmware library" %}</div>
+      <h1 class="page-title">{% trans "Firmware convergence" %}</h1>
+      <p class="page-sub">{% trans "What each module runs compared with the firmware it should run. A module that failed the same update three times is quarantined and is not retried until you release it." %}</p>
+    </div>
+    <div class="page-head-actions">
+      {% if not can.modules.manage %}{% include "includes/readonly_badge.html" %}{% endif %}
+      <a href="{% url 'module_firmware:target_list' %}" class="btn btn-ghost">{% trans "Firmware targets" %}</a>
+    </div>
+  </div>
+
+  {% comment %}
+  KPI cards double as state filters: click a count to see those modules,
+  click the active one again to clear the filter.
+  {% endcomment %}
+  <nav class="grid grid-kpi mb-24" aria-label="{% trans 'Filter by convergence state' %}">
+    {% for value, label, n in kpi_list %}
+    <a class="stat fw-kpi{% if filters.state == value %} is-active{% endif %}"
+       href="{% if filters.state == value %}?{% else %}?state={{ value }}{% endif %}"
+       {% if filters.state == value %}aria-current="true"{% endif %}>
+      <div class="stat-label">{{ label }}</div>
+      <div class="stat-value{% if n %}{% if value == 'ok' %} stat-ok{% elif value == 'updating' %} stat-accent{% elif value == 'quarantined' %} stat-danger{% endif %}{% endif %}">{{ n }}</div>
+    </a>
+    {% endfor %}
+  </nav>
+
+  <form class="filter-bar" method="get">
+    <div class="search">
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="{% trans 'Search by UID…' %}" aria-label="{% trans 'Search modules by UID' %}">
+    </div>
+    <select name="type" class="form-select fw-filter-select" aria-label="{% trans 'Type' %}">
+      <option value="">{% trans "All types" %}</option>
+      {% for t in types %}
+        <option value="{{ t.key }}" {% if filters.type == t.key %}selected{% endif %}>{{ t.display_name }}</option>
+      {% endfor %}
+    </select>
+    <select name="state" class="form-select fw-filter-select" aria-label="{% trans 'Convergence state' %}">
+      <option value="">{% trans "All states" %}</option>
+      {% for value, label in states %}
+        <option value="{{ value }}" {% if filters.state == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {% if stations %}
+    <select name="station" class="form-select fw-filter-select" aria-label="{% trans 'Station' %}">
+      <option value="">{% trans "All stations" %}</option>
+      {% for s in stations %}
+        <option value="{{ s.pk }}" {% if filters.station == s.pk|stringformat:'s' %}selected{% endif %}>{{ s.callsign|default:s.name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button type="submit" class="btn">{% trans "Filter" %}</button>
+  </form>
+
+  {% if rows %}
+  <div class="table-wrap" data-mobile-cards>
+    <table class="t-table">
+      <thead>
+        <tr>
+          <th>{% trans "UID" %}</th>
+          <th>{% trans "Type / variant" %}</th>
+          <th>{% trans "Location" %}</th>
+          <th>{% trans "Running" %}</th>
+          <th>{% trans "Target" %}</th>
+          <th>{% trans "State" %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% with module=row.module a=row.assignment %}
+        <tr>
+          <td data-primary data-label="{% trans 'UID' %}">
+            <a href="{% url 'module_firmware:module_detail' module.uid %}" class="t-mono fw-uid-link">{{ module.uid }}</a>
+          </td>
+          <td data-label="{% trans 'Type / variant' %}">
+            {{ module.module_type.display_name }}
+            {% if module.variant %}<span class="t-mono-sm t-muted">{{ module.variant }}</span>{% endif %}
+          </td>
+          <td data-label="{% trans 'Location' %}">
+            {% if a and a.station %}
+              <a href="{% url 'stations:station_detail' a.station.pk %}" class="fw-uid-link">{{ a.station.callsign|default:a.station.name }}</a>
+              <span class="t-mono-sm t-muted">{{ a.slot }}</span>
+            {% else %}
+              <span class="t-muted">—</span>
+            {% endif %}
+          </td>
+          <td data-label="{% trans 'Running' %}">
+            <span class="fw-version{% if row.target and module.last_reported_version == row.target.version %} fw-version-match{% endif %}">{{ module.last_reported_version|default:"—" }}</span>
+          </td>
+          <td data-label="{% trans 'Target' %}">
+            {% include "module_firmware/_target_cell.html" with fw=row module=module %}
+          </td>
+          <td data-label="{% trans 'State' %}">
+            {% include "module_firmware/_convergence_pill.html" with module=module %}
+            {% if row.quarantine %}
+              {% include "module_firmware/_quarantine_note.html" with module=module quarantine=row.quarantine next=request.get_full_path %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endwith %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "module_firmware/_pagination.html" %}
+  {% else %}
+  <div class="panel">
+    <div class="empty">
+      <div class="empty-title">{% trans "No modules match those filters" %}</div>
+      <div>{% trans "Modules appear here once a station reports one. Try clearing the filters." %}</div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

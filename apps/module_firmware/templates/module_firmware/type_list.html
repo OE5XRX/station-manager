@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Module types" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Module types" %}</span>
+{% endblock %}
+
+{% block content %}
+<div>
+  <div class="page-head">
+    <div class="page-head-main">
+      <div class="page-eyebrow">{% trans "Fleet" %} · {% trans "Firmware library" %}</div>
+      <h1 class="page-title">{% trans "Module types" %}</h1>
+      <p class="page-sub">{% trans "Each type needs a firmware repo and asset prefix before its releases can be imported from GitHub." %}</p>
+    </div>
+    <div class="page-head-actions">
+      {% if can.modules.manage %}
+      <a href="{% url 'module_firmware:type_create' %}" class="btn btn-primary">{% trans "New module type" %}</a>
+      {% else %}
+      {% include "includes/readonly_badge.html" %}
+      {% endif %}
+    </div>
+  </div>
+
+  <section class="panel mb-24">
+    <div class="panel-body flush">
+    {% if types %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "Type" %}</th>
+            <th>{% trans "Firmware repo" %}</th>
+            <th>{% trans "Asset prefix" %}</th>
+            <th>{% trans "Import" %}</th>
+            <th class="num">{% trans "Modules" %}</th>
+            <th class="num">{% trans "Releases" %}</th>
+            <th class="num">{% trans "Targets" %}</th>
+            <th style="width:1%;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in types %}
+          <tr>
+            <td data-primary data-label="{% trans 'Type' %}">
+              <span style="font-weight:600;color:var(--ink-0);">{{ t.display_name }}</span>
+              <div class="t-mono-sm t-muted">{{ t.key }}</div>
+            </td>
+            <td class="t-mono" data-label="{% trans 'Firmware repo' %}">{{ t.firmware_repo|default:"—" }}</td>
+            <td class="t-mono" data-label="{% trans 'Asset prefix' %}">{{ t.release_asset_prefix|default:"—" }}</td>
+            <td data-label="{% trans 'Import' %}">
+              {% if not t.import_blockers %}
+              <span class="pill pill-success">{% trans "import-ready" %}</span>
+              {% else %}
+              <span class="pill pill-warn">{% trans "not ready" %}</span>
+              <div class="t-mono-sm t-muted">{{ t.import_blockers|join:", " }}</div>
+              {% endif %}
+            </td>
+            <td class="t-mono num" data-label="{% trans 'Modules' %}">{{ t.module_count }}</td>
+            <td class="t-mono num" data-label="{% trans 'Releases' %}">{{ t.release_count }}</td>
+            <td class="t-mono num" data-label="{% trans 'Targets' %}">{{ t.target_count }}</td>
+            <td class="actions">
+              {% if can.modules.manage %}
+              <a href="{% url 'module_firmware:type_update' t.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+              <a href="{% url 'module_firmware:type_delete' t.pk %}" class="btn btn-sm btn-ghost">{% trans "Delete" %}</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-title">{% trans "No module types yet" %}</div>
+      <div>{% trans "Create a module type to start importing firmware for it." %}</div>
+    </div>
+    {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

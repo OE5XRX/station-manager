@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ form_title }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:target_list' %}">{% trans "Firmware targets" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ form_title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Firmware library" %}</div>
+    <h1 class="page-title">{{ form_title }}</h1>
+    <p class="page-sub">{% trans "Pick a release and where it applies. Modules with an open assignment are re-evaluated as soon as you save." %}</p>
+  </div>
+</div>
+
+<form method="post" style="max-width:560px;">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <section class="panel">
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label" for="{{ form.release.id_for_label }}">{% trans "Firmware release" %}</label>
+        {{ form.release }}{{ form.release.errors }}
+        <div class="t-muted">{{ form.release.help_text }}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.scope.id_for_label }}">{% trans "Applies to" %}</label>
+        {{ form.scope }}{{ form.scope.errors }}
+        <div class="t-muted">{% trans "Station overrides beat tag overrides, which beat the fleet default." %}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.tag.id_for_label }}">{% trans "Tag" %}</label>
+        {{ form.tag }}{{ form.tag.errors }}
+        <div class="t-muted">{% trans "Only for a tag override." %}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.station.id_for_label }}">{% trans "Station" %}</label>
+        {{ form.station }}{{ form.station.errors }}
+        <div class="t-muted">{% trans "Only for a station override." %}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.canary_tag.id_for_label }}">{% trans "Canary tag" %}</label>
+        {{ form.canary_tag }}{{ form.canary_tag.errors }}
+        <div class="t-muted">{% trans "Optional, fleet default only. While set, the fleet default applies only to stations in this tag; clear it to roll out to the whole fleet." %}</div>
+      </div>
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-primary">{% trans "Save target" %}</button>
+      <a href="{% url 'module_firmware:target_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    </div>
+  </section>
+</form>
+{% endblock %}

@@ -116,7 +116,12 @@ AREAS: dict[str, Area] = {
         _("Module & Firmware"),
         view=A,
         manage=S,
-        verb_labels={"manage": _("Module bestätigen, Firmware importieren/archivieren")},
+        verb_labels={
+            "manage": _(
+                "Module bestätigen, Firmware importieren/archivieren, Modultypen, "
+                "Soll-Versionen, Quarantäne freigeben"
+            )
+        },
     ),
     "users": Area(
         _("Benutzer"), view=M, manage=AD, verb_labels={"manage": _("Benutzer verwalten")}

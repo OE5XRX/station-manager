@@ -1,0 +1,24 @@
+{% load i18n %}
+{% comment %}
+Effective firmware target for one module. Expects `fw` (firmware_row dict)
+and `module` in context.
+{% endcomment %}
+{% if fw.target %}
+  <span class="fw-target">
+    <span class="fw-version">{{ fw.target.version }}</span>
+    {% if fw.target.scope == "fleet" %}
+      <span class="pill pill-accent">{% if fw.target.canary_tag_id %}{% trans "Canary" %}{% else %}{% trans "Fleet" %}{% endif %}</span>
+    {% elif fw.target.scope == "tag" %}
+      <span class="pill pill-violet">{% trans "Tag" %} {{ fw.target.tag.name }}</span>
+    {% else %}
+      <span class="pill pill-muted">{% trans "Station" %}</span>
+    {% endif %}
+  </span>
+  {% if not fw.has_release %}
+    <span class="fw-hint fw-hint-warn" title="{% trans 'No imported release of this version exists for this module variant, so the module will not be updated.' %}">
+      {% blocktrans with variant=module.variant|default:"—" %}no release for variant {{ variant }}{% endblocktrans %}
+    </span>
+  {% endif %}
+{% else %}
+  <span class="t-muted">— {% trans "no target" %}</span>
+{% endif %}

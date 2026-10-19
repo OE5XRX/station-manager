@@ -1,0 +1,21 @@
+{% load i18n %}
+{% comment %}
+Quarantine details + release action. Expects `module`, `quarantine`
+(ModuleFirmwareConvergenceState) and optionally `next` in context.
+{% endcomment %}
+<div class="fw-quarantine">
+  <div class="fw-quarantine-meta">
+    {% blocktrans with version=quarantine.target_release.version attempts=quarantine.attempts %}{{ version }} failed {{ attempts }}×{% endblocktrans %}{% if quarantine.last_error_mode %}, {{ quarantine.get_last_error_mode_display|lower }}{% endif %}
+  </div>
+  {% if quarantine.last_error_message %}<div class="fw-quarantine-msg">{{ quarantine.last_error_message|truncatechars:240 }}</div>{% endif %}
+  {% if can.modules.manage %}
+  <form method="post"
+        action="{% url 'module_firmware:module_release_quarantine' module.uid %}"
+        class="fw-quarantine-form"
+        data-confirm="{% blocktrans with uid=module.uid %}Release the quarantine of {{ uid }}? The station will try the update again.{% endblocktrans %}">
+    {% csrf_token %}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    <button type="submit" class="btn btn-sm">{% trans "Release quarantine" %}</button>
+  </form>
+  {% endif %}
+</div>

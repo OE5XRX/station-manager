@@ -4,11 +4,16 @@ Kept separate from ingest.py: these are user-driven, audited with the acting
 user, and always allowed (including sticky lifecycle states).
 """
 
+import logging
+
 from django.db import transaction
 
 from apps.stations.models import StationAuditLog
 
-from .models import Module
+from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
+from .reconciler import effective_target, reconcile_module
+
+logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
@@ -67,3 +72,139 @@ def set_lifecycle(module, status, *, user):
         message=f"Lifecycle {old} → {status} for module {locked.uid}.",
         changes={"lifecycle_status": {"old": old, "new": status}},
     )
+
+
+def reconcile_module_type(module_type):
+    """Reconcile every module of ``module_type`` that has an open assignment.
+
+    Per-module failures are logged, not raised, so one bad module can't block
+    the rest. Returns the number reconciled without error."""
+    ok = 0
+    open_ids = ModuleAssignmentHistory.objects.filter(to_ts__isnull=True).values("module_id")
+    for module in Module.objects.filter(module_type=module_type, pk__in=open_ids):
+        try:
+            reconcile_module(module)
+            ok += 1
+        except Exception:
+            logger.warning("reconcile_module_type: module %s failed", module.pk, exc_info=True)
+    return ok
+
+
+_UNSET = object()
+
+
+def quarantined_states_qs():
+    """All QUARANTINED convergence rows, latest first (the GUI's fallback order)."""
+    return (
+        ModuleFirmwareConvergenceState.objects.filter(
+            state=ModuleFirmwareConvergenceState.State.QUARANTINED
+        )
+        .select_related("target_release")
+        .order_by("-updated_at", "-pk")
+    )
+
+
+def _open_assignment_target(module):
+    assignment = (
+        ModuleAssignmentHistory.objects.filter(module=module, to_ts__isnull=True)
+        .select_related("station")
+        .first()
+    )
+    if assignment is None or assignment.station is None:
+        return None
+    return effective_target(assignment.station, module.module_type)
+
+
+def current_quarantine(module, *, states=None, target=_UNSET):
+    """The single live quarantine of ``module`` — the row the GUI shows AND the
+    row ``release_quarantine`` releases (one source of truth).
+
+    None unless the module's rollup is QUARANTINED (older QUARANTINED rows
+    survive a fix-by-new-target and must not count). Otherwise the QUARANTINED
+    row for the current desired release when one exists, else the latest
+    QUARANTINED row (e.g. the module lost its assignment and ingest has not
+    reconciled yet).
+
+    ``states``: optional pre-fetched QUARANTINED rows of this module, latest
+    first (see ``quarantined_states_qs``). ``target``: optional pre-resolved
+    effective ModuleFirmwareTarget (None = no target); resolved from the open
+    assignment when omitted."""
+    if module.firmware_convergence != Module.Convergence.QUARANTINED:
+        return None
+    if states is None:
+        states = list(quarantined_states_qs().filter(module=module))
+    if not states:
+        return None
+    if target is _UNSET:
+        target = _open_assignment_target(module)
+    if target is not None:
+        for cs in states:
+            rel = cs.target_release
+            if (
+                rel.module_type_id == module.module_type_id
+                and rel.variant == module.variant
+                and rel.version == target.version
+            ):
+                return cs
+    return states[0]
+
+
+@transaction.atomic
+def release_quarantine(module, *, user, ip_address=None):
+    """Release ``module``'s live quarantine (``current_quarantine``) for retry.
+
+    Acts only while the rollup is QUARANTINED and only on the row
+    ``current_quarantine`` picks — the very row the GUI shows — so stale
+    quarantined rows of old targets stay untouched. Always reconciles after
+    releasing so the rollup self-heals (an unassigned module drops out of
+    QUARANTINED).
+
+    Lock order module → convergence states (same as the reconciler); the pick
+    is re-read inside the transaction under the module lock. Returns the
+    released target versions; an empty list means nothing to release (no-op,
+    no audit)."""
+    locked = Module.objects.select_for_update().get(pk=module.pk)
+    # Bring the rollup up to date with the CURRENT target first: a target moved
+    # without a reconcile (e.g. station-tag change) must not let the latest-row
+    # fallback release a stale quarantine of the old target.
+    reconcile_module(locked)
+    locked.refresh_from_db(fields=["firmware_convergence"])
+    states = list(quarantined_states_qs().filter(module=locked).select_for_update(of=("self",)))
+    picked = current_quarantine(locked, states=states)
+    if picked is None:
+        return []
+    picked.state = ModuleFirmwareConvergenceState.State.UPDATING
+    picked.attempts = 0
+    picked.last_error_mode = ""
+    picked.last_error_message = ""
+    picked.save(
+        update_fields=[
+            "state",
+            "attempts",
+            "last_error_mode",
+            "last_error_message",
+            "updated_at",
+        ]
+    )
+    versions = [picked.target_release.version]
+    reconcile_module(locked)
+    open_assignment = (
+        ModuleAssignmentHistory.objects.filter(module=locked, to_ts__isnull=True)
+        .select_related("station")
+        .first()
+    )
+    try:
+        with transaction.atomic():
+            StationAuditLog.log(
+                station=open_assignment.station if open_assignment else None,
+                module=locked,
+                event_type=StationAuditLog.EventType.MODULE_QUARANTINE_RELEASED,
+                message=f"Quarantine released for module {locked.uid}: {', '.join(versions)}.",
+                changes={"released_targets": versions},
+                user=user,
+                ip_address=ip_address,
+            )
+    except Exception:
+        logger.warning("release_quarantine: audit write failed", exc_info=True)
+    module.firmware_convergence = locked.firmware_convergence
+    return versions

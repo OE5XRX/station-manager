@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ form_title }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:module_list' %}">{% trans "Modules" %}</a>
+  <span class="sep">/</span>
+  <a href="{% url 'module_firmware:type_list' %}">{% trans "Module types" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ form_title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Firmware library" %}</div>
+    <h1 class="page-title">{{ form_title }}</h1>
+    <p class="page-sub">{% trans "Firmware repo and asset prefix tell the importer where to find signed releases for this type." %}</p>
+  </div>
+</div>
+
+<form method="post" style="max-width:560px;">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <section class="panel">
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label" for="{{ form.key.id_for_label }}">{% trans "Key" %}</label>
+        {{ form.key }}{{ form.key.errors }}
+        <div class="t-muted">{% if form.instance.pk %}{% trans "The key cannot be changed after creation." %}{% else %}{{ form.key.help_text }}{% endif %}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.display_name.id_for_label }}">{% trans "Display name" %}</label>
+        {{ form.display_name }}{{ form.display_name.errors }}
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.hw_repo.id_for_label }}">{% trans "Hardware repo" %}</label>
+        {{ form.hw_repo }}{{ form.hw_repo.errors }}
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.firmware_repo.id_for_label }}">{% trans "Firmware repo" %}</label>
+        {{ form.firmware_repo }}{{ form.firmware_repo.errors }}
+        <div class="t-muted">{{ form.firmware_repo.help_text }}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="{{ form.release_asset_prefix.id_for_label }}">{% trans "Release asset prefix" %}</label>
+        {{ form.release_asset_prefix }}{{ form.release_asset_prefix.errors }}
+        <div class="t-muted">{{ form.release_asset_prefix.help_text }}</div>
+      </div>
+    </div>
+    <div class="panel-foot row-gap-8">
+      <button type="submit" class="btn btn-primary">{% trans "Save module type" %}</button>
+      <a href="{% url 'module_firmware:type_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+    </div>
+  </section>
+</form>
+{% endblock %}

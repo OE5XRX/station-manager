@@ -13,6 +13,7 @@ from apps.images.github_releases import fetch_release_by_tag
 
 from . import storage
 from .models import ModuleFirmwareImportJob, ModuleFirmwareRelease
+from .trust import is_trusted_repo, is_valid_tag, trusted_owners
 
 _SIGNED_SUFFIX = ".signed.bin"
 
@@ -106,6 +107,13 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
     prefix = job.module_type.release_asset_prefix
     uploaded: list[str] = []
     try:
+        if not is_valid_tag(job.tag):
+            raise ValueError(f"invalid release tag {job.tag!r}; refusing to import")
+        if not is_trusted_repo(repo):
+            raise ValueError(
+                f"source repo {repo!r} is not owned by a trusted owner "
+                f"({', '.join(trusted_owners())}); refusing to import"
+            )
         if not prefix:
             raise ValueError(f"ModuleType {job.module_type.key} has no release_asset_prefix")
         gh = fetch_release_by_tag(repo, job.tag)

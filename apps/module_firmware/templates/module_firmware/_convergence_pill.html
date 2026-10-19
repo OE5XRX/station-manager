@@ -1,0 +1,7 @@
+{% comment %}
+Firmware convergence rollup pill. Expects `module` in context.
+{% endcomment %}
+{% if module.firmware_convergence == "ok" %}<span class="pill pill-online"><span class="dot"></span>{{ module.get_firmware_convergence_display|upper }}</span>
+{% elif module.firmware_convergence == "updating" %}<span class="pill pill-updating"><span class="dot"></span>{{ module.get_firmware_convergence_display|upper }}</span>
+{% elif module.firmware_convergence == "quarantined" %}<span class="pill pill-error"><span class="dot"></span>{{ module.get_firmware_convergence_display|upper }}</span>
+{% else %}<span class="pill pill-muted"><span class="dot"></span>{{ module.get_firmware_convergence_display|upper }}</span>{% endif %}
