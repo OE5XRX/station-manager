@@ -47,7 +47,14 @@ def _apply_updating_entry(station, slot, module_id, mod, now):
         station=station,
         slot=slot,
         module_id=module_id,
-        defaults={"online": True, "last_seen": now, "firmware_updating": True},
+        # ``last_seen`` refreshes with every paused-slot report, so a long flash never
+        # runs the stale-module TTL down (see _prune_expired).
+        defaults={
+            "online": True,
+            "last_seen": now,
+            "offline_with_station": False,
+            "firmware_updating": True,
+        },
         create_defaults={
             "type": identity.get("type", ""),
             "model": identity.get("model", ""),
@@ -250,17 +257,34 @@ def _carry_over_moved(station, tracked_rows, before):
 
     Independently of a move, rows of a module reported (once) elsewhere are deleted —
     they are the stale panel cards.
+
+    A module being flashed (``firmware_updating`` row, i.e. a paused slot reported as
+    ``updating`` or a started-but-unfinished flash) is never part of a move: its row
+    is not a stale card, its slot's calibration is neither moved away nor overwritten,
+    and a tracked module that has such a row is not treated as re-plugged.
     """
     from apps.stations.models import StationAuditLog
 
     counts = Counter(tracked.id for _, tracked in tracked_rows)
     reported_pks = {sm.pk for sm, _ in tracked_rows}
+    flashing_keys = set()
+    flashing_modules = set()
+    for slot, module_id, tracked_id in StationModule.objects.filter(
+        station=station, firmware_updating=True
+    ).values_list("slot", "module_id", "tracked_module_id"):
+        flashing_keys.add((slot, module_id))
+        if tracked_id is not None:
+            flashing_modules.add(tracked_id)
     moves = []
     for sm, tracked in tracked_rows:
         if tracked.id not in before or counts[tracked.id] != 1:
             continue
+        if tracked.id in flashing_modules:
+            continue
         (slot, module_id, prev_state), keys = before[tracked.id]
         dest = (str(sm.slot), sm.module_id)
+        if (str(slot), module_id) in flashing_keys or dest in flashing_keys:
+            continue
         # Reported where it already had a row: not a move — any other rows are stale
         # duplicates whose settings must not overwrite the live slot's.
         if dest not in keys:
@@ -271,11 +295,19 @@ def _carry_over_moved(station, tracked_rows, before):
     # Rows of a module reported (once) elsewhere are stale cards — also when the move
     # itself happened before this snapshot (e.g. before this cleanup was deployed).
     moved_from = {m[1].id: m[2] for m in moves}
-    single = [(sm, tracked) for sm, tracked in tracked_rows if counts[tracked.id] == 1]
+    single = [
+        (sm, tracked)
+        for sm, tracked in tracked_rows
+        if counts[tracked.id] == 1 and tracked.id not in flashing_modules
+    ]
     stale_by_module = {}
-    for row in StationModule.objects.filter(
-        station=station, tracked_module_id__in=[t.id for _, t in single]
-    ).exclude(pk__in=reported_pks):
+    for row in (
+        StationModule.objects.filter(
+            station=station, tracked_module_id__in=[t.id for _, t in single]
+        )
+        .exclude(pk__in=reported_pks)
+        .exclude(firmware_updating=True)
+    ):
         stale_by_module.setdefault(row.tracked_module_id, []).append(row)
     for sm, tracked in single:
         stale = stale_by_module.get(tracked.id, [])
@@ -349,14 +381,15 @@ def _prune_expired(station, now):
 
     Rows never seen (``last_seen`` NULL) age by ``updated_at``. Persisted calibration
     is slot-keyed and kept: a module returning to the same slot gets it re-applied.
+    A module being flashed (``firmware_updating``) is never pruned.
     """
     from apps.stations.models import StationAuditLog
 
     ttl = getattr(settings, "CONTROL_STALE_MODULE_TTL_SECONDS", DEFAULT_STALE_MODULE_TTL_SECONDS)
     cutoff = now - timedelta(seconds=ttl)
-    expired = StationModule.objects.filter(station=station, online=False).filter(
-        Q(last_seen__lt=cutoff) | Q(last_seen__isnull=True, updated_at__lt=cutoff)
-    )
+    expired = StationModule.objects.filter(
+        station=station, online=False, firmware_updating=False
+    ).filter(Q(last_seen__lt=cutoff) | Q(last_seen__isnull=True, updated_at__lt=cutoff))
     for old in expired:
         old.delete()
         StationAuditLog.log(
@@ -399,7 +432,11 @@ def set_firmware_updating(station, slot, module_id, value, result=None):
         # counts as a genuine came-back (clears a DFU-stuck notice) — whereas a module
         # still hanging in DFU stays unreported (agent forget_slot) and offline. Rows
         # that were not updating keep their state.
-        qs.filter(firmware_updating=True).update(firmware_updating=False, online=False)
+        # ``last_seen`` is stamped like any online→offline drop, so the stale TTL
+        # counts from the end of the flash.
+        qs.filter(firmware_updating=True).update(
+            firmware_updating=False, online=False, last_seen=timezone.now()
+        )
     # A pre-flash failure leaves the module untouched (it never left its app): keep
     # ``online`` as is — a fast cycle may finish before any ``updating`` inventory.
     qs.update(firmware_updating=False)
