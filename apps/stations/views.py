@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.db.models import Q
+from django.db.models import Count, Min, Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -21,9 +21,22 @@ from apps.module_firmware import drain as module_drain
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.targeting import reason_message, resolve_upgrade
 
-from .forms import StationForm, StationLogEntryForm, StationPhotoForm, StationTagForm
+from .forms import (
+    RolloutGroupForm,
+    StationForm,
+    StationLogEntryForm,
+    StationPhotoForm,
+    StationTagForm,
+)
 from .inventory import inventory_for_viewer
-from .models import Region, Station, StationAssignment, StationAuditLog, StationTag
+from .models import (
+    Region,
+    RolloutGroup,
+    Station,
+    StationAssignment,
+    StationAuditLog,
+    StationTag,
+)
 
 User = get_user_model()
 
@@ -63,7 +76,7 @@ class StationListView(AreaPermissionMixin, ListView):
         return [self.template_name]
 
     def get_queryset(self):
-        qs = super().get_queryset().prefetch_related("tags")
+        qs = super().get_queryset().select_related("rollout_group").prefetch_related("tags")
         search = self.request.GET.get("q", "").strip()
         if search:
             qs = qs.filter(Q(name__icontains=search) | Q(callsign__icontains=search))
@@ -238,6 +251,17 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
                 event_type=StationAuditLog.EventType.UPDATED,
                 message=f"Fields changed: {field_names}",
                 changes=changes,
+                user=self.request.user,
+                ip_address=_get_client_ip(self.request),
+            )
+        if old.rollout_group_id != self.object.rollout_group_id:
+            old_name = old.rollout_group.name if old.rollout_group else "none"
+            new_name = self.object.rollout_group.name if self.object.rollout_group else "none"
+            StationAuditLog.log(
+                station=self.object,
+                event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
+                message=f"Rollout group: {old_name} → {new_name} by {self.request.user}",
+                changes={"rollout_group": {"old": old_name, "new": new_name}},
                 user=self.request.user,
                 ip_address=_get_client_ip(self.request),
             )
@@ -436,4 +460,92 @@ class StationTagDeleteView(AreaPermissionMixin, DeleteView):
 
     def form_valid(self, form):
         messages.success(self.request, _("Tag deleted successfully."))
+        return super().form_valid(form)
+
+
+# ---------------------------------------------------------------------------
+# RolloutGroup views
+# ---------------------------------------------------------------------------
+
+
+class RolloutGroupListView(AreaPermissionMixin, ListView):
+    area = "stations"
+    model = RolloutGroup
+    template_name = "stations/group_list.html"
+    context_object_name = "groups"
+    paginate_by = 25
+
+    def get_queryset(self):
+        # Station count and sequence position in the same query (no N+1).
+        # The rollout sequence is a singleton, so a group has at most one
+        # entry and Min() is just "its position, or NULL".
+        return (
+            super()
+            .get_queryset()
+            .annotate(
+                station_count=Count("stations", distinct=True),
+                sequence_position=Min("rollout_entries__position"),
+            )
+            .order_by("name")
+        )
+
+
+class RolloutGroupCreateView(AreaPermissionMixin, CreateView):
+    area = "stations"
+    verb = "manage"
+    model = RolloutGroup
+    template_name = "stations/group_form.html"
+    form_class = RolloutGroupForm
+    success_url = reverse_lazy("stations:group_list")
+
+    def form_valid(self, form):
+        messages.success(self.request, _("Rollout group created successfully."))
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = _("Create rollout group")
+        return context
+
+
+class RolloutGroupUpdateView(AreaPermissionMixin, UpdateView):
+    area = "stations"
+    verb = "manage"
+    model = RolloutGroup
+    template_name = "stations/group_form.html"
+    form_class = RolloutGroupForm
+    success_url = reverse_lazy("stations:group_list")
+
+    def form_valid(self, form):
+        messages.success(self.request, _("Rollout group updated successfully."))
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_title"] = _("Edit rollout group")
+        return context
+
+
+class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
+    area = "stations"
+    verb = "manage"
+    model = RolloutGroup
+    template_name = "stations/group_confirm_delete.html"
+    context_object_name = "group"
+    success_url = reverse_lazy("stations:group_list")
+
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .annotate(
+                station_count=Count("stations", distinct=True),
+                sequence_position=Min("rollout_entries__position"),
+                firmware_target_count=Count("firmware_targets", distinct=True),
+                deployment_count=Count("deployments", distinct=True),
+            )
+        )
+
+    def form_valid(self, form):
+        messages.success(self.request, _("Rollout group deleted successfully."))
         return super().form_valid(form)

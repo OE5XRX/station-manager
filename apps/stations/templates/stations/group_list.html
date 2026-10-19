@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Rollout groups" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'stations:station_list' %}">{% trans "Stations" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Rollout groups" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Organization" %} · {% trans "Updates" %}</div>
+    <h1 class="page-title">{% trans "Rollout groups" %}</h1>
+    <p class="page-sub">{% trans "Each station belongs to at most one group. The group decides which update channel the station follows and when it gets upgrades in the rollout sequence. Stations without a group follow the release channel." %}</p>
+  </div>
+  <div class="page-head-actions">
+    {% if can.rollouts.view %}
+    <a href="{% url 'rollouts:upgrade_dashboard' %}" class="btn btn-ghost">{% trans "Upgrade dashboard" %}</a>
+    {% endif %}
+    {% if can.stations.manage %}
+    <a href="{% url 'stations:group_create' %}" class="btn btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      {% trans "New group" %}
+    </a>
+    {% else %}
+    {% include "includes/readonly_badge.html" %}
+    {% endif %}
+  </div>
+</div>
+
+{% if groups %}
+<div class="table-wrap" data-mobile-cards>
+  <table class="t-table">
+    <thead>
+      <tr>
+        <th>{% trans "Name" %}</th>
+        <th>{% trans "Channel" %}</th>
+        <th>{% trans "Sequence step" %}</th>
+        <th>{% trans "Stations" %}</th>
+        <th>{% trans "Slug" %}</th>
+        <th>{% trans "Description" %}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for group in groups %}
+      <tr data-group-slug="{{ group.slug }}">
+        <td data-primary><strong>{{ group.name }}</strong></td>
+        <td data-label="{% trans 'Channel' %}">{% include "images/_channel_badge.html" with channel=group.channel %}</td>
+        <td class="t-mono num" data-label="{% trans 'Sequence step' %}" data-group-position="{{ group.sequence_position|default_if_none:'' }}">
+          {% if group.sequence_position is not None %}{{ group.sequence_position }}{% else %}<span class="t-muted" title="{% trans 'Not in the rollout sequence' %}">—</span>{% endif %}
+        </td>
+        <td class="t-mono num" data-label="{% trans 'Stations' %}" data-group-stations="{{ group.station_count }}">{{ group.station_count }}</td>
+        <td class="t-mono" data-label="{% trans 'Slug' %}">{{ group.slug }}</td>
+        <td class="t-muted" data-label="{% trans 'Description' %}">{{ group.description|default:"—" }}</td>
+        <td class="actions">
+          {% if can.stations.manage %}
+          <a href="{% url 'stations:group_edit' group.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+          <a href="{% url 'stations:group_delete' group.pk %}" class="btn btn-sm btn-danger">{% trans "Delete" %}</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "includes/pagination.html" %}
+{% else %}
+<div class="panel">
+  <div class="empty">
+    <div class="empty-title">{% trans "No rollout groups yet" %}</div>
+    <div>{% trans "All stations follow the release channel. Create a group to move stations to the dev channel or to stage upgrades." %}</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

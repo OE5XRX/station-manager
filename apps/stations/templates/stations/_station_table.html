@@ -9,6 +9,7 @@
         <th>{% trans "Status" %}</th>
         <th>{% trans "Location" %}</th>
         <th>{% trans "OS" %}</th>
+        <th>{% trans "Rollout group" %}</th>
         <th>{% trans "Agent" %}</th>
         <th>{% trans "Last heard" %}</th>
         <th>{% trans "Tags" %}</th>
@@ -41,6 +42,7 @@
           {% endif %}
         </td>
         <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—"|truncatechars:20 }} {% include "images/_channel_badge.html" with channel=station.current_image_variant %}</td>
+        <td data-station-group="{{ station.rollout_group.slug|default:'' }}" data-label="{% trans 'Rollout group' %}">{% if station.rollout_group %}{{ station.rollout_group.name }} {% include "images/_channel_badge.html" with channel=station.rollout_group.channel %}{% else %}<span class="t-muted">{% trans "No group" %}</span> {% include "images/_channel_badge.html" with channel="release" %}{% endif %}</td>
         <td class="t-mono" data-label="{% trans 'Agent' %}">{{ station.current_agent_version|default:"—" }}</td>
         <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">
           {% if station.last_seen %}{{ station.last_seen|timesince }} {% trans "ago" %}{% else %}<span class="t-muted">{% trans "never" %}</span>{% endif %}

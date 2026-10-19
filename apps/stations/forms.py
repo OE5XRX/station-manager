@@ -3,7 +3,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.accounts.permissions import can
 
-from .models import Region, Station, StationLogEntry, StationPhoto, StationTag
+from .models import Region, RolloutGroup, Station, StationLogEntry, StationPhoto, StationTag
 
 
 class StationForm(forms.ModelForm):
@@ -22,6 +22,7 @@ class StationForm(forms.ModelForm):
             "hardware_revision",
             "tx_audio_ceiling_dbfs",
             "tags",
+            "rollout_group",
             "notes",
         )
         widgets = {
@@ -39,6 +40,7 @@ class StationForm(forms.ModelForm):
                 attrs={"class": "form-control", "step": "0.5", "lang": "en"}
             ),
             "tags": forms.CheckboxSelectMultiple(),
+            "rollout_group": forms.Select(attrs={"class": "form-select"}),
             "notes": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
 
@@ -47,6 +49,8 @@ class StationForm(forms.ModelForm):
         # RF-safety calibration: only Vereins-Staff/Admin may change it.
         if not can(user, "stations", "manage"):
             self.fields.pop("tx_audio_ceiling_dbfs", None)
+        if "rollout_group" in self.fields:
+            self.fields["rollout_group"].empty_label = _("No group (release channel)")
 
 
 class StationPhotoForm(forms.ModelForm):
@@ -91,6 +95,20 @@ class StationTagForm(forms.ModelForm):
             "color": forms.TextInput(
                 attrs={"class": "form-control form-control-color", "type": "color"}
             ),
+            "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
+        }
+
+
+class RolloutGroupForm(forms.ModelForm):
+    """Form for creating and editing rollout groups."""
+
+    class Meta:
+        model = RolloutGroup
+        fields = ("name", "slug", "channel", "description")
+        widgets = {
+            "name": forms.TextInput(attrs={"class": "form-control"}),
+            "slug": forms.TextInput(attrs={"class": "form-control"}),
+            "channel": forms.Select(attrs={"class": "form-select"}),
             "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
 
