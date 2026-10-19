@@ -297,13 +297,16 @@ class RolloutGroupViewSet(
         # Every FK to a group is PROTECT: stations, sequence entries and MF
         # (canary) targets must be moved off first. The audit row rolls back
         # with a blocked delete.
+        pk = instance.pk
         try:
             with transaction.atomic():
                 self._audit(instance, "deleted")
                 instance.delete()
         except (ProtectedError, IntegrityError):
             # IntegrityError: a concurrent write referenced the group between
-            # the PROTECT check and commit (deferred FK on PostgreSQL).
+            # the PROTECT check and commit (deferred FK on PostgreSQL). By then
+            # the Collector has already set instance.pk = None.
+            instance.pk = pk
             refs = rollout_services.group_references(instance)
             blocking = ", ".join(f"{k}={v}" for k, v in refs.items() if v)
             err = APIException(

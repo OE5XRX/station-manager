@@ -185,6 +185,7 @@ def test_delete_race_integrity_error_is_409(api_topology, bearer, group, monkeyp
     from django.db import IntegrityError
 
     def racing_delete(self, *a, **kw):
+        self.pk = None  # Collector.delete() nulls the pk before the deferred FK fires
         raise IntegrityError("deferred FK violation")
 
     monkeypatch.setattr(RolloutGroup, "delete", racing_delete)

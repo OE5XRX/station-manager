@@ -271,3 +271,25 @@ def test_delete_unreferenced_group_keeps_deployment_history(
     assert dep.target_group is None
     log = AccountAuditLog.objects.get(event_type=AccountAuditLog.EventType.CONFIG_CHANGED)
     assert log.message == f"RolloutGroup old deleted by {staff_user}"
+
+
+def test_delete_race_integrity_error_redirects_back(
+    client, staff_user, make_rollout_group, monkeypatch
+):
+    from django.db import IntegrityError
+
+    group = make_rollout_group("Racy")
+    pk = group.pk
+
+    def racing_delete(self, *a, **kw):
+        self.pk = None  # Collector.delete() nulls the pk before the deferred FK fires
+        raise IntegrityError("deferred FK violation")
+
+    monkeypatch.setattr(RolloutGroup, "delete", racing_delete)
+    client.force_login(staff_user)
+    url = reverse("stations:group_delete", args=[pk])
+    response = client.post(url)
+
+    assert response.status_code == 302
+    assert response["Location"] == url
+    assert RolloutGroup.objects.filter(pk=pk).exists()

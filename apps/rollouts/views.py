@@ -182,7 +182,20 @@ class UpgradeGroupView(AreaPermissionMixin, View):
 
         created = 0
         with transaction.atomic():
+            # Lock the members and drop any that moved to another group since
+            # the read above: their target was resolved for this group's
+            # channel and must not be applied to them.
+            still_members = set(
+                Station.objects.select_for_update()
+                .filter(pk__in=[s.pk for s in stations], rollout_group=group)
+                .values_list("pk", flat=True)
+            )
             for target, eligible in by_machine.values():
+                moved = [s for s in eligible if s.pk not in still_members]
+                skipped += len(moved)
+                eligible = [s for s in eligible if s.pk in still_members]
+                if not eligible:
+                    continue
                 dep = Deployment.objects.create(
                     image_release=target,
                     target_type=Deployment.TargetType.GROUP,

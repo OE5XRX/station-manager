@@ -581,6 +581,7 @@ class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
 
     def form_valid(self, form):
         group = self.object
+        pk = group.pk  # delete() sets it to None before a deferred-FK IntegrityError
         try:
             with transaction.atomic():
                 _audit_group(self.request, group, "deleted")
@@ -592,6 +593,6 @@ class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
                 self.request,
                 _("Rollout group is still in use and cannot be deleted."),
             )
-            return redirect("stations:group_delete", pk=group.pk)
+            return redirect("stations:group_delete", pk=pk)
         messages.success(self.request, _("Rollout group deleted successfully."))
         return HttpResponseRedirect(self.get_success_url())

@@ -299,3 +299,31 @@ def test_group_name_not_double_escaped_in_confirm(
     html = client.get(reverse("rollouts:upgrade_dashboard")).content.decode()
     assert "group A\\u0026B to the latest" in html
     assert "&amp;amp;" not in html and "A\\u0026amp;B" not in html
+
+
+def test_upgrade_group_skips_station_moved_out_concurrently(
+    client, admin_user, make_release, make_rollout_group, monkeypatch
+):
+    from apps.rollouts import views as rollout_views
+
+    group = make_rollout_group("Early")
+    other = make_rollout_group("Elsewhere")
+    cur = make_release("2026.10.01-01", latest=False)
+    new = make_release("2026.10.18-01")
+    s1 = Station.objects.create(name="S1", rollout_group=group, current_image_release=cur)
+    s2 = Station.objects.create(name="S2", rollout_group=group, current_image_release=cur)
+
+    real_index = rollout_views.latest_index
+
+    def index_with_concurrent_move():
+        # Between the member read and the locked write, S2 moves groups.
+        Station.objects.filter(pk=s2.pk).update(rollout_group=other)
+        return real_index()
+
+    monkeypatch.setattr(rollout_views, "latest_index", index_with_concurrent_move)
+    client.force_login(admin_user)
+    client.post(reverse("rollouts:upgrade_group", args=[group.slug]))
+
+    dep = Deployment.objects.get()
+    assert dep.image_release == new
+    assert list(dep.results.values_list("station_id", flat=True)) == [s1.pk]
