@@ -471,20 +471,20 @@ class RolloutSequenceEntryViewSet(
 
     def perform_create(self, serializer):
         sequence = serializer.validated_data["sequence"]
-        tag = serializer.validated_data["tag"]
+        group = serializer.validated_data["group"]
         # Route through the locked service so concurrent creates serialize and
         # positions remain gap-free (mirrors SequenceAddView's locked protocol).
-        # R5d: catch IntegrityError from the (sequence, tag) unique constraint
-        # to handle the race where two concurrent creates both pass validate_tag
+        # R5d: catch IntegrityError from the (sequence, group) unique constraint
+        # to handle the race where two concurrent creates both pass validate_group
         # but one hits the DB constraint first → translate to 400 instead of 500.
         try:
             entry = rollout_services.add_entry(
-                sequence=sequence, tag=tag, by_user=self.request.user
+                sequence=sequence, group=group, by_user=self.request.user
             )
         except IntegrityError as exc:
-            raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
+            raise DRFValidationError({"group": "This group is already in this sequence."}) from exc
         if entry is None:
-            raise DRFValidationError({"tag": "This tag is already in the sequence."})
+            raise DRFValidationError({"group": "This group is already in the sequence."})
         # Expose the created entry on the serializer so DRF can build the 201
         # response without trying to call serializer.save() again.
         serializer.instance = entry
@@ -500,16 +500,16 @@ class RolloutSequenceEntryViewSet(
 
         if new_position is not None and new_position != entry.position:
             # Wrap the entire position+field update in ONE transaction so that
-            # a non-position field save (e.g. tag) and the two-phase position
+            # a non-position field save (e.g. group) and the two-phase position
             # move are atomic.  move_entry opens its own transaction.atomic()
             # which becomes a savepoint inside this outer one — that is fine.
             # Lock the parent sequence first (before the field save) so the
             # lock order matches move_entry's own select_for_update, preventing
             # a potential deadlock if two concurrent PATCHes race.
-            # R6a: the same (sequence, tag) unique race that R5d fixed in the
-            # tag-only branch below applies here too — a position+tag PATCH saves
-            # tag via entry.save(), and validate_tag ran before the lock, so two
-            # concurrent PATCHes setting the same new tag both pass validation and
+            # R6a: the same (sequence, group) unique race that R5d fixed in the
+            # group-only branch below applies here too — a position+group PATCH saves
+            # group via entry.save(), and validate_group ran before the lock, so two
+            # concurrent PATCHes setting the same new group both pass validation and
             # the second hits the DB constraint.  Wrap the atomic block in the
             # same IntegrityError → 400 catch so it is handled symmetrically.
             try:
@@ -536,18 +536,20 @@ class RolloutSequenceEntryViewSet(
                             {"position": "sequence too large to reorder"}
                         ) from exc
             except IntegrityError as exc:
-                raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
+                raise DRFValidationError(
+                    {"group": "This group is already in this sequence."}
+                ) from exc
             entry.refresh_from_db()
             serializer.instance = entry
         else:
-            # R4a: tag-only (or no-field-change) path — acquire the parent lock
+            # R4a: group-only (or no-field-change) path — acquire the parent lock
             # FIRST so that concurrent reorders cannot interleave with this save.
             # touch_sequence opens its own transaction.atomic() / select_for_update;
             # wrap both the field save and the stamp in ONE outer atomic so they
             # are visible to the DB in the same serialised order.
-            # R5d: catch IntegrityError from the (sequence, tag) unique constraint
-            # to handle the race where two concurrent tag-change PATCHes both pass
-            # validate_tag but one hits the DB constraint first → 400 not 500.
+            # R5d: catch IntegrityError from the (sequence, group) unique constraint
+            # to handle the race where two concurrent group-change PATCHes both pass
+            # validate_group but one hits the DB constraint first → 400 not 500.
             try:
                 with transaction.atomic():
                     RolloutSequence.objects.select_for_update().filter(
@@ -557,7 +559,9 @@ class RolloutSequenceEntryViewSet(
                     entry.sequence.updated_by = self.request.user
                     entry.sequence.save(update_fields=["updated_by", "updated_at"])
             except IntegrityError as exc:
-                raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
+                raise DRFValidationError(
+                    {"group": "This group is already in this sequence."}
+                ) from exc
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} updated",

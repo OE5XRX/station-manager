@@ -22,7 +22,7 @@
       </div>
       <h1 class="page-title">{% trans "Rollout Sequence" %}</h1>
       <p class="page-sub">
-        {% trans "Stations are bucketed by the first matching tag in this ordered list. Stations with none of these tags fall into the Unassigned bucket." %}
+        {% trans "Rollout groups are upgraded in this order. Groups outside the sequence follow, then stations without a group." %}
       </p>
     </div>
     <div class="page-head-actions">
@@ -53,8 +53,9 @@
             <li class="sequence-row" data-entry-id="{{ entry.pk }}">
               <span class="grip" aria-hidden="true" title="{% trans 'Drag to reorder' %}">&#8801;</span>
               <span class="sequence-pos t-mono t-muted">{{ forloop.counter }}.</span>
-              <span class="sequence-tag t-mono">{{ entry.tag.name }}</span>
-              {% blocktrans asvar remove_msg with tag=entry.tag.name %}Remove tag {{ tag }} from the rollout sequence?{% endblocktrans %}
+              <span class="sequence-tag t-mono">{{ entry.group.name }}</span>
+              {% include "images/_channel_badge.html" with channel=entry.group.channel %}
+              {% blocktrans asvar remove_msg with group=entry.group.name %}Remove group {{ group }} from the rollout sequence?{% endblocktrans %}
               <form method="post" action="{% url 'rollouts:sequence_remove' entry_pk=entry.pk %}" class="sequence-remove-form" onsubmit="return confirm('{{ remove_msg|escapejs }}');">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-danger" aria-label="{% trans 'Remove' %}">
@@ -69,7 +70,7 @@
         </ul>
       {% else %}
         <div class="empty" style="padding:22px 0;">
-          <div class="empty-title">{% trans "No entries — stations will all fall into the Unassigned bucket." %}</div>
+          <div class="empty-title">{% trans "No groups in the sequence yet. Add one below to define the rollout order." %}</div>
         </div>
       {% endif %}
     </div>
@@ -79,17 +80,17 @@
     <div class="panel-head">
       <div class="panel-title">
         <span class="dot" style="background:var(--accent)"></span>
-        <span>{% trans "Add tag" %}</span>
+        <span>{% trans "Add group" %}</span>
       </div>
       <span class="t-label">{% trans "Appended to the end" %}</span>
     </div>
     <div class="panel-body">
-      {% if add_form.fields.tag.queryset.exists %}
+      {% if add_form.fields.group.queryset.exists %}
         <form method="post" action="{% url 'rollouts:sequence_add' %}" class="sequence-add-form">
           {% csrf_token %}
           <div class="row-gap-8" style="flex-wrap:wrap;align-items:center;">
-            <label for="{{ add_form.tag.id_for_label }}" class="t-label">{% trans "Tag" %}</label>
-            {{ add_form.tag }}
+            <label for="{{ add_form.group.id_for_label }}" class="t-label">{% trans "Rollout group" %}</label>
+            {{ add_form.group }}
             <button type="submit" class="btn btn-primary">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
                 <path d="M12 5v14M5 12h14"/>
@@ -100,7 +101,7 @@
         </form>
       {% else %}
         <div class="empty" style="padding:18px 0;">
-          <div class="empty-title">{% trans "Every tag is already in the sequence." %}</div>
+          <div class="empty-title">{% trans "Every rollout group is already in the sequence." %}</div>
         </div>
       {% endif %}
     </div>

@@ -27,14 +27,14 @@ def _get_or_create_sequence():
     return seq
 
 
-def _make_tag(name):
+def _make_group(name):
     from django.utils.text import slugify
 
-    from apps.stations.models import StationTag
+    from apps.stations.models import RolloutGroup
 
     slug = slugify(name)
-    tag, _ = StationTag.objects.get_or_create(name=name, defaults={"slug": slug})
-    return tag
+    group, _ = RolloutGroup.objects.get_or_create(name=name, defaults={"slug": slug})
+    return group
 
 
 def _make_release_with_assets(tag, machine="qemux86-64", channel="release"):
@@ -59,20 +59,20 @@ class TestR1EntryUpdateAtomic:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag_a = _make_tag("r1-src-tag")
-        tag_b = _make_tag("r1-src-tag-b")
-        tag_new = _make_tag("r1-new-tag")
-        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        tag_a = _make_group("r1-src-tag")
+        tag_b = _make_group("r1-src-tag-b")
+        tag_new = _make_group("r1-new-tag")
+        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
         r = bearer(api_topology["admin"]).patch(
-            url, {"position": 1, "tag": tag_new.pk}, format="json"
+            url, {"position": 1, "group": tag_new.pk}, format="json"
         )
         assert r.status_code == 200
         entry_a.refresh_from_db()
         # Both must be persisted
-        assert entry_a.tag == tag_new
+        assert entry_a.group == tag_new
         assert entry_a.position == 1
 
     def test_position_patch_only_no_tag_still_works(self, api_topology, bearer):
@@ -80,10 +80,10 @@ class TestR1EntryUpdateAtomic:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag_x = _make_tag("r1-pos-only-x")
-        tag_y = _make_tag("r1-pos-only-y")
-        entry_x = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_x, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_y, position=1)
+        tag_x = _make_group("r1-pos-only-x")
+        tag_y = _make_group("r1-pos-only-y")
+        entry_x = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_x, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_y, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_x.pk])
         r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
@@ -102,11 +102,11 @@ class TestR2ValidateTagMalformedPK:
 
     def test_non_numeric_sequence_returns_400(self, api_topology, bearer):
         """POST with sequence='notanint' → 400 field error, not 500."""
-        tag = _make_tag("r2-any-tag")
+        tag = _make_group("r2-any-tag")
         url = reverse("api:rollout-sequence-entry-list")
         r = bearer(api_topology["admin"]).post(
             url,
-            {"sequence": "notanint", "tag": tag.pk, "position": 0},
+            {"sequence": "notanint", "group": tag.pk, "position": 0},
             format="json",
         )
         assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
@@ -116,13 +116,13 @@ class TestR2ValidateTagMalformedPK:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag = _make_tag("r2-dup-tag")
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        tag = _make_group("r2-dup-tag")
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-list")
         r = bearer(api_topology["admin"]).post(
             url,
-            {"sequence": seq.pk, "tag": tag.pk, "position": 1},
+            {"sequence": seq.pk, "group": tag.pk, "position": 1},
             format="json",
         )
         assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
@@ -141,20 +141,20 @@ class TestR3SequenceReadOnlyOnUpdate:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag_a = _make_tag("r3-put-tag-a")
-        tag_b = _make_tag("r3-put-tag-b")
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+        tag_a = _make_group("r3-put-tag-a")
+        tag_b = _make_group("r3-put-tag-b")
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
         # Full PUT includes sequence — must not fail because sequence is required
         r = bearer(api_topology["admin"]).put(
             url,
-            {"sequence": seq.pk, "tag": tag_b.pk, "position": 0},
+            {"sequence": seq.pk, "group": tag_b.pk, "position": 0},
             format="json",
         )
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.data}"
         entry.refresh_from_db()
-        assert entry.tag == tag_b, "Tag must be updated by full PUT"
+        assert entry.group == tag_b, "Tag must be updated by full PUT"
         assert entry.sequence == seq, "Sequence must remain unchanged after PUT"
 
     def test_patch_sequence_field_is_ignored(self, api_topology, bearer):
@@ -164,8 +164,8 @@ class TestR3SequenceReadOnlyOnUpdate:
         seq = _get_or_create_sequence()
         # Create a second sequence to try to reparent to
         seq2, _ = RolloutSequence.objects.get_or_create(singleton_key="other-r3")
-        tag = _make_tag("r3-patch-seq-tag")
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        tag = _make_group("r3-patch-seq-tag")
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
         r = bearer(api_topology["admin"]).patch(url, {"sequence": seq2.pk}, format="json")
@@ -175,9 +175,11 @@ class TestR3SequenceReadOnlyOnUpdate:
 
     def test_create_still_requires_sequence(self, api_topology, bearer):
         """POST without sequence → 400 (sequence required on create)."""
-        tag = _make_tag("r3-create-no-seq-tag")
+        tag = _make_group("r3-create-no-seq-tag")
         url = reverse("api:rollout-sequence-entry-list")
-        r = bearer(api_topology["admin"]).post(url, {"tag": tag.pk, "position": 0}, format="json")
+        r = bearer(api_topology["admin"]).post(
+            url, {"group": tag.pk, "position": 0}, format="json"
+        )
         assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.data}"
 
 
@@ -382,9 +384,9 @@ class TestR7OffsetCap:
         seq, _ = RolloutSequence.objects.get_or_create(singleton_key="r7-overflow-seq")
 
         # Create 10 entries (representative; 100 is too slow for a unit test)
-        tags = [_make_tag(f"r7-tag-{i:03d}") for i in range(10)]
+        tags = [_make_group(f"r7-tag-{i:03d}") for i in range(10)]
         entries = [
-            RolloutSequenceEntry.objects.create(sequence=seq, tag=t, position=i)
+            RolloutSequenceEntry.objects.create(sequence=seq, group=t, position=i)
             for i, t in enumerate(tags)
         ]
 

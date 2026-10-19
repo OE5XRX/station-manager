@@ -1,7 +1,7 @@
 """Signal handlers for rollout sequence integrity.
 
 post_delete on RolloutSequenceEntry: whenever an entry is removed (whether via
-the API's own remove_entry service, OR via a CASCADE from a StationTag delete),
+the API's own remove_entry service, OR via a CASCADE from a RolloutGroup delete),
 renumber remaining entries to be 0-based and gap-free, and bump the parent
 RolloutSequence.updated_at.
 
@@ -27,7 +27,7 @@ def _on_sequence_entry_delete(sender, instance, **kwargs):
     """Renumber the parent sequence after any entry removal.
 
     Fires for both API-driven deletes (remove_entry) and CASCADE-driven
-    deletes (StationTag.delete() → CASCADE → RolloutSequenceEntry.delete()).
+    deletes (RolloutGroup.delete() → CASCADE → RolloutSequenceEntry.delete()).
 
     The renumber uses the already-established transaction (the caller's atomic
     block, or the implicit atomic wrapping a plain .delete() call).

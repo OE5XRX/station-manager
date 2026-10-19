@@ -66,17 +66,17 @@ def test_station_detail_cards_follow_permissions(client, station):
     url = reverse("stations:station_detail", args=[station.pk])
     _login(client, "member")
     html = client.get(url).content.decode()
-    assert "has not been provisioned yet" not in html
+    assert 'data-upgrade-reason="no_platform"' not in html
     assert "<section" in html and ">Provisioning<" not in html
     client.logout()
     _login(client, "staff")
     html = client.get(url).content.decode()
-    assert "has not been provisioned yet" in html  # upgrade card (deployments:manage)
+    assert 'data-upgrade-reason="no_platform"' in html  # upgrade card (deployments:manage)
     assert ">Provisioning<" not in html  # provisioning:manage is admin-only
     client.logout()
     _login(client, "admin")
     html = client.get(url).content.decode()
-    assert "has not been provisioned yet" in html
+    assert 'data-upgrade-reason="no_platform"' in html
     assert ">Provisioning<" in html
 
 

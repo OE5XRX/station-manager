@@ -187,7 +187,7 @@ class RegionAssignmentSerializer(serializers.ModelSerializer):
 class RolloutSequenceEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = RolloutSequenceEntry
-        fields = ["id", "sequence", "tag", "position"]
+        fields = ["id", "sequence", "group", "position"]
 
 
 class RolloutSequenceSerializer(serializers.ModelSerializer):

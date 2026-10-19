@@ -14,10 +14,15 @@ from apps.deployments.supersession import (
     ActiveDeploymentConflictError,
     supersede_pending_for_station,
 )
-from apps.images.models import ImageRelease
 from apps.rollouts import services as rollout_services
-from apps.rollouts.grouping import UNASSIGNED_KEY, group_stations_by_sequence
-from apps.stations.models import Station, StationAuditLog, StationTag
+from apps.rollouts.grouping import group_stations_by_sequence, ordered_groups
+from apps.rollouts.targeting import (
+    UpgradeTarget,
+    latest_index,
+    reason_message,
+    resolve_upgrade,
+)
+from apps.stations.models import RolloutGroup, Station, StationAuditLog
 
 from .forms import SequenceAddForm
 from .models import RolloutSequence, RolloutSequenceEntry, current_sequence
@@ -89,40 +94,22 @@ class UpgradeStationView(AreaPermissionMixin, View):
     verb = "manage"
 
     def post(self, request, station_pk):
-        station = get_object_or_404(Station, pk=station_pk)
-        current = station.current_image_release
-        if current is None:
-            # We can't pick a target machine without a current release.
-            # Distinguish this from the "machine known but no latest
-            # release imported" case below so the operator isn't left
-            # wondering whether to import an image or provision the box.
-            messages.error(
-                request,
-                _("Station has not been provisioned with an image release yet."),
+        station = get_object_or_404(
+            Station.objects.select_related("current_image_release", "rollout_group"),
+            pk=station_pk,
+        )
+        upgrade = resolve_upgrade(station)
+        if not upgrade.ok:
+            # "Nothing newer" is information, everything else needs action
+            # (provision the box, import / re-import an image).
+            notify = (
+                messages.info
+                if upgrade.reason in (UpgradeTarget.UP_TO_DATE, UpgradeTarget.NOT_NEWER)
+                else messages.error
             )
+            notify(request, reason_message(upgrade, station))
             return redirect("stations:station_detail", pk=station.pk)
-        target = ImageRelease.objects.filter(
-            machine=current.machine, channel="release", is_latest=True
-        ).first()
-        if target is None:
-            messages.error(
-                request,
-                _("No image release imported for machine %(machine)s.")
-                % {"machine": current.machine},
-            )
-            return redirect("stations:station_detail", pk=station.pk)
-
-        if station.current_image_release_id == target.pk:
-            messages.info(request, _("Station is already on the latest release."))
-            return redirect("stations:station_detail", pk=station.pk)
-
-        if not target.is_ota_ready:
-            messages.error(
-                request,
-                _("Release %(tag)s is not prepared for OTA — re-import it first.")
-                % {"tag": target.tag},
-            )
-            return redirect("stations:station_detail", pk=station.pk)
+        target = upgrade.target
 
         try:
             with transaction.atomic():
@@ -158,90 +145,48 @@ class UpgradeStationView(AreaPermissionMixin, View):
 
 
 class UpgradeGroupView(AreaPermissionMixin, View):
-    """Create Deployments for every station carrying the given tag (grouped
-    by machine: one Deployment per (tag, machine) tuple).
+    """Create Deployments for every station in the given rollout group
+    (one Deployment per machine, each targeting the newest OTA-ready image of
+    the group's channel). Works for any group, in the sequence or not.
     """
 
     area = "rollouts"
     verb = "manage"
 
-    def post(self, request, tag_slug):
-        tag = get_object_or_404(StationTag, slug=tag_slug)
-
-        # Honor first-match-wins: a station carrying both "test" (pos 0)
-        # and "easy" (pos 1) belongs to whichever tag comes first in the
-        # sequence. Resolve the same bucketing as the dashboard, but
-        # purely in SQL — group-upgrade should scale with group size,
-        # not total fleet size.
-        seq = current_sequence()
-        entry = seq.entries.filter(tag=tag).first()
-        if entry is None:
-            messages.info(request, _("Tag is not part of the rollout sequence."))
-            return redirect("rollouts:upgrade_dashboard")
-
-        earlier_tag_ids = list(
-            seq.entries.filter(position__lt=entry.position).values_list("tag_id", flat=True)
-        )
-        stations_qs = Station.objects.filter(tags=tag).select_related("current_image_release")
-        if earlier_tag_ids:
-            # Narrow the claimed-by-earlier query to stations that *also*
-            # carry the target tag — chained .filter() on an M2M forces
-            # an AND intersection. Bound the query to the group, not the
-            # fleet. Pass the queryset to .exclude() so Django emits a
-            # subquery instead of materializing pks into Python.
-            claimed_by_earlier = (
-                Station.objects.filter(tags=tag).filter(tags__in=earlier_tag_ids).values("pk")
+    def post(self, request, group_slug):
+        group = get_object_or_404(RolloutGroup, slug=group_slug)
+        stations = list(
+            Station.objects.filter(rollout_group=group).select_related(
+                "current_image_release", "rollout_group"
             )
-            stations_qs = stations_qs.exclude(pk__in=claimed_by_earlier)
-        stations = list(stations_qs)
+        )
         if not stations:
             messages.info(request, _("No stations are currently assigned to this group."))
             return redirect("rollouts:upgrade_dashboard")
 
-        # Bucket by machine. Stations with no current_image_release cannot
-        # be routed to a target (we don't know their machine) — count them
-        # as skipped so the flash message doesn't silently lose them.
-        by_machine: dict[str, list] = {}
-        unprovisioned = 0
+        # Resolve every station against one prebuilt index. Stations without
+        # a platform, without a newer / OTA-ready image, or already up to date
+        # are counted as skipped so the flash message doesn't silently lose
+        # them. The rest are bucketed by machine (all stations of a group
+        # share its channel, so one machine means one target image).
+        index = latest_index()
+        by_machine: dict[str, tuple] = {}
+        skipped = 0
         for s in stations:
-            if not s.current_image_release:
-                unprovisioned += 1
+            upgrade = resolve_upgrade(s, index)
+            if not upgrade.ok:
+                skipped += 1
                 continue
-            by_machine.setdefault(s.current_image_release.machine, []).append(s)
+            target = upgrade.target
+            by_machine.setdefault(target.machine, (target, []))[1].append(s)
 
         created = 0
-        skipped = unprovisioned
         with transaction.atomic():
-            for machine, machine_stations in by_machine.items():
-                target = ImageRelease.objects.filter(
-                    machine=machine, channel="release", is_latest=True
-                ).first()
-                if target is None:
-                    skipped += len(machine_stations)
-                    continue
-
-                if not target.is_ota_ready:
-                    skipped += len(machine_stations)
-                    continue
-
-                # Filter out stations that are already on the target or
-                # that have an active deployment — BEFORE creating the
-                # Deployment row, so an all-skipped machine doesn't leave
-                # an empty Deployment floating in the table.
-                eligible: list = []
-                for s in machine_stations:
-                    if s.current_image_release_id == target.pk:
-                        skipped += 1
-                        continue
-                    eligible.append(s)
-
-                if not eligible:
-                    continue
-
+            for target, eligible in by_machine.values():
                 dep = Deployment.objects.create(
                     image_release=target,
-                    target_type=Deployment.TargetType.TAG,
-                    target_tag=tag,
+                    target_type=Deployment.TargetType.GROUP,
+                    target_group=group,
                     status=Deployment.Status.IN_PROGRESS,
                     created_by=request.user,
                 )
@@ -264,15 +209,12 @@ class UpgradeGroupView(AreaPermissionMixin, View):
                     # commits. Running it inside the block risks a
                     # DatabaseError on the audit table flipping the main
                     # transaction into rollback-only, which would then
-                    # swallow every subsequent create in the loop. The
-                    # lambda copies all values we need so the closure is
-                    # safe even though `s` / `dep` / `target` / `tag` are
-                    # loop variables that will change.
+                    # swallow every subsequent create in the loop.
                     _defer_audit_log(
                         station=s,
                         event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
                         message=(
-                            f"Upgrade triggered (group '{tag.name}'): "
+                            f"Upgrade triggered (group '{group.name}', channel {group.channel}): "
                             f"{s.current_os_version or '?'} \u2192 {target.tag} "
                             f"(deployment #{dep.pk}) by {request.user.username}"
                         ),
@@ -293,8 +235,8 @@ class UpgradeGroupView(AreaPermissionMixin, View):
 
 
 class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
-    """Roll-up of every station bucketed by its first matching
-    rollout-sequence tag, showing pending upgrades and a per-group action.
+    """Roll-up of every station bucketed by its rollout group, showing the
+    channel-aware upgrade target per station and a per-group action.
     """
 
     area = "rollouts"
@@ -303,14 +245,11 @@ class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        stations = list(
-            Station.objects.select_related("current_image_release").prefetch_related("tags")
-        )
-        grouped = group_stations_by_sequence(stations)
-
-        latest_per_machine: dict[str, ImageRelease] = {
-            r.machine: r for r in ImageRelease.objects.filter(channel="release", is_latest=True)
-        }
+        stations = list(Station.objects.select_related("current_image_release", "rollout_group"))
+        groups = ordered_groups()
+        grouped = group_stations_by_sequence(stations, groups)
+        group_by_slug = {g.slug: g for g in groups}
+        index = latest_index()
 
         # Fetch the latest active DeploymentResult per station so the
         # initial page render already shows real deployment progress
@@ -339,34 +278,38 @@ class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
         ):
             active_result_by_station.setdefault(r.station_id, r)
 
-        # grouped keys are tag slugs; the sidebar + headers want the human
-        # name. One prefetch covers every tag that actually matters here.
-        slug_to_name = dict(StationTag.objects.values_list("slug", "name"))
-
-        rows_by_group: list[tuple[str, str, list]] = []
+        group_rows: list[dict] = []
         up_to_date: list = []
         for group_key, stations_in_group in grouped.items():
-            pending = []
+            rows = []
             for s in stations_in_group:
-                target = (
-                    latest_per_machine.get(s.current_image_release.machine)
-                    if s.current_image_release
-                    else None
+                upgrade = resolve_upgrade(s, index)
+                if upgrade.reason == UpgradeTarget.UP_TO_DATE:
+                    up_to_date.append((s, upgrade.target))
+                    continue
+                rows.append(
+                    {
+                        "station": s,
+                        "upgrade": upgrade,
+                        "message": reason_message(upgrade, s),
+                        "active_result": active_result_by_station.get(s.pk),
+                    }
                 )
-                if target and s.current_image_release_id == target.pk:
-                    up_to_date.append((s, target))
-                else:
-                    pending.append((s, target, active_result_by_station.get(s.pk)))
-            if group_key == UNASSIGNED_KEY:
-                display_name = _("Unassigned")
-            else:
-                display_name = slug_to_name.get(group_key, group_key)
-            rows_by_group.append((group_key, display_name, pending))
+            group = group_by_slug.get(group_key)
+            group_rows.append(
+                {
+                    "key": group_key,
+                    "name": group.name if group else _("No group"),
+                    "channel": group.channel if group else RolloutGroup.Channel.RELEASE,
+                    "is_unassigned": group is None,
+                    "rows": rows,
+                    "upgradable": sum(1 for row in rows if row["upgrade"].ok),
+                }
+            )
 
-        ctx["groups"] = rows_by_group
+        ctx["groups"] = group_rows
         ctx["up_to_date"] = up_to_date
-        ctx["latest_per_machine"] = latest_per_machine
-        ctx["unassigned_key"] = UNASSIGNED_KEY
+        ctx["latest_releases"] = sorted(index.values(), key=lambda r: (r.machine, r.channel))
         return ctx
 
 
@@ -379,7 +322,7 @@ class SequenceEditView(AreaPermissionMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         seq = current_sequence()
         ctx["sequence"] = seq
-        ctx["entries"] = seq.entries.select_related("tag").order_by("position")
+        ctx["entries"] = seq.entries.select_related("group").order_by("position")
         ctx["add_form"] = SequenceAddForm(sequence=seq)
         return ctx
 
@@ -397,7 +340,7 @@ class SequenceAddView(AreaPermissionMixin, View):
             # appends at max(position) + 1. It used to be duplicated here as
             # `(max or -1) + 1`, which turned max == 0 into position 0 again
             # and 500'd on the second entry (uniq_position_per_sequence).
-            rollout_services.add_entry(seq, form.cleaned_data["tag"], by_user=request.user)
+            rollout_services.add_entry(seq, form.cleaned_data["group"], by_user=request.user)
         return redirect("rollouts:sequence_edit")
 
 

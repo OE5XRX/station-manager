@@ -40,7 +40,7 @@ def touch_sequence(sequence: RolloutSequence, by_user) -> None:
 
     Acquires a SELECT FOR UPDATE lock on the parent row so it serialises
     with concurrent add/remove/move calls.  Used when a field other than
-    ``position`` is mutated on an entry (e.g. a tag-only PATCH).
+    ``position`` is mutated on an entry (e.g. a group-only PATCH).
     """
     with transaction.atomic():
         RolloutSequence.objects.select_for_update().filter(pk=sequence.pk).first()
@@ -50,17 +50,17 @@ def touch_sequence(sequence: RolloutSequence, by_user) -> None:
 
 def add_entry(
     sequence: RolloutSequence,
-    tag,
+    group,
     by_user,
 ) -> RolloutSequenceEntry | None:
-    """Add *tag* to *sequence* at the next available position.
+    """Add rollout *group* to *sequence* at the next available position.
 
     The ``position`` hint from the caller is intentionally not used:
     the service always appends at ``max(position) + 1`` so there are
     never position collisions on insert.  The caller must NOT pass a
     position — the service is the authority.
 
-    Returns the new entry, or ``None`` if the tag is already in the
+    Returns the new entry, or ``None`` if the group is already in the
     sequence (idempotent: does not raise).
 
     Acquires a SELECT FOR UPDATE lock on the parent RolloutSequence row,
@@ -69,7 +69,7 @@ def add_entry(
     """
     with transaction.atomic():
         RolloutSequence.objects.select_for_update().filter(pk=sequence.pk).first()
-        if sequence.entries.filter(tag=tag).exists():
+        if sequence.entries.filter(group=group).exists():
             return None
         max_pos = sequence.entries.aggregate(Max("position"))["position__max"]
         # Use explicit None-check: max_pos=0 is a valid position (the sequence has
@@ -78,7 +78,7 @@ def add_entry(
         next_pos = (max_pos if max_pos is not None else -1) + 1
         entry = RolloutSequenceEntry.objects.create(
             sequence=sequence,
-            tag=tag,
+            group=group,
             position=next_pos,
         )
         sequence.updated_by = by_user

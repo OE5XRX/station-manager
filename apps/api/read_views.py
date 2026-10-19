@@ -229,7 +229,7 @@ class RolloutSequenceViewSet(AreaReadOnlyViewSet):
 class RolloutSequenceEntryViewSet(AreaReadOnlyViewSet):
     area = "rollouts"
     serializer_class = RolloutSequenceEntrySerializer
-    filterset_fields = ["sequence", "tag"]
+    filterset_fields = ["sequence", "group"]
     ordering_fields = ["position"]
 
     def get_queryset(self):

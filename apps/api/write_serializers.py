@@ -242,20 +242,20 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
     and allowing it on PATCH would bypass the locked renumber on the original
     sequence.  Any ``sequence`` value in a PATCH body is silently ignored.
 
-    ``tag`` uniqueness per sequence is enforced by a custom ``validate_tag``
-    check: a duplicate tag returns a descriptive 400.  The auto-generated
+    ``group`` uniqueness per sequence is enforced by a custom ``validate_group``
+    check: a duplicate group returns a descriptive 400.  The auto-generated
     UniqueTogetherValidator is suppressed (``validators = []``) to prevent it
     from also rejecting valid reorder operations on the position constraint;
-    we re-add only the tag check manually.
+    we re-add only the group check manually.
     """
 
-    def validate_tag(self, value):
-        """Reject a duplicate tag within the same sequence (400, not a DB 500)."""
+    def validate_group(self, value):
+        """Reject a duplicate group within the same sequence (400, not a DB 500)."""
         # On update (partial_update), instance is set — compare against the
         # sequence that already owns this entry (sequence is read-only on update).
         if self.instance is not None:
             sequence = self.instance.sequence
-            qs = RolloutSequenceEntry.objects.filter(sequence=sequence, tag=value).exclude(
+            qs = RolloutSequenceEntry.objects.filter(sequence=sequence, group=value).exclude(
                 pk=self.instance.pk
             )
         else:
@@ -263,12 +263,12 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
             # Using initial_data['sequence'] directly risks a ValueError/500 if
             # the client sent a non-numeric PK — DRF's PrimaryKeyRelatedField
             # will have already added a field error for the bad value, so by the
-            # time validate_tag runs the field error is queued but attrs may not
+            # time validate_group runs the field error is queued but attrs may not
             # contain 'sequence'.  Access attrs instead; if it's absent the field
             # validation failed and DRF will return a 400 anyway.
             sequence = self.initial_data.get("_resolved_sequence")  # never set
             # Prefer the already-validated value from attrs passed to validate().
-            # validate_tag is called by DRF as a field-level validator BEFORE
+            # validate_group is called by DRF as a field-level validator BEFORE
             # the cross-field validate() method, so we can't get attrs here
             # directly.  Instead, attempt a safe lookup via the field's
             # run_validators path: read the sibling field's current_value from
@@ -282,7 +282,7 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
                 sequence_pk = int(raw)
             except (TypeError, ValueError):
                 # Non-numeric PK → DRF's PrimaryKeyRelatedField will reject it
-                # with a 400; skip the tag-uniqueness check here.
+                # with a 400; skip the group-uniqueness check here.
                 return value
             from apps.rollouts.models import RolloutSequence
 
@@ -291,19 +291,19 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
             except RolloutSequence.DoesNotExist:
                 # Bad FK — DRF field validation will return a 400.
                 return value
-            qs = RolloutSequenceEntry.objects.filter(sequence=sequence, tag=value)
+            qs = RolloutSequenceEntry.objects.filter(sequence=sequence, group=value)
         if qs.exists():
-            raise serializers.ValidationError("This tag is already in the sequence.")
+            raise serializers.ValidationError("This group is already in the sequence.")
         return value
 
     class Meta:
         model = RolloutSequenceEntry
-        fields = ["id", "sequence", "tag", "position"]
+        fields = ["id", "sequence", "group", "position"]
         read_only_fields = ["id"]
         # Suppress auto-generated UniqueTogetherValidator for the position
         # constraint only. DRF generates one validator per UniqueConstraint;
-        # we must explicitly empty the list and re-add the tag validator so
-        # only the harmless one (tag-uniqueness for 400-on-duplicate) fires.
+        # we must explicitly empty the list and re-add the group validator so
+        # only the harmless one (group-uniqueness for 400-on-duplicate) fires.
         # The position constraint is enforced atomically by the service layer.
         validators = []
 

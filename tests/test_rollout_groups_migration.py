@@ -256,3 +256,28 @@ def test_tags_unchanged(migrator):
     assert after == before
     assert after[s1.pk] == ["a", "b", "label"]
     assert after[s2.pk] == ["label"]
+
+
+@pytest.mark.django_db
+def test_drop_entry_tag_deletes_groupless_entries_and_renumbers(migrator):
+    """0006 must never abort on an entry 0005 left without a group: it drops
+    it, closes the position gap, and the column becomes NOT NULL."""
+    old = migrator.apply_initial_migration([("rollouts", "0005_tags_to_groups")]).apps
+    seed = _Seed(old)
+    group_model = old.get_model("stations", "RolloutGroup")
+    g0 = group_model.objects.create(name="g0", slug="g0")
+    g2 = group_model.objects.create(name="g2", slug="g2")
+    e0 = seed.entry(seed.tag("t0"), 0)
+    seed.entry(seed.tag("t1"), 1)  # never mapped -> group stays NULL
+    e2 = seed.entry(seed.tag("t2"), 2)
+    seed.Entry.objects.filter(pk=e0.pk).update(group=g0)
+    seed.Entry.objects.filter(pk=e2.pk).update(group=g2)
+
+    new = migrator.apply_tested_migration([("rollouts", "0006_drop_entry_tag")]).apps
+
+    entry_model = new.get_model("rollouts", "RolloutSequenceEntry")
+    assert list(entry_model.objects.order_by("position").values_list("group_id", "position")) == [
+        (g0.pk, 0),
+        (g2.pk, 1),
+    ]
+    assert not entry_model._meta.get_field("group").null

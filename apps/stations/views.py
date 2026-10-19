@@ -19,6 +19,7 @@ from apps.deployments.models import DeploymentResult
 from apps.images.models import ImageRelease
 from apps.module_firmware import drain as module_drain
 from apps.provisioning.models import ProvisioningJob
+from apps.rollouts.targeting import reason_message, resolve_upgrade
 
 from .forms import StationForm, StationLogEntryForm, StationPhotoForm, StationTagForm
 from .inventory import inventory_for_viewer
@@ -93,7 +94,9 @@ class StationDetailView(AreaPermissionMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("device_key", "inventory", "telemetry", "current_image_release")
+            .select_related(
+                "device_key", "inventory", "telemetry", "current_image_release", "rollout_group"
+            )
             .prefetch_related(*prefetch)
         )
 
@@ -133,13 +136,9 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             )
         # Upgrade card (deployments:manage; the card is hidden otherwise)
         if can(user, "deployments", "manage"):
-            current = self.object.current_image_release
-            if current is not None:
-                context["upgrade_target"] = ImageRelease.objects.filter(
-                    machine=current.machine, channel="release", is_latest=True
-                ).first()
-            else:
-                context["upgrade_target"] = None
+            upgrade = resolve_upgrade(self.object)
+            context["upgrade"] = upgrade
+            context["upgrade_message"] = reason_message(upgrade, self.object)
             context["recent_deployments"] = list(
                 DeploymentResult.objects.filter(station=self.object)
                 .select_related("deployment__image_release")

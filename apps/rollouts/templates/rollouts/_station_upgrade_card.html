@@ -7,34 +7,36 @@
     </div>
   </div>
   <div class="panel-body">
-    {% if upgrade_target %}
-      {% if station.current_image_release_id == upgrade_target.pk %}
-        <p class="t-muted">
-          <em>{% trans "Already on latest" %} ({{ upgrade_target.tag }}).</em>
-        </p>
+    <p class="t-muted" style="margin-top:0;">
+      {% trans "Channel" %}: {% include "images/_channel_badge.html" with channel=station.rollout_group.channel|default:"release" %}
+      {% if station.rollout_group %}
+        <span style="margin-left:6px;">({% trans "group" %} {{ station.rollout_group.name }})</span>
       {% else %}
-        <p>
-          {% trans "Current" %}: <code class="t-mono">{{ station.current_image_release.tag|default:'-' }}</code> {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}<br>
-          {% trans "Target" %}: <code class="t-mono">{{ upgrade_target.tag }}</code> {% include "images/_channel_badge.html" with channel=upgrade_target.channel %}
-          <span class="t-muted">({% trans "latest for" %} {{ upgrade_target.machine }})</span>
-        </p>
-        {% blocktrans asvar confirm_msg with t=upgrade_target.tag %}Upgrade this station to {{ t }}?{% endblocktrans %}
-        <form method="post"
-              action="{% url 'rollouts:upgrade_station' station_pk=station.pk %}"
-              onsubmit="return confirm('{{ confirm_msg|escapejs }}');"
-              style="margin:0;">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-primary">
-            {% blocktrans with t=upgrade_target.tag %}Upgrade this station to {{ t }}{% endblocktrans %}
-          </button>
-        </form>
+        <span style="margin-left:6px;">({% trans "no group" %})</span>
       {% endif %}
+    </p>
+    {% if upgrade.ok %}
+      <p>
+        {% trans "Current" %}: <code class="t-mono">{{ station.current_image_release.tag }}</code> {% include "images/_channel_badge.html" with channel=station.current_image_release.channel %}<br>
+        {% trans "Target" %}: <code class="t-mono">{{ upgrade.target.tag }}</code> {% include "images/_channel_badge.html" with channel=upgrade.target.channel %}
+        <span class="t-muted">({% trans "latest for" %} {{ upgrade.target.machine }})</span>
+      </p>
+      {% blocktrans asvar confirm_msg with t=upgrade.target.tag %}Upgrade this station to {{ t }}?{% endblocktrans %}
+      <form method="post"
+            action="{% url 'rollouts:upgrade_station' station_pk=station.pk %}"
+            onsubmit="return confirm('{{ confirm_msg|escapejs }}');"
+            style="margin:0;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">
+          {% blocktrans with t=upgrade.target.tag %}Upgrade this station to {{ t }}{% endblocktrans %}
+        </button>
+      </form>
+    {% elif upgrade.reason == upgrade.UP_TO_DATE %}
+      <p class="t-muted">
+        <em>{% trans "Already on latest" %} ({{ upgrade.target.tag }}).</em>
+      </p>
     {% else %}
-      {% if station.current_image_release_id %}
-        <p class="t-muted"><em>{% trans "No image release imported yet for this station's machine." %}</em></p>
-      {% else %}
-        <p class="t-muted"><em>{% trans "Station has not been provisioned yet." %}</em></p>
-      {% endif %}
+      <p class="t-muted" data-upgrade-reason="{{ upgrade.reason }}"><em>{{ upgrade_message }}</em></p>
     {% endif %}
 
     {% if recent_deployments %}
