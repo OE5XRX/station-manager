@@ -1,7 +1,7 @@
 """Regression tests for Copilot round-4 findings (R4a/R4b/R4c).
 
 R4a — RolloutSequenceEntry tag-only PATCH acquires parent lock before saving
-R4b — StationTag delete cascades RolloutSequenceEntry → gaps in sequence / no renumber
+R4b — RolloutGroup delete cascades RolloutSequenceEntry → gaps in sequence / no renumber
 R4c — move_entry ValueError (offset overflow) → 500 instead of 400
 """
 
@@ -23,14 +23,14 @@ def _get_or_create_sequence(key="current"):
     return seq
 
 
-def _make_tag(name):
+def _make_group(name):
     from django.utils.text import slugify
 
-    from apps.stations.models import StationTag
+    from apps.stations.models import RolloutGroup
 
     slug = slugify(name)
-    tag, _ = StationTag.objects.get_or_create(name=name, defaults={"slug": slug})
-    return tag
+    group, _ = RolloutGroup.objects.get_or_create(name=name, defaults={"slug": slug})
+    return group
 
 
 # ---------------------------------------------------------------------------
@@ -58,20 +58,20 @@ class TestR4aTagOnlyPatchLocked:
         from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 
         seq = _get_or_create_sequence("r4a-tag-only")
-        tag_a = _make_tag("r4a-original")
-        tag_b = _make_tag("r4a-replacement")
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+        tag_a = _make_group("r4a-original")
+        tag_b = _make_group("r4a-replacement")
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
 
         # Clear updated_by so we can assert it is set
         RolloutSequence.objects.filter(pk=seq.pk).update(updated_by=None)
         before = datetime.datetime.now(datetime.UTC)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_b.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"group": tag_b.pk}, format="json")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.data}"
 
         entry.refresh_from_db()
-        assert entry.tag == tag_b, "Entry tag must be updated"
+        assert entry.group == tag_b, "Entry tag must be updated"
 
         seq.refresh_from_db()
         assert seq.updated_by == api_topology["admin"], (
@@ -86,12 +86,12 @@ class TestR4aTagOnlyPatchLocked:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence("r4a-200-check")
-        tag_a = _make_tag("r4a-200-orig")
-        tag_b = _make_tag("r4a-200-new")
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+        tag_a = _make_group("r4a-200-orig")
+        tag_b = _make_group("r4a-200-new")
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
-        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_b.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"group": tag_b.pk}, format="json")
         assert r.status_code == 200, (
             f"Tag-only PATCH must return 200, got {r.status_code}: {r.data}"
         )
@@ -101,100 +101,76 @@ class TestR4aTagOnlyPatchLocked:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence("r4a-pos-tag-atomic")
-        tag_a = _make_tag("r4a-pos-tag-a")
-        tag_b = _make_tag("r4a-pos-tag-b")
-        tag_new = _make_tag("r4a-pos-tag-new")
-        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        tag_a = _make_group("r4a-pos-tag-a")
+        tag_b = _make_group("r4a-pos-tag-b")
+        tag_new = _make_group("r4a-pos-tag-new")
+        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
         r = bearer(api_topology["admin"]).patch(
-            url, {"position": 1, "tag": tag_new.pk}, format="json"
+            url, {"position": 1, "group": tag_new.pk}, format="json"
         )
         assert r.status_code == 200, (
             f"position+tag PATCH must return 200, got {r.status_code}: {r.data}"
         )
         entry_a.refresh_from_db()
-        assert entry_a.tag == tag_new
+        assert entry_a.group == tag_new
         assert entry_a.position == 1
 
 
 # ---------------------------------------------------------------------------
-# R4b — StationTag delete renumbers sequence (approach a: post_delete signal)
+# R4b — sequence entries stay gap-free (post_delete signal); a group in the
+# sequence can't be deleted (PROTECT)
 # ---------------------------------------------------------------------------
 
 
 class TestR4bTagDeleteRenumbersSequence:
-    """Deleting a StationTag that appears in a RolloutSequence must:
-      - remove the RolloutSequenceEntry (cascade),
-      - renumber remaining entries to be 0-based and gap-free,
-      - stamp the parent RolloutSequence updated_at.
-
-    The renumber is driven by a post_delete signal on RolloutSequenceEntry so it
-    catches the cascade path (tag delete) as well as any other ORM removal.
-    Because the signal fires without an actor, updated_by is left as-is (or None
-    if not previously set); the important invariant is that positions are gap-free
-    and updated_at is bumped.
+    """Removing a RolloutSequenceEntry by any ORM path renumbers the remaining
+    entries 0-based and gap-free via the post_delete signal. Deleting a group
+    that still has an entry is blocked (PROTECT) — the user decision is that a
+    group must be removed from the sequence first.
     """
 
-    def test_tag_delete_removes_entry_and_renumbers_sequence(self, api_topology, bearer):
-        """Delete the middle tag → entry removed, remaining entries renumbered
-        to [0, 1] (no gap), parent sequence updated_at bumped, no 500."""
-        import datetime
-
+    def test_group_delete_blocked_while_in_sequence(self, api_topology, bearer):
+        """A group in the sequence is PROTECTed: API delete → 409, entries untouched."""
         from apps.rollouts.models import RolloutSequenceEntry
-        from apps.stations.models import StationTag
+        from apps.stations.models import RolloutGroup
 
         seq = _get_or_create_sequence("r4b-tag-delete")
-        tag_t0 = StationTag.objects.create(name="r4b-tag-t0", slug="r4b-tag-t0")
-        tag_t1 = StationTag.objects.create(name="r4b-tag-t1", slug="r4b-tag-t1")
-        tag_t2 = StationTag.objects.create(name="r4b-tag-t2", slug="r4b-tag-t2")
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_t0, position=0)
-        e1 = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_t1, position=1)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_t2, position=2)
+        groups = [
+            RolloutGroup.objects.create(name=f"r4b-tag-t{i}", slug=f"r4b-tag-t{i}")
+            for i in range(3)
+        ]
+        for i, g in enumerate(groups):
+            RolloutSequenceEntry.objects.create(sequence=seq, group=g, position=i)
 
-        # Record updated_at before the delete
-        seq.refresh_from_db()
-        before = datetime.datetime.now(datetime.UTC)
-
-        # Delete the middle tag via the API (staff-only)
-        url = reverse("api:station-tag-detail", args=[tag_t1.pk])
+        url = reverse("api:rollout-group-detail", args=[groups[1].pk])
         r = bearer(api_topology["staff"]).delete(url)
-        assert r.status_code == 204, f"Expected 204 on tag delete, got {r.status_code}: {r.data}"
+        assert r.status_code == 409, r.content
+        assert "sequence_entries=1" in r.data["detail"]
+        assert RolloutGroup.objects.filter(pk=groups[1].pk).exists()
+        assert list(seq.entries.order_by("position").values_list("position", flat=True)) == [
+            0,
+            1,
+            2,
+        ]
 
-        # Entry for tag_t1 must be gone (cascaded)
-        assert not RolloutSequenceEntry.objects.filter(pk=e1.pk).exists(), (
-            "RolloutSequenceEntry for deleted tag must be removed via cascade"
-        )
-
-        # Remaining entries must be 0-based contiguous (no gap)
-        positions = list(seq.entries.order_by("position").values_list("position", flat=True))
-        assert positions == list(range(len(positions))), (
-            f"Positions must be gap-free after tag delete, got: {positions}"
-        )
-        assert len(positions) == 2, f"Expected 2 remaining entries, got {len(positions)}"
-
-        # Parent updated_at must be bumped
-        seq.refresh_from_db()
-        assert seq.updated_at >= before, (
-            "Parent sequence.updated_at must be bumped after tag-cascade-delete"
-        )
-
-    def test_tag_delete_via_orm_also_renumbers(self, api_topology):
-        """ORM tag.delete() (not via API) must also renumber via signal."""
+    def test_entry_delete_via_orm_also_renumbers(self, api_topology):
+        """ORM entry.delete() (not via the service) must also renumber via signal."""
         from apps.rollouts.models import RolloutSequenceEntry
-        from apps.stations.models import StationTag
+        from apps.stations.models import RolloutGroup
 
         seq = _get_or_create_sequence("r4b-orm-delete")
-        t0 = StationTag.objects.create(name="r4b-orm-t0", slug="r4b-orm-t0")
-        t1 = StationTag.objects.create(name="r4b-orm-t1", slug="r4b-orm-t1")
-        t2 = StationTag.objects.create(name="r4b-orm-t2", slug="r4b-orm-t2")
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t0, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=1)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=2)
+        t0 = RolloutGroup.objects.create(name="r4b-orm-t0", slug="r4b-orm-t0")
+        t1 = RolloutGroup.objects.create(name="r4b-orm-t1", slug="r4b-orm-t1")
+        t2 = RolloutGroup.objects.create(name="r4b-orm-t2", slug="r4b-orm-t2")
+        RolloutSequenceEntry.objects.create(sequence=seq, group=t0, position=0)
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=2)
 
-        # Delete middle tag via ORM (not API) — signal must still fire
-        t1.delete()
+        # Delete the middle entry via ORM (not the service) — signal must still fire
+        e1.delete()
 
         positions = list(seq.entries.order_by("position").values_list("position", flat=True))
         assert positions == list(range(len(positions))), (
@@ -219,12 +195,12 @@ class TestR4bTagDeleteRenumbersSequence:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence("r4b-idempotent")
-        t0 = _make_tag("r4b-idem-t0")
-        t1 = _make_tag("r4b-idem-t1")
-        t2 = _make_tag("r4b-idem-t2")
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t0, position=0)
-        e1 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=1)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=2)
+        t0 = _make_group("r4b-idem-t0")
+        t1 = _make_group("r4b-idem-t1")
+        t2 = _make_group("r4b-idem-t2")
+        RolloutSequenceEntry.objects.create(sequence=seq, group=t0, position=0)
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=2)
 
         # Delete entry directly via API (not via tag delete)
         url = reverse("api:rollout-sequence-entry-detail", args=[e1.pk])
@@ -257,10 +233,10 @@ class TestR4cOffsetOverflow400:
         monkeypatch.setattr(rollout_services, "_calc_offset", _raising_calc_offset)
 
         seq = _get_or_create_sequence("r4c-overflow")
-        tag_a = _make_tag("r4c-overflow-a")
-        tag_b = _make_tag("r4c-overflow-b")
-        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        tag_a = _make_group("r4c-overflow-a")
+        tag_b = _make_group("r4c-overflow-b")
+        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
         r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
@@ -286,10 +262,10 @@ class TestR4cOffsetOverflow400:
         monkeypatch.setattr(rollout_services, "_calc_offset", _raising_calc_offset)
 
         seq = _get_or_create_sequence("r4c-msg")
-        tag_a = _make_tag("r4c-msg-a")
-        tag_b = _make_tag("r4c-msg-b")
-        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        tag_a = _make_group("r4c-msg-a")
+        tag_b = _make_group("r4c-msg-b")
+        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
         r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")
@@ -304,10 +280,10 @@ class TestR4cOffsetOverflow400:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence("r4c-normal")
-        tag_a = _make_tag("r4c-normal-a")
-        tag_b = _make_tag("r4c-normal-b")
-        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        tag_a = _make_group("r4c-normal-a")
+        tag_b = _make_group("r4c-normal-b")
+        entry_a = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_a.pk])
         r = bearer(api_topology["admin"]).patch(url, {"position": 1}, format="json")

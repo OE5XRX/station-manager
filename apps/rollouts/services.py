@@ -5,9 +5,8 @@ mutating entries, so concurrent API / UI calls serialize through a single gate.
 They also renumber remaining positions to maintain a 0-based, gap-free ordering
 and stamp updated_by / updated_at on the parent in the same transaction.
 
-These functions back the API write path (apps/api/write_views.py).  The UI
-views (apps/rollouts/views.py) retain their own parallel implementation;
-shared extraction is a tracked follow-up.
+These functions back both the API write path (apps/api/write_views.py) and the
+UI add/remove views (apps/rollouts/views.py).
 """
 
 from django.db import transaction
@@ -41,7 +40,7 @@ def touch_sequence(sequence: RolloutSequence, by_user) -> None:
 
     Acquires a SELECT FOR UPDATE lock on the parent row so it serialises
     with concurrent add/remove/move calls.  Used when a field other than
-    ``position`` is mutated on an entry (e.g. a tag-only PATCH).
+    ``position`` is mutated on an entry (e.g. a group-only PATCH).
     """
     with transaction.atomic():
         RolloutSequence.objects.select_for_update().filter(pk=sequence.pk).first()
@@ -51,17 +50,17 @@ def touch_sequence(sequence: RolloutSequence, by_user) -> None:
 
 def add_entry(
     sequence: RolloutSequence,
-    tag,
+    group,
     by_user,
 ) -> RolloutSequenceEntry | None:
-    """Add *tag* to *sequence* at the next available position.
+    """Add rollout *group* to *sequence* at the next available position.
 
     The ``position`` hint from the caller is intentionally not used:
     the service always appends at ``max(position) + 1`` so there are
     never position collisions on insert.  The caller must NOT pass a
     position — the service is the authority.
 
-    Returns the new entry, or ``None`` if the tag is already in the
+    Returns the new entry, or ``None`` if the group is already in the
     sequence (idempotent: does not raise).
 
     Acquires a SELECT FOR UPDATE lock on the parent RolloutSequence row,
@@ -70,7 +69,7 @@ def add_entry(
     """
     with transaction.atomic():
         RolloutSequence.objects.select_for_update().filter(pk=sequence.pk).first()
-        if sequence.entries.filter(tag=tag).exists():
+        if sequence.entries.filter(group=group).exists():
             return None
         max_pos = sequence.entries.aggregate(Max("position"))["position__max"]
         # Use explicit None-check: max_pos=0 is a valid position (the sequence has
@@ -79,7 +78,7 @@ def add_entry(
         next_pos = (max_pos if max_pos is not None else -1) + 1
         entry = RolloutSequenceEntry.objects.create(
             sequence=sequence,
-            tag=tag,
+            group=group,
             position=next_pos,
         )
         sequence.updated_by = by_user
@@ -155,3 +154,54 @@ def move_entry(entry: RolloutSequenceEntry, new_position: int, by_user) -> None:
 
         sequence.updated_by = by_user
         sequence.save(update_fields=["updated_by", "updated_at"])
+
+
+def group_references(group) -> dict[str, int]:
+    """Count what blocks deleting *group* (all four FKs are PROTECT).
+
+    Separate ``count()`` queries instead of one annotated join: four
+    multi-valued LEFT JOINs would multiply the row set.
+    """
+    return {
+        "stations": group.stations.count(),
+        "sequence_entries": group.rollout_entries.count(),
+        "firmware_targets": group.firmware_targets.count(),
+        "canary_targets": group.canary_targets.count(),
+    }
+
+
+GROUP_AUDIT_FIELDS = ("name", "slug", "channel", "description")
+
+
+def group_snapshot(group) -> dict[str, str]:
+    """Field values to diff against after an update (see :func:`audit_group`)."""
+    return {f: str(getattr(group, f)) for f in GROUP_AUDIT_FIELDS}
+
+
+def audit_group(group, action, *, actor, ip_address=None, suffix="", before=None) -> None:
+    """CONFIG_CHANGED row for a rollout-group create/update/delete.
+
+    Shared by the UI, the API and the Django admin so all three record the
+    same shape. *before* is a :func:`group_snapshot` taken before an update;
+    the row then carries an old/new diff. A create records the channel.
+    """
+    from apps.accounts.models import AccountAuditLog
+
+    if before is not None:
+        after = group_snapshot(group)
+        changes = {
+            f: {"old": before[f], "new": after[f]}
+            for f in GROUP_AUDIT_FIELDS
+            if before[f] != after[f]
+        }
+    elif action == "created":
+        changes = {"channel": group.channel}
+    else:
+        changes = {}
+    AccountAuditLog.log(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        actor=actor,
+        ip_address=ip_address,
+        message=f"RolloutGroup {group.slug} {action}{suffix}",
+        details={"object": "rollout_group", "action": action, "changes": changes},
+    )

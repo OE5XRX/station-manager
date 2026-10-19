@@ -13,7 +13,7 @@ from apps.module_firmware.models import (
     ModuleFirmwareTarget,
     ModuleType,
 )
-from apps.stations.models import StationAuditLog, StationTag
+from apps.stations.models import RolloutGroup, StationAuditLog
 from tests.test_api_read_fixtures import session
 
 pytestmark = pytest.mark.django_db
@@ -60,8 +60,8 @@ def rel2(fm):
 
 
 @pytest.fixture
-def tag():
-    return StationTag.objects.create(name="Canary", slug="canary")
+def group():
+    return RolloutGroup.objects.create(name="Canary", slug="canary")
 
 
 @pytest.fixture
@@ -229,9 +229,9 @@ def test_create_second_fleet_target_same_type_400(api_topology, bearer, fleet_ta
     assert not _audits().exists()
 
 
-def test_create_tag_scope_without_tag_400(api_topology, bearer, rel1, reconciled):
+def test_create_group_scope_without_group_400(api_topology, bearer, rel1, reconciled):
     resp = bearer(api_topology["staff"]).post(
-        reverse(LIST), {"release": rel1.pk, "scope": "tag"}, format="json"
+        reverse(LIST), {"release": rel1.pk, "scope": "group"}, format="json"
     )
     assert resp.status_code == 400
     assert "non_field_errors" in resp.json()
@@ -239,14 +239,14 @@ def test_create_tag_scope_without_tag_400(api_topology, bearer, rel1, reconciled
     assert reconciled == []
 
 
-def test_create_canary_on_station_scope_400(api_topology, bearer, rel1, tag, reconciled):
+def test_create_canary_on_station_scope_400(api_topology, bearer, rel1, group, reconciled):
     resp = bearer(api_topology["staff"]).post(
         reverse(LIST),
         {
             "release": rel1.pk,
             "scope": "station",
             "station": api_topology["station_in"].pk,
-            "canary_tag": tag.pk,
+            "canary_group": group.pk,
         },
         format="json",
     )
@@ -255,12 +255,14 @@ def test_create_canary_on_station_scope_400(api_topology, bearer, rel1, tag, rec
     assert not ModuleFirmwareTarget.objects.exists()
 
 
-def test_create_fleet_with_canary_tag(api_topology, bearer, rel1, tag, reconciled):
+def test_create_fleet_with_canary_group(api_topology, bearer, rel1, group, reconciled):
     resp = bearer(api_topology["staff"]).post(
-        reverse(LIST), {"release": rel1.pk, "scope": "fleet", "canary_tag": tag.pk}, format="json"
+        reverse(LIST),
+        {"release": rel1.pk, "scope": "fleet", "canary_group": group.pk},
+        format="json",
     )
     assert resp.status_code == 201, resp.content
-    assert resp.json()["canary_tag"] == tag.pk
+    assert resp.json()["canary_group"] == group.pk
 
 
 def test_create_archived_release_400_on_release(api_topology, bearer, rel1, reconciled):
@@ -363,15 +365,19 @@ def test_put_requires_release(api_topology, bearer, fleet_target, reconciled):
     assert "release" in resp.json()
 
 
-def test_put_full_update(api_topology, bearer, fleet_target, rel2, tag, reconciled):
+def test_put_full_update(api_topology, bearer, fleet_target, rel2, group, reconciled):
     resp = bearer(api_topology["staff"]).put(
         reverse(DETAIL, args=[fleet_target.pk]),
-        {"release": rel2.pk, "scope": "tag", "tag": tag.pk},
+        {"release": rel2.pk, "scope": "group", "group": group.pk},
         format="json",
     )
     assert resp.status_code == 200, resp.content
     fleet_target.refresh_from_db()
-    assert (fleet_target.version, fleet_target.scope, fleet_target.tag) == ("2.0", "tag", tag)
+    assert (fleet_target.version, fleet_target.scope, fleet_target.group) == (
+        "2.0",
+        "group",
+        group,
+    )
 
 
 # --- delete -----------------------------------------------------------------

@@ -24,6 +24,7 @@ router = ScopedDefaultRouter()
 router.register(r"stations", write_views.StationViewSet, basename="station")
 router.register(r"regions", write_views.RegionViewSet, basename="region")
 router.register(r"station-tags", write_views.StationTagViewSet, basename="station-tag")
+router.register(r"rollout-groups", write_views.RolloutGroupViewSet, basename="rollout-group")
 router.register(
     r"station-assignments",
     write_views.StationAssignmentViewSet,

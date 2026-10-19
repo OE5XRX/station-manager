@@ -5,11 +5,11 @@ from tests.test_api_read_fixtures import bearer, session, topology  # noqa: F401
 
 def _seq():
     from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
-    from apps.stations.models import StationTag
+    from apps.stations.models import RolloutGroup
 
     seq, _ = RolloutSequence.objects.get_or_create(singleton_key="current")
-    tag = StationTag.objects.create(name="early", slug="early")
-    RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+    group = RolloutGroup.objects.create(name="early", slug="early")
+    RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
     return seq
 
 
@@ -26,6 +26,9 @@ def test_rollout_sequence_entries_nested(topology):  # noqa: F811
     seq = _seq()
     resp = bearer(topology["station_user"]).get(f"/api/v1/rollout-sequences/{seq.pk}/entries/")
     assert resp.status_code == 200 and resp.data["count"] == 1
+    entry = resp.data["results"][0]
+    assert "tag" not in entry
+    assert entry["group"] == seq.entries.get().group_id
 
 
 @pytest.mark.django_db

@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 
 class RolloutSequence(models.Model):
-    """System-wide ordered tag list for manual phased rollouts.
+    """System-wide ordered rollout-group list for manual phased rollouts.
 
     Enforced singleton: the ``singleton_key`` field has a unique index
     and a fixed default, so the DB rejects any attempt to insert a
@@ -40,16 +40,17 @@ class RolloutSequence(models.Model):
 
 
 class RolloutSequenceEntry(models.Model):
-    """One tag at one position inside a RolloutSequence."""
+    """One rollout group at one position inside a RolloutSequence."""
 
     sequence = models.ForeignKey(
         RolloutSequence,
         on_delete=models.CASCADE,
         related_name="entries",
     )
-    tag = models.ForeignKey(
-        "stations.StationTag",
-        on_delete=models.CASCADE,
+    group = models.ForeignKey(
+        "stations.RolloutGroup",
+        # PROTECT: remove the group from the sequence before deleting it.
+        on_delete=models.PROTECT,
         related_name="rollout_entries",
     )
     position = models.PositiveSmallIntegerField(_("position"))
@@ -57,14 +58,14 @@ class RolloutSequenceEntry(models.Model):
     class Meta:
         ordering = ["position"]
         constraints = [
-            models.UniqueConstraint(fields=["sequence", "tag"], name="uniq_tag_per_sequence"),
+            models.UniqueConstraint(fields=["sequence", "group"], name="uniq_group_per_sequence"),
             models.UniqueConstraint(
                 fields=["sequence", "position"], name="uniq_position_per_sequence"
             ),
         ]
 
     def __str__(self):
-        return f"{self.position}: {self.tag}"
+        return f"{self.position}: {self.group}"
 
 
 def current_sequence() -> RolloutSequence:

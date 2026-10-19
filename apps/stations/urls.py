@@ -48,6 +48,15 @@ urlpatterns = [
     path("tags/create/", views.StationTagCreateView.as_view(), name="tag_create"),
     path("tags/<int:pk>/edit/", views.StationTagUpdateView.as_view(), name="tag_edit"),
     path("tags/<int:pk>/delete/", views.StationTagDeleteView.as_view(), name="tag_delete"),
+    # Rollout groups
+    path("groups/", views.RolloutGroupListView.as_view(), name="group_list"),
+    path("groups/create/", views.RolloutGroupCreateView.as_view(), name="group_create"),
+    path("groups/<int:pk>/edit/", views.RolloutGroupUpdateView.as_view(), name="group_edit"),
+    path(
+        "groups/<int:pk>/delete/",
+        views.RolloutGroupDeleteView.as_view(),
+        name="group_delete",
+    ),
     # Region CRUD
     path("regions/", RegionListView.as_view(), name="region_list"),
     path(

@@ -20,6 +20,9 @@ EXPECTED_WRITE_OPS = {
     "/api/v1/regions/{id}/": {"put", "patch", "delete"},
     "/api/v1/station-tags/": {"post"},
     "/api/v1/station-tags/{id}/": {"put", "patch", "delete"},
+    # Rollout groups CRUD
+    "/api/v1/rollout-groups/": {"post"},
+    "/api/v1/rollout-groups/{id}/": {"put", "patch", "delete"},
     # Task 4: Station/Region assignment CRUD
     "/api/v1/station-assignments/": {"post"},
     "/api/v1/station-assignments/{id}/": {"put", "patch", "delete"},

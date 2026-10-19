@@ -307,11 +307,11 @@ class ModuleFirmwareImportJob(models.Model):
 
 class ModuleFirmwareTarget(models.Model):
     """Declarative desired firmware version per module_type, with scope
-    precedence station > tag > fleet and an optional canary gate."""
+    precedence station > group > fleet and an optional canary gate."""
 
     class Scope(models.TextChoices):
         FLEET = "fleet", _("Fleet default")
-        TAG = "tag", _("Tag override")
+        GROUP = "group", _("Group override")
         STATION = "station", _("Station override")
 
     module_type = models.ForeignKey(
@@ -322,13 +322,15 @@ class ModuleFirmwareTarget(models.Model):
     )
     version = models.CharField(_("version"), max_length=64)
     scope = models.CharField(_("scope"), max_length=16, choices=Scope.choices, default=Scope.FLEET)
-    tag = models.ForeignKey(
-        "stations.StationTag",
-        on_delete=models.CASCADE,
+    group = models.ForeignKey(
+        "stations.RolloutGroup",
+        # PROTECT (group and canary_group): deleting a referenced group would
+        # silently drop a group target or ungate a canary fleet target.
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="firmware_targets",
-        verbose_name=_("tag"),
+        verbose_name=_("group"),
     )
     station = models.ForeignKey(
         "stations.Station",
@@ -338,14 +340,14 @@ class ModuleFirmwareTarget(models.Model):
         related_name="firmware_targets",
         verbose_name=_("station"),
     )
-    canary_tag = models.ForeignKey(
-        "stations.StationTag",
-        on_delete=models.SET_NULL,
+    canary_group = models.ForeignKey(
+        "stations.RolloutGroup",
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name="+",
-        verbose_name=_("canary tag"),
-        help_text=_("While set, a fleet target applies only to stations in this tag."),
+        related_name="canary_targets",
+        verbose_name=_("canary group"),
+        help_text=_("While set, a fleet target applies only to stations in this group."),
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -369,43 +371,43 @@ class ModuleFirmwareTarget(models.Model):
                 name="uniq_fleet_target_per_type",
             ),
             models.UniqueConstraint(
-                fields=["module_type", "tag"],
-                condition=models.Q(scope="tag"),
-                name="uniq_tag_target_per_type_tag",
+                fields=["module_type", "group"],
+                condition=models.Q(scope="group"),
+                name="uniq_group_target_per_type_group",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "station"],
                 condition=models.Q(scope="station"),
                 name="uniq_station_target_per_type_station",
             ),
-            # Scope/ref coherence: nullable tag/station must match the scope, so
-            # effective_target can never misbehave on an inconsistent row.
+            # Scope/ref coherence: nullable group/station must match the scope,
+            # so effective_target can never misbehave on an inconsistent row.
             models.CheckConstraint(
                 condition=(
                     ~models.Q(scope="fleet")
-                    | (models.Q(tag__isnull=True) & models.Q(station__isnull=True))
+                    | (models.Q(group__isnull=True) & models.Q(station__isnull=True))
                 ),
                 name="target_fleet_has_no_ref",
             ),
             models.CheckConstraint(
                 condition=(
-                    ~models.Q(scope="tag")
-                    | (models.Q(tag__isnull=False) & models.Q(station__isnull=True))
+                    ~models.Q(scope="group")
+                    | (models.Q(group__isnull=False) & models.Q(station__isnull=True))
                 ),
-                name="target_tag_has_tag_only",
+                name="target_group_has_group_only",
             ),
             models.CheckConstraint(
                 condition=(
                     ~models.Q(scope="station")
-                    | (models.Q(station__isnull=False) & models.Q(tag__isnull=True))
+                    | (models.Q(station__isnull=False) & models.Q(group__isnull=True))
                 ),
                 name="target_station_has_station_only",
             ),
-            # canary_tag is a fleet-only gate; effective_target ignores it on
-            # tag/station scopes, so allowing it there is silent dead intent.
+            # canary_group is a fleet-only gate; effective_target ignores it on
+            # group/station scopes, so allowing it there is silent dead intent.
             models.CheckConstraint(
-                condition=(models.Q(scope="fleet") | models.Q(canary_tag__isnull=True)),
-                name="canary_tag_only_on_fleet",
+                condition=(models.Q(scope="fleet") | models.Q(canary_group__isnull=True)),
+                name="canary_group_only_on_fleet",
             ),
         ]
 
@@ -415,16 +417,16 @@ class ModuleFirmwareTarget(models.Model):
         from django.core.exceptions import ValidationError
 
         if self.scope == self.Scope.FLEET:
-            if self.tag_id is not None or self.station_id is not None:
-                raise ValidationError(_("A fleet target must not set a tag or station."))
-        elif self.scope == self.Scope.TAG:
-            if self.tag_id is None or self.station_id is not None:
-                raise ValidationError(_("A tag target must set a tag and no station."))
+            if self.group_id is not None or self.station_id is not None:
+                raise ValidationError(_("A fleet target must not set a group or station."))
+        elif self.scope == self.Scope.GROUP:
+            if self.group_id is None or self.station_id is not None:
+                raise ValidationError(_("A group target must set a group and no station."))
         elif self.scope == self.Scope.STATION:
-            if self.station_id is None or self.tag_id is not None:
-                raise ValidationError(_("A station target must set a station and no tag."))
-        if self.scope != self.Scope.FLEET and self.canary_tag_id is not None:
-            raise ValidationError(_("A canary tag is only allowed on a fleet target."))
+            if self.station_id is None or self.group_id is not None:
+                raise ValidationError(_("A station target must set a station and no group."))
+        if self.scope != self.Scope.FLEET and self.canary_group_id is not None:
+            raise ValidationError(_("A canary group is only allowed on a fleet target."))
 
     def __str__(self):
         return f"{self.module_type.key} {self.scope}={self.version}"

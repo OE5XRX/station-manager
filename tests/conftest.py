@@ -181,6 +181,20 @@ def make_station_tag(db):
 
 
 @pytest.fixture
+def make_rollout_group(db):
+    """Factory to create a RolloutGroup with slug defaulted to slugify(name)."""
+    from django.utils.text import slugify
+
+    from apps.stations.models import RolloutGroup
+
+    def _make(name, **kwargs):
+        kwargs.setdefault("slug", slugify(name))
+        return RolloutGroup.objects.create(name=name, **kwargs)
+
+    return _make
+
+
+@pytest.fixture
 def deployment(image_release, station, staff_user):
     """An in-progress Deployment targeting a single station."""
     dep = Deployment.objects.create(

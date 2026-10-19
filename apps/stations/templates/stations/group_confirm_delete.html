@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Delete rollout group" %} {{ group.name }}{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'stations:group_list' %}">{% trans "Rollout groups" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Delete" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head"><div class="page-head-main">
+  <div class="page-eyebrow t-danger">{% trans "Danger zone" %}</div>
+  <h1 class="page-title">{% trans "Delete rollout group" %}</h1>
+  <p class="page-sub">{% if blocked %}{% blocktrans with name=group.name %}"{{ name }}" is still in use. Move everything below off this group first.{% endblocktrans %}{% else %}{% blocktrans with name=group.name %}Delete "{{ name }}"? Nothing references it any more.{% endblocktrans %}{% endif %}</p>
+</div></div>
+<form method="post" class="panel" style="max-width:620px;border-left:3px solid var(--danger);">
+  {% csrf_token %}
+  <div class="panel-body stack-gap-14">
+    <div class="row-gap-8"><strong>{{ group.name }}</strong> {% include "images/_channel_badge.html" with channel=group.channel %}</div>
+    <dl class="dlist">
+      <dt>{% trans "Stations" %}</dt>
+      <dd>{% if refs.stations %}<span class="t-danger">{% blocktrans count counter=refs.stations %}{{ counter }} station is in this group. Assign it to another group first.{% plural %}{{ counter }} stations are in this group. Assign them to another group first.{% endblocktrans %}</span>{% else %}<span class="t-muted">{% trans "No stations." %}</span>{% endif %}</dd>
+      <dt>{% trans "Rollout sequence" %}</dt>
+      <dd>{% if refs.sequence_entries %}<span class="t-danger">{% trans "The group is a step in the rollout sequence. Remove it there first." %}</span>{% else %}<span class="t-muted">{% trans "Not in the sequence." %}</span>{% endif %}</dd>
+      <dt>{% trans "Module firmware" %}</dt>
+      <dd>
+        {% if refs.firmware_targets or refs.canary_targets %}
+          <span class="t-danger">
+            {% if refs.firmware_targets %}{% blocktrans count counter=refs.firmware_targets %}{{ counter }} group firmware target points at this group.{% plural %}{{ counter }} group firmware targets point at this group.{% endblocktrans %}{% endif %}
+            {% if refs.canary_targets %}{% blocktrans count counter=refs.canary_targets %}{{ counter }} fleet target uses it as its canary group.{% plural %}{{ counter }} fleet targets use it as their canary group.{% endblocktrans %}{% endif %}
+            {% trans "Change or remove them first." %}
+          </span>
+        {% else %}<span class="t-muted">{% trans "No firmware targets." %}</span>{% endif %}
+      </dd>
+      <dt>{% trans "Deployments" %}</dt>
+      <dd><span class="t-muted">{% blocktrans count counter=deployment_count %}{{ counter }} past deployment keeps its history, labelled as a deleted group.{% plural %}{{ counter }} past deployments keep their history, labelled as a deleted group.{% endblocktrans %}</span></dd>
+    </dl>
+  </div>
+  <div class="panel-foot row-gap-8">
+    {% if not blocked %}
+      <button type="submit" class="btn btn-danger" data-confirm="{% trans 'Delete this rollout group?' %}">{% trans "Delete group" %}</button>
+    {% endif %}
+    <a href="{% url 'stations:group_list' %}" class="btn btn-ghost">{% if blocked %}{% trans "Back" %}{% else %}{% trans "Cancel" %}{% endif %}</a>
+  </div>
+</form>
+{% endblock %}

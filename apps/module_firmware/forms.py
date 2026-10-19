@@ -64,8 +64,8 @@ class ModuleFirmwareTargetForm(forms.ModelForm):
 
     UNIQUE_MESSAGES = {
         "uniq_fleet_target_per_type": _("This module type already has a fleet target."),
-        "uniq_tag_target_per_type_tag": _(
-            "This module type already has a target for the selected tag."
+        "uniq_group_target_per_type_group": _(
+            "This module type already has a target for the selected group."
         ),
         "uniq_station_target_per_type_station": _(
             "This module type already has a target for the selected station."
@@ -80,13 +80,13 @@ class ModuleFirmwareTargetForm(forms.ModelForm):
 
     class Meta:
         model = ModuleFirmwareTarget
-        fields = ("scope", "tag", "station", "canary_tag")
+        fields = ("scope", "group", "station", "canary_group")
         widgets = {
             "scope": forms.Select(attrs={"class": "form-select", "data-scope-select": ""}),
-            "tag": forms.Select(attrs={"class": "form-select", "data-scope-field": "tag"}),
+            "group": forms.Select(attrs={"class": "form-select", "data-scope-field": "group"}),
             "station": forms.Select(attrs={"class": "form-select", "data-scope-field": "station"}),
-            "canary_tag": forms.Select(
-                attrs={"class": "form-select", "data-scope-field": "canary_tag"}
+            "canary_group": forms.Select(
+                attrs={"class": "form-select", "data-scope-field": "canary_group"}
             ),
         }
 

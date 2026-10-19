@@ -190,9 +190,9 @@ class ModuleFirmwareTargetAdmin(admin.ModelAdmin):
         "module_type",
         "scope",
         "version",
-        "tag",
+        "group",
         "station",
-        "canary_tag",
+        "canary_group",
         "updated_at",
     )
     list_filter = ("module_type", "scope")

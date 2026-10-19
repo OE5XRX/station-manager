@@ -25,7 +25,13 @@ from rest_framework.response import Response
 from apps.accounts.models import AccountAuditLog, User
 from apps.accounts.permissions import require
 from apps.api import read_serializers, read_views
-from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
+from apps.api.audit import (
+    _client_ip,
+    _token_suffix,
+    audit_account_write,
+    audit_config_write,
+    audit_station_write,
+)
 from apps.api.write_serializers import (
     AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
@@ -33,6 +39,7 @@ from apps.api.write_serializers import (
     ProvisioningJobCreateSerializer,
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
+    RolloutGroupWriteSerializer,
     RolloutSequenceEntryWriteSerializer,
     RolloutSequenceWriteSerializer,
     StationAssignmentWriteSerializer,
@@ -121,15 +128,34 @@ class StationViewSet(
             event_type=StationAuditLog.EventType.CREATED,
             message=f"Station {station.callsign or station.name} created",
         )
+        self._audit_rollout_group_change(station, old_group=None)
 
     def perform_update(self, serializer):
         self._require_topology_if_region_changes(serializer, serializer.instance)
+        old_group = serializer.instance.rollout_group
         station = serializer.save()
         audit_station_write(
             self.request,
             station=station,
             event_type=StationAuditLog.EventType.UPDATED,
             message=f"Station {station.callsign or station.name} updated",
+        )
+        self._audit_rollout_group_change(station, old_group=old_group)
+
+    def _audit_rollout_group_change(self, station, *, old_group):
+        """ROLLOUT_GROUP_CHANGED row on a real group change — same message
+        and ``changes`` shape as the UI station form, plus the token origin."""
+        new_group = station.rollout_group
+        if getattr(old_group, "pk", None) == getattr(new_group, "pk", None):
+            return
+        old_name = old_group.name if old_group else "none"
+        new_name = new_group.name if new_group else "none"
+        audit_station_write(
+            self.request,
+            station=station,
+            event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
+            message=f"Rollout group: {old_name} → {new_name} by {self.request.user}",
+            changes={"rollout_group": {"old": old_name, "new": new_name}},
         )
 
     def perform_destroy(self, instance):
@@ -235,6 +261,59 @@ class StationTagViewSet(
             message=f"StationTag {instance.slug} deleted",
         )
         instance.delete()
+
+
+class RolloutGroupViewSet(
+    AreaWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.RolloutGroupViewSet,
+):
+    write_serializer_class = RolloutGroupWriteSerializer
+
+    def _audit(self, group, action, before=None):
+        rollout_services.audit_group(
+            group,
+            action,
+            actor=self.request.user,
+            ip_address=_client_ip(self.request),
+            suffix=_token_suffix(self.request),
+            before=before,
+        )
+
+    def perform_create(self, serializer):
+        with transaction.atomic():
+            self._audit(serializer.save(), "created")
+
+    def perform_update(self, serializer):
+        before = rollout_services.group_snapshot(serializer.instance)
+        with transaction.atomic():
+            group = serializer.save()
+            if rollout_services.group_snapshot(group) != before:  # no-op PATCH: no row
+                self._audit(group, "updated", before)
+
+    def perform_destroy(self, instance):
+        # Every FK to a group is PROTECT: stations, sequence entries and MF
+        # (canary) targets must be moved off first. The audit row rolls back
+        # with a blocked delete.
+        pk = instance.pk
+        try:
+            with transaction.atomic():
+                self._audit(instance, "deleted")
+                instance.delete()
+        except (ProtectedError, IntegrityError):
+            # IntegrityError: a concurrent write referenced the group between
+            # the PROTECT check and commit (deferred FK on PostgreSQL). By then
+            # the Collector has already set instance.pk = None.
+            instance.pk = pk
+            refs = rollout_services.group_references(instance)
+            blocking = ", ".join(f"{k}={v}" for k, v in refs.items() if v)
+            err = APIException(
+                detail=f"Rollout group cannot be deleted while referenced by: {blocking}."
+            )
+            err.status_code = http_status.HTTP_409_CONFLICT
+            raise err from None
 
 
 def _save_assignment(serializer, *, actor, is_create):
@@ -471,20 +550,20 @@ class RolloutSequenceEntryViewSet(
 
     def perform_create(self, serializer):
         sequence = serializer.validated_data["sequence"]
-        tag = serializer.validated_data["tag"]
+        group = serializer.validated_data["group"]
         # Route through the locked service so concurrent creates serialize and
         # positions remain gap-free (mirrors SequenceAddView's locked protocol).
-        # R5d: catch IntegrityError from the (sequence, tag) unique constraint
-        # to handle the race where two concurrent creates both pass validate_tag
+        # R5d: catch IntegrityError from the (sequence, group) unique constraint
+        # to handle the race where two concurrent creates both pass validate_group
         # but one hits the DB constraint first → translate to 400 instead of 500.
         try:
             entry = rollout_services.add_entry(
-                sequence=sequence, tag=tag, by_user=self.request.user
+                sequence=sequence, group=group, by_user=self.request.user
             )
         except IntegrityError as exc:
-            raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
+            raise DRFValidationError({"group": "This group is already in this sequence."}) from exc
         if entry is None:
-            raise DRFValidationError({"tag": "This tag is already in the sequence."})
+            raise DRFValidationError({"group": "This group is already in the sequence."})
         # Expose the created entry on the serializer so DRF can build the 201
         # response without trying to call serializer.save() again.
         serializer.instance = entry
@@ -500,16 +579,16 @@ class RolloutSequenceEntryViewSet(
 
         if new_position is not None and new_position != entry.position:
             # Wrap the entire position+field update in ONE transaction so that
-            # a non-position field save (e.g. tag) and the two-phase position
+            # a non-position field save (e.g. group) and the two-phase position
             # move are atomic.  move_entry opens its own transaction.atomic()
             # which becomes a savepoint inside this outer one — that is fine.
             # Lock the parent sequence first (before the field save) so the
             # lock order matches move_entry's own select_for_update, preventing
             # a potential deadlock if two concurrent PATCHes race.
-            # R6a: the same (sequence, tag) unique race that R5d fixed in the
-            # tag-only branch below applies here too — a position+tag PATCH saves
-            # tag via entry.save(), and validate_tag ran before the lock, so two
-            # concurrent PATCHes setting the same new tag both pass validation and
+            # R6a: the same (sequence, group) unique race that R5d fixed in the
+            # group-only branch below applies here too — a position+group PATCH saves
+            # group via entry.save(), and validate_group ran before the lock, so two
+            # concurrent PATCHes setting the same new group both pass validation and
             # the second hits the DB constraint.  Wrap the atomic block in the
             # same IntegrityError → 400 catch so it is handled symmetrically.
             try:
@@ -536,18 +615,20 @@ class RolloutSequenceEntryViewSet(
                             {"position": "sequence too large to reorder"}
                         ) from exc
             except IntegrityError as exc:
-                raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
+                raise DRFValidationError(
+                    {"group": "This group is already in this sequence."}
+                ) from exc
             entry.refresh_from_db()
             serializer.instance = entry
         else:
-            # R4a: tag-only (or no-field-change) path — acquire the parent lock
+            # R4a: group-only (or no-field-change) path — acquire the parent lock
             # FIRST so that concurrent reorders cannot interleave with this save.
             # touch_sequence opens its own transaction.atomic() / select_for_update;
             # wrap both the field save and the stamp in ONE outer atomic so they
             # are visible to the DB in the same serialised order.
-            # R5d: catch IntegrityError from the (sequence, tag) unique constraint
-            # to handle the race where two concurrent tag-change PATCHes both pass
-            # validate_tag but one hits the DB constraint first → 400 not 500.
+            # R5d: catch IntegrityError from the (sequence, group) unique constraint
+            # to handle the race where two concurrent group-change PATCHes both pass
+            # validate_group but one hits the DB constraint first → 400 not 500.
             try:
                 with transaction.atomic():
                     RolloutSequence.objects.select_for_update().filter(
@@ -557,7 +638,9 @@ class RolloutSequenceEntryViewSet(
                     entry.sequence.updated_by = self.request.user
                     entry.sequence.save(update_fields=["updated_by", "updated_at"])
             except IntegrityError as exc:
-                raise DRFValidationError({"tag": "This tag is already in this sequence."}) from exc
+                raise DRFValidationError(
+                    {"group": "This group is already in this sequence."}
+                ) from exc
         audit_config_write(
             self.request,
             message=f"RolloutSequenceEntry {entry.pk} updated",

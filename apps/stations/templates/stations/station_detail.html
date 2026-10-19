@@ -71,6 +71,10 @@
       </div>
     </div>
     <div class="summary-item">
+      <div class="summary-key">{% trans "Rollout group" %}</div>
+      <div class="summary-val" data-station-group="{{ station.rollout_group.slug|default:'' }}">{% if station.rollout_group %}{% if can.stations.view %}<a href="{% url 'stations:group_list' %}">{{ station.rollout_group.name }}</a>{% else %}{{ station.rollout_group.name }}{% endif %} {% include "images/_channel_badge.html" with channel=station.rollout_group.channel %}{% else %}<span class="t-muted">{% trans "No group" %}</span> {% include "images/_channel_badge.html" with channel="release" %}{% endif %}</div>
+    </div>
+    <div class="summary-item">
       <div class="summary-key">{% trans "Agent Version" %}</div>
       <div class="summary-val mono">{{ station.current_agent_version|default:"—" }}</div>
     </div>

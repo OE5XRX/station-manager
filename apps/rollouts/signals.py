@@ -1,9 +1,9 @@
 """Signal handlers for rollout sequence integrity.
 
-post_delete on RolloutSequenceEntry: whenever an entry is removed (whether via
-the API's own remove_entry service, OR via a CASCADE from a StationTag delete),
-renumber remaining entries to be 0-based and gap-free, and bump the parent
-RolloutSequence.updated_at.
+post_delete on RolloutSequenceEntry: whenever an entry is removed (via the
+remove_entry service or a direct ORM delete — a RolloutGroup that still has an
+entry can't be deleted, the FK is PROTECT), renumber remaining entries to be
+0-based and gap-free, and bump the parent RolloutSequence.updated_at.
 
 The renumber is idempotent: running it twice (e.g. when remove_entry also
 renumbers after deleting the entry) produces the same result — the positions are
@@ -11,7 +11,7 @@ already gap-free on the second pass, so all `e.position == idx` checks pass
 without writing.
 
 updated_by is intentionally left unchanged here: the signal has no actor context
-(cascade deletes arrive without a request user).  The service-layer callers
+(direct ORM deletes arrive without a request user).  The service-layer callers
 (remove_entry, touch_sequence) already set updated_by when they have an actor.
 """
 
@@ -26,8 +26,8 @@ from .models import RolloutSequence, RolloutSequenceEntry
 def _on_sequence_entry_delete(sender, instance, **kwargs):
     """Renumber the parent sequence after any entry removal.
 
-    Fires for both API-driven deletes (remove_entry) and CASCADE-driven
-    deletes (StationTag.delete() → CASCADE → RolloutSequenceEntry.delete()).
+    Fires for service deletes (remove_entry) and direct ORM deletes of an
+    entry, including the CASCADE from a RolloutSequence delete.
 
     The renumber uses the already-established transaction (the caller's atomic
     block, or the implicit atomic wrapping a plain .delete() call).

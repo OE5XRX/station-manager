@@ -6,6 +6,7 @@ EXPECTED_PATHS = [
     "/api/v1/stations/",
     "/api/v1/regions/",
     "/api/v1/station-tags/",
+    "/api/v1/rollout-groups/",
     "/api/v1/station-assignments/",
     "/api/v1/region-assignments/",
     "/api/v1/rollout-sequences/",

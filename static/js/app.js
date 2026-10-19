@@ -438,7 +438,7 @@
     var scope = sel.value;
     form.querySelectorAll("[data-scope-field]").forEach(function (field) {
       var name = field.getAttribute("data-scope-field");
-      var show = name === "canary_tag" ? scope === "fleet" : name === scope;
+      var show = name === "canary_group" ? scope === "fleet" : name === scope;
       var group = field.closest(".form-group") || field;
       group.hidden = !show;
       field.disabled = !show;

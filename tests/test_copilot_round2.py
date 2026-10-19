@@ -32,14 +32,14 @@ def _get_or_create_sequence():
     return seq
 
 
-def _make_tag(name):
+def _make_group(name):
     from django.utils.text import slugify
 
-    from apps.stations.models import StationTag
+    from apps.stations.models import RolloutGroup
 
     slug = slugify(name)
-    tag, _ = StationTag.objects.get_or_create(name=name, defaults={"slug": slug})
-    return tag
+    group, _ = RolloutGroup.objects.get_or_create(name=name, defaults={"slug": slug})
+    return group
 
 
 def _make_release_with_assets(tag, machine="qemux86-64", channel="release"):
@@ -302,8 +302,8 @@ class TestRolloutEntrySequenceReadOnlyOnUpdate:
         seq = _get_or_create_sequence()
         # Create a second sequence to try to reparent to
         other_seq, _ = RolloutSequence.objects.get_or_create(singleton_key="other-r2")
-        tag = _make_tag("r2-seq-ro-tag")
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        tag = _make_group("r2-seq-ro-tag")
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
         r = bearer(api_topology["admin"]).patch(url, {"sequence": other_seq.pk}, format="json")
@@ -329,13 +329,13 @@ class TestRolloutEntryDuplicateTagValidation:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag = _make_tag("r2-dup-tag")
+        tag = _make_group("r2-dup-tag")
         # Pre-create the entry
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag, position=0)
 
         url = reverse("api:rollout-sequence-entry-list")
         r = bearer(api_topology["admin"]).post(
-            url, {"sequence": seq.pk, "tag": tag.pk, "position": 1}, format="json"
+            url, {"sequence": seq.pk, "group": tag.pk, "position": 1}, format="json"
         )
         # The service returns None for a duplicate tag and the view returns 400.
         assert r.status_code == 400, (
@@ -347,15 +347,15 @@ class TestRolloutEntryDuplicateTagValidation:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag_a = _make_tag("r2-dup-a-tag")
-        tag_b = _make_tag("r2-dup-b-tag")
+        tag_a = _make_group("r2-dup-a-tag")
+        tag_b = _make_group("r2-dup-b-tag")
         # Both tags are already in the sequence
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        entry_b = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        entry_b = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         # Try to PATCH entry_b so it has tag_a (which is taken)
         url = reverse("api:rollout-sequence-entry-detail", args=[entry_b.pk])
-        r = bearer(api_topology["admin"]).patch(url, {"tag": tag_a.pk}, format="json")
+        r = bearer(api_topology["admin"]).patch(url, {"group": tag_a.pk}, format="json")
         assert r.status_code == 400, (
             f"Expected 400 for duplicate tag on PATCH, got {r.status_code}"
         )
@@ -421,22 +421,22 @@ class TestRolloutEntryPatchPositionAndTag:
         from apps.rollouts.models import RolloutSequenceEntry
 
         seq = _get_or_create_sequence()
-        tag_a = _make_tag("r2-pt-a-tag")
-        tag_b = _make_tag("r2-pt-b-tag")
-        tag_c = _make_tag("r2-pt-c-tag")
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
+        tag_a = _make_group("r2-pt-a-tag")
+        tag_b = _make_group("r2-pt-b-tag")
+        tag_c = _make_group("r2-pt-c-tag")
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
         # Add a second entry so the move is meaningful (from 0 → 1)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
 
         url = reverse("api:rollout-sequence-entry-detail", args=[entry.pk])
         r = bearer(api_topology["admin"]).patch(
-            url, {"position": 1, "tag": tag_c.pk}, format="json"
+            url, {"position": 1, "group": tag_c.pk}, format="json"
         )
         assert r.status_code == 200, (
             f"Expected 200 for combined position+tag PATCH, got {r.status_code}"
         )
         entry.refresh_from_db()
-        assert entry.tag == tag_c, f"Tag must be updated to tag_c, got {entry.tag}"
+        assert entry.group == tag_c, f"Tag must be updated to tag_c, got {entry.group}"
         assert entry.position == 1, f"Position must be moved to 1, got {entry.position}"
         # Parent sequence updated_by must reflect the actor
         seq.refresh_from_db()

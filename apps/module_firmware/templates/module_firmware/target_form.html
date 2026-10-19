@@ -35,12 +35,12 @@
       <div class="form-group">
         <label class="form-label" for="{{ form.scope.id_for_label }}">{% trans "Applies to" %}</label>
         {{ form.scope }}{{ form.scope.errors }}
-        <div class="t-muted">{% trans "Station overrides beat tag overrides, which beat the fleet default." %}</div>
+        <div class="t-muted">{% trans "Station overrides beat group overrides, which beat the fleet default." %}</div>
       </div>
       <div class="form-group">
-        <label class="form-label" for="{{ form.tag.id_for_label }}">{% trans "Tag" %}</label>
-        {{ form.tag }}{{ form.tag.errors }}
-        <div class="t-muted">{% trans "Only for a tag override." %}</div>
+        <label class="form-label" for="{{ form.group.id_for_label }}">{% trans "Rollout group" %}</label>
+        {{ form.group }}{{ form.group.errors }}
+        <div class="t-muted">{% trans "Only for a group override." %}</div>
       </div>
       <div class="form-group">
         <label class="form-label" for="{{ form.station.id_for_label }}">{% trans "Station" %}</label>
@@ -48,9 +48,9 @@
         <div class="t-muted">{% trans "Only for a station override." %}</div>
       </div>
       <div class="form-group">
-        <label class="form-label" for="{{ form.canary_tag.id_for_label }}">{% trans "Canary tag" %}</label>
-        {{ form.canary_tag }}{{ form.canary_tag.errors }}
-        <div class="t-muted">{% trans "Optional, fleet default only. While set, the fleet default applies only to stations in this tag; clear it to roll out to the whole fleet." %}</div>
+        <label class="form-label" for="{{ form.canary_group.id_for_label }}">{% trans "Canary group" %}</label>
+        {{ form.canary_group }}{{ form.canary_group.errors }}
+        <div class="t-muted">{% trans "Optional, fleet default only. While set, the fleet default applies only to stations in this group; clear it to roll out to the whole fleet." %}</div>
       </div>
     </div>
     <div class="panel-foot row-gap-8">

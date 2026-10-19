@@ -69,8 +69,8 @@
             </div>
           </td>
           <td data-label="{% trans 'Target' %}">
-            {% if d.target_type == "tag" and d.target_tag %}
-              <span class="tag" style="--tag-color: {{ d.target_tag.color }};">{{ d.target_tag.name }}</span>
+            {% if d.target_type == "group" %}
+              {% if d.target_group_label %}<span class="pill pill-muted">{% if d.target_group %}{% blocktrans with name=d.target_group_label %}By Group: {{ name }}{% endblocktrans %}{% else %}{% blocktrans with name=d.target_group_label %}By Group: {{ name }} (deleted){% endblocktrans %}{% endif %}</span>{% else %}<span class="pill pill-muted">{% trans "By Group (deleted)" %}</span>{% endif %}
             {% elif d.target_type == "station" and d.target_station %}
               <span class="callsign">{{ d.target_station.callsign|default:d.target_station.name }}</span>
             {% else %}

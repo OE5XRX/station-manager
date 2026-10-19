@@ -2,7 +2,7 @@ import pytest
 from django.db import IntegrityError
 
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
-from apps.stations.models import StationTag
+from apps.stations.models import RolloutGroup
 
 
 @pytest.mark.django_db
@@ -16,37 +16,37 @@ class TestRolloutSequence:
         from apps.rollouts.models import current_sequence
 
         seq = current_sequence()
-        tag_a = StationTag.objects.create(name="alpha", slug="alpha")
-        tag_b = StationTag.objects.create(name="beta", slug="beta")
-        tag_c = StationTag.objects.create(name="gamma", slug="gamma")
+        tag_a = RolloutGroup.objects.create(name="alpha", slug="alpha")
+        tag_b = RolloutGroup.objects.create(name="beta", slug="beta")
+        tag_c = RolloutGroup.objects.create(name="gamma", slug="gamma")
 
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_b, position=1)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_a, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag_c, position=2)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_b, position=1)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_a, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_c, position=2)
 
-        ordered = list(seq.entries.values_list("tag__name", flat=True))
+        ordered = list(seq.entries.values_list("group__name", flat=True))
         assert ordered == ["alpha", "beta", "gamma"]
 
-    def test_tag_unique_per_sequence(self):
+    def test_group_unique_per_sequence(self):
         from apps.rollouts.models import current_sequence
 
         seq = current_sequence()
-        tag = StationTag.objects.create(name="t1", slug="t1")
+        group = RolloutGroup.objects.create(name="t1", slug="t1")
 
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
         with pytest.raises(IntegrityError):
-            RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=1)
+            RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=1)
 
     def test_position_unique_per_sequence(self):
         from apps.rollouts.models import current_sequence
 
         seq = current_sequence()
-        t1 = StationTag.objects.create(name="t1", slug="t1")
-        t2 = StationTag.objects.create(name="t2", slug="t2")
+        t1 = RolloutGroup.objects.create(name="t1", slug="t1")
+        t2 = RolloutGroup.objects.create(name="t2", slug="t2")
 
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=0)
         with pytest.raises(IntegrityError):
-            RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=0)
+            RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=0)
 
 
 @pytest.mark.django_db
@@ -83,25 +83,24 @@ class TestSingletonSeed:
 
 @pytest.mark.django_db
 class TestGrouping:
-    def test_first_matching_tag_wins(self, make_station_tag):
+    def test_station_lands_in_its_group_bucket(self, make_rollout_group):
         from apps.rollouts.grouping import group_stations_by_sequence
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
         from apps.stations.models import Station
 
-        t_test = make_station_tag("test")
-        t_easy = make_station_tag("easy")
+        g_test = make_rollout_group("test")
+        g_easy = make_rollout_group("easy")
         seq = current_sequence()
         seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_test, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_easy, position=1)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=g_test, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=g_easy, position=1)
 
-        s = Station.objects.create(name="S1")
-        s.tags.add(t_test, t_easy)
+        s = Station.objects.create(name="S1", rollout_group=g_easy)
 
         grouped = group_stations_by_sequence([s])
-        # s must appear ONLY in the 'test' bucket, not in 'easy' too.
-        assert grouped["test"] == [s]
-        assert grouped["easy"] == []
+        assert list(grouped) == ["test", "easy", "__unassigned__"]
+        assert grouped["test"] == []
+        assert grouped["easy"] == [s]
 
     def test_unassigned_bucket(self):
         from apps.rollouts.grouping import group_stations_by_sequence
@@ -188,10 +187,9 @@ class TestUpgradeActions:
         # No Deployment / DeploymentResult row was created.
         assert not Deployment.objects.filter(target_station=station).exists()
 
-        # A flash error message names the tag and asks the operator
-        # to re-import.
+        # A flash error message names the release and says it isn't OTA-ready.
         msgs = [str(m) for m in response.context["messages"]]
-        assert any("v2-unprocessed" in m and "re-import" in m.lower() for m in msgs)
+        assert any("v2-unprocessed" in m and "not OTA-ready" in m for m in msgs), msgs
 
     def test_member_cannot_upgrade(self, client, member_user, station):
         from django.urls import reverse
@@ -201,7 +199,7 @@ class TestUpgradeActions:
         assert response.status_code == 403
 
     def test_upgrade_group_creates_deployment(
-        self, client, admin_user, image_release, make_station_tag
+        self, client, admin_user, image_release, make_rollout_group
     ):
         from django.urls import reverse
 
@@ -210,15 +208,15 @@ class TestUpgradeActions:
         from apps.stations.models import Station
 
         # Two stations on the same machine, both on v1-alpha.
-        tag = make_station_tag("test-stations")
+        group = make_rollout_group("test-stations")
         seq = current_sequence()
         seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
 
         s1 = Station.objects.create(name="S1")
-        s1.tags.add(tag)
+        s1.rollout_group = group
         s1.current_image_release = image_release
-        s1.save(update_fields=["current_image_release"])
+        s1.save(update_fields=["rollout_group", "current_image_release"])
 
         # Introduce a newer release for that machine.
         from apps.images.models import ImageRelease
@@ -241,64 +239,12 @@ class TestUpgradeActions:
             reverse("rollouts:upgrade_group", args=["test-stations"]),
         )
         assert response.status_code == 302
-        dep = Deployment.objects.filter(target_tag=tag).first()
+        dep = Deployment.objects.filter(target_group=group).first()
         assert dep is not None
         assert dep.image_release.tag == "v2"
 
-    def test_upgrade_group_honors_first_match_wins(
-        self, client, admin_user, image_release, make_station_tag
-    ):
-        """A station carrying both `test` (pos 0) and `easy` (pos 1) must
-        only be upgraded when the `test` group button is pressed, never
-        when the `easy` button is pressed — the dashboard and the action
-        agree on which bucket the station lives in."""
-        from django.urls import reverse
-
-        from apps.deployments.models import Deployment
-        from apps.rollouts.models import RolloutSequenceEntry, current_sequence
-        from apps.stations.models import Station
-
-        t_test = make_station_tag("test")
-        t_easy = make_station_tag("easy")
-        seq = current_sequence()
-        seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_test, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=t_easy, position=1)
-
-        s = Station.objects.create(name="Dual")
-        s.tags.add(t_test, t_easy)
-        s.current_image_release = image_release
-        s.save(update_fields=["current_image_release"])
-
-        from apps.images.models import ImageRelease
-
-        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
-        ImageRelease.objects.create(
-            tag="v2",
-            machine="qemux86-64",
-            s3_key="images/v2/qemu.wic.bz2",
-            sha256="f" * 64,
-            size_bytes=2000,
-            rootfs_s3_key="images/v2/qemu.rootfs.bz2",
-            rootfs_sha256="g" * 64,
-            rootfs_size_bytes=500,
-            is_latest=True,
-        )
-
-        client.force_login(admin_user)
-        # Press the "easy" group's button — station is in the test bucket,
-        # so no deployment should be queued against the easy tag.
-        response = client.post(reverse("rollouts:upgrade_group", args=["easy"]))
-        assert response.status_code == 302
-        assert not Deployment.objects.filter(target_tag=t_easy).exists()
-
-        # Press the "test" group's button — the station's real bucket.
-        response = client.post(reverse("rollouts:upgrade_group", args=["test"]))
-        assert response.status_code == 302
-        assert Deployment.objects.filter(target_tag=t_test).exists()
-
     def test_upgrade_group_skips_releases_without_rootfs(
-        self, client, admin_user, make_station_tag, image_release
+        self, client, admin_user, make_rollout_group, image_release
     ):
         """A group upgrade targeting two machines where one's latest
         release is OTA-ready and the other's isn't must create a
@@ -317,10 +263,10 @@ class TestUpgradeActions:
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
         from apps.stations.models import Station
 
-        tag = make_station_tag("group-a")
+        group = make_rollout_group("group-a")
         seq = current_sequence()
         seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
 
         ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
         qemu_ready = ImageRelease.objects.create(
@@ -359,17 +305,19 @@ class TestUpgradeActions:
             callsign="Q1TEST",
             current_image_release=image_release,  # older qemu release
         )
-        s_qemu.tags.add(tag)
+        s_qemu.rollout_group = group
+        s_qemu.save(update_fields=["rollout_group"])
         s_rpi = Station.objects.create(
             name="rpi-station",
             callsign="R1TEST",
             current_image_release=rpi_old,  # older rpi release, target is rpi-not-ready
         )
-        s_rpi.tags.add(tag)
+        s_rpi.rollout_group = group
+        s_rpi.save(update_fields=["rollout_group"])
 
         client.force_login(admin_user)
         response = client.post(
-            reverse("rollouts:upgrade_group", kwargs={"tag_slug": tag.slug}),
+            reverse("rollouts:upgrade_group", kwargs={"group_slug": group.slug}),
             follow=True,
         )
         assert response.status_code == 200
@@ -384,7 +332,7 @@ class TestUpgradeActions:
         assert any("Queued 1" in m and "1 skipped" in m for m in msgs), msgs
 
     def test_upgrade_group_skips_unprovisioned_stations(
-        self, client, admin_user, image_release, make_station_tag
+        self, client, admin_user, image_release, make_rollout_group
     ):
         """Stations with no current_image_release have no known machine
         and must be counted as skipped, not silently dropped."""
@@ -394,36 +342,53 @@ class TestUpgradeActions:
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
         from apps.stations.models import Station
 
-        tag = make_station_tag("test")
+        group = make_rollout_group("test")
         seq = current_sequence()
         seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
 
         s = Station.objects.create(name="UnprovS")
-        s.tags.add(tag)
+        s.rollout_group = group
+        s.save(update_fields=["rollout_group"])
         # current_image_release left None — station has no known machine.
 
         client.force_login(admin_user)
         response = client.post(reverse("rollouts:upgrade_group", args=["test"]))
         assert response.status_code == 302
         # No Deployment should be created since there's nothing to target.
-        assert not Deployment.objects.filter(target_tag=tag).exists()
+        assert not Deployment.objects.filter(target_group=group).exists()
 
 
 @pytest.mark.django_db
 class TestUpgradeDashboard:
-    def test_admin_sees_groups(self, client, admin_user, station, image_release, make_station_tag):
+    def test_admin_sees_groups(
+        self, client, admin_user, station, image_release, make_rollout_group
+    ):
         from django.urls import reverse
 
+        from apps.images.models import ImageRelease
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
 
-        tag = make_station_tag("test-stations")
-        station.tags.add(tag)
-        station.current_image_release = None
-        station.save(update_fields=["current_image_release"])
+        group = make_rollout_group("test-stations")
+        station.rollout_group = group
+        station.current_image_release = image_release
+        station.save(update_fields=["rollout_group", "current_image_release"])
         seq = current_sequence()
         seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
+        # A newer OTA-ready release makes the station upgradable.
+        ImageRelease.objects.filter(is_latest=True, machine="qemux86-64").update(is_latest=False)
+        ImageRelease.objects.create(
+            tag="v2",
+            machine="qemux86-64",
+            s3_key="images/v2/qemu.wic.bz2",
+            sha256="e" * 64,
+            size_bytes=2000,
+            rootfs_s3_key="images/v2/qemu.rootfs.bz2",
+            rootfs_sha256="f" * 64,
+            rootfs_size_bytes=500,
+            is_latest=True,
+        )
 
         client.force_login(admin_user)
         response = client.get(reverse("rollouts:upgrade_dashboard"))
@@ -442,7 +407,7 @@ class TestUpgradeDashboard:
         assert "nur lesend" in response.content.decode()
 
     def test_dashboard_renders_active_deployment_status(
-        self, client, admin_user, station, image_release, make_station_tag
+        self, client, admin_user, station, image_release, make_rollout_group
     ):
         """The Status column must reflect the active DeploymentResult
         status on initial render — so a mid-flight deployment doesn't
@@ -453,13 +418,13 @@ class TestUpgradeDashboard:
         from apps.deployments.models import Deployment, DeploymentResult
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
 
-        tag = make_station_tag("test-stations")
-        station.tags.add(tag)
+        group = make_rollout_group("test-stations")
+        station.rollout_group = group
         station.current_image_release = image_release
-        station.save(update_fields=["current_image_release"])
+        station.save(update_fields=["rollout_group", "current_image_release"])
         seq = current_sequence()
         seq.entries.all().delete()
-        RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
 
         # Introduce a newer release so the station has something pending.
         from apps.images.models import ImageRelease
@@ -495,47 +460,47 @@ class TestUpgradeDashboard:
 
 @pytest.mark.django_db
 class TestSequenceEdit:
-    def test_add_entry(self, client, admin_user, make_station_tag):
+    def test_add_entry(self, client, admin_user, make_rollout_group):
         from django.urls import reverse
 
         from apps.rollouts.models import current_sequence
 
         current_sequence().entries.all().delete()
-        tag = make_station_tag("test")
+        group = make_rollout_group("test")
         client.force_login(admin_user)
         response = client.post(
             reverse("rollouts:sequence_add"),
-            {"tag": tag.pk},
+            {"group": group.pk},
         )
         assert response.status_code == 302
         seq = current_sequence()
         assert seq.entries.count() == 1
 
-    def test_remove_entry(self, client, admin_user, make_station_tag):
+    def test_remove_entry(self, client, admin_user, make_rollout_group):
         from django.urls import reverse
 
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
 
-        tag = make_station_tag("test")
+        group = make_rollout_group("test")
         seq = current_sequence()
         seq.entries.all().delete()
-        entry = RolloutSequenceEntry.objects.create(sequence=seq, tag=tag, position=0)
+        entry = RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=0)
         client.force_login(admin_user)
         response = client.post(reverse("rollouts:sequence_remove", args=[entry.pk]))
         assert response.status_code == 302
         assert not RolloutSequenceEntry.objects.filter(pk=entry.pk).exists()
 
-    def test_reorder(self, client, admin_user, make_station_tag):
+    def test_reorder(self, client, admin_user, make_rollout_group):
         from django.urls import reverse
 
         from apps.rollouts.models import RolloutSequenceEntry, current_sequence
 
         seq = current_sequence()
         seq.entries.all().delete()
-        t1 = make_station_tag("t1")
-        t2 = make_station_tag("t2")
-        e1 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=0)
-        e2 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=1)
+        t1 = make_rollout_group("t1")
+        t2 = make_rollout_group("t2")
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=0)
+        e2 = RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=1)
 
         client.force_login(admin_user)
         response = client.post(
@@ -548,7 +513,7 @@ class TestSequenceEdit:
         assert e1.position == 1
         assert e2.position == 0
 
-    def test_reorder_rejects_duplicate_ids(self, client, admin_user, make_station_tag):
+    def test_reorder_rejects_duplicate_ids(self, client, admin_user, make_rollout_group):
         """`1,1,2` used to pass the set-equality check and leave the
         sequence non-normalized — one entry double-assigned, one
         position skipped. Now it must be rejected up front."""
@@ -558,10 +523,10 @@ class TestSequenceEdit:
 
         seq = current_sequence()
         seq.entries.all().delete()
-        t1 = make_station_tag("t1")
-        t2 = make_station_tag("t2")
-        e1 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t1, position=0)
-        e2 = RolloutSequenceEntry.objects.create(sequence=seq, tag=t2, position=1)
+        t1 = make_rollout_group("t1")
+        t2 = make_rollout_group("t2")
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=0)
+        e2 = RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=1)
 
         client.force_login(admin_user)
         response = client.post(
@@ -593,6 +558,9 @@ class TestStationUpgradeCard:
             s3_key="images/v2/qemu.wic.bz2",
             sha256="z" * 64,
             size_bytes=1,
+            rootfs_s3_key="images/v2/qemu.rootfs.bz2",
+            rootfs_sha256="y" * 64,
+            rootfs_size_bytes=1,
             is_latest=True,
         )
         client.force_login(admin_user)

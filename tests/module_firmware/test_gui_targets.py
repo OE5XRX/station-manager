@@ -52,9 +52,9 @@ def _data(mtype, version="1.0.0", **kw):
     data = {
         "release": f"{mtype.pk}:{version}",
         "scope": "fleet",
-        "tag": "",
+        "group": "",
         "station": "",
-        "canary_tag": "",
+        "canary_group": "",
     }
     data.update(kw)
     return data
@@ -204,36 +204,36 @@ def test_release_choices_grouped_and_variants_joined(fm):
     ]
 
 
-def test_tag_scope_requires_tag(client, staff, fm):
+def test_group_scope_requires_group(client, staff, fm):
     _release(fm)
     client.force_login(staff)
-    resp = client.post(reverse("module_firmware:target_create"), _data(fm, scope="tag"))
+    resp = client.post(reverse("module_firmware:target_create"), _data(fm, scope="group"))
     assert resp.status_code == 200
     # One message from Model.clean(), not duplicated by the CheckConstraint mirror.
     assert resp.context["form"].non_field_errors() == [
-        "A tag target must set a tag and no station."
+        "A group target must set a group and no station."
     ]
     assert not ModuleFirmwareTarget.objects.exists()
 
 
-def test_canary_only_on_fleet(client, staff, fm, station_factory, make_station_tag):
+def test_canary_only_on_fleet(client, staff, fm, station_factory, make_rollout_group):
     _release(fm)
     st = station_factory()
-    canary = make_station_tag("canary")
+    canary = make_rollout_group("canary")
     client.force_login(staff)
     resp = client.post(
         reverse("module_firmware:target_create"),
-        _data(fm, scope="station", station=str(st.pk), canary_tag=str(canary.pk)),
+        _data(fm, scope="station", station=str(st.pk), canary_group=str(canary.pk)),
     )
     assert resp.status_code == 200
     assert resp.context["form"].errors
     assert not ModuleFirmwareTarget.objects.exists()
     # ... but allowed on fleet
     resp = client.post(
-        reverse("module_firmware:target_create"), _data(fm, canary_tag=str(canary.pk))
+        reverse("module_firmware:target_create"), _data(fm, canary_group=str(canary.pk))
     )
     assert resp.status_code == 302
-    assert ModuleFirmwareTarget.objects.get().canary_tag == canary
+    assert ModuleFirmwareTarget.objects.get().canary_group == canary
 
 
 def test_duplicate_fleet_target_is_form_error(client, staff, fm):
@@ -248,13 +248,15 @@ def test_duplicate_fleet_target_is_form_error(client, staff, fm):
     assert ModuleFirmwareTarget.objects.count() == 1
 
 
-def test_duplicate_tag_target_is_form_error(client, staff, fm, make_station_tag):
+def test_duplicate_group_target_is_form_error(client, staff, fm, make_rollout_group):
     _release(fm)
-    tag = make_station_tag("lte")
-    ModuleFirmwareTarget.objects.create(module_type=fm, version="1.0.0", scope="tag", tag=tag)
+    group = make_rollout_group("lte")
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, version="1.0.0", scope="group", group=group
+    )
     client.force_login(staff)
     resp = client.post(
-        reverse("module_firmware:target_create"), _data(fm, scope="tag", tag=str(tag.pk))
+        reverse("module_firmware:target_create"), _data(fm, scope="group", group=str(group.pk))
     )
     assert resp.status_code == 200
     assert resp.context["form"].non_field_errors()
@@ -272,7 +274,7 @@ def test_same_scope_other_type_is_allowed(client, staff, fm):
     assert ModuleFirmwareTarget.objects.count() == 2
 
 
-def test_edit_target_with_archived_version_keeps_choice(client, staff, fm, make_station_tag):
+def test_edit_target_with_archived_version_keeps_choice(client, staff, fm, make_rollout_group):
     _release(fm, version="0.9.0", archived=True)
     _release(fm)
     target = ModuleFirmwareTarget.objects.create(module_type=fm, version="0.9.0")
@@ -283,12 +285,12 @@ def test_edit_target_with_archived_version_keeps_choice(client, staff, fm, make_
     assert form.initial["release"] == f"{fm.pk}:0.9.0"
     labels = dict(opt for _g, opts in form.fields["release"].choices[1:] for opt in opts)
     assert "(archived)" in labels[f"{fm.pk}:0.9.0"]
-    canary = make_station_tag("canary")
-    resp = client.post(url, _data(fm, version="0.9.0", canary_tag=str(canary.pk)))
+    canary = make_rollout_group("canary")
+    resp = client.post(url, _data(fm, version="0.9.0", canary_group=str(canary.pk)))
     assert resp.status_code == 302
     target.refresh_from_db()
     assert target.version == "0.9.0"
-    assert target.canary_tag == canary
+    assert target.canary_group == canary
 
 
 def test_target_create_reconciles_assigned_modules(client, staff, fm, station_factory):
@@ -334,9 +336,9 @@ def test_list_empty_state_links_to_releases(client, staff, db):
 def test_form_widgets_carry_scope_data_attributes(fm):
     form = ModuleFirmwareTargetForm()
     assert "data-scope-select" in form.fields["scope"].widget.attrs
-    assert form.fields["tag"].widget.attrs["data-scope-field"] == "tag"
+    assert form.fields["group"].widget.attrs["data-scope-field"] == "group"
     assert form.fields["station"].widget.attrs["data-scope-field"] == "station"
-    assert form.fields["canary_tag"].widget.attrs["data-scope-field"] == "canary_tag"
+    assert form.fields["canary_group"].widget.attrs["data-scope-field"] == "canary_group"
 
 
 def test_update_moving_station_override_audits_removal(client, staff, fm, station_factory):

@@ -5,14 +5,14 @@ from django.db import models
 from django.db.models import Count
 from django.utils.translation import gettext_lazy as _
 
-from apps.stations.models import Station, StationTag
+from apps.stations.models import Station
 
 
 class Deployment(models.Model):
     """An OTA firmware deployment targeting one or more stations."""
 
     class TargetType(models.TextChoices):
-        TAG = "tag", _("By Tag")
+        GROUP = "group", _("By Group")
         STATION = "station", _("Single Station")
         ALL = "all", _("All Stations")
 
@@ -38,14 +38,17 @@ class Deployment(models.Model):
         max_length=10,
         choices=TargetType.choices,
     )
-    target_tag = models.ForeignKey(
-        StationTag,
-        verbose_name=_("target tag"),
+    target_group = models.ForeignKey(
+        "stations.RolloutGroup",
+        verbose_name=_("target group"),
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="deployments",
     )
+    # Snapshot of the group name at deploy time, so history stays readable
+    # after the group is renamed or deleted (target_group is SET_NULL).
+    target_group_name = models.CharField(_("target group name"), max_length=100, blank=True)
     target_station = models.ForeignKey(
         Station,
         verbose_name=_("target station"),
@@ -91,10 +94,22 @@ class Deployment(models.Model):
     def __str__(self):
         return f"Deployment #{self.pk} - {self.image_release} ({self.get_status_display()})"
 
+    def save(self, *args, **kwargs):
+        if self.target_group_id and not self.target_group_name:
+            self.target_group_name = self.target_group.name
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "target_group_name"}
+        super().save(*args, **kwargs)
+
+    @property
+    def target_group_label(self) -> str:
+        """Deploy-time group name; falls back to the live FK for old rows."""
+        return self.target_group_name or (self.target_group.name if self.target_group else "")
+
     def get_target_stations(self):
         """Resolve the queryset of stations targeted by this deployment."""
-        if self.target_type == self.TargetType.TAG and self.target_tag:
-            return Station.objects.filter(tags=self.target_tag)
+        if self.target_type == self.TargetType.GROUP and self.target_group_id:
+            return Station.objects.filter(rollout_group_id=self.target_group_id)
         elif self.target_type == self.TargetType.STATION and self.target_station:
             return Station.objects.filter(pk=self.target_station_id)
         elif self.target_type == self.TargetType.ALL:

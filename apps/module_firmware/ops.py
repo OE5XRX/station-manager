@@ -67,15 +67,15 @@ def target_details(target):
         "module_type": target.module_type.key,
         "scope": target.scope,
         "version": target.version,
-        "tag": target.tag.slug if target.tag_id else None,
+        "group": target.group.slug if target.group_id else None,
         "station": target.station.name if target.station_id else None,
-        "canary_tag": target.canary_tag.slug if target.canary_tag_id else None,
+        "canary_group": target.canary_group.slug if target.canary_group_id else None,
     }
 
 
 def target_label(target):
-    if target.scope == ModuleFirmwareTarget.Scope.TAG:
-        return f"{target.module_type.key} tag {target.tag.slug}"
+    if target.scope == ModuleFirmwareTarget.Scope.GROUP:
+        return f"{target.module_type.key} group {target.group.slug}"
     if target.scope == ModuleFirmwareTarget.Scope.STATION:
         return f"{target.module_type.key} station {target.station.name}"
     return f"{target.module_type.key} fleet"

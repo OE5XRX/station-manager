@@ -24,7 +24,9 @@ _parse_ip = parse_ip
 _client_ip = client_ip
 
 
-def audit_station_write(request, *, station=None, station_id=None, event_type, message):
+def audit_station_write(
+    request, *, station=None, station_id=None, event_type, message, changes=None
+):
     """Write a StationAuditLog entry for an API write operation.
 
     Pass either ``station`` (instance) or ``station_id`` (pk).  The
@@ -38,6 +40,7 @@ def audit_station_write(request, *, station=None, station_id=None, event_type, m
             station_id=station_id,
             event_type=event_type,
             message=message + _token_suffix(request),
+            changes=changes,
             user=request.user,
             ip_address=_client_ip(request),
         )

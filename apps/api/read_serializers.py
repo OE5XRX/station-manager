@@ -20,6 +20,7 @@ from apps.stations.inventory import inventory_for_viewer
 from apps.stations.models import (
     Region,
     RegionAssignment,
+    RolloutGroup,
     Station,
     StationAssignment,
     StationInventory,
@@ -53,6 +54,12 @@ class StationTagSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "slug", "color", "description", "created_at"]
 
 
+class RolloutGroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolloutGroup
+        fields = ["id", "name", "slug", "channel", "description", "created_at"]
+
+
 class StationSerializer(serializers.ModelSerializer):
     is_online = serializers.BooleanField(read_only=True)
     # Not ``read_only`` so the OpenAPI response schema marks it optional: it is
@@ -79,6 +86,7 @@ class StationSerializer(serializers.ModelSerializer):
             "tx_audio_ceiling_dbfs",
             "region",
             "tags",
+            "rollout_group",
             "notes",
             "current_os_version",
             "current_agent_version",
@@ -187,7 +195,7 @@ class RegionAssignmentSerializer(serializers.ModelSerializer):
 class RolloutSequenceEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = RolloutSequenceEntry
-        fields = ["id", "sequence", "tag", "position"]
+        fields = ["id", "sequence", "group", "position"]
 
 
 class RolloutSequenceSerializer(serializers.ModelSerializer):
@@ -230,7 +238,8 @@ class DeploymentSerializer(serializers.ModelSerializer):
             "id",
             "image_release",
             "target_type",
-            "target_tag",
+            "target_group",
+            "target_group_name",
             "target_station",
             "strategy",
             "phase_config",

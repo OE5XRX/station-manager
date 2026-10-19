@@ -17,7 +17,7 @@
     <div class="page-head-main">
       <div class="page-eyebrow">{% trans "Fleet" %} · {% trans "Firmware library" %}</div>
       <h1 class="page-title">{% trans "Firmware targets" %}</h1>
-      <p class="page-sub">{% trans "The firmware version each module type should run. A station override beats a tag override, which beats the fleet default. While a fleet default has a canary tag, it only applies to stations in that tag." %}</p>
+      <p class="page-sub">{% trans "The firmware version each module type should run. A station override beats a group override, which beats the fleet default. While a fleet default has a canary group, it only applies to stations in that group." %}</p>
     </div>
     <div class="page-head-actions">
       {% if can.modules.manage %}
@@ -60,15 +60,15 @@
               <td data-label="{% trans 'Applies to' %}">
                 {% if t.scope == "fleet" %}
                   <span class="pill pill-accent">{% trans "Fleet default" %}</span>
-                  {% if t.canary_tag %}
+                  {% if t.canary_group %}
                   <div style="margin-top:6px;" class="row-gap-8">
                     <span class="t-mono-sm t-muted">{% trans "canary" %}</span>
-                    <span class="tag" style="--tag-color: {{ t.canary_tag.color }};">{{ t.canary_tag.name }}</span>
+                    <span class="pill pill-muted">{{ t.canary_group.name }}</span>
                   </div>
                   {% endif %}
-                {% elif t.scope == "tag" %}
-                  <span class="pill pill-violet">{% trans "Tag" %}</span>
-                  <span class="tag" style="--tag-color: {{ t.tag.color }};">{{ t.tag.name }}</span>
+                {% elif t.scope == "group" %}
+                  <span class="pill pill-violet">{% trans "Group" %}</span>
+                  <span>{{ t.group.name }}</span>
                 {% else %}
                   <span class="pill pill-muted">{% trans "Station" %}</span>
                   <a href="{% url 'stations:station_detail' t.station.pk %}">{{ t.station.name }}</a>

@@ -17,7 +17,7 @@ from .ops import target_label as _target_label
 
 SCOPE_ORDER = {
     ModuleFirmwareTarget.Scope.FLEET: 0,
-    ModuleFirmwareTarget.Scope.TAG: 1,
+    ModuleFirmwareTarget.Scope.GROUP: 1,
     ModuleFirmwareTarget.Scope.STATION: 2,
 }
 
@@ -30,7 +30,7 @@ class TargetListView(AreaPermissionMixin, ListView):
 
     def get_queryset(self):
         return ModuleFirmwareTarget.objects.select_related(
-            "module_type", "tag", "station", "canary_tag", "created_by"
+            "module_type", "group", "station", "canary_group", "created_by"
         )
 
     def get_context_data(self, **kwargs):
@@ -44,7 +44,7 @@ class TargetListView(AreaPermissionMixin, ListView):
             key=lambda t: (
                 t.module_type.display_name,
                 SCOPE_ORDER.get(t.scope, 9),
-                t.tag.name if t.tag_id else "",
+                t.group.name if t.group_id else "",
                 t.station.name if t.station_id else "",
             ),
         ):
@@ -71,7 +71,7 @@ class _TargetFormMixin:
 
     def get_queryset(self):
         return ModuleFirmwareTarget.objects.select_related(
-            "module_type", "tag", "station", "canary_tag"
+            "module_type", "group", "station", "canary_group"
         )
 
 
@@ -98,7 +98,7 @@ class TargetUpdateView(AreaPermissionMixin, _TargetFormMixin, UpdateView):
 
     def form_valid(self, form):
         before = ModuleFirmwareTarget.objects.select_related(
-            "module_type", "tag", "station", "canary_tag"
+            "module_type", "group", "station", "canary_group"
         ).get(pk=self.object.pk)
         response = super().form_valid(form)
         if form.has_changed():
@@ -121,7 +121,7 @@ class TargetDeleteView(AreaPermissionMixin, View):
     def post(self, request, pk):
         target = get_object_or_404(
             ModuleFirmwareTarget.objects.select_related(
-                "module_type", "tag", "station", "canary_tag"
+                "module_type", "group", "station", "canary_group"
             ),
             pk=pk,
         )
