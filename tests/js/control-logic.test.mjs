@@ -231,4 +231,19 @@ ok("slotAddr leaves a genuinely non-numeric slot untouched", () => {
   assert.strictEqual(L.slotAddr("1a"), "1a");
 });
 
+// --- local date/time display (drain banner) ----------------------------------
+ok("formatLocalDateTime renders dd.mm.yyyy HH:MM in local time", () => {
+  assert.equal(L.formatLocalDateTime(new Date(2026, 9, 18, 10, 5)), "18.10.2026 10:05");
+  assert.equal(L.formatLocalDateTime(new Date(2026, 0, 2, 3, 4)), "02.01.2026 03:04");
+});
+ok("formatLocalDateTime accepts an ISO string", () => {
+  const d = new Date("2026-10-18T08:05:00+00:00");
+  assert.equal(L.formatLocalDateTime("2026-10-18T08:05:00+00:00"), L.formatLocalDateTime(d));
+});
+ok("formatLocalDateTime returns empty for missing/invalid input", () => {
+  assert.equal(L.formatLocalDateTime(null), "");
+  assert.equal(L.formatLocalDateTime(""), "");
+  assert.equal(L.formatLocalDateTime("not a date"), "");
+});
+
 console.log("\n" + passed + " assertions passed");

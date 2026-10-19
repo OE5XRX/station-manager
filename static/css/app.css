@@ -553,6 +553,37 @@ h4 { font-family: var(--font-body); font-weight: 600; font-size: 14px; margin: 0
 .pill-rolled_back { background: var(--warn-soft);  color: var(--warn); }
 .pill-in_progress { background: var(--cyan-soft);  color: var(--cyan);   border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
 
+/* Station drain banner (module firmware update pending). Same cyan "in transit"
+   channel as .pill-updating; shared by station detail and the control panel. */
+.fw-drain-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.fw-drain-banner .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* Dashboard firmware-update rows: same rhythm as the deployment rows; a module
+   stuck in DFU mode gets a warn edge because it needs a hands-on power-cycle. */
+.fw-dash-row {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.fw-dash-row:last-child { border-bottom: 0; }
+.fw-dash-row[data-fw-dfu-stuck] { box-shadow: inset 3px 0 0 var(--warn); }
+
 /* Live dot for online pill */
 .pill-online .dot {
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal) 60%, transparent);

@@ -17,6 +17,7 @@ from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import DeploymentResult
 from apps.images.models import ImageRelease
+from apps.module_firmware import drain as module_drain
 from apps.provisioning.models import ProvisioningJob
 
 from .forms import StationForm, StationLogEntryForm, StationPhotoForm, StationTagForm
@@ -107,6 +108,7 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             context["show_raw_private_key"] = True
             context["raw_private_key"] = raw_private_key
         user = self.request.user
+        context["drain"] = module_drain.drain_status(self.object)
         inventory = getattr(self.object, "inventory", None)
         context["inventory_data"] = inventory_for_viewer(
             inventory.data if inventory else None, can(user, "stations", "manage")

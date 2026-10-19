@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Collection
 
 import serial
 
@@ -266,7 +267,10 @@ def _extract_json(buf: bytes, prefix: str) -> dict | None:
 
 
 def discover_slots(
-    base: str = "/dev/oe5xrx", timeout: float = 3.0, trace: bool = False
+    base: str = "/dev/oe5xrx",
+    timeout: float = 3.0,
+    trace: bool = False,
+    skip: Collection[int] = (),
 ) -> list[dict]:
     """Scan `base` for slotN/control, enumerate + describe modules, return inventory entries.
 
@@ -277,6 +281,10 @@ def discover_slots(
     When `trace` is True, every TX/RX chunk on each slot's serial is hex-dumped at
     DEBUG level (enabled via the ``trace_serial`` config field) — this is the only way
     the production discovery path emits raw bytes for "module not found" debugging.
+
+    Slot numbers in `skip` (slots paused for a module firmware update, see
+    ``slot_pause``) are omitted WITHOUT opening their control device — the flasher owns
+    that device (or it is mid-re-enumeration) for the duration of the update.
     """
     if not os.path.isdir(base):
         return []
@@ -291,6 +299,8 @@ def discover_slots(
         slot_dir = os.path.basename(os.path.dirname(control))
         match = _SLOT_RE.match(slot_dir)
         if not match:
+            continue
+        if int(match.group(1)) in skip:
             continue
         try:
             modules = probe_slot(control, timeout=timeout, trace=trace)

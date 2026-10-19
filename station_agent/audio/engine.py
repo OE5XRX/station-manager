@@ -117,6 +117,21 @@ class AudioEngine:
         await self._teardown_tx()
         await self._teardown_diag()
 
+    def slot_active(self, slot: int) -> bool:
+        """True while *slot* carries the TX/mic route or a diagnostic run.
+
+        Called cross-thread by the module_ota cycle (a busy slot is not flashed). RX-only
+        streams deliberately do NOT count: any viewer subscribes RX on page load without a
+        control lock, so counting RX would let one forgotten browser tab postpone a flash
+        indefinitely while the drain refuses every control grant. RX simply drops for the
+        duration of the flash (the module card shows "Firmware-Update läuft").
+        Each read is a single attribute load on a snapshot reference; the answer is advisory.
+        """
+        tx, diag = self._tx, self._diag
+        return (tx is not None and tx.get("slot") == slot) or (
+            diag is not None and diag.get("slot") == slot
+        )
+
     # --- RX (demand-gated source production) -------------------------------
     async def on_source_subscribe(self, stream_id: str) -> None:
         info = self.registry.get(stream_id)

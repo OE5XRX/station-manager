@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_FILES = [
     REPO_ROOT / "tests" / "js" / "control-logic.test.mjs",
     REPO_ROOT / "tests" / "js" / "control-panel-readonly.test.mjs",
+    REPO_ROOT / "tests" / "js" / "control-panel-firmware.test.mjs",
 ]
 
 

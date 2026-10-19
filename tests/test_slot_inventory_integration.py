@@ -17,7 +17,8 @@ def test_collect_inventory_includes_modules(monkeypatch):
         }
     ]
     monkeypatch.setattr(
-        "station_agent.inventory.discover_slots", lambda base, timeout=3.0, trace=False: fake
+        "station_agent.inventory.discover_slots",
+        lambda base, timeout=3.0, trace=False, skip=(): fake,
     )
     data = inventory.collect_inventory(config=_cfg(slot_discovery_enabled=True))
     assert data["modules"] == fake
@@ -27,7 +28,7 @@ def test_collect_inventory_discovery_disabled(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "station_agent.inventory.discover_slots",
-        lambda base, timeout=3.0, trace=False: calls.append(base) or [],
+        lambda base, timeout=3.0, trace=False, skip=(): calls.append(base) or [],
     )
     data = inventory.collect_inventory(config=_cfg(slot_discovery_enabled=False))
     assert data.get("modules", []) == []

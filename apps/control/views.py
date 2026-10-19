@@ -6,6 +6,7 @@ from apps.accounts.permissions import (
     level_label,
     required_level,
 )
+from apps.module_firmware import drain
 from apps.stations.models import Station
 
 from . import serializers
@@ -40,4 +41,6 @@ class StationControlView(AreaPermissionMixin, DetailView):
         # Read-only hint: which level unlocks operating (from the registry, not hardcoded).
         ctx["control_use_label"] = level_label(required_level("control", "use"))
         ctx["ptt_default_key"] = " "
+        # Station drain banner first paint; live updates come via lock frames.
+        ctx["drain"] = drain.drain_status(station)
         return ctx

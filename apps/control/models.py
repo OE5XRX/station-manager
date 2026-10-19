@@ -45,6 +45,10 @@ class StationModule(models.Model):
     # the next non-empty inventory restarts ``last_seen`` so the outage does not count
     # towards the stale-module TTL (``apps.control.registry``).
     offline_with_station = models.BooleanField(_("offline with station"), default=False)
+    # True while the agent flashes this module (Teilbereich D): set by an inventory
+    # entry with ``status == "updating"`` (paused slot) or ``firmware_update_started``,
+    # cleared by any other inventory entry or ``firmware_update_finished``.
+    firmware_updating = models.BooleanField(_("firmware updating"), default=False)
 
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)

@@ -146,3 +146,17 @@ def test_commit_404_when_not_bound_to_station(client, station_with_key, fm, stat
     m, cs = _setup(fm, other, uid="OTHER")
     resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": "26.09.15-01"})
     assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_commit_success_resets_transient_failures(client, station_with_key, fm):
+    station, priv = station_with_key
+    _m, cs = _setup(fm, station)
+    cs.transient_failures = 4
+    cs.save(update_fields=["transient_failures"])
+    # Heartbeat has NOT caught up yet: row stays updating, but the accepted commit
+    # proves the agent can converge, so the drain cap restarts.
+    resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": "26.09.15-01"})
+    assert resp.status_code == 200
+    cs.refresh_from_db()
+    assert cs.transient_failures == 0

@@ -151,11 +151,19 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         mtype = msg.get("type")
         if mtype == "inventory":
             station = await self._cached_station()
+            drain_changed, drain_after = False, None
             if station is not None:
-                await self._apply_inventory(station, msg.get("slots", []))
+                drain_changed, drain_after = await self._apply_inventory(
+                    station, msg.get("slots", [])
+                )
                 await self._reapply_persisted(station, msg.get("slots", []))
                 await self._replay_telemetry(station)
             await self._broadcast("control.inventory", {"msg": msg})
+            if drain_changed:
+                # E.g. the post-flash inventory reports the target version: the row
+                # converges and the drain ends -> refresh every open panel's banner.
+                # Reuse the drain evaluated in _apply_inventory (no 3rd evaluation).
+                await self._broadcast_lock_refresh(drain=drain_after)
         elif mtype == "state":
             station = await self._cached_station()
             if station is not None:
@@ -166,7 +174,19 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         elif mtype == "result":
             await self._broadcast("control.result", {"msg": msg})
         elif mtype == "event":
+            updating = registry.FIRMWARE_UPDATING_EVENTS.get(msg.get("event"))
+            if updating is not None:
+                station = await self._cached_station()
+                if station is not None:
+                    detail = msg.get("detail")
+                    result = detail.get("result") if isinstance(detail, dict) else None
+                    await self._set_firmware_updating(
+                        station, msg.get("slot"), msg.get("module"), updating, result
+                    )
             await self._broadcast("control.event", {"msg": msg})
+            if updating is not None:
+                # A flash started / ended: refresh every open panel's drain banner.
+                await self._broadcast_lock_refresh()
         # Unknown types are ignored (forward-compat).
         # Deferred re-apply retry runs AFTER the frame was processed, so it sees the module
         # state this very frame carried (an inventory frame does its own check above).
@@ -195,6 +215,22 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         frame = event["frame"]
         self._note_user_set(frame)
         await self.send(text_data=json.dumps(frame))
+        if isinstance(frame, dict) and frame.get("type") == "firmware_check":
+            # Target/release changed: the drain state may have changed with it.
+            await self._broadcast_lock_refresh()
+
+    async def _broadcast_lock_refresh(self, drain=lock.DRAIN_UNSET):
+        """Re-broadcast ``control.lock`` with a fresh drain payload (best effort).
+
+        ``drain`` = an already-evaluated drain payload for the current state."""
+        try:
+            station = await self._cached_station()
+            if station is None:
+                return
+            status = await self._lock_status(station, drain=drain)
+            await self._broadcast("control.lock", {"lock": status})
+        except Exception:
+            logger.exception("control: lock/drain refresh broadcast failed")
 
     def _note_user_set(self, frame):
         """Remember a relayed browser ``set`` so a deferred re-apply leaves that capability
@@ -377,7 +413,13 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _apply_inventory(self, station, slots):
+        """Apply the inventory; ``(changed, after)`` where ``changed`` is True iff the
+        station's drain state changed with it and ``after`` is the post-apply drain
+        payload (reused for the broadcast, so the predicate runs twice per frame)."""
+        before = lock.drain_payload(station)
         registry.apply_inventory(station, slots)
+        after = lock.drain_payload(station)
+        return after != before, after
 
     @database_sync_to_async
     def _reapply_frames(self, station, slots):
@@ -416,6 +458,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         registry.apply_state(station, slot, module_id, values)
 
     @database_sync_to_async
+    def _set_firmware_updating(self, station, slot, module_id, value, result=None):
+        registry.set_firmware_updating(station, slot, module_id, value, result)
+
+    @database_sync_to_async
     def _mark_offline(self, station):
         registry.mark_station_offline(station)
 
@@ -430,8 +476,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         return lock.sweep_lock(station, now=timezone.now(), idle_seconds=constants.T_IDLE_SECONDS)
 
     @database_sync_to_async
-    def _lock_status(self, station):
-        return lock.lock_status(_lock_with_holder(station))
+    def _lock_status(self, station, drain=lock.DRAIN_UNSET):
+        return _lock_status_with_drain(station, drain=drain)
 
     @database_sync_to_async
     def _verify_agent(self, station, params):
@@ -492,6 +538,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         from apps.audio import gate as audio_gate
 
         audio_gate.clear_ptt(station)
+
+
+def _lock_status_with_drain(station, drain=lock.DRAIN_UNSET):
+    """Lock frame payload plus ``drain`` — see ``lock.status_with_drain``."""
+    return lock.status_with_drain(station, drain=drain)
 
 
 def _lock_with_holder(station, scope="station"):
@@ -864,10 +915,13 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     # -- lock actions ---------------------------------------------------------
 
     async def _lock_acquire(self, station):
-        if await self._acquire(station):
+        acquired = await self._acquire(station)
+        if acquired:
             await self._audit(
                 station, "control_lock_acquired", f"{self.user.username} acquired control"
             )
+        if acquired is lock.DRAIN_REFUSED:
+            await self._send_drain_refusal()
         await self._broadcast_lock(station)
 
     async def _revoke_if_holder(self, station):
@@ -899,7 +953,10 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     async def _lock_request(self, station):
         holder = await self._request(station)
-        if holder is not None:
+        if holder is lock.DRAIN_REFUSED:
+            await self._send_drain_refusal()
+            return
+        if holder:
             await self.channel_layer.group_send(
                 self.group_name,
                 {
@@ -910,7 +967,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             )
 
     async def _lock_transfer(self, station, to_user_id):
-        if to_user_id is not None and await self._transfer(station, to_user_id):
+        transferred = to_user_id is not None and await self._transfer(station, to_user_id)
+        if transferred:
             await self._audit(
                 station,
                 "control_lock_transferred",
@@ -919,6 +977,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             # Holder changed -> old holder can no longer key TX.
             await self._audio_clear_ptt(station)
             await self._bridge_gate(station)
+        if transferred is lock.DRAIN_REFUSED:
+            await self._send_drain_refusal()
         await self._broadcast_lock(station)
 
     async def _lock_preempt(self, station):
@@ -933,7 +993,11 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 text_data=json.dumps({"type": "error", "code": "forbidden", "message": message})
             )
             return
-        await self._preempt(station)
+        if await self._preempt(station) is lock.DRAIN_REFUSED:
+            # A free lock while draining: preempting it would be a new grant.
+            await self._send_drain_refusal()
+            await self._send_lock_status(station)
+            return
         await self._audit(
             station, "control_lock_preempted", f"{self.user.username} preempted control"
         )
@@ -942,8 +1006,21 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._bridge_gate(station)
         await self._broadcast_lock(station)
 
+    async def _send_drain_refusal(self):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "error",
+                    "code": "firmware_update_pending",
+                    "message": lock.FIRMWARE_DRAIN_MESSAGE,
+                }
+            )
+        )
+
     async def _broadcast_lock(self, station):
-        status = await self._lock_status(station)
+        await self._group_send_lock(await self._lock_status(station))
+
+    async def _group_send_lock(self, status):
         await self.channel_layer.group_send(
             self.group_name, {"type": "control.lock", "lock": status}
         )
@@ -1129,7 +1206,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _lock_status(self, station):
-        return lock.lock_status(_lock_with_holder(station))
+        return _lock_status_with_drain(station)
 
     @database_sync_to_async
     def _audit(self, station, event_type, message):

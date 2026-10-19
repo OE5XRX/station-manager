@@ -112,7 +112,11 @@ def _same(a, b):
 
 
 def reapply_frames(station, slots):
-    """``set`` frames for every persisted value the reported inventory disagrees with."""
+    """``set`` frames for every persisted value the reported inventory disagrees with.
+
+    Modules being flashed (inventory ``status: updating`` / snapshot ``updating``) are
+    skipped entirely.
+    """
     if not isinstance(slots, list):
         return []
     rows = {}
@@ -131,6 +135,11 @@ def reapply_frames(station, slots):
             if not isinstance(mod, dict) or not isinstance(mod.get("module"), str):
                 continue
             module_id = mod["module"]
+            if mod.get("status") == "updating" or mod.get("updating") is True:
+                # Paused for a firmware flash: the agent reports its last-known
+                # snapshot with ``state: {}`` and rejects commands to the slot. Not a
+                # drift — the post-flash inventory re-applies (FW persists nothing).
+                continue
             identity = mod.get("identity") if isinstance(mod.get("identity"), dict) else {}
             module_type = identity.get("type")
             desc = mod.get("capabilities")

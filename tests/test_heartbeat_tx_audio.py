@@ -138,7 +138,7 @@ class _Client:
 
 
 def test_send_heartbeat_feeds_holder(monkeypatch):
-    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda config=None: {})
+    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda *a, **kw: {})
     h = ts.TxAudioSettings()
     ok = send_heartbeat(_Client(_Resp(200, {"tx_audio": {"ceiling_dbfs": -7.5}})), tx_settings=h)
     assert ok is True
@@ -146,14 +146,14 @@ def test_send_heartbeat_feeds_holder(monkeypatch):
 
 
 def test_send_heartbeat_survives_non_json_body(monkeypatch):
-    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda config=None: {})
+    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda *a, **kw: {})
     h = ts.TxAudioSettings()
     assert send_heartbeat(_Client(_Resp(200, ValueError("no json"))), tx_settings=h) is True
     assert h.ceiling_dbfs == -12.0
 
 
 def test_send_heartbeat_survives_recursion_error(monkeypatch):
-    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda config=None: {})
+    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda *a, **kw: {})
     h = ts.TxAudioSettings()
     h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -6.0}})
     assert send_heartbeat(_Client(_Resp(200, RecursionError("deep"))), tx_settings=h) is True
@@ -161,7 +161,7 @@ def test_send_heartbeat_survives_recursion_error(monkeypatch):
 
 
 def test_send_heartbeat_unparseable_body_keeps_quieter_calibration(monkeypatch):
-    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda config=None: {})
+    monkeypatch.setattr("station_agent.heartbeat.collect_system_info", lambda *a, **kw: {})
     h = ts.TxAudioSettings()
     h.update_from_heartbeat({"tx_audio": {"ceiling_dbfs": -20.0}})
     assert send_heartbeat(_Client(_Resp(200, RecursionError("deep"))), tx_settings=h) is True

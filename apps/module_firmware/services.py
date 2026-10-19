@@ -11,6 +11,7 @@ from django.db import transaction
 from apps.stations.models import StationAuditLog
 
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
+from .nudge import nudge_stations, refresh_lock_status
 from .reconciler import effective_target, reconcile_module
 
 logger = logging.getLogger(__name__)
@@ -80,15 +81,32 @@ def reconcile_module_type(module_type):
     """Reconcile every module of ``module_type`` that has an open assignment.
 
     Per-module failures are logged, not raised, so one bad module can't block
-    the rest. Returns the number reconciled without error."""
+    the rest. Stations of modules left UPDATING are nudged to re-check; every
+    reconciled station gets a ``control.lock`` refresh (its drain may have ended,
+    e.g. target deleted/archived, which sends no nudge; harmlessly redundant with
+    the agent consumer's nudge handler for nudged stations, but also reaches
+    panels of stations whose agent is offline).
+    Returns the number reconciled without error."""
     ok = 0
-    open_ids = ModuleAssignmentHistory.objects.filter(to_ts__isnull=True).values("module_id")
-    for module in Module.objects.filter(module_type=module_type, pk__in=open_ids):
+    to_nudge = set()
+    reconciled = set()
+    open_assignments = dict(
+        ModuleAssignmentHistory.objects.filter(
+            to_ts__isnull=True, module__module_type=module_type
+        ).values_list("module_id", "station_id")
+    )
+    for module in Module.objects.filter(module_type=module_type, pk__in=open_assignments):
         try:
-            reconcile_module(module)
+            state = reconcile_module(module)
             ok += 1
         except Exception:
             logger.warning("reconcile_module_type: module %s failed", module.pk, exc_info=True)
+            continue
+        reconciled.add(open_assignments[module.pk])
+        if state is not None and state.state == ModuleFirmwareConvergenceState.State.UPDATING:
+            to_nudge.add(open_assignments[module.pk])
+    nudge_stations(to_nudge)
+    refresh_lock_status(reconciled)
     return ok
 
 
@@ -177,12 +195,18 @@ def release_quarantine(module, *, user, ip_address=None, audit_suffix=""):
         return []
     picked.state = ModuleFirmwareConvergenceState.State.UPDATING
     picked.attempts = 0
+    # Also reset the transient-failure streak: a row can be quarantined with
+    # transient_failures >= DRAIN_TRANSIENT_LIMIT (e.g. 5 'failed' then one
+    # 'rejected'); leaving it would keep the row out of the drain the release
+    # is meant to (re)start.
+    picked.transient_failures = 0
     picked.last_error_mode = ""
     picked.last_error_message = ""
     picked.save(
         update_fields=[
             "state",
             "attempts",
+            "transient_failures",
             "last_error_mode",
             "last_error_message",
             "updated_at",
@@ -195,6 +219,11 @@ def release_quarantine(module, *, user, ip_address=None, audit_suffix=""):
         .select_related("station")
         .first()
     )
+    if open_assignment is not None:
+        # The release (re)starts a drain on the station: push a fresh lock frame to
+        # open panels and nudge the agent instead of waiting for its next cadence.
+        nudge_stations([open_assignment.station_id])
+        refresh_lock_status([open_assignment.station_id])
     try:
         with transaction.atomic():
             StationAuditLog.log(

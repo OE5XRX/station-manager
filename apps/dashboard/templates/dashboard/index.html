@@ -197,6 +197,49 @@
     </section>
 
     <aside class="stack-gap-14">
+      {% if can.modules.view %}{% if fw_waiting or fw_dfu_stuck %}
+      {% comment %}
+      Module firmware updates (Teilbereich D): stations whose control lock is held
+      back until a pending flash is through, plus modules stuck in DFU mode that
+      need a power-cycle. Rendered only when there is something to act on.
+      {% endcomment %}
+      <section class="panel" data-fw-updates>
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot" style="background:var({% if fw_dfu_stuck %}--warn{% else %}--cyan{% endif %})"></span>{% trans "Firmware-Updates" %}</div>
+          {% if can.modules.view %}<a href="{% url 'module_firmware:convergence' %}" class="t-label" style="color:var(--ink-2);">{% trans "Konvergenz" %} →</a>{% endif %}
+        </div>
+        <div class="panel-body flush">
+          {% for entry in fw_dfu_stuck %}
+            <div class="fw-dash-row" data-fw-dfu-stuck>
+              <div class="row-split">
+                <div class="stack-gap-2" style="min-width:0;">
+                  <div class="truncate" style="font-weight:600;color:var(--ink-0);font-size:13px;">
+                    {% if entry.station %}{% if can.stations.view %}<a href="{% url 'stations:station_detail' entry.station.pk %}" class="callsign">{{ entry.station.callsign|default:entry.station.name }}</a>{% else %}<span class="callsign">{{ entry.station.callsign|default:entry.station.name }}</span>{% endif %}{% else %}{% trans "ohne Station" %}{% endif %}
+                    <span class="t-mono-sm t-muted">{% if entry.slot %}{{ entry.slot }} · {% endif %}{{ entry.module.uid }}</span>
+                  </div>
+                  <div class="t-mono-sm stat-warn">{{ entry.message }}</div>
+                </div>
+                <span class="pill pill-warn">{% trans "DFU" %}</span>
+              </div>
+              <div class="t-mono-sm t-muted mt-10">{% trans "seit" %} {{ entry.since|date:"d.m.Y H:i" }}</div>
+            </div>
+          {% endfor %}
+          {% for station, status in fw_waiting %}
+            <div class="fw-dash-row" data-fw-waiting>
+              <div class="row-split">
+                <div class="stack-gap-2" style="min-width:0;">
+                  {% if can.stations.view %}<a href="{% url 'stations:station_detail' station.pk %}" class="callsign">{{ station.callsign|default:station.name }}</a>{% else %}<span class="callsign">{{ station.callsign|default:station.name }}</span>{% endif %}
+                  <span class="t-mono-sm t-muted truncate">{{ status.module_uids|join:", " }}</span>
+                </div>
+                <span class="pill pill-updating">{% trans "wartet" %}</span>
+              </div>
+              <div class="t-mono-sm t-muted mt-10" title="{{ status.since|date:'d.m.Y H:i' }}">{% trans "wartet seit" %} {{ status.since|date:"d.m.Y H:i" }} ({{ status.since|timesince }})</div>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}{% endif %}
+
       {% if can.deployments.view %}
       <section class="panel">
         <div class="panel-head">

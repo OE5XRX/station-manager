@@ -8,6 +8,7 @@ from apps.accounts.models import AccountAuditLog
 from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment
+from apps.module_firmware import drain as module_drain
 from apps.module_firmware.models import Module
 from apps.monitoring.models import Alert
 from apps.stations.models import Station, StationLogEntry
@@ -57,6 +58,15 @@ class IndexView(AreaPermissionMixin, TemplateView):
             .select_related("module_type")
             .order_by("uid")
         )
+        # Module uids / flash errors are module data: gated on modules.view, not just
+        # dashboard.view. Station visibility is not topology-scoped anywhere (every
+        # stations.view holder sees the whole fleet, see the Live fleet table above).
+        if can(self.request.user, "modules", "view"):
+            context["fw_waiting"] = module_drain.draining_stations()
+            context["fw_dfu_stuck"] = module_drain.dfu_stuck_modules()
+        else:
+            context["fw_waiting"] = []
+            context["fw_dfu_stuck"] = []
         if can(self.request.user, "audit", "view"):
             context["denials_24h"] = AccountAuditLog.objects.filter(
                 event_type=AccountAuditLog.EventType.PERMISSION_DENIED,

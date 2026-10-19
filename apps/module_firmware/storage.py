@@ -16,6 +16,14 @@ def bundle_key(type_key: str, version: str, variant: str) -> str:
     return f"{release_key(type_key, version, variant)}.bundle"
 
 
+def sim_release_key(type_key: str, version: str, variant: str) -> str:
+    return f"module_firmware/{type_key}/{version}/{_variant_seg(variant)}.native_sim"
+
+
+def sim_bundle_key(type_key: str, version: str, variant: str) -> str:
+    return f"{sim_release_key(type_key, version, variant)}.bundle"
+
+
 def upload_bytes(key: str, data: bytes) -> None:
     if default_storage.exists(key):
         default_storage.delete(key)

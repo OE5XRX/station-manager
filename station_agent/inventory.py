@@ -10,6 +10,7 @@ import os
 import re
 import socket
 
+from station_agent import slot_pause
 from station_agent.slot_discovery import discover_slots
 
 logger = logging.getLogger(__name__)
@@ -200,14 +201,38 @@ def _collect_modules(config) -> list[dict]:
 
     Returns [] when config is None or slot_discovery_enabled is False so that
     the heartbeat loop is never disrupted by discovery errors.
+
+    Slots paused for a module firmware update (``slot_pause``) are never opened; each one
+    that has a snapshot is reported as its last-known entry with ``status: updating``.
     """
     if config is None or not getattr(config, "slot_discovery_enabled", False):
         return []
     try:
-        return discover_slots(config.slot_dev_base, trace=getattr(config, "trace_serial", False))
+        # Live view: a slot paused mid-scan is skipped from then on (checked right
+        # before each probe, not from a snapshot taken before the scan).
+        entries = discover_slots(
+            config.slot_dev_base,
+            trace=getattr(config, "trace_serial", False),
+            skip=slot_pause.LIVE_PAUSED,
+        )
+        return _merge_paused(entries)
     except Exception:  # noqa: BLE001 — discovery must never break the heartbeat
         logger.exception("slot discovery failed")
         return []
+
+
+def _merge_paused(entries: list[dict]) -> list[dict]:
+    """Add the ``updating`` entry of every paused slot that has a snapshot; sort by slot.
+
+    The paused set is re-read here (after the scan): a slot paused while the scan ran
+    reports its ``updating`` entry instead of a probe taken just before the pause."""
+    paused = slot_pause.paused_slots()
+    by_slot = {e.get("slot"): e for e in entries if e.get("slot") not in paused}
+    for slot in paused:
+        entry = slot_pause.updating_entry(slot)
+        if entry is not None:
+            by_slot[slot] = entry
+    return [by_slot[slot] for slot in sorted(by_slot)]
 
 
 def collect_inventory(config=None) -> dict:

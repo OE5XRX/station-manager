@@ -180,7 +180,8 @@ def reconcile_module(module):
     reported = module.last_reported_version or ""
     if reported == desired.version:
         cs.state = ModuleFirmwareConvergenceState.State.OK
-        cs.save(update_fields=["state", "updated_at"])
+        cs.transient_failures = 0
+        cs.save(update_fields=["state", "transient_failures", "updated_at"])
         _set_convergence_rollup(module, Module.Convergence.OK)
     else:
         cs.state = ModuleFirmwareConvergenceState.State.UPDATING
@@ -195,7 +196,8 @@ def record_error(convergence, error_mode, error_message=""):
 
     - rejected  -> immediate quarantine, attempts unchanged (retry never helps);
     - rolled_back -> attempts++, quarantine once attempts >= N;
-    - transient -> no attempts++, stays updating.
+    - transient -> no attempts++, stays updating; transient_failures++ (the
+      drain cap, see DRAIN_TRANSIENT_LIMIT — never quarantines).
 
     Stamps last_attempt_at/last_error_mode and maintains the rollup."""
     convergence.last_error_mode = error_mode
@@ -212,7 +214,11 @@ def record_error(convergence, error_mode, error_message=""):
         if convergence.attempts >= QUARANTINE_ATTEMPT_LIMIT:
             convergence.state = ModuleFirmwareConvergenceState.State.QUARANTINED
             fields.append("state")
-    # transient: no attempts change, state stays updating.
+    else:
+        # transient: no attempts change, state stays updating. Count it toward the
+        # drain cap so a never-converging station is not locked out forever.
+        convergence.transient_failures += 1
+        fields.append("transient_failures")
 
     convergence.save(update_fields=fields)
 

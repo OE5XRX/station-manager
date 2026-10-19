@@ -132,3 +132,37 @@ def test_apply_state_bumps_updated_at():
     registry.apply_state(station, "slot0", "fm0", {"frequency": 146.0})
     after = StationModule.objects.get(station=station, slot="slot0", module_id="fm0").updated_at
     assert after > before
+
+
+@pytest.mark.django_db
+def test_soft_offline_clears_firmware_updating():
+    """A module that vanishes mid-flash (agent died, finished event lost) must not show
+    "Firmware-Update läuft" forever."""
+    from apps.control import registry
+    from apps.control.models import StationModule
+
+    station = Station.objects.create(name="fwu-soft")
+    StationModule.objects.create(
+        station=station, slot="slot0", module_id="fm0", online=True, firmware_updating=True
+    )
+    registry.apply_inventory(station, [{"slot": "slot1", "modules": []}])
+    sm = StationModule.objects.get(station=station, slot="slot0", module_id="fm0")
+    assert sm.online is False
+    assert sm.firmware_updating is False
+
+
+@pytest.mark.django_db
+def test_mark_station_offline_clears_firmware_updating():
+    from apps.control import registry
+    from apps.control.models import StationModule
+
+    station = Station.objects.create(name="fwu-off")
+    StationModule.objects.create(
+        station=station, slot="slot0", module_id="fm0", online=True, firmware_updating=True
+    )
+    # An already-offline row that still carries a stale flag is cleared too.
+    StationModule.objects.create(
+        station=station, slot="slot1", module_id="fm0", online=False, firmware_updating=True
+    )
+    registry.mark_station_offline(station)
+    assert not StationModule.objects.filter(station=station, firmware_updating=True).exists()

@@ -28,6 +28,12 @@ class AgentConfig:
     terminal_shell: str = "/bin/sh"
     bootloader: str = "auto"
     slot_discovery_enabled: bool = True
+    module_ota_enabled: bool = True
+    module_fw_dir: str = "/var/lib/station-agent/module-fw"
+    slots_conf: str = "/etc/oe5xrx/slots.conf"
+    sim_dir: str = "/var/lib/oe5xrx/sim"
+    sim_service: str = "oe5xrx-sim-harness"
+    dfu_util: str = "dfu-util"
     slot_dev_base: str = "/dev/oe5xrx"
     trace_serial: bool = False
     control_dead_man_timeout: float = 1.5
@@ -106,6 +112,12 @@ def load_config() -> AgentConfig:
         terminal_shell=str(data.get("terminal_shell", "/bin/sh")),
         bootloader=str(data.get("bootloader", "auto")),
         slot_discovery_enabled=bool(data.get("slot_discovery_enabled", True)),
+        module_ota_enabled=bool(data.get("module_ota_enabled", True)),
+        module_fw_dir=str(data.get("module_fw_dir", "/var/lib/station-agent/module-fw")),
+        slots_conf=str(data.get("slots_conf", "/etc/oe5xrx/slots.conf")),
+        sim_dir=str(data.get("sim_dir", "/var/lib/oe5xrx/sim")),
+        sim_service=str(data.get("sim_service", "oe5xrx-sim-harness")),
+        dfu_util=str(data.get("dfu_util", "dfu-util")),
         slot_dev_base=str(data.get("slot_dev_base", "/dev/oe5xrx")),
         trace_serial=bool(data.get("trace_serial", False)),
         control_dead_man_timeout=float(data.get("control_dead_man_timeout", 1.5)),

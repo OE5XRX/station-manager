@@ -28,6 +28,10 @@ class ModuleFirmwareDownloadView(APIView):
 
     Range requests are supported for resumable transfers (verbatim copy
     of the Range/streaming block from DeploymentDownloadView).
+
+    ``?artifact=sim`` streams the optional native_sim blob instead of the
+    signed.bin (404 if the release has none). A missing ``artifact`` means
+    ``dfu``; any other value is 400.
     """
 
     authentication_classes = [DeviceKeyAuthentication]
@@ -35,6 +39,7 @@ class ModuleFirmwareDownloadView(APIView):
     permission_exempt = "device-key"
 
     CHUNK = 1 << 20  # 1 MiB
+    ARTIFACTS = ("dfu", "sim")
 
     def get(self, request, pk):
         station = getattr(request.auth, "station", None)
@@ -42,6 +47,13 @@ class ModuleFirmwareDownloadView(APIView):
             return Response(
                 {"detail": "No station linked to this device key."},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        artifact = request.query_params.get("artifact", "dfu")
+        if artifact not in self.ARTIFACTS:
+            return Response(
+                {"detail": "Invalid artifact (expected 'dfu' or 'sim')."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         release = ModuleFirmwareRelease.objects.filter(pk=pk).first()
@@ -62,12 +74,28 @@ class ModuleFirmwareDownloadView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Checked after authz so a station cannot probe which foreign
+        # releases carry a sim artifact.
+        if artifact == "sim":
+            if not release.has_sim_artifact:
+                return Response(
+                    {"detail": "Release has no native_sim artifact."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            storage_key = release.sim_storage_key
+            size_bytes = release.sim_size_bytes
+            suffix = ".native_sim"
+        else:
+            storage_key = release.storage_key
+            size_bytes = release.size_bytes
+            suffix = ".signed.bin"
+
         try:
-            stream = storage.open_stream(release.storage_key)
+            stream = storage.open_stream(storage_key)
         except Exception as exc:
             logger.error(
                 "FW download: cannot open %s: %s",
-                release.storage_key,
+                storage_key,
                 exc,
             )
             return Response(
@@ -75,7 +103,7 @@ class ModuleFirmwareDownloadView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        total_size = release.size_bytes if release.size_bytes and release.size_bytes > 0 else None
+        total_size = size_bytes if size_bytes and size_bytes > 0 else None
 
         # Optional Range support - translate HTTP Range into a seek on the stream.
         range_header = request.META.get("HTTP_RANGE", "")
@@ -153,8 +181,8 @@ class ModuleFirmwareDownloadView(APIView):
                 stream.close()
 
         variant = release.variant or "x"
-        filename = f"{release.module_type.key}-{variant}-{release.version}.signed.bin"
-        safe_name = re.sub(r'["\r\n]', "_", filename) or "firmware.signed.bin"
+        filename = f"{release.module_type.key}-{variant}-{release.version}{suffix}"
+        safe_name = re.sub(r'["\r\n]', "_", filename) or f"firmware{suffix}"
         response = StreamingHttpResponse(
             iterator(), status=http_status, content_type="application/octet-stream"
         )

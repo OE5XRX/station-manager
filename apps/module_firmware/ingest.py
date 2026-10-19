@@ -11,16 +11,27 @@ from django.db import transaction
 
 from apps.stations.models import StationAuditLog
 
-from .models import Module, ModuleAssignmentHistory, ModuleType
+from .drain import DFU_STUCK_PREFIX
+from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState, ModuleType
 from .reconciler import reconcile_module
 
 logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
-def ingest_module(station, slot, module_id, identity, *, now, user=None):
+def ingest_module(station, slot, module_id, identity, *, now, user=None, came_online=True):
     """Upsert a Module from a self-reported identity dict. Returns the Module
     or None (no UID => legacy path; unknown type => rejected).
+
+    ``came_online`` — the report is a genuine offline->online transition of this
+    module (apply_inventory: it was absent or soft-offline before). Only then is a
+    DFU-stuck notice cleared: a module in DFU has no CDC, so it can only come back
+    online via a real reconnect, whereas a re-report while already online may be the
+    agent's debounced last-known entry of a module still hanging in DFU. Leaving the
+    updating state after a flash (``firmware_update_finished`` with a result other
+    than the pre-flash ``failed``) soft-offlines the flashed row, so the
+    first real identity after a flash also counts as came-back (a false-positive
+    DFU_STUCK whose module recovered on its own clears without an observed offline).
 
     Wrapped in ``transaction.atomic`` so the row locks taken during assignment
     are always inside a transaction — safe both under ``apply_inventory``'s
@@ -169,11 +180,24 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None):
 
     _apply_assignment(module, station, slot, now=now, user=user)
     _derive_lifecycle(module, now=now, station=station)
+    if came_online:
+        _clear_dfu_stuck(module)
     try:
         reconcile_module(module)
     except Exception:
         logger.warning("ingest: reconcile_module failed for uid=%s", uid, exc_info=True)
     return module
+
+
+def _clear_dfu_stuck(module):
+    """The module just came (back) online on its CDC control line with an identity, so
+    it is demonstrably out of DFU mode (a module in DFU has no CDC): drop the DFU-stuck
+    notice from its convergence rows so the dashboard stops asking for a
+    power-cycle. Runs under the module row lock taken by _apply_assignment /
+    _derive_lifecycle (lock order module -> convergence)."""
+    ModuleFirmwareConvergenceState.objects.filter(
+        module=module, last_error_message__startswith=DFU_STUCK_PREFIX
+    ).update(last_error_message="")
 
 
 def _apply_assignment(module, station, slot, *, now, user=None):

@@ -8,8 +8,11 @@
        x-data="controlPanel()"
        data-station-id="{{ station.id }}"
        data-can-admin="{{ can_admin|yesno:'1,0' }}"
-       data-ptt-default-key="{{ ptt_default_key }}">
+       data-ptt-default-key="{{ ptt_default_key }}"
+       data-drain-since="{% if drain.active and drain.since %}{{ drain.since.isoformat }}{% endif %}"
+       data-drain-label="{% trans "Station wartet auf Firmware-Update seit" %}">
     {% include "control/_lock_banner.html" %}
+    {% include "module_firmware/_drain_banner.html" with live=True %}
     <div class="cp-modules">
       {% for m in modules %}{% include "control/_module_card.html" %}{% empty %}
         <p class="cp-empty">{% trans "No modules discovered on this station yet." %}</p>
