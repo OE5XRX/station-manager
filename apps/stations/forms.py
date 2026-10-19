@@ -112,6 +112,13 @@ class RolloutGroupForm(forms.ModelForm):
             "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            # Fixed after create (disabled fields ignore POSTed values): a
+            # channel flip would silently retarget every member.
+            self.fields["channel"].disabled = True
+
 
 class RegionForm(forms.ModelForm):
     class Meta:

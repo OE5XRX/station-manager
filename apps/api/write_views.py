@@ -25,13 +25,7 @@ from rest_framework.response import Response
 from apps.accounts.models import AccountAuditLog, User
 from apps.accounts.permissions import require
 from apps.api import read_serializers, read_views
-from apps.api.audit import (
-    _client_ip,
-    _token_suffix,
-    audit_account_write,
-    audit_config_write,
-    audit_station_write,
-)
+from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
 from apps.api.write_serializers import (
     AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
@@ -281,17 +275,22 @@ class RolloutGroupViewSet(
         audit_config_write(self.request, message=f"RolloutGroup {group.slug} updated")
 
     def perform_destroy(self, instance):
-        # One transaction: a failed delete must not leave a "deleted" row.
-        with transaction.atomic():
-            audit_config_write(self.request, message=f"RolloutGroup {instance.slug} deleted")
-            # Same semantics as the UI delete view: per-member
-            # ROLLOUT_GROUP_CHANGED rows + actor-stamped sequence renumber.
-            rollout_services.delete_group(
-                instance,
-                by_user=self.request.user,
-                ip_address=_client_ip(self.request),
-                audit_suffix=_token_suffix(self.request),
+        # Every FK to a group is PROTECT: stations, sequence entries and MF
+        # (canary) targets must be moved off first. The audit row rolls back
+        # with a blocked delete.
+        slug = instance.slug
+        try:
+            with transaction.atomic():
+                audit_config_write(self.request, message=f"RolloutGroup {slug} deleted")
+                instance.delete()
+        except ProtectedError:
+            refs = rollout_services.group_references(instance)
+            blocking = ", ".join(f"{k}={v}" for k, v in refs.items() if v)
+            err = APIException(
+                detail=f"Rollout group cannot be deleted while referenced by: {blocking}."
             )
+            err.status_code = http_status.HTTP_409_CONFLICT
+            raise err from None
 
 
 def _save_assignment(serializer, *, actor, is_create):

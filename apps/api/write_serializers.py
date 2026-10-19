@@ -162,6 +162,16 @@ class RolloutGroupWriteSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "slug", "channel", "description", "created_at"]
         read_only_fields = ["id", "created_at"]
 
+    def validate_channel(self, value):
+        # Fixed after create: a channel flip would silently retarget every
+        # member. Switching channels is an explicit deployment instead.
+        if self.instance is not None and value != self.instance.channel:
+            raise serializers.ValidationError(
+                "The channel cannot be changed after creation. "
+                "Create a new group, or deploy an image explicitly."
+            )
+        return value
+
     def validate_slug(self, value):
         # Same reason as StationTagWriteSerializer.validate_slug: model.clean()
         # is not called by DRF, so mirror the reserved-slug guard for a 400

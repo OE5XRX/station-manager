@@ -49,7 +49,8 @@ class RolloutSequenceEntry(models.Model):
     )
     group = models.ForeignKey(
         "stations.RolloutGroup",
-        on_delete=models.CASCADE,
+        # PROTECT: remove the group from the sequence before deleting it.
+        on_delete=models.PROTECT,
         related_name="rollout_entries",
     )
     position = models.PositiveSmallIntegerField(_("position"))

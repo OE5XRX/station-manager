@@ -274,14 +274,14 @@ def test_sequence_add_remove_reorder_groups(
     assert "gc" in page.content.decode()
 
 
-def test_delete_group_in_sequence_renumbers(make_rollout_group, empty_sequence):
+def test_group_in_sequence_cannot_be_deleted(make_rollout_group, empty_sequence):
+    from django.db.models.deletion import ProtectedError
+
     groups = [make_rollout_group(f"g{i}") for i in range(3)]
     for i, g in enumerate(groups):
         RolloutSequenceEntry.objects.create(sequence=empty_sequence, group=g, position=i)
 
-    groups[0].delete()
+    with pytest.raises(ProtectedError):
+        groups[0].delete()
 
-    assert list(empty_sequence.entries.values_list("group", "position")) == [
-        (groups[1].pk, 0),
-        (groups[2].pk, 1),
-    ]
+    assert empty_sequence.entries.count() == 3

@@ -120,70 +120,44 @@ class TestR4aTagOnlyPatchLocked:
 
 
 # ---------------------------------------------------------------------------
-# R4b — RolloutGroup delete renumbers sequence (approach a: post_delete signal)
+# R4b — sequence entries stay gap-free (post_delete signal); a group in the
+# sequence can't be deleted (PROTECT)
 # ---------------------------------------------------------------------------
 
 
 class TestR4bTagDeleteRenumbersSequence:
-    """Deleting a RolloutGroup that appears in a RolloutSequence must:
-      - remove the RolloutSequenceEntry (cascade),
-      - renumber remaining entries to be 0-based and gap-free,
-      - stamp the parent RolloutSequence updated_at.
-
-    The renumber is driven by a post_delete signal on RolloutSequenceEntry so it
-    catches the cascade path (group delete) as well as any other ORM removal.
-    Because the signal fires without an actor, updated_by is left as-is (or None
-    if not previously set); the important invariant is that positions are gap-free
-    and updated_at is bumped.
+    """Removing a RolloutSequenceEntry by any ORM path renumbers the remaining
+    entries 0-based and gap-free via the post_delete signal. Deleting a group
+    that still has an entry is blocked (PROTECT) — the user decision is that a
+    group must be removed from the sequence first.
     """
 
-    def test_tag_delete_removes_entry_and_renumbers_sequence(self, api_topology, bearer):
-        """Delete the middle tag → entry removed, remaining entries renumbered
-        to [0, 1] (no gap), parent sequence updated_at bumped, no 500."""
-        import datetime
-
+    def test_group_delete_blocked_while_in_sequence(self, api_topology, bearer):
+        """A group in the sequence is PROTECTed: API delete → 409, entries untouched."""
         from apps.rollouts.models import RolloutSequenceEntry
         from apps.stations.models import RolloutGroup
 
         seq = _get_or_create_sequence("r4b-tag-delete")
-        tag_t0 = RolloutGroup.objects.create(name="r4b-tag-t0", slug="r4b-tag-t0")
-        tag_t1 = RolloutGroup.objects.create(name="r4b-tag-t1", slug="r4b-tag-t1")
-        tag_t2 = RolloutGroup.objects.create(name="r4b-tag-t2", slug="r4b-tag-t2")
-        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_t0, position=0)
-        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=tag_t1, position=1)
-        RolloutSequenceEntry.objects.create(sequence=seq, group=tag_t2, position=2)
+        groups = [
+            RolloutGroup.objects.create(name=f"r4b-tag-t{i}", slug=f"r4b-tag-t{i}")
+            for i in range(3)
+        ]
+        for i, g in enumerate(groups):
+            RolloutSequenceEntry.objects.create(sequence=seq, group=g, position=i)
 
-        # Record updated_at before the delete
-        seq.refresh_from_db()
-        before = datetime.datetime.now(datetime.UTC)
-
-        # Delete the middle group through the API.
-        url = reverse("api:rollout-group-detail", args=[tag_t1.pk])
+        url = reverse("api:rollout-group-detail", args=[groups[1].pk])
         r = bearer(api_topology["staff"]).delete(url)
-        assert r.status_code == 204, f"Group DELETE must return 204, got {r.status_code}"
+        assert r.status_code == 409, r.content
+        assert "sequence_entries=1" in r.data["detail"]
+        assert RolloutGroup.objects.filter(pk=groups[1].pk).exists()
+        assert list(seq.entries.order_by("position").values_list("position", flat=True)) == [
+            0,
+            1,
+            2,
+        ]
 
-        # Entry for tag_t1 must be gone (cascaded)
-        assert not RolloutSequenceEntry.objects.filter(pk=e1.pk).exists(), (
-            "RolloutSequenceEntry for deleted tag must be removed via cascade"
-        )
-
-        # Remaining entries must be 0-based contiguous (no gap)
-        positions = list(seq.entries.order_by("position").values_list("position", flat=True))
-        assert positions == list(range(len(positions))), (
-            f"Positions must be gap-free after tag delete, got: {positions}"
-        )
-        assert len(positions) == 2, f"Expected 2 remaining entries, got {len(positions)}"
-
-        # Parent updated_at must be bumped
-        seq.refresh_from_db()
-        assert seq.updated_at >= before, (
-            "Parent sequence.updated_at must be bumped after tag-cascade-delete"
-        )
-        # The API path removes the entry through the service → actor stamped.
-        assert seq.updated_by == api_topology["staff"]
-
-    def test_tag_delete_via_orm_also_renumbers(self, api_topology):
-        """ORM tag.delete() (not via API) must also renumber via signal."""
+    def test_entry_delete_via_orm_also_renumbers(self, api_topology):
+        """ORM entry.delete() (not via the service) must also renumber via signal."""
         from apps.rollouts.models import RolloutSequenceEntry
         from apps.stations.models import RolloutGroup
 
@@ -192,11 +166,11 @@ class TestR4bTagDeleteRenumbersSequence:
         t1 = RolloutGroup.objects.create(name="r4b-orm-t1", slug="r4b-orm-t1")
         t2 = RolloutGroup.objects.create(name="r4b-orm-t2", slug="r4b-orm-t2")
         RolloutSequenceEntry.objects.create(sequence=seq, group=t0, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
         RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=2)
 
-        # Delete middle tag via ORM (not API) — signal must still fire
-        t1.delete()
+        # Delete the middle entry via ORM (not the service) — signal must still fire
+        e1.delete()
 
         positions = list(seq.entries.order_by("position").values_list("position", flat=True))
         assert positions == list(range(len(positions))), (

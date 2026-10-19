@@ -34,7 +34,7 @@ staff/member → 403, nicht 500 — `rollouts.manage` ist Admin).
 
 1. Neues Konzept **Rollout-Gruppe** (`RolloutGroup`). `StationTag` bleibt freies
    Label ohne Funktion.
-2. Station in **0..1** Gruppe (`Station.rollout_group`, FK, `SET_NULL`). Ohne
+2. Station in **0..1** Gruppe (`Station.rollout_group`, FK, `PROTECT`). Ohne
    Gruppe = Kanal `release`, keine Sequenzposition.
 3. Gruppe hat **Kanal** (`release` | `dev`, dieselben Werte wie
    `ImageRelease.channel`) und optional eine **Position in der Rollout-Sequenz**
@@ -84,7 +84,7 @@ class RolloutGroup(models.Model):
     description = TextField(blank=True)
     created_at = DateTimeField(auto_now_add=True)
     ordering = ["name"]
-Station.rollout_group = FK(RolloutGroup, null=True, blank=True, SET_NULL, related_name="stations")
+Station.rollout_group = FK(RolloutGroup, null=True, blank=True, PROTECT, related_name="stations")
 ```
 Kanal als `TextChoices` (dev/release) — `ImageRelease.channel` ist free-form, aber
 für Gruppen wollen wir nur die zwei realen Kanäle; Vergleich ist ein String-Equal
@@ -151,7 +151,7 @@ Historie: Migration mappt jedes `target_tag` auf die gleichnamige Gruppe, setzt
 
 ### Modul-FW
 `ModuleFirmwareTarget.Scope.GROUP = "group"`; Felder `group` (FK `RolloutGroup`,
-`CASCADE` wie heute `tag`) und `canary_group` (`SET_NULL` wie heute `canary_tag`). Constraints: `uniq_group_target_per_type_group`,
+`PROTECT`) und `canary_group` (`PROTECT`). Constraints: `uniq_group_target_per_type_group`,
 `target_group_has_group_only`, `target_station_has_station_only` (station darf
 keine group), `canary_group_only_on_fleet`. Reconciler: station-Target, sonst
 group-Target für `station.rollout_group_id`, sonst fleet; Canary-Gate:
@@ -222,3 +222,16 @@ Gruppe einer Station per UI (Station-Form) oder API geändert wird.
   Referenzen), Tags bleiben.
 - API + OpenAPI; Permission-Matrix-Tests `rollout-groups`.
 - `python -m pytest -q` + CI grün, review-loop bis 0.
+
+## Nachtrag (Review-Runde 1): Löschen + Kanal
+
+- **Gruppe löschen ist blockiert**, solange Stationen, Sequenz-Einträge,
+  Modul-FW-Gruppen-Targets oder Canary-Gates darauf zeigen: alle vier FKs sind
+  `PROTECT`. UI-Bestätigungsseite listet die Referenzen statt eines Buttons; API
+  → 409; Django-Admin zeigt seine Protected-Seite. Nur `Deployment.target_group`
+  bleibt `SET_NULL` (Name-Snapshot hält die Historie lesbar). Damit kann ein
+  gelöschtes Canary-Gate kein Fleet-Target mehr still fleet-weit ausrollen.
+- **Kanal ist nach dem Anlegen fix**: UI-Feld disabled, API → 400 bei Änderung.
+  Kanalwechsel nur explizit (andere Gruppe oder bewusstes Deployment).
+- Gruppen anlegen/ändern/löschen schreibt in UI und API eine `CONFIG_CHANGED`-Zeile
+  (UI mit Feld-Diff).

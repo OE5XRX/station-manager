@@ -3,8 +3,8 @@
 
 Read needs ``stations.view`` (every member level incl. Applicant), writes need
 ``stations.manage`` (Staff/Admin) — same as StationTag. Every write audits
-token origin; deleting a group mirrors the UI delete (per-station
-ROLLOUT_GROUP_CHANGED rows + renumbered, actor-stamped sequence).
+token origin. A group that is still referenced (station, sequence entry, MF
+group/canary target) can't be deleted: 409, nothing changes.
 """
 
 import pytest
@@ -160,43 +160,70 @@ def test_invalid_channel_400(api_topology, bearer):
     assert not RolloutGroup.objects.filter(slug="weird").exists()
 
 
+def test_channel_is_fixed_after_create(api_topology, bearer, group):
+    url = reverse("api:rollout-group-detail", args=[group.pk])
+    client = bearer(api_topology["staff"])
+
+    resp = client.patch(url, {"channel": "dev"}, format="json")
+    assert resp.status_code == 400, resp.data
+    assert "channel" in resp.data
+    group.refresh_from_db()
+    assert group.channel == RolloutGroup.Channel.RELEASE
+
+    # Echoing the unchanged channel (full PUT) is fine.
+    resp = client.put(
+        url, {"name": "Canary", "slug": "canary", "channel": "release"}, format="json"
+    )
+    assert resp.status_code == 200, resp.data
+
+
 # ---------------------------------------------------------------------------
-# Delete semantics (same as the UI delete view)
+# Delete is blocked while the group is referenced (all FKs PROTECT)
 # ---------------------------------------------------------------------------
 
 
-def test_delete_audits_members_and_renumbers_sequence(api_topology, bearer):
-    staff = api_topology["staff"]
-    seq, _ = RolloutSequence.objects.get_or_create(singleton_key="current")
-    g0 = RolloutGroup.objects.create(name="G0", slug="g0")
-    g1 = RolloutGroup.objects.create(name="G1", slug="g1")
-    g2 = RolloutGroup.objects.create(name="G2", slug="g2")
-    RolloutSequenceEntry.objects.create(sequence=seq, group=g0, position=0)
-    RolloutSequenceEntry.objects.create(sequence=seq, group=g1, position=1)
-    RolloutSequenceEntry.objects.create(sequence=seq, group=g2, position=2)
+def _ref_station(api_topology, g):
     station = api_topology["station_in"]
-    station.rollout_group = g1
+    station.rollout_group = g
     station.save(update_fields=["rollout_group"])
 
-    resp = bearer(staff).delete(reverse("api:rollout-group-detail", args=[g1.pk]))
-    assert resp.status_code == 204
 
-    station.refresh_from_db()
-    assert station.rollout_group is None
-    log = StationAuditLog.objects.get(
-        station=station, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
+def _ref_sequence(api_topology, g):
+    seq, _ = RolloutSequence.objects.get_or_create(singleton_key="current")
+    RolloutSequenceEntry.objects.create(sequence=seq, group=g, position=0)
+
+
+def _ref_mf(api_topology, g, **kw):
+    from apps.module_firmware.models import ModuleFirmwareTarget, ModuleType
+
+    fm = ModuleType.objects.create(key="fm", display_name="FM")
+    ModuleFirmwareTarget.objects.create(module_type=fm, version="1.0", **kw)
+
+
+@pytest.mark.parametrize(
+    ("make_ref", "key"),
+    [
+        (_ref_station, "stations=1"),
+        (_ref_sequence, "sequence_entries=1"),
+        (lambda t, g: _ref_mf(t, g, scope="group", group=g), "firmware_targets=1"),
+        (lambda t, g: _ref_mf(t, g, scope="fleet", canary_group=g), "canary_targets=1"),
+    ],
+)
+def test_delete_blocked_while_referenced(api_topology, bearer, group, make_ref, key):
+    make_ref(api_topology, group)
+    before = AccountAuditLog.objects.count()
+
+    resp = bearer(api_topology["staff"]).delete(
+        reverse("api:rollout-group-detail", args=[group.pk])
     )
-    assert log.message.startswith(f"Rollout group: G1 → none by {staff} (group deleted) via API ")
-    assert "via API token " in log.message
-    assert log.user == staff
-    assert log.changes == {"rollout_group": {"old": "G1", "new": "none"}}
 
-    assert list(seq.entries.order_by("position").values_list("group__slug", "position")) == [
-        ("g0", 0),
-        ("g2", 1),
-    ]
-    seq.refresh_from_db()
-    assert seq.updated_by == staff
+    assert resp.status_code == 409, resp.data
+    assert key in resp.data["detail"]
+    assert RolloutGroup.objects.filter(pk=group.pk).exists()
+    assert AccountAuditLog.objects.count() == before  # "deleted" row rolled back
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
+    ).exists()
 
 
 # ---------------------------------------------------------------------------

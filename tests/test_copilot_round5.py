@@ -43,50 +43,8 @@ class TestR5aSignalLock:
     """The post_delete renumber signal on RolloutSequenceEntry must:
     - acquire a SELECT FOR UPDATE lock on the parent sequence before renumbering
     - skip gracefully (no error) if the parent sequence is gone
-    - still produce gap-free positions after a tag cascade-delete
+    - still produce gap-free positions after an ORM entry delete
     """
-
-    def test_signal_renumbers_after_tag_delete_with_lock(self, api_topology, bearer):
-        """RolloutGroup delete cascades RolloutSequenceEntry → signal renumbers gap-free.
-
-        This is the lock-guarded path (R5a extends R4b). The result is the same
-        as R4b (gap-free positions, updated_at bumped) — this confirms the lock
-        path is exercised without raising.
-        """
-        import datetime
-
-        from apps.rollouts.models import RolloutSequenceEntry
-        from apps.stations.models import RolloutGroup
-
-        seq = _get_or_create_sequence("r5a-lock-tag-delete")
-        t0 = RolloutGroup.objects.create(name="r5a-t0", slug="r5a-t0")
-        t1 = RolloutGroup.objects.create(name="r5a-t1", slug="r5a-t1")
-        t2 = RolloutGroup.objects.create(name="r5a-t2", slug="r5a-t2")
-
-        RolloutSequenceEntry.objects.create(sequence=seq, group=t0, position=0)
-        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
-        RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=2)
-
-        before = datetime.datetime.now(datetime.UTC)
-
-        # Delete the middle group through the API.
-        url = reverse("api:rollout-group-detail", args=[t1.pk])
-        r = bearer(api_topology["staff"]).delete(url)
-        assert r.status_code == 204, f"Group DELETE must return 204, got {r.status_code}"
-
-        # Entry must be gone (cascade)
-        assert not RolloutSequenceEntry.objects.filter(pk=e1.pk).exists()
-
-        # Remaining positions must be gap-free
-        positions = list(seq.entries.order_by("position").values_list("position", flat=True))
-        assert positions == list(range(len(positions))), (
-            f"Positions must be gap-free after tag cascade-delete, got: {positions}"
-        )
-        assert len(positions) == 2
-
-        # updated_at bumped
-        seq.refresh_from_db()
-        assert seq.updated_at >= before
 
     def test_signal_skips_gracefully_when_parent_gone(self):
         """If the parent sequence pk is None (detached instance), signal skips without error."""
@@ -105,7 +63,7 @@ class TestR5aSignalLock:
         _on_sequence_entry_delete(sender=RolloutSequenceEntry, instance=entry)
 
     def test_signal_renumbers_via_orm_delete_gap_free(self):
-        """ORM tag.delete() on the middle of 3 entries → gap-free [0,1] via locked signal."""
+        """ORM entry.delete() on the middle of 3 entries → gap-free [0,1] via locked signal."""
         from apps.rollouts.models import RolloutSequenceEntry
         from apps.stations.models import RolloutGroup
 
@@ -114,10 +72,10 @@ class TestR5aSignalLock:
         t1 = RolloutGroup.objects.create(name="r5a-orm-t1", slug="r5a-orm-t1")
         t2 = RolloutGroup.objects.create(name="r5a-orm-t2", slug="r5a-orm-t2")
         RolloutSequenceEntry.objects.create(sequence=seq, group=t0, position=0)
-        RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
+        e1 = RolloutSequenceEntry.objects.create(sequence=seq, group=t1, position=1)
         RolloutSequenceEntry.objects.create(sequence=seq, group=t2, position=2)
 
-        t1.delete()
+        e1.delete()
 
         positions = list(seq.entries.order_by("position").values_list("position", flat=True))
         assert positions == list(range(len(positions))), (

@@ -1,6 +1,8 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Count, Min, Q
+from django.db.models.deletion import ProtectedError
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
@@ -14,6 +16,7 @@ from django.views.generic import (
     UpdateView,
 )
 
+from apps.accounts.models import AccountAuditLog
 from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import DeploymentResult
@@ -47,6 +50,18 @@ def _get_client_ip(request):
     from apps.accounts.client_ip import client_ip
 
     return client_ip(request)
+
+
+def _audit_group(request, group, action, changes=None):
+    """CONFIG_CHANGED row for a UI rollout-group write (the API path writes
+    its own via ``audit_config_write``)."""
+    AccountAuditLog.log(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        actor=request.user,
+        ip_address=_get_client_ip(request),
+        message=f"RolloutGroup {group.slug} {action} by {request.user}",
+        details={"object": "rollout_group", "action": action, "changes": changes or {}},
+    )
 
 
 def _track_changes(old_instance, new_instance, fields):
@@ -511,8 +526,11 @@ class RolloutGroupCreateView(AreaPermissionMixin, CreateView):
     success_url = reverse_lazy("stations:group_list")
 
     def form_valid(self, form):
+        with transaction.atomic():
+            response = super().form_valid(form)
+            _audit_group(self.request, self.object, "created", {"channel": self.object.channel})
         messages.success(self.request, _("Rollout group created successfully."))
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -529,8 +547,16 @@ class RolloutGroupUpdateView(AreaPermissionMixin, UpdateView):
     success_url = reverse_lazy("stations:group_list")
 
     def form_valid(self, form):
+        changes = {
+            f: {"old": str(form.initial.get(f, "")), "new": str(form.cleaned_data[f])}
+            for f in form.changed_data
+        }
+        with transaction.atomic():
+            response = super().form_valid(form)
+            if changes:
+                _audit_group(self.request, self.object, "updated", changes)
         messages.success(self.request, _("Rollout group updated successfully."))
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -539,6 +565,9 @@ class RolloutGroupUpdateView(AreaPermissionMixin, UpdateView):
 
 
 class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
+    """Delete an unreferenced group. Every FK to a group is PROTECT, so the
+    confirm page lists what has to be moved off first instead of a button."""
+
     area = "stations"
     verb = "manage"
     model = RolloutGroup
@@ -546,25 +575,25 @@ class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
     context_object_name = "group"
     success_url = reverse_lazy("stations:group_list")
 
-    def get_queryset(self):
-        return (
-            super()
-            .get_queryset()
-            .annotate(
-                station_count=Count("stations", distinct=True),
-                sequence_position=Min("rollout_entries__position"),
-                firmware_target_count=Count("firmware_targets", distinct=True),
-                deployment_count=Count("deployments", distinct=True),
-            )
-        )
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        refs = rollout_services.group_references(self.object)
+        context["refs"] = refs
+        context["blocked"] = any(refs.values())
+        context["deployment_count"] = self.object.deployments.count()
+        return context
 
     def form_valid(self, form):
-        # Shared with the API destroy: per-member audit rows, actor-stamped
-        # sequence renumber, delete — all in one transaction.
-        rollout_services.delete_group(
-            self.object,
-            by_user=self.request.user,
-            ip_address=_get_client_ip(self.request),
-        )
+        group = self.object
+        try:
+            with transaction.atomic():
+                _audit_group(self.request, group, "deleted")
+                group.delete()
+        except ProtectedError:
+            messages.error(
+                self.request,
+                _("Rollout group is still in use and cannot be deleted."),
+            )
+            return redirect("stations:group_delete", pk=group.pk)
         messages.success(self.request, _("Rollout group deleted successfully."))
         return HttpResponseRedirect(self.get_success_url())

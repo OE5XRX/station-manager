@@ -3,9 +3,10 @@
 import pytest
 from django.urls import reverse
 
+from apps.accounts.models import AccountAuditLog
 from apps.deployments.models import Deployment
 from apps.module_firmware.models import ModuleFirmwareTarget, ModuleType
-from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+from apps.rollouts.models import current_sequence
 from apps.rollouts.services import add_entry
 from apps.stations.models import RolloutGroup, Station, StationAuditLog
 
@@ -79,16 +80,35 @@ def test_group_list_query_count_is_constant(
         assert client.get(reverse("stations:group_list")).status_code == 200
 
 
-def test_staff_can_edit_group(client, staff_user, make_rollout_group):
+def test_staff_can_edit_group_but_not_its_channel(client, staff_user, make_rollout_group):
     group = make_rollout_group("Beta")
     client.force_login(staff_user)
+    url = reverse("stations:group_edit", args=[group.pk])
+    assert "disabled" in client.get(url).content.decode().split('name="channel"')[1][:200]
+
     response = client.post(
-        reverse("stations:group_edit", args=[group.pk]),
-        {"name": "Beta", "slug": "beta", "channel": "dev", "description": ""},
+        url, {"name": "Beta wave", "slug": "beta", "channel": "dev", "description": ""}
     )
+
     assert response.status_code == 302
     group.refresh_from_db()
-    assert group.channel == RolloutGroup.Channel.DEV
+    assert group.name == "Beta wave"
+    assert group.channel == RolloutGroup.Channel.RELEASE
+    log = AccountAuditLog.objects.get(event_type=AccountAuditLog.EventType.CONFIG_CHANGED)
+    assert log.actor == staff_user
+    assert log.message == f"RolloutGroup beta updated by {staff_user}"
+    assert log.details["changes"] == {"name": {"old": "Beta", "new": "Beta wave"}}
+
+
+def test_create_group_is_audited(client, staff_user):
+    client.force_login(staff_user)
+    client.post(
+        reverse("stations:group_create"),
+        {"name": "Dev", "slug": "dev", "channel": "dev", "description": ""},
+    )
+    log = AccountAuditLog.objects.get(event_type=AccountAuditLog.EventType.CONFIG_CHANGED)
+    assert log.message == f"RolloutGroup dev created by {staff_user}"
+    assert log.details["changes"] == {"channel": "dev"}
 
 
 def _station_post(station, **extra):
@@ -190,51 +210,64 @@ def test_station_detail_shows_group(client, staff_user, station_factory, make_ro
     assert 'class="pill pill-accent">DEV<' in html
 
 
-def test_delete_group_view_with_references(
-    client, staff_user, station, make_rollout_group, image_release
+def test_delete_group_view_blocked_while_referenced(
+    client, staff_user, station, make_rollout_group
 ):
     group = make_rollout_group("Canary", channel=RolloutGroup.Channel.DEV)
     station.rollout_group = group
     station.save()
     seq = current_sequence()
-    first = make_rollout_group("First")
-    last = make_rollout_group("Last")
-    add_entry(seq, first, by_user=None)
     add_entry(seq, group, by_user=None)
-    add_entry(seq, last, by_user=None)
+    fm = ModuleType.objects.create(key="fm", display_name="FM")
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.GROUP, version="1.0", group=group
+    )
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="1.0", canary_group=group
+    )
+    client.force_login(staff_user)
+    url = reverse("stations:group_delete", args=[group.pk])
+
+    page = client.get(url).content.decode()
+    assert "is still in use" in page
+    assert "1 station is in this group" in page
+    assert "a step in the rollout sequence" in page
+    assert "1 group firmware target points at this group" in page
+    assert "1 fleet target uses it as its canary group" in page
+    assert "Delete group</button>" not in page
+
+    response = client.post(url, follow=True)
+
+    assert "still in use and cannot be deleted" in response.content.decode()
+    assert RolloutGroup.objects.filter(pk=group.pk).exists()
+    station.refresh_from_db()
+    assert station.rollout_group == group
+    assert not AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED
+    ).exists()
+
+
+def test_delete_unreferenced_group_keeps_deployment_history(
+    client, staff_user, make_rollout_group, image_release
+):
+    group = make_rollout_group("Old")
     dep = Deployment.objects.create(
         image_release=image_release,
         target_type=Deployment.TargetType.GROUP,
         target_group=group,
     )
-    fm = ModuleType.objects.create(key="fm", display_name="FM")
-    ModuleFirmwareTarget.objects.create(
-        module_type=fm, scope=ModuleFirmwareTarget.Scope.GROUP, version="1.0", group=group
-    )
     client.force_login(staff_user)
     url = reverse("stations:group_delete", args=[group.pk])
 
-    confirm = client.get(url)
-    assert confirm.status_code == 200
-    assert "deleted group" in confirm.content.decode()
-    assert "Step 2 is removed" in confirm.content.decode()  # 0-based position 1
+    page = client.get(url).content.decode()
+    assert "Delete group</button>" in page
+    assert "1 past deployment keeps its history" in page
 
     response = client.post(url)
 
     assert response.status_code == 302
     assert not RolloutGroup.objects.filter(pk=group.pk).exists()
-    station.refresh_from_db()
-    assert station.rollout_group is None
-    remaining = list(
-        RolloutSequenceEntry.objects.order_by("position").values_list("group__name", "position")
-    )
-    assert remaining == [("First", 0), ("Last", 1)]
-    seq.refresh_from_db()
-    assert seq.updated_by == staff_user
-    log = StationAuditLog.objects.get(
-        station=station, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
-    )
-    assert log.message == f"Rollout group: Canary → none by {staff_user.username} (group deleted)"
-    assert not ModuleFirmwareTarget.objects.filter(scope=ModuleFirmwareTarget.Scope.GROUP).exists()
     dep.refresh_from_db()
     assert dep.target_group is None
+    log = AccountAuditLog.objects.get(event_type=AccountAuditLog.EventType.CONFIG_CHANGED)
+    assert log.message == f"RolloutGroup old deleted by {staff_user}"

@@ -324,7 +324,9 @@ class ModuleFirmwareTarget(models.Model):
     scope = models.CharField(_("scope"), max_length=16, choices=Scope.choices, default=Scope.FLEET)
     group = models.ForeignKey(
         "stations.RolloutGroup",
-        on_delete=models.CASCADE,
+        # PROTECT (group and canary_group): deleting a referenced group would
+        # silently drop a group target or ungate a canary fleet target.
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="firmware_targets",
@@ -340,10 +342,10 @@ class ModuleFirmwareTarget(models.Model):
     )
     canary_group = models.ForeignKey(
         "stations.RolloutGroup",
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name="+",
+        related_name="canary_targets",
         verbose_name=_("canary group"),
         help_text=_("While set, a fleet target applies only to stations in this group."),
     )

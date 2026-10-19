@@ -184,7 +184,8 @@ class Station(models.Model):
         verbose_name=_("rollout group"),
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        # PROTECT: a group can only be deleted once no station is in it.
+        on_delete=models.PROTECT,
         related_name="stations",
     )
     notes = models.TextField(_("notes"), blank=True)
