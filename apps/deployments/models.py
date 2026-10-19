@@ -13,6 +13,7 @@ class Deployment(models.Model):
 
     class TargetType(models.TextChoices):
         TAG = "tag", _("By Tag")
+        GROUP = "group", _("By Group")
         STATION = "station", _("Single Station")
         ALL = "all", _("All Stations")
 
@@ -41,6 +42,14 @@ class Deployment(models.Model):
     target_tag = models.ForeignKey(
         StationTag,
         verbose_name=_("target tag"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deployments",
+    )
+    target_group = models.ForeignKey(
+        "stations.RolloutGroup",
+        verbose_name=_("target group"),
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

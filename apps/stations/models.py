@@ -79,6 +79,52 @@ class StationTag(models.Model):
             raise ValidationError({"slug": _("This slug is reserved by the rollout system.")})
 
 
+class RolloutGroup(models.Model):
+    """Functional rollout bucket: which update channel a station follows and
+    (optionally) where it sits in the phased rollout sequence.
+
+    Unlike tags (free-form labels, many per station), a station belongs to at
+    most one rollout group.
+    """
+
+    class Channel(models.TextChoices):
+        RELEASE = "release", _("Release")
+        DEV = "dev", _("Dev")
+
+    name = models.CharField(_("name"), max_length=100, unique=True)
+    slug = models.SlugField(_("slug"), unique=True)
+    channel = models.CharField(
+        _("channel"),
+        max_length=32,
+        choices=Channel.choices,
+        default=Channel.RELEASE,
+    )
+    description = models.TextField(_("description"), blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("rollout group")
+        verbose_name_plural = _("rollout groups")
+        ordering = ["name"]
+        constraints = [
+            # Same sentinel-bucket reservation as StationTag (see
+            # RESERVED_TAG_SLUGS); DB-level so create()/bulk paths can't
+            # bypass clean().
+            models.CheckConstraint(
+                condition=~models.Q(slug__in=sorted(RESERVED_TAG_SLUGS)),
+                name="rolloutgroup_slug_not_reserved",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        super().clean()
+        if self.slug in RESERVED_TAG_SLUGS:
+            raise ValidationError({"slug": _("This slug is reserved by the rollout system.")})
+
+
 class Station(models.Model):
     """A remote amateur radio station (the main entity)."""
 
@@ -131,6 +177,14 @@ class Station(models.Model):
         StationTag,
         verbose_name=_("tags"),
         blank=True,
+        related_name="stations",
+    )
+    rollout_group = models.ForeignKey(
+        RolloutGroup,
+        verbose_name=_("rollout group"),
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="stations",
     )
     notes = models.TextField(_("notes"), blank=True)
@@ -355,6 +409,7 @@ class StationAuditLog(models.Model):
         FIRMWARE_TARGET_REMOVED = "firmware_target_removed", _("Firmware Target Removed")
         MODULE_QUARANTINE_RELEASED = "module_quarantine_released", _("Module Quarantine Released")
         REBOOT = "reboot", _("Reboot")
+        ROLLOUT_GROUP_CHANGED = "rollout_group_changed", _("Rollout Group Changed")
 
     station = models.ForeignKey(
         Station,

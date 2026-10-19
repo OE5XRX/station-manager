@@ -312,6 +312,7 @@ class ModuleFirmwareTarget(models.Model):
     class Scope(models.TextChoices):
         FLEET = "fleet", _("Fleet default")
         TAG = "tag", _("Tag override")
+        GROUP = "group", _("Group override")
         STATION = "station", _("Station override")
 
     module_type = models.ForeignKey(
@@ -330,6 +331,14 @@ class ModuleFirmwareTarget(models.Model):
         related_name="firmware_targets",
         verbose_name=_("tag"),
     )
+    group = models.ForeignKey(
+        "stations.RolloutGroup",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="firmware_targets",
+        verbose_name=_("group"),
+    )
     station = models.ForeignKey(
         "stations.Station",
         on_delete=models.CASCADE,
@@ -346,6 +355,15 @@ class ModuleFirmwareTarget(models.Model):
         related_name="+",
         verbose_name=_("canary tag"),
         help_text=_("While set, a fleet target applies only to stations in this tag."),
+    )
+    canary_group = models.ForeignKey(
+        "stations.RolloutGroup",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("canary group"),
+        help_text=_("While set, a fleet target applies only to stations in this group."),
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

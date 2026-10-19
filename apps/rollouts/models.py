@@ -52,6 +52,13 @@ class RolloutSequenceEntry(models.Model):
         on_delete=models.CASCADE,
         related_name="rollout_entries",
     )
+    group = models.ForeignKey(
+        "stations.RolloutGroup",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="rollout_entries",
+    )
     position = models.PositiveSmallIntegerField(_("position"))
 
     class Meta:

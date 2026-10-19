@@ -19,7 +19,7 @@ def fm(db):
 
 @pytest.mark.django_db
 def test_scope_choices():
-    assert set(ModuleFirmwareTarget.Scope.values) == {"fleet", "tag", "station"}
+    assert set(ModuleFirmwareTarget.Scope.values) == {"fleet", "tag", "group", "station"}
 
 
 @pytest.mark.django_db
