@@ -23,7 +23,7 @@
       <dt>{% trans "Stations" %}</dt>
       <dd>{% blocktrans count counter=group.station_count %}{{ counter }} station loses its group and follows the release channel.{% plural %}{{ counter }} stations lose their group and follow the release channel.{% endblocktrans %}</dd>
       <dt>{% trans "Rollout sequence" %}</dt>
-      <dd>{% if group.sequence_position is not None %}{% blocktrans with step=group.sequence_position %}Step {{ step }} is removed; later steps move up.{% endblocktrans %}{% else %}<span class="t-muted">{% trans "Not in the sequence." %}</span>{% endif %}</dd>
+      <dd>{% if group.sequence_position is not None %}{% blocktrans with step=group.sequence_position|add:1 %}Step {{ step }} is removed; later steps move up.{% endblocktrans %}{% else %}<span class="t-muted">{% trans "Not in the sequence." %}</span>{% endif %}</dd>
       <dt>{% trans "Module firmware" %}</dt>
       <dd>{% if group.firmware_target_count %}{% blocktrans count counter=group.firmware_target_count %}{{ counter }} group firmware target is removed.{% plural %}{{ counter }} group firmware targets are removed.{% endblocktrans %}{% else %}<span class="t-muted">{% trans "No group firmware targets." %}</span>{% endif %}</dd>
       <dt>{% trans "Deployments" %}</dt>

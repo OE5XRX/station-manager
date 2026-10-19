@@ -52,8 +52,8 @@
       <tr data-group-slug="{{ group.slug }}">
         <td data-primary><strong>{{ group.name }}</strong></td>
         <td data-label="{% trans 'Channel' %}">{% include "images/_channel_badge.html" with channel=group.channel %}</td>
-        <td class="t-mono num" data-label="{% trans 'Sequence step' %}" data-group-position="{{ group.sequence_position|default_if_none:'' }}">
-          {% if group.sequence_position is not None %}{{ group.sequence_position }}{% else %}<span class="t-muted" title="{% trans 'Not in the rollout sequence' %}">—</span>{% endif %}
+        <td class="t-mono num" data-label="{% trans 'Sequence step' %}" data-group-step="{% if group.sequence_position is not None %}{{ group.sequence_position|add:1 }}{% endif %}">
+          {% if group.sequence_position is not None %}{{ group.sequence_position|add:1 }}{% else %}<span class="t-muted" title="{% trans 'Not in the rollout sequence' %}">—</span>{% endif %}
         </td>
         <td class="t-mono num" data-label="{% trans 'Stations' %}" data-group-stations="{{ group.station_count }}">{{ group.station_count }}</td>
         <td class="t-mono" data-label="{% trans 'Slug' %}">{{ group.slug }}</td>

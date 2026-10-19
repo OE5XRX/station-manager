@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Count, Min, Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
@@ -19,6 +20,7 @@ from apps.deployments.models import DeploymentResult
 from apps.images.models import ImageRelease
 from apps.module_firmware import drain as module_drain
 from apps.provisioning.models import ProvisioningJob
+from apps.rollouts import services as rollout_services
 from apps.rollouts.targeting import reason_message, resolve_upgrade
 
 from .forms import (
@@ -203,6 +205,16 @@ class StationCreateView(AreaPermissionMixin, CreateView):
             user=self.request.user,
             ip_address=_get_client_ip(self.request),
         )
+        if self.object.rollout_group:
+            StationAuditLog.log(
+                station=self.object,
+                event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
+                message=f"Rollout group: none → {self.object.rollout_group.name} "
+                f"by {self.request.user}",
+                changes={"rollout_group": {"old": "none", "new": self.object.rollout_group.name}},
+                user=self.request.user,
+                ip_address=_get_client_ip(self.request),
+            )
         messages.success(self.request, _("Station created successfully."))
         return response
 
@@ -547,5 +559,26 @@ class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
         )
 
     def form_valid(self, form):
+        group = self.object
+        user = self.request.user
+        ip_address = _get_client_ip(self.request)
+        with transaction.atomic():
+            # Members fall back to "no group" via SET_NULL; record that per
+            # station before the FK is cleared.
+            for station in group.stations.all():
+                StationAuditLog.log(
+                    station=station,
+                    event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
+                    message=f"Rollout group: {group.name} → none by {user} (group deleted)",
+                    changes={"rollout_group": {"old": group.name, "new": "none"}},
+                    user=user,
+                    ip_address=ip_address,
+                )
+            # Remove the sequence entry through the service so the sequence
+            # is renumbered and stamped with the acting user (the CASCADE's
+            # post_delete renumber alone has no actor).
+            for entry in group.rollout_entries.select_related("sequence"):
+                rollout_services.remove_entry(entry, by_user=user)
+            response = super().form_valid(form)
         messages.success(self.request, _("Rollout group deleted successfully."))
-        return super().form_valid(form)
+        return response

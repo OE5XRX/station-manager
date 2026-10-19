@@ -6,6 +6,7 @@ from django.urls import reverse
 from apps.deployments.models import Deployment
 from apps.module_firmware.models import ModuleFirmwareTarget, ModuleType
 from apps.rollouts.models import RolloutSequenceEntry, current_sequence
+from apps.rollouts.services import add_entry
 from apps.stations.models import RolloutGroup, Station, StationAuditLog
 
 pytestmark = pytest.mark.django_db
@@ -48,8 +49,8 @@ def test_group_list_visible_to_applicant_readonly(
     group = make_rollout_group("Canary", channel=RolloutGroup.Channel.DEV)
     station_factory(rollout_group=group)
     station_factory(rollout_group=group)
-    seq = current_sequence()
-    RolloutSequenceEntry.objects.create(sequence=seq, group=group, position=1)
+    entry = add_entry(current_sequence(), group, by_user=None)
+    assert entry.position == 0  # stored 0-based, displayed 1-based
     make_rollout_group("Unsequenced")
     client.force_login(applicant_user)
 
@@ -60,7 +61,7 @@ def test_group_list_visible_to_applicant_readonly(
     assert "Canary" in html and "Unsequenced" in html
     assert 'class="pill pill-accent">DEV<' in html
     assert 'data-group-stations="2"' in html
-    assert 'data-group-position="1"' in html
+    assert 'data-group-step="1"' in html
     assert reverse("stations:group_create") not in html
     assert reverse("stations:group_edit", args=[group.pk]) not in html
     assert "nur lesend" in html
@@ -149,7 +150,21 @@ def test_station_create_with_group(client, staff_user, make_rollout_group):
     client.force_login(staff_user)
     data = _station_post(Station(name="New", callsign="OE5NEW"), rollout_group=beta.pk)
     assert client.post(reverse("stations:station_create"), data).status_code == 302
-    assert Station.objects.get(name="New").rollout_group == beta
+    created = Station.objects.get(name="New")
+    assert created.rollout_group == beta
+    log = StationAuditLog.objects.get(
+        station=created, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
+    )
+    assert log.message == f"Rollout group: none → Beta by {staff_user.username}"
+
+
+def test_station_create_without_group_writes_no_group_audit(client, staff_user):
+    client.force_login(staff_user)
+    data = _station_post(Station(name="New", callsign="OE5NEW"), rollout_group="")
+    assert client.post(reverse("stations:station_create"), data).status_code == 302
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
+    ).exists()
 
 
 def test_station_list_shows_group_badge(client, staff_user, station_factory, make_rollout_group):
@@ -181,7 +196,12 @@ def test_delete_group_view_with_references(
     group = make_rollout_group("Canary", channel=RolloutGroup.Channel.DEV)
     station.rollout_group = group
     station.save()
-    RolloutSequenceEntry.objects.create(sequence=current_sequence(), group=group, position=1)
+    seq = current_sequence()
+    first = make_rollout_group("First")
+    last = make_rollout_group("Last")
+    add_entry(seq, first, by_user=None)
+    add_entry(seq, group, by_user=None)
+    add_entry(seq, last, by_user=None)
     dep = Deployment.objects.create(
         image_release=image_release,
         target_type=Deployment.TargetType.GROUP,
@@ -197,6 +217,7 @@ def test_delete_group_view_with_references(
     confirm = client.get(url)
     assert confirm.status_code == 200
     assert "deleted group" in confirm.content.decode()
+    assert "Step 2 is removed" in confirm.content.decode()  # 0-based position 1
 
     response = client.post(url)
 
@@ -204,7 +225,16 @@ def test_delete_group_view_with_references(
     assert not RolloutGroup.objects.filter(pk=group.pk).exists()
     station.refresh_from_db()
     assert station.rollout_group is None
-    assert not RolloutSequenceEntry.objects.exists()
+    remaining = list(
+        RolloutSequenceEntry.objects.order_by("position").values_list("group__name", "position")
+    )
+    assert remaining == [("First", 0), ("Last", 1)]
+    seq.refresh_from_db()
+    assert seq.updated_by == staff_user
+    log = StationAuditLog.objects.get(
+        station=station, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
+    )
+    assert log.message == f"Rollout group: Canary → none by {staff_user.username} (group deleted)"
     assert not ModuleFirmwareTarget.objects.filter(scope=ModuleFirmwareTarget.Scope.GROUP).exists()
     dep.refresh_from_db()
     assert dep.target_group is None
