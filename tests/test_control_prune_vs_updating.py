@@ -101,6 +101,21 @@ def test_offline_flashing_row_is_not_pruned(fm_type, station):
 
 
 @pytest.mark.django_db
+def test_offline_flashing_row_survives_disconnect_and_reconnect_snapshot(fm_type, station):
+    registry.apply_inventory(station, _inv(slot1=[_fm()], slot2=[_fm(uid="UID-B")]))
+    registry.apply_inventory(station, _inv(slot2=[_fm(uid="UID-B")]))  # slot1 drops out
+    _backdate(station, "slot1", TTL + timedelta(hours=1))
+    registry.set_firmware_updating(station, "slot1", "fm", True)
+
+    registry.mark_station_offline(station)  # long outage: updating flag cleared
+    registry.apply_inventory(station, _inv(slot2=[_fm(uid="UID-B")]))  # reconnect
+
+    sm = StationModule.objects.get(station=station, slot="slot1")
+    assert sm.firmware_updating is False
+    assert timezone.now() - sm.last_seen < timedelta(minutes=1)
+
+
+@pytest.mark.django_db
 def test_finished_flash_restarts_ttl(fm_type, station):
     registry.apply_inventory(station, _inv(slot1=[_fm()], slot2=[_fm(uid="UID-B")]))
     _backdate(station, "slot1", TTL + timedelta(hours=1))

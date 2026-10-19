@@ -283,7 +283,7 @@ def _carry_over_moved(station, tracked_rows, before):
             continue
         (slot, module_id, prev_state), keys = before[tracked.id]
         dest = (str(sm.slot), sm.module_id)
-        if (str(slot), module_id) in flashing_keys or dest in flashing_keys:
+        if (str(slot), module_id) in flashing_keys:
             continue
         # Reported where it already had a row: not a move — any other rows are stale
         # duplicates whose settings must not overwrite the live slot's.
@@ -455,6 +455,8 @@ def mark_station_offline(station):
         offline_with_station=True,
         firmware_updating=False,
     )
+    # Stamp last_seen too: a row whose flash started while soft-offline loses its prune
+    # immunity here, so its TTL restarts now (else the first reconnect snapshot prunes it).
     StationModule.objects.filter(station=station, firmware_updating=True).update(
-        firmware_updating=False
+        firmware_updating=False, last_seen=timezone.now()
     )
