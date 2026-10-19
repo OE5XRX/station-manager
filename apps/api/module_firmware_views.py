@@ -467,7 +467,7 @@ class ModuleFirmwareTargetViewSet(
     ordering_fields = ["created_at", "updated_at"]
 
     # Same related rows the GUI target views load (audit details/labels).
-    _AUDIT_RELATED = ("module_type", "tag", "station", "canary_tag")
+    _AUDIT_RELATED = ("module_type", "group", "station", "canary_group")
 
     def get_queryset(self):
         return ModuleFirmwareTarget.objects.select_related(

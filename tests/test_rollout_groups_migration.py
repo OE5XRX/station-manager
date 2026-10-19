@@ -281,3 +281,40 @@ def test_drop_entry_tag_deletes_groupless_entries_and_renumbers(migrator):
         (g2.pk, 1),
     ]
     assert not entry_model._meta.get_field("group").null
+
+
+@pytest.mark.django_db
+def test_drop_target_tag_scope_never_aborts_on_leftovers(migrator):
+    """module_firmware.0015 must never abort on target rows 0005 left behind:
+    a leftover "tag" row with a group becomes a group target (unless that
+    group already has one), orphans are deleted, stray refs are cleared."""
+    old = migrator.apply_initial_migration(
+        [("rollouts", "0005_tags_to_groups"), ("module_firmware", "0014_target_group")]
+    ).apps
+    seed = _Seed(old)
+    group_model = old.get_model("stations", "RolloutGroup")
+    g1 = group_model.objects.create(name="g1", slug="g1")
+    g2 = group_model.objects.create(name="g2", slug="g2")
+    mt = seed.module_type()
+    mapped = seed.Target.objects.create(
+        module_type=mt, version="1", scope="tag", tag=seed.tag("t1"), group=g1
+    )
+    seed.Target.objects.create(module_type=mt, version="2", scope="tag", tag=seed.tag("t2"))
+    seed.Target.objects.create(module_type=mt, version="3", scope="group")
+    kept = seed.Target.objects.create(
+        module_type=mt, version="4", scope="group", group=g2, canary_group=g1
+    )
+    seed.Target.objects.create(
+        module_type=mt, version="5", scope="tag", tag=seed.tag("t3"), group=g2
+    )
+    fleet = seed.Target.objects.create(module_type=mt, version="6", scope="fleet", group=g1)
+
+    new = migrator.apply_tested_migration([("module_firmware", "0015_drop_tag_scope")]).apps
+
+    target_model = new.get_model("module_firmware", "ModuleFirmwareTarget")
+    rows = {r.pk: (r.scope, r.group_id, r.canary_group_id) for r in target_model.objects.all()}
+    assert rows == {
+        mapped.pk: ("group", g1.pk, None),
+        kept.pk: ("group", g2.pk, None),
+        fleet.pk: ("fleet", None, None),
+    }

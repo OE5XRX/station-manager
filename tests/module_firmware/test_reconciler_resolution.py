@@ -9,7 +9,7 @@ from apps.module_firmware.models import (
     ModuleType,
 )
 from apps.module_firmware.reconciler import desired_release_for_module, effective_target
-from apps.stations.models import StationTag
+from apps.stations.models import RolloutGroup
 
 
 @pytest.fixture
@@ -22,55 +22,38 @@ def _target(fm, scope, version, **kw):
 
 
 @pytest.mark.django_db
-def test_precedence_station_over_tag_over_fleet(fm, station_factory):
-    st = station_factory()
-    tag = StationTag.objects.create(name="t", slug="t")
-    st.tags.add(tag)
+def test_precedence_station_over_group_over_fleet(fm, station_factory):
+    group = RolloutGroup.objects.create(name="g", slug="g")
+    st = station_factory(rollout_group=group)
     _target(fm, ModuleFirmwareTarget.Scope.FLEET, "fleet-v")
-    _target(fm, ModuleFirmwareTarget.Scope.TAG, "tag-v", tag=tag)
+    _target(fm, ModuleFirmwareTarget.Scope.GROUP, "group-v", group=group)
     _target(fm, ModuleFirmwareTarget.Scope.STATION, "station-v", station=st)
     assert effective_target(st, fm).version == "station-v"
 
 
 @pytest.mark.django_db
-def test_tag_over_fleet_when_no_station_target(fm, station_factory):
-    st = station_factory()
-    tag = StationTag.objects.create(name="t", slug="t")
-    st.tags.add(tag)
+def test_group_over_fleet_when_no_station_target(fm, station_factory):
+    group = RolloutGroup.objects.create(name="g", slug="g")
+    st = station_factory(rollout_group=group)
     _target(fm, ModuleFirmwareTarget.Scope.FLEET, "fleet-v")
-    _target(fm, ModuleFirmwareTarget.Scope.TAG, "tag-v", tag=tag)
-    assert effective_target(st, fm).version == "tag-v"
-
-
-@pytest.mark.django_db
-def test_multiple_tag_targets_newest_updated_at_wins(fm, station_factory):
-    st = station_factory()
-    a = StationTag.objects.create(name="a", slug="a")
-    b = StationTag.objects.create(name="b", slug="b")
-    st.tags.add(a, b)
-    _target(fm, ModuleFirmwareTarget.Scope.TAG, "a-v", tag=a)
-    tb = _target(fm, ModuleFirmwareTarget.Scope.TAG, "b-v", tag=b)
-    # Force tb to be the newer updated_at.
-    tb.version = "b-v2"
-    tb.save()
-    assert effective_target(st, fm).pk == tb.pk
+    _target(fm, ModuleFirmwareTarget.Scope.GROUP, "group-v", group=group)
+    assert effective_target(st, fm).version == "group-v"
 
 
 @pytest.mark.django_db
 def test_canary_gate_excludes_non_canary_station(fm, station_factory):
-    # Review Focus #2: fleet target gated on canary_tag, station not in tag.
+    # Review Focus #2: fleet target gated on canary_group, station not in group.
     st = station_factory()
-    canary = StationTag.objects.create(name="canary", slug="canary")
-    _target(fm, ModuleFirmwareTarget.Scope.FLEET, "fleet-v", canary_tag=canary)
+    canary = RolloutGroup.objects.create(name="canary", slug="canary")
+    _target(fm, ModuleFirmwareTarget.Scope.FLEET, "fleet-v", canary_group=canary)
     assert effective_target(st, fm) is None
 
 
 @pytest.mark.django_db
 def test_canary_gate_includes_canary_station(fm, station_factory):
-    st = station_factory()
-    canary = StationTag.objects.create(name="canary", slug="canary")
-    st.tags.add(canary)
-    _target(fm, ModuleFirmwareTarget.Scope.FLEET, "fleet-v", canary_tag=canary)
+    canary = RolloutGroup.objects.create(name="canary", slug="canary")
+    st = station_factory(rollout_group=canary)
+    _target(fm, ModuleFirmwareTarget.Scope.FLEET, "fleet-v", canary_group=canary)
     assert effective_target(st, fm).version == "fleet-v"
 
 

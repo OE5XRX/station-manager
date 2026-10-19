@@ -112,5 +112,5 @@ class ModuleFirmwareTargetFilter(django_filters.FilterSet):
             "module_type": ["exact"],
             "scope": ["exact"],
             "station": ["exact"],
-            "tag": ["exact"],
+            "group": ["exact"],
         }

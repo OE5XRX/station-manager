@@ -7,9 +7,9 @@ and `module` in context.
   <span class="fw-target">
     <span class="fw-version">{{ fw.target.version }}</span>
     {% if fw.target.scope == "fleet" %}
-      <span class="pill pill-accent">{% if fw.target.canary_tag_id %}{% trans "Canary" %}{% else %}{% trans "Fleet" %}{% endif %}</span>
-    {% elif fw.target.scope == "tag" %}
-      <span class="pill pill-violet">{% trans "Tag" %} {{ fw.target.tag.name }}</span>
+      <span class="pill pill-accent">{% if fw.target.canary_group_id %}{% trans "Canary" %}{% else %}{% trans "Fleet" %}{% endif %}</span>
+    {% elif fw.target.scope == "group" %}
+      <span class="pill pill-violet">{% trans "Group" %} {{ fw.target.group.name }}</span>
     {% else %}
       <span class="pill pill-muted">{% trans "Station" %}</span>
     {% endif %}

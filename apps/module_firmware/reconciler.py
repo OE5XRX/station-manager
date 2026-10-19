@@ -32,9 +32,9 @@ def _audit(module, event_type, message, *, station=None):
 
 def effective_target(station, module_type):
     """Resolve the effective ModuleFirmwareTarget for (station, module_type)
-    with precedence station > tag > fleet, honouring the canary gate.
+    with precedence station > group > fleet, honouring the canary gate.
 
-    Returns None when nothing applies (incl. a fleet target whose canary_tag
+    Returns None when nothing applies (incl. a fleet target whose canary_group
     excludes this station)."""
     station_t = ModuleFirmwareTarget.objects.filter(
         module_type=module_type, scope=ModuleFirmwareTarget.Scope.STATION, station=station
@@ -42,28 +42,22 @@ def effective_target(station, module_type):
     if station_t is not None:
         return station_t
 
-    station_tag_ids = list(station.tags.values_list("id", flat=True))
-    if station_tag_ids:
-        tag_t = (
-            ModuleFirmwareTarget.objects.filter(
-                module_type=module_type,
-                scope=ModuleFirmwareTarget.Scope.TAG,
-                tag_id__in=station_tag_ids,
-            )
-            .order_by("-updated_at")
-            .first()
-        )
-        if tag_t is not None:
-            return tag_t
+    group_id = station.rollout_group_id
+    if group_id is not None:
+        group_t = ModuleFirmwareTarget.objects.filter(
+            module_type=module_type, scope=ModuleFirmwareTarget.Scope.GROUP, group_id=group_id
+        ).first()
+        if group_t is not None:
+            return group_t
 
     fleet_t = ModuleFirmwareTarget.objects.filter(
         module_type=module_type, scope=ModuleFirmwareTarget.Scope.FLEET
     ).first()
     if fleet_t is None:
         return None
-    # Canary gate: while canary_tag is set, a fleet target applies only to
-    # stations carrying that tag. Non-canary stations get no target — no drift.
-    if fleet_t.canary_tag_id is not None and fleet_t.canary_tag_id not in station_tag_ids:
+    # Canary gate: while canary_group is set, a fleet target applies only to
+    # stations in that group. Non-canary stations get no target — no drift.
+    if fleet_t.canary_group_id is not None and fleet_t.canary_group_id != group_id:
         return None
     return fleet_t
 

@@ -284,9 +284,9 @@ class ModuleFirmwareTargetSerializer(serializers.ModelSerializer):
             "module_type_key",
             "version",
             "scope",
-            "tag",
+            "group",
             "station",
-            "canary_tag",
+            "canary_group",
             "variant_coverage",
             "created_by",
             "created_at",
@@ -327,11 +327,11 @@ class ModuleFirmwareTargetWriteSerializer(serializers.ModelSerializer):
         ),
     )
 
-    _REF_FIELDS = ("tag", "station", "canary_tag")
+    _REF_FIELDS = ("group", "station", "canary_group")
 
     class Meta:
         model = ModuleFirmwareTarget
-        fields = ["release", "scope", "tag", "station", "canary_tag"]
+        fields = ["release", "scope", "group", "station", "canary_group"]
         # The form is the single validator (incl. the conditional uniques).
         validators = []
 
