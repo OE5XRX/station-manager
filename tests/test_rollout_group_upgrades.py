@@ -285,3 +285,17 @@ def test_group_in_sequence_cannot_be_deleted(make_rollout_group, empty_sequence)
         groups[0].delete()
 
     assert empty_sequence.entries.count() == 3
+
+
+def test_group_name_not_double_escaped_in_confirm(
+    client, admin_user, station, make_release, make_rollout_group
+):
+    group = make_rollout_group("A&B")
+    station.rollout_group = group
+    station.current_image_release = make_release("2026.10.01-01", latest=False)
+    station.save()
+    make_release("2026.10.18-01")
+    client.force_login(admin_user)
+    html = client.get(reverse("rollouts:upgrade_dashboard")).content.decode()
+    assert "group A\\u0026B to the latest" in html
+    assert "&amp;amp;" not in html and "A\\u0026amp;B" not in html

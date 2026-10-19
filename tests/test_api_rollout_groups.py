@@ -399,3 +399,12 @@ def test_schema_lists_rollout_groups_paths(api_topology, bearer):
     assert "rollout_group" in schemas["Station"]["properties"]
     station_params = {p["name"] for p in paths["/api/v1/stations/"]["get"]["parameters"]}
     assert "rollout_group" in station_params
+
+
+def test_api_noop_update_writes_no_audit_row(api_topology, bearer, group):
+    before = AccountAuditLog.objects.count()
+    resp = bearer(api_topology["staff"]).patch(
+        reverse("api:rollout-group-detail", args=[group.pk]), {"name": "Canary"}, format="json"
+    )
+    assert resp.status_code == 200, resp.data
+    assert AccountAuditLog.objects.count() == before

@@ -90,7 +90,7 @@
           {% endif %}
         </div>
         {% if can.rollouts.manage and group.upgradable and not group.is_unassigned %}
-          {% blocktrans asvar confirm_msg with name=group.name n=group.upgradable channel=group.channel %}Upgrade {{ n }} station(s) in group {{ name }} to the latest {{ channel }} image?{% endblocktrans %}
+          {% blocktrans asvar confirm_msg with name=group.name|safe n=group.upgradable channel=group.channel %}Upgrade {{ n }} station(s) in group {{ name }} to the latest {{ channel }} image?{% endblocktrans %}
           <form method="post"
                 action="{% url 'rollouts:upgrade_group' group_slug=group.key %}"
                 onsubmit="return confirm('{{ confirm_msg|escapejs }}');"

@@ -55,7 +55,7 @@
               <span class="sequence-pos t-mono t-muted">{{ forloop.counter }}.</span>
               <span class="sequence-tag t-mono">{{ entry.group.name }}</span>
               {% include "images/_channel_badge.html" with channel=entry.group.channel %}
-              {% blocktrans asvar remove_msg with group=entry.group.name %}Remove group {{ group }} from the rollout sequence?{% endblocktrans %}
+              {% blocktrans asvar remove_msg with group=entry.group.name|safe %}Remove group {{ group }} from the rollout sequence?{% endblocktrans %}
               <form method="post" action="{% url 'rollouts:sequence_remove' entry_pk=entry.pk %}" class="sequence-remove-form" onsubmit="return confirm('{{ remove_msg|escapejs }}');">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-danger" aria-label="{% trans 'Remove' %}">

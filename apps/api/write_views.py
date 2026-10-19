@@ -289,7 +289,9 @@ class RolloutGroupViewSet(
     def perform_update(self, serializer):
         before = rollout_services.group_snapshot(serializer.instance)
         with transaction.atomic():
-            self._audit(serializer.save(), "updated", before)
+            group = serializer.save()
+            if rollout_services.group_snapshot(group) != before:  # no-op PATCH: no row
+                self._audit(group, "updated", before)
 
     def perform_destroy(self, instance):
         # Every FK to a group is PROTECT: stations, sequence entries and MF
