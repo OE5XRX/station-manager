@@ -5,14 +5,13 @@ from django.db import models
 from django.db.models import Count
 from django.utils.translation import gettext_lazy as _
 
-from apps.stations.models import Station, StationTag
+from apps.stations.models import Station
 
 
 class Deployment(models.Model):
     """An OTA firmware deployment targeting one or more stations."""
 
     class TargetType(models.TextChoices):
-        TAG = "tag", _("By Tag")
         GROUP = "group", _("By Group")
         STATION = "station", _("Single Station")
         ALL = "all", _("All Stations")
@@ -38,14 +37,6 @@ class Deployment(models.Model):
         _("target type"),
         max_length=10,
         choices=TargetType.choices,
-    )
-    target_tag = models.ForeignKey(
-        StationTag,
-        verbose_name=_("target tag"),
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="deployments",
     )
     target_group = models.ForeignKey(
         "stations.RolloutGroup",
@@ -102,8 +93,8 @@ class Deployment(models.Model):
 
     def get_target_stations(self):
         """Resolve the queryset of stations targeted by this deployment."""
-        if self.target_type == self.TargetType.TAG and self.target_tag:
-            return Station.objects.filter(tags=self.target_tag)
+        if self.target_type == self.TargetType.GROUP and self.target_group_id:
+            return Station.objects.filter(rollout_group_id=self.target_group_id)
         elif self.target_type == self.TargetType.STATION and self.target_station:
             return Station.objects.filter(pk=self.target_station_id)
         elif self.target_type == self.TargetType.ALL:

@@ -230,7 +230,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
             "id",
             "image_release",
             "target_type",
-            "target_tag",
+            "target_group",
             "target_station",
             "strategy",
             "phase_config",

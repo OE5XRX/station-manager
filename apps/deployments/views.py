@@ -32,7 +32,7 @@ class DeploymentListView(AreaPermissionMixin, ListView):
         qs = (
             super()
             .get_queryset()
-            .select_related("image_release", "target_tag", "target_station", "created_by")
+            .select_related("image_release", "target_group", "target_station", "created_by")
             .annotate(
                 result_total=Count("results"),
                 result_completed=Count(
@@ -81,7 +81,7 @@ class DeploymentDetailView(AreaPermissionMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("image_release", "target_tag", "target_station", "created_by")
+            .select_related("image_release", "target_group", "target_station", "created_by")
             .prefetch_related("results__station")
         )
 
