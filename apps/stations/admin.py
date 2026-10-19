@@ -42,6 +42,9 @@ class StationAdmin(admin.ModelAdmin):
         "current_agent_version",
         "created_at",
         "updated_at",
+        # Group changes must go through the audited station-edit path
+        # (StationAuditLog ROLLOUT_GROUP_CHANGED); admin shows it read-only.
+        "rollout_group",
     )
     filter_horizontal = ("tags",)
     inlines = [StationPhotoInline, StationLogEntryInline]

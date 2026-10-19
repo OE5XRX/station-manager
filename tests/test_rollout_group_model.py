@@ -45,3 +45,11 @@ def test_ordering_by_name():
     RolloutGroup.objects.create(name="Zulu", slug="zulu")
     RolloutGroup.objects.create(name="Alpha", slug="alpha")
     assert [g.name for g in RolloutGroup.objects.all()] == ["Alpha", "Zulu"]
+
+
+def test_station_admin_rollout_group_read_only():
+    """Admin must not change a station's group (unaudited path)."""
+    from django.contrib import admin
+
+    model_admin = admin.site._registry[Station]
+    assert "rollout_group" in model_admin.readonly_fields
