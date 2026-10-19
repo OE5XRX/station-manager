@@ -157,9 +157,10 @@ class TestR4bTagDeleteRenumbersSequence:
         seq.refresh_from_db()
         before = datetime.datetime.now(datetime.UTC)
 
-        # Delete the middle group (the rollout-groups API lands in a later
-        # task; the cascade + signal path is identical for an ORM delete).
-        tag_t1.delete()
+        # Delete the middle group through the API.
+        url = reverse("api:rollout-group-detail", args=[tag_t1.pk])
+        r = bearer(api_topology["staff"]).delete(url)
+        assert r.status_code == 204, f"Group DELETE must return 204, got {r.status_code}"
 
         # Entry for tag_t1 must be gone (cascaded)
         assert not RolloutSequenceEntry.objects.filter(pk=e1.pk).exists(), (
@@ -178,6 +179,8 @@ class TestR4bTagDeleteRenumbersSequence:
         assert seq.updated_at >= before, (
             "Parent sequence.updated_at must be bumped after tag-cascade-delete"
         )
+        # The API path removes the entry through the service → actor stamped.
+        assert seq.updated_by == api_topology["staff"]
 
     def test_tag_delete_via_orm_also_renumbers(self, api_topology):
         """ORM tag.delete() (not via API) must also renumber via signal."""

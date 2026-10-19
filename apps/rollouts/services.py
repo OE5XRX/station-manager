@@ -154,3 +154,36 @@ def move_entry(entry: RolloutSequenceEntry, new_position: int, by_user) -> None:
 
         sequence.updated_by = by_user
         sequence.save(update_fields=["updated_by", "updated_at"])
+
+
+def delete_group(group, *, by_user, ip_address=None, audit_suffix: str = "") -> None:
+    """Delete a RolloutGroup with the side effects both UI and API rely on.
+
+    In one transaction:
+      - one ``ROLLOUT_GROUP_CHANGED`` StationAuditLog row per member station
+        (members fall back to "no group" via SET_NULL, which leaves no trace
+        on its own); ``audit_suffix`` is appended to the message (the API
+        passes its token-origin suffix),
+      - every sequence entry of the group is removed through
+        :func:`remove_entry`, so the sequence is renumbered and stamped with
+        *by_user* (the CASCADE's post_delete renumber alone has no actor),
+      - the group itself is deleted.
+    """
+    from apps.stations.models import StationAuditLog
+
+    with transaction.atomic():
+        for station in group.stations.all():
+            StationAuditLog.log(
+                station=station,
+                event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
+                message=(
+                    f"Rollout group: {group.name} → none by {by_user} (group deleted)"
+                    f"{audit_suffix}"
+                ),
+                changes={"rollout_group": {"old": group.name, "new": "none"}},
+                user=by_user,
+                ip_address=ip_address,
+            )
+        for entry in group.rollout_entries.select_related("sequence"):
+            remove_entry(entry, by_user=by_user)
+        group.delete()

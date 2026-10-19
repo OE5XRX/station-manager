@@ -29,6 +29,7 @@ from apps.api.read_serializers import (
     ProvisioningJobSerializer,
     RegionAssignmentSerializer,
     RegionSerializer,
+    RolloutGroupSerializer,
     RolloutSequenceEntrySerializer,
     RolloutSequenceSerializer,
     StationAssignmentSerializer,
@@ -49,6 +50,7 @@ from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
     Region,
     RegionAssignment,
+    RolloutGroup,
     Station,
     StationAssignment,
     StationTag,
@@ -157,6 +159,16 @@ class StationTagViewSet(AreaReadOnlyViewSet):
 
     def get_queryset(self):
         return StationTag.objects.all().order_by("name")
+
+
+class RolloutGroupViewSet(AreaReadOnlyViewSet):
+    area = "stations"
+    serializer_class = RolloutGroupSerializer
+    search_fields = ["name", "slug"]
+    ordering_fields = ["name"]
+
+    def get_queryset(self):
+        return RolloutGroup.objects.all().order_by("name")
 
 
 User = get_user_model()

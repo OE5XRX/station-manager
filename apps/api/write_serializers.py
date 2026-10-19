@@ -17,6 +17,7 @@ from apps.stations.models import (
     RESERVED_TAG_SLUGS,
     Region,
     RegionAssignment,
+    RolloutGroup,
     Station,
     StationAssignment,
     StationLogEntry,
@@ -123,6 +124,7 @@ class StationWriteSerializer(serializers.ModelSerializer):
             "hardware_revision",
             "region",
             "tags",
+            "rollout_group",
             "notes",
             "status",
             "created_at",
@@ -149,6 +151,21 @@ class StationTagWriteSerializer(serializers.ModelSerializer):
         # guard from StationTag.clean() would be bypassed and reach the DB
         # CheckConstraint → IntegrityError/500.  Mirror the model check here
         # for a proper 400 field error.
+        if value in RESERVED_TAG_SLUGS:
+            raise serializers.ValidationError("This slug is reserved by the rollout system.")
+        return value
+
+
+class RolloutGroupWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolloutGroup
+        fields = ["id", "name", "slug", "channel", "description", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def validate_slug(self, value):
+        # Same reason as StationTagWriteSerializer.validate_slug: model.clean()
+        # is not called by DRF, so mirror the reserved-slug guard for a 400
+        # instead of the DB CheckConstraint's IntegrityError/500.
         if value in RESERVED_TAG_SLUGS:
             raise serializers.ValidationError("This slug is reserved by the rollout system.")
         return value

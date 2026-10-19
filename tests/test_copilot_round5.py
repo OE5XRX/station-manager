@@ -69,8 +69,10 @@ class TestR5aSignalLock:
 
         before = datetime.datetime.now(datetime.UTC)
 
-        # Delete the middle group (cascades to its sequence entry).
-        t1.delete()
+        # Delete the middle group through the API.
+        url = reverse("api:rollout-group-detail", args=[t1.pk])
+        r = bearer(api_topology["staff"]).delete(url)
+        assert r.status_code == 204, f"Group DELETE must return 204, got {r.status_code}"
 
         # Entry must be gone (cascade)
         assert not RolloutSequenceEntry.objects.filter(pk=e1.pk).exists()

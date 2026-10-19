@@ -18,7 +18,12 @@ from apps.stations.models import Station
 class StationFilter(django_filters.FilterSet):
     class Meta:
         model = Station
-        fields = {"status": ["exact"], "region": ["exact"], "tags": ["exact"]}
+        fields = {
+            "status": ["exact"],
+            "region": ["exact"],
+            "tags": ["exact"],
+            "rollout_group": ["exact"],
+        }
 
 
 class DeploymentFilter(django_filters.FilterSet):

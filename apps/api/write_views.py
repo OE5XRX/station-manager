@@ -25,7 +25,13 @@ from rest_framework.response import Response
 from apps.accounts.models import AccountAuditLog, User
 from apps.accounts.permissions import require
 from apps.api import read_serializers, read_views
-from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
+from apps.api.audit import (
+    _client_ip,
+    _token_suffix,
+    audit_account_write,
+    audit_config_write,
+    audit_station_write,
+)
 from apps.api.write_serializers import (
     AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
@@ -33,6 +39,7 @@ from apps.api.write_serializers import (
     ProvisioningJobCreateSerializer,
     RegionAssignmentWriteSerializer,
     RegionWriteSerializer,
+    RolloutGroupWriteSerializer,
     RolloutSequenceEntryWriteSerializer,
     RolloutSequenceWriteSerializer,
     StationAssignmentWriteSerializer,
@@ -121,15 +128,34 @@ class StationViewSet(
             event_type=StationAuditLog.EventType.CREATED,
             message=f"Station {station.callsign or station.name} created",
         )
+        self._audit_rollout_group_change(station, old_group=None)
 
     def perform_update(self, serializer):
         self._require_topology_if_region_changes(serializer, serializer.instance)
+        old_group = serializer.instance.rollout_group
         station = serializer.save()
         audit_station_write(
             self.request,
             station=station,
             event_type=StationAuditLog.EventType.UPDATED,
             message=f"Station {station.callsign or station.name} updated",
+        )
+        self._audit_rollout_group_change(station, old_group=old_group)
+
+    def _audit_rollout_group_change(self, station, *, old_group):
+        """ROLLOUT_GROUP_CHANGED row on a real group change — same message
+        and ``changes`` shape as the UI station form, plus the token origin."""
+        new_group = station.rollout_group
+        if getattr(old_group, "pk", None) == getattr(new_group, "pk", None):
+            return
+        old_name = old_group.name if old_group else "none"
+        new_name = new_group.name if new_group else "none"
+        audit_station_write(
+            self.request,
+            station=station,
+            event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
+            message=f"Rollout group: {old_name} → {new_name} by {self.request.user}",
+            changes={"rollout_group": {"old": old_name, "new": new_name}},
         )
 
     def perform_destroy(self, instance):
@@ -235,6 +261,35 @@ class StationTagViewSet(
             message=f"StationTag {instance.slug} deleted",
         )
         instance.delete()
+
+
+class RolloutGroupViewSet(
+    AreaWriteViewSet,
+    CreateModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    read_views.RolloutGroupViewSet,
+):
+    write_serializer_class = RolloutGroupWriteSerializer
+
+    def perform_create(self, serializer):
+        group = serializer.save()
+        audit_config_write(self.request, message=f"RolloutGroup {group.slug} created")
+
+    def perform_update(self, serializer):
+        group = serializer.save()
+        audit_config_write(self.request, message=f"RolloutGroup {group.slug} updated")
+
+    def perform_destroy(self, instance):
+        audit_config_write(self.request, message=f"RolloutGroup {instance.slug} deleted")
+        # Same semantics as the UI delete view: per-member ROLLOUT_GROUP_CHANGED
+        # rows + actor-stamped sequence renumber, atomically with the delete.
+        rollout_services.delete_group(
+            instance,
+            by_user=self.request.user,
+            ip_address=_client_ip(self.request),
+            audit_suffix=_token_suffix(self.request),
+        )
 
 
 def _save_assignment(serializer, *, actor, is_create):

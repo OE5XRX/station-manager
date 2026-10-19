@@ -1,7 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.db import transaction
 from django.db.models import Count, Min, Q
+from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -559,26 +559,12 @@ class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
         )
 
     def form_valid(self, form):
-        group = self.object
-        user = self.request.user
-        ip_address = _get_client_ip(self.request)
-        with transaction.atomic():
-            # Members fall back to "no group" via SET_NULL; record that per
-            # station before the FK is cleared.
-            for station in group.stations.all():
-                StationAuditLog.log(
-                    station=station,
-                    event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
-                    message=f"Rollout group: {group.name} → none by {user} (group deleted)",
-                    changes={"rollout_group": {"old": group.name, "new": "none"}},
-                    user=user,
-                    ip_address=ip_address,
-                )
-            # Remove the sequence entry through the service so the sequence
-            # is renumbered and stamped with the acting user (the CASCADE's
-            # post_delete renumber alone has no actor).
-            for entry in group.rollout_entries.select_related("sequence"):
-                rollout_services.remove_entry(entry, by_user=user)
-            response = super().form_valid(form)
+        # Shared with the API destroy: per-member audit rows, actor-stamped
+        # sequence renumber, delete — all in one transaction.
+        rollout_services.delete_group(
+            self.object,
+            by_user=self.request.user,
+            ip_address=_get_client_ip(self.request),
+        )
         messages.success(self.request, _("Rollout group deleted successfully."))
-        return response
+        return HttpResponseRedirect(self.get_success_url())
