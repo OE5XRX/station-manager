@@ -1,4 +1,8 @@
+import json
+
 from rest_framework import serializers
+
+MAX_CAPABILITIES_BYTES = 4096
 
 
 class _AnyJSONField(serializers.Field):
@@ -22,6 +26,12 @@ class HeartbeatSerializer(serializers.Serializer):
     timestamp = serializers.FloatField(required=False, default=None)
     inventory = serializers.DictField(required=False, default=dict)
     telemetry = _AnyJSONField(required=False)
+    capabilities = serializers.DictField(required=False)
+
+    def validate_capabilities(self, value):
+        if len(json.dumps(value, separators=(",", ":"))) > MAX_CAPABILITIES_BYTES:
+            raise serializers.ValidationError("capabilities too large (max 4 KiB).")
+        return value
 
 
 class HealthSerializer(serializers.Serializer):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import urllib.request
 from dataclasses import dataclass
@@ -15,7 +16,11 @@ from . import storage
 from .models import ModuleFirmwareImportJob, ModuleFirmwareRelease
 from .trust import is_trusted_repo, is_valid_tag, trusted_owners
 
+logger = logging.getLogger(__name__)
+
 _SIGNED_SUFFIX = ".signed.bin"
+_SIM_SUFFIX = ".native_sim"
+_VARIANT_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,29 @@ class VariantAsset:
     variant: str
     signed_name: str
     bundle_name: str
+
+
+def _variant_from_name(name: str, prefix: str, suffix: str) -> str | None:
+    """Return the variant token of ``{prefix}[-{variant}]{suffix}`` or None.
+
+    A bare ``{prefix}{suffix}`` yields variant "". A prefix that is only a
+    substring of a longer token (e.g. ``fm-sa818x-...``) is rejected — the
+    char after the prefix must be '-' or the suffix itself. Only lowercase
+    alnum + internal hyphens are accepted as variant: this blocks "_"
+    (collides with the bandless storage segment), path chars ("/", "..")
+    and anything that could shape a storage key outside its segment.
+    """
+    if not (name.startswith(prefix) and name.endswith(suffix)):
+        return None
+    middle = name[len(prefix) : -len(suffix)]
+    if middle == "":
+        return ""
+    if not middle.startswith("-"):
+        return None  # prefix is a proper substring of a longer token
+    variant = middle[1:]
+    if not _VARIANT_RE.fullmatch(variant):
+        return None
+    return variant
 
 
 def parse_variant_assets(asset_names: set[str], prefix: str) -> list[VariantAsset]:
@@ -36,27 +64,30 @@ def parse_variant_assets(asset_names: set[str], prefix: str) -> list[VariantAsse
     """
     out: list[VariantAsset] = []
     for name in sorted(asset_names):
-        if not (name.startswith(prefix) and name.endswith(_SIGNED_SUFFIX)):
+        variant = _variant_from_name(name, prefix, _SIGNED_SUFFIX)
+        if variant is None:
             continue
-        middle = name[len(prefix) : -len(_SIGNED_SUFFIX)]
-        if middle == "":
-            variant = ""
-        elif middle.startswith("-"):
-            variant = middle[1:]
-            if not variant:
-                continue
-            # Reject unsafe variant tokens: only lowercase alnum + internal
-            # hyphens are accepted.  This blocks "_" (collides with the
-            # bandless storage segment), path chars ("/", ".."), and anything
-            # that could shape a storage key outside the intended segment.
-            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", variant):
-                continue
-        else:
-            continue  # prefix is a proper substring of a longer token
         bundle_name = name + ".bundle"
         if bundle_name not in asset_names:
             continue
         out.append(VariantAsset(variant=variant, signed_name=name, bundle_name=bundle_name))
+    return out
+
+
+def parse_sim_assets(asset_names: set[str], prefix: str) -> dict[str, str]:
+    """From a release's asset names, extract {variant: native_sim asset name}.
+
+    Matches ``{prefix}[-{variant}].native_sim`` with the same variant rules
+    as :func:`parse_variant_assets`. Only entries with a ``{name}.bundle``
+    sibling count — an unsigned sim blob is never imported (it is executed
+    as root on sim stations).
+    """
+    out: dict[str, str] = {}
+    for name in sorted(asset_names):
+        variant = _variant_from_name(name, prefix, _SIM_SUFFIX)
+        if variant is None or name + ".bundle" not in asset_names:
+            continue
+        out[variant] = name
     return out
 
 
@@ -71,6 +102,10 @@ def parse_sha256sums(text: str) -> dict[str, str]:
 
 
 _DOWNLOAD_TIMEOUT = 60
+# Upper bound for any single release asset held in memory (signed.bin, native_sim ELF,
+# bundles, SHA256SUMS).
+MAX_FIRMWARE_ASSET_BYTES = 64 * 1024 * 1024
+_DOWNLOAD_CHUNK = 1024 * 1024
 _DEFAULT_BRANCH = "main"  # FW-RemoteStation release.yml runs workflow_dispatch on main
 
 
@@ -85,9 +120,27 @@ def _asset_url(repo: str, tag: str, name: str) -> str:
     return f"https://github.com/{repo}/releases/download/{tag}/{name}"
 
 
-def _download(url: str) -> bytes:
+def _download(url: str, max_bytes: int | None = None) -> bytes:
+    """Fetch ``url`` with a hard size cap: staged blobs are held in memory until every
+    variant verifies, so an oversized asset (declared via Content-Length or only
+    discovered while streaming) fails the import instead of exhausting memory."""
+    if max_bytes is None:
+        max_bytes = MAX_FIRMWARE_ASSET_BYTES
     with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT) as resp:
-        return resp.read()
+        declared = resp.headers.get("Content-Length") if resp.headers else None
+        if declared is not None and declared.isdigit() and int(declared) > max_bytes:
+            raise ValueError(f"asset {url} is {declared} bytes, exceeds cap of {max_bytes}")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = resp.read(_DOWNLOAD_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"asset {url} exceeds cap of {max_bytes} bytes")
+            chunks.append(chunk)
+        return b"".join(chunks)
 
 
 @dataclass
@@ -100,6 +153,27 @@ class _StagedVariant:
     url: str
     blob: bytes
     bundle: bytes
+    sim: _StagedSim | None = None
+
+
+@dataclass
+class _StagedSim:
+    skey: str
+    bkey: str
+    size: int
+    sha256: str
+    blob: bytes
+    bundle: bytes
+
+
+def _reconcile_after_publish(module_type) -> None:
+    from .services import reconcile_module_type  # services imports reconciler; avoid cycles
+
+    try:
+        with transaction.atomic():
+            reconcile_module_type(module_type)
+    except Exception:
+        logger.warning("post-publish reconcile for %s failed", module_type.key, exc_info=True)
 
 
 def import_release_tag(job: ModuleFirmwareImportJob) -> None:
@@ -120,6 +194,7 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
         if gh is None:
             raise ValueError(f"release tag {job.tag} not found in {repo}")
         variants = parse_variant_assets(set(gh.asset_names), prefix)
+        sim_assets = parse_sim_assets(set(gh.asset_names), prefix)
         if not variants:
             raise ValueError(
                 f"no {prefix}-*.signed.bin or {prefix}.signed.bin (+bundle) assets in {job.tag}"
@@ -155,6 +230,26 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                 verify_blob_identity(blob, bundle, identity)
                 skey = storage.release_key(job.module_type.key, job.tag, va.variant)
                 bkey = storage.bundle_key(job.module_type.key, job.tag, va.variant)
+                # Optional native_sim artifact: verified EXACTLY like the
+                # signed.bin (SUMS sha + cosign identity). Any failure fails
+                # the whole job — an unverified sim blob is never published.
+                sim = None
+                sim_name = sim_assets.get(va.variant)
+                if sim_name is not None:
+                    sim_blob = _download(_asset_url(repo, job.tag, sim_name))
+                    sim_expected = sums.get(sim_name)
+                    if not sim_expected or hashlib.sha256(sim_blob).hexdigest() != sim_expected:
+                        raise ValueError(f"sha256 mismatch for {sim_name}")
+                    sim_bundle = _download(_asset_url(repo, job.tag, sim_name + ".bundle"))
+                    verify_blob_identity(sim_blob, sim_bundle, identity)
+                    sim = _StagedSim(
+                        skey=storage.sim_release_key(job.module_type.key, job.tag, va.variant),
+                        bkey=storage.sim_bundle_key(job.module_type.key, job.tag, va.variant),
+                        size=len(sim_blob),
+                        sha256=sim_expected,
+                        blob=sim_blob,
+                        bundle=sim_bundle,
+                    )
                 # Finding 5: do NOT upload here — keep bytes in memory until all
                 # variants are verified.  Uploads happen in the publish phase only.
                 staged.append(
@@ -167,6 +262,7 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                         url=_asset_url(repo, job.tag, va.signed_name),
                         blob=blob,
                         bundle=bundle,
+                        sim=sim,
                     )
                 )
 
@@ -197,6 +293,26 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                 uploaded.append(sv.skey)
                 storage.upload_bytes(sv.bkey, sv.bundle)
                 uploaded.append(sv.bkey)
+                if sv.sim is not None:
+                    storage.upload_bytes(sv.sim.skey, sv.sim.blob)
+                    uploaded.append(sv.sim.skey)
+                    storage.upload_bytes(sv.sim.bkey, sv.sim.bundle)
+                    uploaded.append(sv.sim.bkey)
+                    sim_defaults = {
+                        "sim_storage_key": sv.sim.skey,
+                        "sim_sha256": sv.sim.sha256,
+                        "sim_size_bytes": sv.sim.size,
+                        "sim_cosign_bundle_key": sv.sim.bkey,
+                    }
+                else:
+                    # Re-import (restore of an archived row) must clear stale
+                    # sim fields when the tag has no (valid) sim asset.
+                    sim_defaults = {
+                        "sim_storage_key": "",
+                        "sim_sha256": "",
+                        "sim_size_bytes": None,
+                        "sim_cosign_bundle_key": "",
+                    }
                 last_release, _ = ModuleFirmwareRelease.all_objects.update_or_create(
                     module_type=job.module_type,
                     variant=sv.va.variant,
@@ -211,6 +327,7 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                         "source_github_url": sv.url,
                         "imported_by": job.requested_by,
                         "archived_at": None,
+                        **sim_defaults,
                     },
                 )
 
@@ -221,17 +338,19 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
             job.status = ModuleFirmwareImportJob.Status.READY
             job.completed_at = timezone.now()
             job.save(update_fields=["release", "status", "completed_at"])
+            # A new release can make a pinned target resolvable: reconcile and
+            # nudge agents once the publish is committed.
+            module_type = job.module_type
+            transaction.on_commit(lambda: _reconcile_after_publish(module_type))
     except Exception as exc:
         # Best-effort cleanup of keys we uploaded that no active release row references.
-        in_use = set(
-            ModuleFirmwareRelease.all_objects.filter(
-                module_type=job.module_type, version=job.tag
-            ).values_list("storage_key", flat=True)
-        ) | set(
-            ModuleFirmwareRelease.all_objects.filter(
-                module_type=job.module_type, version=job.tag
-            ).values_list("cosign_bundle_key", flat=True)
-        )
+        in_use: set[str] = set()
+        for row in ModuleFirmwareRelease.all_objects.filter(
+            module_type=job.module_type, version=job.tag
+        ).values_list(
+            "storage_key", "cosign_bundle_key", "sim_storage_key", "sim_cosign_bundle_key"
+        ):
+            in_use.update(k for k in row if k)
         for key in uploaded:
             if key in in_use:
                 continue

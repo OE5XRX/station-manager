@@ -194,6 +194,69 @@
   }
 }
 
+/* ---------- Firmware update in progress (per module card) -------------------- */
+/* Cyan "in transit" channel (.pill-updating). The strip sits under the header;
+   its bottom edge carries the one moving element: an indeterminate sweep that
+   says "the station is working on it", not "something is broken". */
+.cp-fw-updating {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+}
+.cp-fw-updating::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 30%;
+  background: var(--cyan);
+  animation: cp-fw-sweep 1.6s var(--ease) infinite;
+}
+@keyframes cp-fw-sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(340%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cp-fw-updating::after { animation: none; width: 100%; opacity: 0.5; }
+}
+/* Hidden until Alpine decides (no global [x-cloak] rule exists in app.css). */
+.cp-fw-updating[x-cloak],
+.cp-module-error[x-cloak],
+.fw-drain-banner[x-cloak] { display: none; }
+.cp-fw-updating-title { font-weight: 600; }
+.cp-fw-updating-hint { color: var(--ink-2); font-size: 11px; }
+
+/* Widgets stay visible (operators see the last-known state) but recede. */
+.cp-module-card.is-updating .cp-module-widgets {
+  opacity: 0.45;
+}
+
+/* Module-level error (module_error / firmware_dfu_stuck). */
+.cp-module-error {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
 /* ---------- Module grid ------------------------------------------------------- */
 .cp-modules {
   display: grid;

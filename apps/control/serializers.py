@@ -7,7 +7,8 @@ from .models import StationModule
 def snapshot(station):
     """Return the persisted inventory grouped by slot, in the same shape as the
     agent's live ``inventory`` frame. Includes a per-module ``online`` flag so
-    offline modules still render from persisted descriptors + last_state."""
+    offline modules still render from persisted descriptors + last_state, and
+    ``updating`` while the agent flashes the module's firmware."""
     slots, order = {}, []
     for m in StationModule.objects.filter(station=station):
         if m.slot not in slots:
@@ -20,6 +21,7 @@ def snapshot(station):
                 "capabilities": m.capability_descriptor,
                 "state": m.last_state,
                 "online": m.online,
+                "updating": m.firmware_updating,
             }
         )
     return [{"slot": s, "modules": slots[s]} for s in order]

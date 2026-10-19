@@ -208,6 +208,32 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Local date/time display ("dd.mm.yyyy HH:MM", browser time zone)
+  // ---------------------------------------------------------------------------
+
+  /* Format a Date or ISO-8601 string in the browser's local time, matching the
+     server-rendered |date:"d.m.Y H:i" first paint. Empty for missing/invalid. */
+  function formatLocalDateTime(value) {
+    if (value === null || value === undefined || value === "") return "";
+    var d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return "";
+    function pad(n) {
+      return n < 10 ? "0" + n : String(n);
+    }
+    return (
+      pad(d.getDate()) +
+      "." +
+      pad(d.getMonth() + 1) +
+      "." +
+      d.getFullYear() +
+      " " +
+      pad(d.getHours()) +
+      ":" +
+      pad(d.getMinutes())
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Structured command-error code -> human string
   // ---------------------------------------------------------------------------
 
@@ -272,6 +298,7 @@
     computeStep: computeStep,
     clamp: clamp,
     deriveLockState: deriveLockState,
+    formatLocalDateTime: formatLocalDateTime,
     errorMessage: errorMessage,
     subscribeInterval: subscribeInterval,
     widgetKey: widgetKey,

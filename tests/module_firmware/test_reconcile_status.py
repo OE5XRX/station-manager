@@ -144,3 +144,61 @@ def test_status_409_after_commit_ok(client, station_with_key, fm):
     assert resp.status_code == 409
     cs.refresh_from_db()
     assert cs.state == ModuleFirmwareConvergenceState.State.OK
+
+
+# --- transient-failure cap (final review Important 2) ---------------------------------
+
+
+@pytest.mark.django_db
+def test_status_failed_counts_transient_failures(client, station_with_key, fm):
+    station, priv = station_with_key
+    _, cs = _setup(fm, station)
+    for _ in range(3):
+        assert _post(client, priv, station.pk, cs.pk, {"status": "failed"}).status_code == 200
+    cs.refresh_from_db()
+    assert cs.transient_failures == 3
+    assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING  # never quarantines
+    assert cs.attempts == 0
+
+
+@pytest.mark.django_db
+def test_status_verifying_resets_transient_failures(client, station_with_key, fm):
+    station, priv = station_with_key
+    _, cs = _setup(fm, station)
+    _post(client, priv, station.pk, cs.pk, {"status": "failed"})
+    _post(client, priv, station.pk, cs.pk, {"status": "downloading"})
+    cs.refresh_from_db()
+    assert cs.transient_failures == 1  # downloading is not proof of progress
+    _post(client, priv, station.pk, cs.pk, {"status": "verifying"})
+    cs.refresh_from_db()
+    assert cs.transient_failures == 0
+
+
+@pytest.mark.django_db
+def test_status_rolled_back_does_not_count_transient(client, station_with_key, fm):
+    station, priv = station_with_key
+    _, cs = _setup(fm, station)
+    _post(client, priv, station.pk, cs.pk, {"status": "rolled_back"})
+    cs.refresh_from_db()
+    assert cs.transient_failures == 0
+
+
+@pytest.mark.django_db
+def test_progress_status_clears_dfu_stuck_notice(client, station_with_key, fm):
+    """A new cycle reaching ``downloading`` means the module answered on CDC again
+    (out of DFU): the DFU-stuck notice must not outlive the stuck state."""
+    from apps.module_firmware.drain import DFU_STUCK_PREFIX, dfu_stuck_modules
+    from station_agent.module_ota import DFU_STUCK_MSG
+
+    station, priv = station_with_key
+    _, cs = _setup(fm, station)
+    ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(
+        last_error_message=DFU_STUCK_MSG, last_error_mode="rolled_back", attempts=1
+    )
+    assert DFU_STUCK_MSG.startswith(DFU_STUCK_PREFIX)
+    assert len(dfu_stuck_modules()) == 1
+    resp = _post(client, priv, station.pk, cs.pk, {"status": "downloading"})
+    assert resp.status_code == 200
+    cs.refresh_from_db()
+    assert cs.last_error_message == ""
+    assert dfu_stuck_modules() == []

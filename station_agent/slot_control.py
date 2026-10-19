@@ -16,6 +16,7 @@ import select
 import termios
 import time
 import tty
+from collections.abc import Callable
 
 from station_agent.descriptor import TOKEN_RE
 from station_agent.devlock import control_device_lock
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 _RESULT_PREFIX = "MODULE-RESULT "
 _TIMEOUT_RESULT = {"ok": False, "error": "timeout"}
+_ABORTED_RESULT = {"ok": False, "error": "updating"}
 
 
 def _write_all(fd: int, data: bytes, deadline: float) -> bool:
@@ -64,9 +66,22 @@ class SlotControl:
         self._timeout = timeout
 
     def execute(
-        self, module_id: str, op: str, cap: str, token: str | None = None, trace: bool = False
+        self,
+        module_id: str,
+        op: str,
+        cap: str,
+        token: str | None = None,
+        trace: bool = False,
+        *,
+        abort_if: Callable[[], bool] | None = None,
     ) -> dict:
-        """Send one command, return the parsed MODULE-RESULT (or a timeout error)."""
+        """Send one command, return the parsed MODULE-RESULT (or a timeout error).
+
+        ``abort_if`` is evaluated once the device lock is held, before the device is
+        opened; if it returns True the command is dropped with ``error: updating``
+        without touching the line (the broker passes the module-firmware pause check,
+        so a call queued behind an in-flight opener can never open a slot that was
+        paused for a flash meanwhile)."""
         # Defense-in-depth: never echo an unsafe id into the shell line, and fail
         # closed on a non-str module_id/cap so .match() can't raise TypeError.
         if not (isinstance(module_id, str) and _MODULE_ID_RE.match(module_id)) or not (
@@ -92,6 +107,8 @@ class SlotControl:
         # configures it. Fail closed as a timeout if the line stays busy past the lock budget.
         try:
             with control_device_lock(self._path):
+                if abort_if is not None and abort_if():
+                    return dict(_ABORTED_RESULT)
                 try:
                     fd = os.open(self._path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
                 except OSError as exc:

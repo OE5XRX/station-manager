@@ -1,5 +1,6 @@
 """Main agent loop for the Station Agent."""
 
+import contextlib
 import logging
 import os
 import re
@@ -7,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 from .bootinfo import write_last_ota_result
 from .bootloader import get_bootloader, get_env
@@ -15,6 +17,7 @@ from .health_check import run_health_checks
 from .heartbeat import send_heartbeat
 from .http_client import HttpClient
 from .inventory import get_current_version
+from .module_ota import NUDGE_MIN_INTERVAL_S, ModuleOta
 from .ota import (
     apply_update,
     check_for_update,
@@ -32,12 +35,124 @@ class StationAgent:
 
     def __init__(self):
         self._shutdown = threading.Event()
+        # Wakes the main-loop wait early: a server ``firmware_check`` nudge, or shutdown.
+        self._wake = threading.Event()
+        self._module_ota = None
+        self._last_module_ota: float | None = None
+        self._nudge_pending = False
+        self._config = None
+        self._tx_settings = None
+        self._clock = time.monotonic
 
     def _handle_signal(self, signum, frame):
         """Handle termination signals for graceful shutdown."""
         sig_name = signal.Signals(signum).name
         logger.info("Received %s, shutting down...", sig_name)
         self._shutdown.set()
+        self._wake.set()
+
+    @contextlib.contextmanager
+    def _heartbeat_keepalive(self):
+        """Keep heartbeating while the main thread is blocked in a module flash.
+
+        A flash can take minutes (download + settle + verify); without heartbeats the
+        server would see the station offline and lift the slot drain mid-flash. The
+        keepalive uses its OWN ``HttpClient`` (module_ota uses the main one concurrently)
+        and stops when the module OTA call returns. Not started when shutting down.
+        """
+        config = self._config
+        if config is None or self._shutdown.is_set():
+            yield
+            return
+        stop = threading.Event()
+
+        def _keepalive():
+            try:
+                client = HttpClient(config)
+            except Exception:  # noqa: BLE001
+                logger.exception("module_ota keepalive: cannot create HTTP client")
+                return
+            while not stop.wait(config.heartbeat_interval) and not self._shutdown.is_set():
+                try:
+                    send_heartbeat(
+                        client,
+                        config=config,
+                        tx_settings=self._tx_settings,
+                        module_ota_backends=self._module_ota_backends(),
+                    )
+                except Exception:  # noqa: BLE001 — a failed heartbeat must not end the keepalive
+                    logger.exception("module_ota keepalive heartbeat failed")
+
+        thread = threading.Thread(target=_keepalive, name="module-ota-keepalive", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+    def _module_ota_backends(self) -> list[str]:
+        """Backends the heartbeat advertises: what the running ModuleOta can execute.
+
+        No ModuleOta (setup failed) => none, so the server never drains the station or
+        hands out instructions this agent would not execute.
+        """
+        if self._module_ota is None:
+            return []
+        try:
+            return list(self._module_ota.advertised_backends())
+        except Exception:  # noqa: BLE001 — a heartbeat must never fail on this
+            logger.exception("module_ota: backend detection for heartbeat failed")
+            return []
+
+    def _call_module_ota(self, method: str):
+        """Run one ModuleOta call on the main thread (with heartbeat keepalive).
+
+        Skipped once shutdown was requested — e.g. right after an image OTA queued a
+        reboot — so no DFU detach/flash starts while systemd tears the station down.
+        Never lets an exception escape: the main loop must never die.
+        """
+        if self._module_ota is None or self._shutdown.is_set():
+            return
+        try:
+            with self._heartbeat_keepalive():
+                getattr(self._module_ota, method)()
+        except Exception:  # noqa: BLE001
+            logger.exception("module_ota %s failed unexpectedly", method)
+
+    def _run_module_ota(self):
+        """One module_ota cycle (cadence or nudge)."""
+        self._last_module_ota = self._clock()
+        self._nudge_pending = False  # this run also serves any deferred nudge
+        self._call_module_ota("run_once")
+
+    def _recover_module_ota(self):
+        """Startup recovery: finish an interrupted flash / roll back a pending sim override."""
+        self._call_module_ota("recover_on_startup")
+
+    def _wait_for_next_heartbeat(self, interval):
+        """Sleep until the next heartbeat; serve ``firmware_check`` nudges meanwhile.
+
+        A nudge runs module_ota at most once per ``NUDGE_MIN_INTERVAL_S`` (counted from
+        the last run, cadence or nudge). Nudges inside the interval are coalesced into one
+        deferred run when it elapses, so a nudge is never lost. No extra heartbeat is sent.
+        """
+        deadline = self._clock() + interval
+        while not self._shutdown.is_set():
+            now = self._clock()
+            timeout = deadline - now
+            if self._nudge_pending:
+                last = self._last_module_ota
+                if last is None or now - last >= NUDGE_MIN_INTERVAL_S:
+                    self._run_module_ota()
+                    continue
+                timeout = min(timeout, last + NUDGE_MIN_INTERVAL_S - now)
+            if deadline - now <= 0:
+                return  # a still-deferred nudge carries over to the next wait
+            if self._wake.wait(timeout=timeout) and not self._shutdown.is_set():
+                self._wake.clear()
+                logger.debug("firmware_check nudge received")
+                self._nudge_pending = True
 
     def _handle_ota(self, config, http_client):
         """Check for and process an OTA update.
@@ -593,7 +708,9 @@ class StationAgent:
 
         logger.info("Control channel enabled")
         virtual = [audio_router_module] if audio_router_module is not None else None
-        control_client = ControlClient(config, virtual_modules=virtual)
+        control_client = ControlClient(
+            config, virtual_modules=virtual, on_firmware_check=self._wake.set
+        )
         control_thread = threading.Thread(
             target=control_client.run, name="control-client", daemon=True
         )
@@ -623,10 +740,26 @@ class StationAgent:
         else:
             logger.info("Audio channel disabled")
 
+        # Module firmware OTA: runs only on this (main) thread, sequentially with image OTA.
+        self._config = config
+        self._tx_settings = tx_settings
+        try:
+            self._module_ota = ModuleOta(
+                config, http_client, control=control_client, audio=audio_client
+            )
+        except Exception:  # noqa: BLE001 — module OTA must not keep the agent down
+            logger.exception("module_ota setup failed; module firmware updates disabled")
+        self._recover_module_ota()
+
         # Main heartbeat loop
         heartbeat_count = 0
         while not self._shutdown.is_set():
-            send_heartbeat(http_client, config=config, tx_settings=tx_settings)
+            send_heartbeat(
+                http_client,
+                config=config,
+                tx_settings=tx_settings,
+                module_ota_backends=self._module_ota_backends(),
+            )
             heartbeat_count += 1
 
             # Check for OTA updates at the configured interval
@@ -635,8 +768,9 @@ class StationAgent:
                     self._handle_ota(config, http_client)
                 except Exception as exc:
                     logger.error("OTA check failed unexpectedly: %s", exc)
+                self._run_module_ota()
 
-            self._shutdown.wait(timeout=config.heartbeat_interval)
+            self._wait_for_next_heartbeat(config.heartbeat_interval)
 
         # Stop terminal client on shutdown
         if terminal_client is not None:

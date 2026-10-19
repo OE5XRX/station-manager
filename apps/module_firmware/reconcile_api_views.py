@@ -11,8 +11,10 @@ from rest_framework.views import APIView
 
 from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
+from apps.control.models import ControlLock
 from apps.stations.models import StationAuditLog
 
+from .drain import ARTIFACT_SIM, DFU_STUCK_PREFIX, executable_artifact
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
 from .reconcile_serializers import (
     ReconcileCheckRequestSerializer,
@@ -32,6 +34,14 @@ class ReconcileCheckView(APIView):
     Selection: among the station's open assignments (deterministic slot order),
     reconcile each module; prefer a mid-flight ``updating`` convergence (resume
     after an agent crash), otherwise the first drifted, non-quarantined module.
+
+    Idle gate: while any ControlLock of the station is held, nothing is handed
+    out (204) — a flash never interrupts a running operator session.
+
+    Artifact selection: synthetic (sim) modules get the native_sim artifact,
+    real hardware the signed DFU image. A module is skipped when the agent does
+    not report the matching ``module_ota`` backend or the target release lacks
+    that artifact.
     """
 
     authentication_classes = [DeviceKeyAuthentication]
@@ -49,6 +59,12 @@ class ReconcileCheckView(APIView):
         req = ReconcileCheckRequestSerializer(data=request.data)
         req.is_valid(raise_exception=True)
 
+        # Idle gate — evaluated BEFORE reconciling (any scope counts).
+        if ControlLock.objects.filter(station=station, holder__isnull=False).exists():
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        backends = station.module_ota_backends()
+
         assignments = (
             ModuleAssignmentHistory.objects.filter(station=station, to_ts__isnull=True)
             .select_related("module", "module__module_type")
@@ -63,7 +79,10 @@ class ReconcileCheckView(APIView):
             cs = reconcile_module(module)
             if cs is None or cs.state != ModuleFirmwareConvergenceState.State.UPDATING:
                 continue
-            instruction = self._instruction(module, a.slot, cs)
+            artifact = executable_artifact(module, cs.target_release, backends)
+            if artifact is None:
+                continue
+            instruction = self._instruction(module, a.slot, cs, artifact)
             # A row is a genuine "resume" only once the agent has actually
             # started flashing it — the status endpoint stamps last_attempt_at on
             # the first progress POST. Heartbeat ingestion creates an updating row
@@ -79,8 +98,14 @@ class ReconcileCheckView(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(ReconcileCheckResponseSerializer(chosen).data)
 
-    def _instruction(self, module, slot, cs):
+    def _instruction(self, module, slot, cs, artifact):
         release = cs.target_release
+        download_url = reverse("module_firmware_api:download", args=[release.pk])
+        if artifact == ARTIFACT_SIM:
+            download_url += "?artifact=sim"
+            checksum, size = release.sim_sha256, release.sim_size_bytes
+        else:
+            checksum, size = release.sha256, release.size_bytes
         return {
             "convergence_id": cs.pk,
             "module_uid": module.uid,
@@ -88,9 +113,10 @@ class ReconcileCheckView(APIView):
             "module_type": module.module_type.key,
             "variant": module.variant,
             "target_version": release.version,
-            "download_url": reverse("module_firmware_api:download", args=[release.pk]),
-            "checksum_sha256": release.sha256,
-            "size_bytes": release.size_bytes,
+            "artifact": artifact,
+            "download_url": download_url,
+            "checksum_sha256": checksum,
+            "size_bytes": size,
         }
 
 
@@ -190,7 +216,17 @@ class ReconcileStatusUpdateView(APIView):
                     station=station,
                 )
             else:
-                # progress (downloading/flashing/verifying)
+                # progress (downloading/flashing/verifying). ``verifying`` means the
+                # image was written: real progress, so the drain's transient cap
+                # restarts (downloading/flashing are not proof the next step works).
+                if new_status == "verifying" and cs.transient_failures:
+                    cs.transient_failures = 0
+                    cs.save(update_fields=["transient_failures", "updated_at"])
+                # Any progress status means the module came back out of DFU (the
+                # cycle restarted on CDC): the DFU-stuck notice is stale.
+                if cs.last_error_message.startswith(DFU_STUCK_PREFIX):
+                    cs.last_error_message = ""
+                    cs.save(update_fields=["last_error_message", "updated_at"])
                 if cs.last_attempt_at is None:
                     _audit(
                         cs.module,
@@ -315,6 +351,9 @@ class ReconcileCommitView(APIView):
                 f"Module {cs.module.uid} committed version {version}.",
                 station=station,
             )
+            if cs.transient_failures:
+                cs.transient_failures = 0
+                cs.save(update_fields=["transient_failures", "updated_at"])
             reconcile_module(cs.module)
 
         return Response({"status": "ok"})

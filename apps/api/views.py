@@ -74,8 +74,12 @@ class HeartbeatView(APIView):
         station.last_ip_address = str(data.get("ip_address", ""))
         station.last_seen = timezone.now()
         station.status = "online"
+        # Always overwrite: an older/downgraded agent omits the key and must
+        # not keep a stale capability.
+        station.agent_capabilities = data.get("capabilities") or {}
         station.save(
             update_fields=[
+                "agent_capabilities",
                 "current_os_version",
                 "current_agent_version",
                 "current_image_variant",

@@ -1,0 +1,24 @@
+{% load i18n %}
+{% comment %}
+Station drain banner (Teilbereich D): new control grants are refused until a
+pending module firmware update is through. Expects `drain`
+(apps.module_firmware.drain.DrainStatus). With `live`, the banner is driven by
+the controlPanel Alpine component (lock frame `drain.since`) and is always
+rendered so it can appear later; the server-rendered text is the first paint.
+{% endcomment %}
+{% trans "Station wartet auf Firmware-Update seit" as drain_label %}
+{% if live %}
+<div class="fw-drain-banner"
+     x-show="drainSince"
+     {% if not drain.active %}x-cloak{% endif %}
+     role="status"
+     aria-live="polite">
+  <span class="dot" aria-hidden="true"></span>
+  <span x-text="drainText()">{% if drain.active %}{{ drain_label }} {{ drain.since|date:"d.m.Y H:i" }}{% endif %}</span>
+</div>
+{% elif drain.active %}
+<div class="fw-drain-banner" role="status">
+  <span class="dot" aria-hidden="true"></span>
+  <span>{{ drain_label }} {{ drain.since|date:"d.m.Y H:i" }}</span>
+</div>
+{% endif %}

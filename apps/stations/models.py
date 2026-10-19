@@ -145,6 +145,12 @@ class Station(models.Model):
         default="",
         help_text=_("Baked image channel (VARIANT_ID) reported by the agent heartbeat."),
     )
+    agent_capabilities = models.JSONField(
+        _("agent capabilities"),
+        default=dict,
+        blank=True,
+        help_text=_("Capabilities reported by the agent heartbeat."),
+    )
     last_ip_address = models.GenericIPAddressField(_("last IP address"), null=True, blank=True)
     last_seen = models.DateTimeField(_("last seen"), null=True, blank=True)
     status = models.CharField(
@@ -189,6 +195,19 @@ class Station(models.Model):
         if self.last_seen is None:
             return False
         return (timezone.now() - self.last_seen).total_seconds() < 120
+
+    def module_ota_backends(self):
+        """Module-OTA backends the agent reports, restricted to known ones."""
+        caps = self.agent_capabilities
+        if not isinstance(caps, dict):
+            return set()
+        module_ota = caps.get("module_ota")
+        if not isinstance(module_ota, dict):
+            return set()
+        backends = module_ota.get("backends")
+        if not isinstance(backends, (list, tuple)):
+            return set()
+        return {"dfu", "sim"} & {b for b in backends if isinstance(b, str)}
 
     def update_from_heartbeat(self, data):
         """Update station fields from a heartbeat payload dict.

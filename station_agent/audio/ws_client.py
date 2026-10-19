@@ -206,6 +206,11 @@ class AudioClient:
             self._loop.close()
             self._loop = None
 
+    def slot_active(self, slot: int) -> bool:
+        """Cross-thread: True while *slot* carries TX/mic or diag audio (RX-only never counts)."""
+        engine = self._engine
+        return engine is not None and engine.slot_active(slot)
+
     def stop(self) -> None:
         logger.info("Audio: stop requested")
         self._shutdown.set()

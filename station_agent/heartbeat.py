@@ -10,6 +10,7 @@ import time
 from . import __version__
 from .http_client import HttpClient
 from .inventory import collect_inventory
+from .module_ota import detect_backends
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +87,18 @@ def _collect_telemetry_safe(config):
         return {}
 
 
-def collect_system_info(config=None) -> dict:
+def collect_system_info(config=None, backends=None) -> dict:
     """Collect all system information for the heartbeat payload.
 
     Args:
         config: Optional AgentConfig. Forwarded to ``collect_inventory`` so
             that slot discovery is enabled/disabled per configuration.
+        backends: Module-OTA backends to advertise. The agent passes
+            ``ModuleOta.advertised_backends()`` so the capability is exactly what the
+            running ModuleOta can execute; None falls back to plain detection.
     """
+    if backends is None:
+        backends = detect_backends(config) if config is not None else []
     return {
         "hostname": get_hostname(),
         "os_version": get_os_version(),
@@ -103,11 +109,14 @@ def collect_system_info(config=None) -> dict:
         "module_versions": get_module_versions(),
         "inventory": collect_inventory(config=config),
         "telemetry": _collect_telemetry_safe(config),
+        "capabilities": {"module_ota": {"backends": backends}} if backends else {},
         "timestamp": time.time(),
     }
 
 
-def send_heartbeat(http_client: HttpClient, config=None, tx_settings=None) -> bool:
+def send_heartbeat(
+    http_client: HttpClient, config=None, tx_settings=None, module_ota_backends=None
+) -> bool:
     """Send a heartbeat to the Station Manager server.
 
     Args:
@@ -115,11 +124,12 @@ def send_heartbeat(http_client: HttpClient, config=None, tx_settings=None) -> bo
         config: Optional AgentConfig. Forwarded to ``collect_system_info`` so
             that slot discovery is enabled/disabled per configuration.
         tx_settings: Optional ``TxAudioSettings`` fed from the response body.
+        module_ota_backends: Backends to advertise (see ``collect_system_info``).
 
     Returns:
         True if the heartbeat was sent successfully, False otherwise.
     """
-    payload = collect_system_info(config=config)
+    payload = collect_system_info(config=config, backends=module_ota_backends)
 
     response = http_client.request("POST", "/api/v1/heartbeat/", json_data=payload)
     if response is None:

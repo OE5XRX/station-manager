@@ -12,6 +12,7 @@ class ReconcileCheckResponseSerializer(serializers.Serializer):
     module_type = serializers.CharField()
     variant = serializers.CharField(allow_blank=True)
     target_version = serializers.CharField()
+    artifact = serializers.ChoiceField(choices=["dfu", "sim"])
     download_url = serializers.CharField()
     checksum_sha256 = serializers.CharField()
     size_bytes = serializers.IntegerField()

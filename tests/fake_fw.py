@@ -25,6 +25,9 @@ class FakeFirmware:
     def __init__(self, modules: dict):
         self._modules = modules
         self.state: dict = {mid: {} for mid in modules}
+        # Every command line the fake received (stripped), so tests can assert that a
+        # slot was (or was NOT) touched — e.g. a paused slot must see no `module list`.
+        self.received: list[bytes] = []
         self._master_fd, self._slave_fd = os.openpty()
         # Real UARTs deliver raw bytes: no line discipline, no echo, no CR/LF
         # mapping. A bare openpty() slave is canonical+echoing, which hides
@@ -124,6 +127,8 @@ class FakeFirmware:
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
                 line = line.strip()
+                if line:
+                    self.received.append(line)
                 if _LIST_RE.search(line):
                     self._w("MODULE-LIST " + json.dumps({"modules": list(self._modules)}) + "\r\n")
                     continue

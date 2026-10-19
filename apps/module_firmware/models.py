@@ -4,6 +4,12 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 QUARANTINE_ATTEMPT_LIMIT = 3
+# Consecutive transient (``failed``) outcomes after which a convergence row stops
+# draining its station (Teilbereich D). No quarantine: the reconcile check keeps
+# offering the instruction, only the ControlLock lock-out ends so a station whose
+# update can never succeed is not locked forever. Reset by real progress
+# (``verifying``), a successful commit or convergence (OK).
+DRAIN_TRANSIENT_LIMIT = 5
 
 
 class ModuleType(models.Model):
@@ -175,6 +181,16 @@ class ModuleFirmwareRelease(models.Model):
     sha256 = models.CharField(_("SHA-256"), max_length=64)
     size_bytes = models.BigIntegerField(_("size in bytes"))
     cosign_bundle_key = models.CharField(_("cosign bundle key"), max_length=512, blank=True)
+    # Optional native_sim artifact (executed on sim stations). Empty
+    # sim_storage_key == no sim artifact for this release.
+    sim_storage_key = models.CharField(
+        _("sim storage key"), max_length=512, blank=True, default=""
+    )
+    sim_sha256 = models.CharField(_("sim SHA-256"), max_length=64, blank=True, default="")
+    sim_size_bytes = models.PositiveBigIntegerField(_("sim size in bytes"), null=True, blank=True)
+    sim_cosign_bundle_key = models.CharField(
+        _("sim cosign bundle key"), max_length=512, blank=True, default=""
+    )
     source_repo = models.CharField(_("source repo"), max_length=200)
     source_tag = models.CharField(_("source tag"), max_length=64)
     source_github_url = models.CharField(_("source URL"), max_length=512, blank=True)
@@ -207,6 +223,10 @@ class ModuleFirmwareRelease(models.Model):
 
     def __str__(self):
         return f"{self.module_type.key}/{self.variant or '-'} {self.version}"
+
+    @property
+    def has_sim_artifact(self) -> bool:
+        return bool(self.sim_storage_key)
 
     def archive(self) -> bool:
         """Soft-delete. Returns True only if THIS call changed the state."""
@@ -441,6 +461,14 @@ class ModuleFirmwareConvergenceState(models.Model):
         _("state"), max_length=16, choices=State.choices, default=State.UPDATING
     )
     attempts = models.PositiveIntegerField(_("attempts"), default=0)
+    transient_failures = models.PositiveIntegerField(
+        _("consecutive transient failures"),
+        default=0,
+        help_text=_(
+            "Consecutive 'failed' outcomes since the last real progress; at "
+            "DRAIN_TRANSIENT_LIMIT the station stops draining for this row."
+        ),
+    )
     last_error_mode = models.CharField(
         _("last error mode"), max_length=16, choices=ErrorMode.choices, blank=True, default=""
     )

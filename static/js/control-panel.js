@@ -20,6 +20,10 @@
   var PTT_KEY_STORAGE = "oe5xrx.ptt_key";
   var LOSS_NOTICE_MS = 4000;
   var DENY_NOTICE_MS = 8000; // long enough to read the full permission message
+  var DRAIN_LABEL_DEFAULT = "Station wartet auf Firmware-Update seit";
+  // Agent events that toggle a module's firmware-updating state (Teilbereich D).
+  var FW_STARTED = "firmware_update_started";
+  var FW_FINISHED = "firmware_update_finished";
 
   function controlPanel() {
     return {
@@ -33,6 +37,9 @@
       pending: {}, // "slot module cap" -> true
       errors: {}, // "slot module cap" (or "slot module") -> human string
       ptt: {}, // "slot module" -> 'armed' | 'keying' | 'tx'
+      updating: {}, // "slot module" -> true while the agent flashes its firmware
+      drainSince: null, // ISO time a pending firmware update blocks new control since
+      drainLabel: DRAIN_LABEL_DEFAULT,
       // lock
       lockState: "free", // 'free' | 'held' | 'other'
       lockHolder: null,
@@ -71,6 +78,8 @@
           store._send = this._send.bind(this);
         }
         this.canAdmin = root.getAttribute("data-can-admin") === "1";
+        this.drainSince = root.getAttribute("data-drain-since") || null;
+        this.drainLabel = root.getAttribute("data-drain-label") || DRAIN_LABEL_DEFAULT;
         var defaultKey = root.getAttribute("data-ptt-default-key");
         if (defaultKey === null || defaultKey === "") defaultKey = " ";
         var stored = null;
@@ -133,6 +142,7 @@
         this._caps = {};
         this._capNames = {};
         this.online = {};
+        this.updating = {};
         this._boundsCache = {};
         for (var i = 0; i < slots.length; i++) {
           var slot = slots[i].slot;
@@ -141,6 +151,9 @@
             var m = mods[j];
             var mkey = L.moduleKey(slot, m.module);
             this.online[mkey] = m.online !== false;
+            // Live inventory marks a paused (being-flashed) slot with
+            // status "updating"; the SSR snapshot carries updating: bool.
+            if (m.status === "updating" || m.updating === true) this.updating[mkey] = true;
             var caps = m.capabilities || [];
             var settingNames = [];
             var telemNames = [];
@@ -372,6 +385,10 @@
         // {code:"forbidden", message} (spec 2026-10-14 §5.2).
         var err = msg.error || (msg.code ? { code: msg.code, msg: msg.message } : null);
         var code = err ? err.code : undefined;
+        if (code === "firmware_update_pending") {
+          // Control grant refused while a module firmware update drains the station.
+          this._showDenyNotice(err.msg || L.errorMessage(code));
+        }
         if (code === "forbidden") {
           // Toast the server's explanation. If the socket then closes with 4403 this
           // was the connect gate, and _scheduleReconnect promotes it to connError.
@@ -417,8 +434,19 @@
             this._unkeyModule(mkey, false);
             break;
           case "module_error":
+          case "firmware_dfu_stuck":
             this.errors[mkey] =
               (msg.detail && msg.detail.msg) || L.errorMessage("bad_value");
+            break;
+          case FW_STARTED:
+            this.updating[mkey] = true;
+            delete this.errors[mkey]; // a new attempt supersedes e.g. a DFU-stuck notice
+            // The agent paused the slot; never leave a local carrier state behind.
+            this._unkeyModule(mkey, false);
+            break;
+          case FW_FINISHED:
+            delete this.updating[mkey];
+            if (msg.detail && msg.detail.result === "success") delete this.errors[mkey];
             break;
           default:
             break;
@@ -431,6 +459,7 @@
         this.youHold = !!msg.you_hold;
         this.lockState = L.deriveLockState(msg.state, this.youHold);
         this.lockHolder = msg.holder_username || null;
+        this.drainSince = (msg.drain && msg.drain.since) || null;
         // Lock-loss while operating: if we were keyed and no longer hold,
         // force unkey everywhere and surface a transient notice.
         if (prevYouHold && !this.youHold && wasKeyed) {
@@ -512,7 +541,23 @@
       // — commands to an offline module would just time out. Templates gate
       // per-module widgets on this (not bare canControl).
       canOperate: function (slot, module) {
-        return this.canControl && this.moduleOnline(slot, module);
+        return (
+          this.canControl && this.moduleOnline(slot, module) && !this.isUpdating(slot, module)
+        );
+      },
+
+      isUpdating: function (slot, module) {
+        return !!this.updating[L.moduleKey(slot, module)];
+      },
+
+      // Module-level error (module_error / firmware_dfu_stuck), "" when none.
+      moduleError: function (slot, module) {
+        return this.errors[L.moduleKey(slot, module)] || "";
+      },
+
+      drainText: function () {
+        if (!this.drainSince) return "";
+        return this.drainLabel + " " + L.formatLocalDateTime(this.drainSince);
       },
 
       valueOf: function (slot, module, cap) {
@@ -621,6 +666,7 @@
 
       setValue: function (slot, module, cap, rawValue) {
         if (this._isReadOnly(slot, module, cap)) return;
+        if (this.isUpdating(slot, module)) return;
         var wkey = L.widgetKey(slot, module, cap);
         delete this.errors[wkey];
         var type = this._capType(slot, module, cap);
@@ -652,6 +698,7 @@
 
       doAction: function (slot, module, cap) {
         if (this._isReadOnly(slot, module, cap)) return;
+        if (this.isUpdating(slot, module)) return;
         this._sendCommand(slot, module, cap, "do", true, L.widgetKey(slot, module, cap));
       },
 

@@ -9,10 +9,11 @@ Header: slot + type + online indicator.
 Body: all capabilities rendered via the dispatch widget partial.
 PTT is rendered last within the card so it can span full width.
 {% endcomment %}
-<article class="cp-module cp-module-card"
+<article class="cp-module cp-module-card{% if m.firmware_updating %} is-updating{% endif %}"
          :class="{
            'is-offline': !moduleOnline('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}'),
-           'cp-disconnected': conn !== 'open'
+           'cp-disconnected': conn !== 'open',
+           'is-updating': isUpdating('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')
          }"
          data-slot="{{ m.slot }}"
          data-module="{{ m.module_id }}">
@@ -39,6 +40,26 @@ PTT is rendered last within the card so it can span full width.
       </span>
     </div>
   </header>
+
+  {% comment %}
+  Firmware flash in progress (Teilbereich D): the agent paused this slot. All
+  widgets are disabled via canOperate(); the strip says why.
+  {% endcomment %}
+  <div class="cp-fw-updating"
+       x-show="isUpdating('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+       {% if not m.firmware_updating %}x-cloak{% endif %}
+       role="status"
+       aria-live="polite">
+    <span class="cp-fw-updating-title">{% trans "Firmware-Update läuft" %}</span>
+    <span class="cp-fw-updating-hint">{% trans "Bedienung gesperrt, bis das Modul wieder da ist" %}</span>
+  </div>
+
+  {% comment %}Module-level error (module_error / firmware_dfu_stuck events).{% endcomment %}
+  <p class="cp-module-error"
+     x-show="moduleError('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+     x-cloak
+     role="alert"
+     x-text="moduleError('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"></p>
 
   <div class="cp-module-widgets">
     {% comment %}Pass 1: all caps except PTT{% endcomment %}

@@ -32,6 +32,37 @@ def is_setting_cap(descriptor, cap_name):
     return False
 
 
+# Inventory module entry ``status`` of a slot the agent paused for a firmware flash.
+MODULE_STATUS_UPDATING = "updating"
+
+
+def _apply_updating_entry(station, slot, module_id, mod, now):
+    """Mark a paused (being-flashed) module updating + online; leave its persisted
+    identity, descriptor and last_state untouched. Only a module the server has
+    never seen is created from the entry, so the panel can still render it."""
+    identity = mod.get("identity") or {}
+    cap_descriptor = mod.get("capabilities", []) or []
+    raw_state = mod.get("state", {}) or {}
+    StationModule.objects.update_or_create(
+        station=station,
+        slot=slot,
+        module_id=module_id,
+        defaults={"online": True, "last_seen": now, "firmware_updating": True},
+        create_defaults={
+            "type": identity.get("type", ""),
+            "model": identity.get("model", ""),
+            "version": identity.get("version", ""),
+            "capability_descriptor": cap_descriptor,
+            "last_state": {
+                k: v for k, v in raw_state.items() if is_setting_cap(cap_descriptor, k)
+            },
+            "online": True,
+            "last_seen": now,
+            "firmware_updating": True,
+        },
+    )
+
+
 @transaction.atomic
 def apply_inventory(station, slots):
     """Upsert all reported modules; soft-offline every module not reported.
@@ -74,6 +105,15 @@ def apply_inventory(station, slots):
             identity = mod.get("identity") or {}
             uid = identity.get("uid")
             slot_str = str(slot)
+            if mod.get("status") == MODULE_STATUS_UPDATING:
+                _apply_updating_entry(station, slot, module_id, mod, now)
+                # The agent paused this slot to flash it: the entry is its last-known
+                # snapshot, not a fresh probe. Keep the slot's open assignment (the
+                # module is still there) and skip ingest — no identity/version churn
+                # and no audits from a mid-flash version.
+                tracked_slots.add(slot_str)
+                reported.append((slot, module_id))
+                continue
             if uid:
                 reported_uid_by_slot[slot_str] = uid
             cap_descriptor = mod.get("capabilities", []) or []
@@ -81,6 +121,13 @@ def apply_inventory(station, slots):
             filtered_state = {
                 k: v for k, v in raw_state.items() if is_setting_cap(cap_descriptor, k)
             }
+            # Genuine offline -> online transition of this module (absent before, or
+            # soft-offlined by an earlier inventory)? Only that proves it left DFU mode;
+            # a re-report while already online may be the agent's debounced last-known
+            # entry of a module that in fact still hangs in DFU (no CDC).
+            came_online = not StationModule.objects.filter(
+                station=station, slot=slot, module_id=module_id, online=True
+            ).exists()
             sm, _ = StationModule.objects.update_or_create(
                 station=station,
                 slot=slot,
@@ -94,9 +141,12 @@ def apply_inventory(station, slots):
                     "online": True,
                     "last_seen": now,
                     "offline_with_station": False,
+                    "firmware_updating": False,
                 },
             )
-            tracked = ingest_module(station, slot, module_id, identity, now=now)
+            tracked = ingest_module(
+                station, slot, module_id, identity, now=now, came_online=came_online
+            )
             if tracked is not None:
                 if sm.tracked_module_id != tracked.id:
                     sm.tracked_module = tracked
@@ -127,8 +177,11 @@ def apply_inventory(station, slots):
     for slot, module_id in reported:
         qs = qs.exclude(slot=slot, module_id=module_id)
     # A module that drops out was present until now: stamp ``last_seen`` so the stale
-    # TTL counts from going offline, not from its last (rare) inventory frame.
-    qs.update(online=False, last_seen=now)
+    # TTL counts from going offline, not from its last (rare) inventory frame. A module
+    # that is no longer reported cannot be mid-flash from the server's view either (its
+    # finished event may have been lost with the agent): clear the flag too, the agent
+    # re-reports ``updating`` while the slot is still paused.
+    qs.update(online=False, last_seen=now, firmware_updating=False)
 
     # Same guard as reconcile below: ``slots == []`` may be a transient discovery
     # failure and must never delete anything.
@@ -316,10 +369,55 @@ def _prune_expired(station, now):
         )
 
 
+# Agent ``event`` names that toggle StationModule.firmware_updating.
+FIRMWARE_UPDATING_EVENTS = {
+    "firmware_update_started": True,
+    "firmware_update_finished": False,
+}
+
+
+# ``firmware_update_finished`` result of a cycle that ended before anything was flashed
+# (download/checksum failure, agent restart before flashing, agent error). Every other
+# result (success / rolled_back incl. DFU_STUCK / rejected) means the flash ran.
+FIRMWARE_RESULT_NOT_FLASHED = "failed"
+
+
+def set_firmware_updating(station, slot, module_id, value, result=None):
+    """Set the firmware-updating flag of one module (agent start/finish event).
+    ``result`` is the ``firmware_update_finished`` detail's result (None if absent).
+    Unknown or malformed addresses are a no-op."""
+    if slot is None or not isinstance(module_id, str):
+        return
+    qs = StationModule.objects.filter(station=station, slot=str(slot), module_id=module_id)
+    if value:
+        qs.update(firmware_updating=True)
+        return
+    if result != FIRMWARE_RESULT_NOT_FLASHED:
+        # Leaving the updating state after a flash: the module rebooted / re-enumerates,
+        # so its presence is unconfirmed until the post-resume inventory (the agent
+        # forces that emit) re-reports it. Mark it soft-offline, so that real identity
+        # counts as a genuine came-back (clears a DFU-stuck notice) — whereas a module
+        # still hanging in DFU stays unreported (agent forget_slot) and offline. Rows
+        # that were not updating keep their state.
+        qs.filter(firmware_updating=True).update(firmware_updating=False, online=False)
+    # A pre-flash failure leaves the module untouched (it never left its app): keep
+    # ``online`` as is — a fast cycle may finish before any ``updating`` inventory.
+    qs.update(firmware_updating=False)
+
+
 def mark_station_offline(station):
     # Only the online→offline transition: modules were present until the station
     # dropped and are flagged so the next non-empty snapshot restarts their TTL (the
     # outage does not count). Already-offline rows keep their TTL running.
+    # Clear firmware_updating as well (on every row): a ``firmware_update_finished``
+    # sent while the agent was disconnected is dropped. On reconnect the agent
+    # re-reports ``updating`` for a slot that is still paused.
     StationModule.objects.filter(station=station, online=True).update(
-        online=False, last_seen=timezone.now(), offline_with_station=True
+        online=False,
+        last_seen=timezone.now(),
+        offline_with_station=True,
+        firmware_updating=False,
+    )
+    StationModule.objects.filter(station=station, firmware_updating=True).update(
+        firmware_updating=False
     )

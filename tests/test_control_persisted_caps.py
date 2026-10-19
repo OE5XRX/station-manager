@@ -1169,3 +1169,57 @@ def test_volume_on_other_module_type_is_never_reapplied(station, staff_user):
     persistence.save(station, 1, "fm0", "volume", 8, staff_user)
     inv = _inv({"volume": 4}, desc=VOLUME_DESC, mtype="audio_router")
     assert persistence.reapply_frames(station, inv) == []
+
+
+# -- paused (being-flashed) modules: no re-apply (Teilbereich D final review) ---------
+
+
+@pytest.mark.django_db
+def test_no_reapply_for_updating_inventory_entry(station, staff_user):
+    """A paused slot reports ``state: {}`` + ``status: updating``: that is no drift."""
+    persistence.save(station, 1, "fm0", "filter_hpf", False, staff_user)
+    slots = _inv({})
+    slots[0]["modules"][0]["status"] = "updating"
+    assert persistence.reapply_frames(station, slots) == []
+
+
+@pytest.mark.django_db
+def test_no_reapply_for_snapshot_module_marked_updating(station, staff_user):
+    persistence.save(station, 1, "fm0", "filter_hpf", False, staff_user)
+    slots = _inv({"filter_hpf": True})
+    slots[0]["modules"][0]["updating"] = True  # serializers.snapshot shape
+    assert persistence.reapply_frames(station, slots) == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_updating_inventory_sends_no_reapply_and_writes_no_audit(control_agent_auth):
+    """Cross-component: flash start (paused slot) => no set frames, no audits, and the
+    module's last_state stays untouched."""
+    station = Station.objects.create(name="pc-updating", status="online")
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm0",
+        type="fm",
+        capability_descriptor=DESC,
+        last_state={"filter_hpf": True},
+        online=True,
+    )
+    persistence.save(station, "slot0", "fm0", "filter_hpf", False, None)
+    slots = _inv({}, slot="slot0")
+    slots[0]["modules"][0]["status"] = "updating"
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to({"v": V, "type": "inventory", "slots": slots})
+        nothing = await agent.receive_nothing(timeout=0.5)
+        await agent.disconnect()
+        return nothing
+
+    assert asyncio.run(scenario()) is True
+    assert not StationAuditLog.objects.filter(
+        station=station, message__contains="re-apply persisted"
+    ).exists()
+    sm = StationModule.objects.get(station=station, slot="slot0", module_id="fm0")
+    assert sm.last_state == {"filter_hpf": True}

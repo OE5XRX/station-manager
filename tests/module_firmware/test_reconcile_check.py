@@ -18,6 +18,14 @@ def fm(db):
     return ModuleType.objects.create(key="fm", display_name="FM")
 
 
+@pytest.fixture(autouse=True)
+def _dfu_capable_station(db, station):
+    # Teil D: the check only hands out instructions for artifact kinds the agent
+    # reports as module_ota backends. These stations run a dfu-capable agent.
+    station.agent_capabilities = {"module_ota": {"backends": ["dfu"]}}
+    station.save(update_fields=["agent_capabilities"])
+
+
 def _release(fm, version="26.09.15-01", variant="vhf"):
     return ModuleFirmwareRelease.objects.create(
         module_type=fm,

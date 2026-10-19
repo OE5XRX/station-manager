@@ -11,11 +11,14 @@ subscription and the PTT dead-man are layered on in later tasks.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
+from collections.abc import Callable
 
 from station_agent import descriptor as desc
 from station_agent import protocol as proto
+from station_agent import slot_pause
 from station_agent.slot_control import SlotControl
 
 logger = logging.getLogger(__name__)
@@ -50,8 +53,12 @@ class Broker:
         trace_serial: bool = False,
         virtual_modules=None,
         now=time.monotonic,
+        on_firmware_check: Callable[[], None] | None = None,
     ):
         self._send = send
+        # Server `firmware_check` nudge -> module_ota cycle (runs on the main thread; the
+        # callback only signals it, it must not block the control loop).
+        self._on_firmware_check = on_firmware_check
         # Virtual modules (e.g. the audio-router, Spec 0 §5.6) present a descriptor + their
         # own command handler on the existing control-plane. Keyed by (slot, module_id).
         # Empty by default ⇒ byte-identical behaviour to the physical-only broker.
@@ -84,6 +91,14 @@ class Broker:
         self._subscriptions: dict[tuple[int, str], dict] = {}
         # (slot, module) -> {"cap": capability_name, "task": asyncio.Task}
         self._ptt: dict[tuple[int, str], dict] = {}
+        # (slot, module) whose fail-safe unkey is on the wire. The dead-man / disconnect paths
+        # pop _ptt BEFORE the `do ptt false` round-trip; slot_busy() must still report busy
+        # until it lands, or a module firmware pause could slip in and drop the unkey.
+        self._unkeying: set[tuple[int, str]] = set()
+        # (slot, module) whose PTT `do` is on the wire. _ptt is armed only once the key
+        # command's result returns, so without this a module firmware pause could slip in
+        # while `do ptt true` is in flight and the key would land unseen by slot_busy().
+        self._ptt_inflight: set[tuple[int, str]] = set()
         # slot -> asyncio.Lock serializing device access WITHIN the control event loop. A
         # slot's control device is a single serial/pty line: concurrent execute() calls (e.g.
         # a telemetry poll tick and a command) would interleave their write/read framing on
@@ -106,10 +121,15 @@ class Broker:
             self._controls[slot] = slot_entry.get("control", "")
             for module in slot_entry.get("modules", []):
                 mid = module.get("id")
-                self._descriptors[(slot, mid)] = {
+                descriptor = {
                     "identity": module.get("identity", {}),
                     "capabilities": module.get("capabilities", []),
                 }
+                # A paused slot's entry carries `status: updating` (slot_pause.updating_entry);
+                # keep it so the control inventory reports it too.
+                if "status" in module:
+                    descriptor["status"] = module["status"]
+                self._descriptors[(slot, mid)] = descriptor
         # Register virtual modules alongside the discovered physical ones so they appear in
         # inventory and command routing. They carry no control device.
         for (slot, mid), vm in self._virtual.items():
@@ -135,6 +155,12 @@ class Broker:
             await self.handle_unsubscribe(msg)
         elif mtype == "ptt_keepalive":
             await self.handle_keepalive(msg)
+        elif mtype == "firmware_check":
+            if self._on_firmware_check is not None:
+                try:
+                    self._on_firmware_check()
+                except Exception:  # noqa: BLE001 — a hook must never break the control link
+                    logger.exception("broker: firmware_check callback raised")
         else:
             logger.debug("broker: ignoring message type %r", mtype)
 
@@ -194,17 +220,26 @@ class Broker:
         if op != "get":
             token = desc.format_value(cap["type"], value)
 
-        result = await self._execute(slot, module, op, capability, token)
+        is_ptt = op == "do" and self._is_ptt_cap(cap)
+        if is_ptt:
+            self._ptt_inflight.add((slot, module))
+        try:
+            result = await self._execute(slot, module, op, capability, token)
+            if result.get("ok") and is_ptt:
+                # Arm/disarm before leaving the in-flight window, so slot_busy() never sees
+                # a gap between "key on the wire" and "dead-man armed".
+                if value is True:
+                    self._arm_dead_man(slot, module, capability)
+                elif value is False:
+                    self._disarm_dead_man(slot, module)
+        finally:
+            if is_ptt:
+                self._ptt_inflight.discard((slot, module))
         if result.get("ok"):
             await self._send(proto.build_result(request_id, True, value=result.get("value")))
             await self._send(
                 proto.build_state(slot, module, {capability: result.get("value")}, self._ts())
             )
-            if op == "do" and self._is_ptt_cap(cap):
-                if value is True:
-                    self._arm_dead_man(slot, module, capability)
-                elif value is False:
-                    self._disarm_dead_man(slot, module)
         else:
             err_code = result.get("error", proto.TIMEOUT)
             await self._send(proto.build_result(request_id, False, error=(err_code, "")))
@@ -262,7 +297,9 @@ class Broker:
                     )
                     continue
                 state = {}
-                for cap in caps:
+                # A paused slot is being flashed: never touch its control device.
+                paused = slot_pause.is_paused(slot)
+                for cap in [] if paused else caps:
                     if not isinstance(cap, dict):
                         continue
                     if cap.get("kind") != "setting":
@@ -273,18 +310,25 @@ class Broker:
                     result = await self._execute(slot, module, "get", name, None)
                     if result.get("ok"):
                         state[name] = result.get("value")
-                modules_out.append(
-                    {
-                        "module": module,
-                        "identity": descriptor.get("identity", {}),
-                        "capabilities": caps,
-                        "state": state,
-                    }
-                )
+                module_out = {
+                    "module": module,
+                    "identity": descriptor.get("identity", {}),
+                    "capabilities": caps,
+                    "state": state,
+                }
+                if "status" in descriptor:
+                    module_out["status"] = descriptor["status"]
+                modules_out.append(module_out)
             slots_out.append({"slot": slot, "modules": modules_out})
         await self._send(proto.build_inventory(slots_out))
 
-    async def _execute(self, slot, module, op, capability, token) -> dict:
+    async def _execute(self, slot, module, op, capability, token, *, failsafe=False) -> dict:
+        """Run one command on the slot's control device.
+
+        ``failsafe=True`` (PTT unkey only) bypasses the module-firmware pause guard: driving the
+        transmitter low is the safety action and must always reach the device. It is still
+        serialized against the flasher by the process-wide devlock inside SlotControl.
+        """
         vm = self._virtual.get((slot, module))
         if vm is not None:
             # Virtual modules (e.g. the audio-router on a synthetic slot) have no control
@@ -294,6 +338,11 @@ class Broker:
             # telemetry poll reaches _execute directly, so guard here too. Snapshot the
             # module's own state off the event loop (state() may shell out to PipeWire/udev).
             return await self._execute_virtual(vm, capability)
+        if not failsafe and slot_pause.is_paused(slot):
+            # The slot is paused for a module firmware update: the flasher owns (or is
+            # re-enumerating) its control device. Fail fast — no slot lock, no executor, no
+            # device lock wait — so commands and telemetry polls never contend with the flash.
+            return {"ok": False, "error": "updating"}
         control_path = self._control_path(slot)
         if control_path is None:
             # The slot is not currently in inventory — it dropped on a re-discovery, or the
@@ -312,9 +361,17 @@ class Broker:
         # Serialize per-slot device I/O so a telemetry poll and a command never
         # interleave their framing on the same serial/pty line.
         async with lock:
-            return await loop.run_in_executor(
-                None, transport.execute, module, op, capability, token, self._trace
-            )
+            # Re-check after queueing behind the slot lock: module_ota may have paused the
+            # slot while this call waited for an in-flight opener, and its barrier only
+            # drains that in-flight opener — not calls queued behind it.
+            if not failsafe and slot_pause.is_paused(slot):
+                return {"ok": False, "error": "updating"}
+            call = functools.partial(transport.execute, module, op, capability, token, self._trace)
+            if not failsafe and isinstance(transport, SlotControl):
+                # ... and once more under the process-wide devlock, right before the open,
+                # closing the window between this check and the device lock.
+                call = functools.partial(call, abort_if=lambda: slot_pause.is_paused(slot))
+            return await loop.run_in_executor(None, call)
 
     async def rediscover(self, discover_fn):
         """Run the blocking slot scan *discover_fn* and return its result.
@@ -496,6 +553,10 @@ class Broker:
             logger.exception("broker: telemetry poll failed for slot %s module %s", slot, module)
 
     # --- PTT dead-man ----------------------------------------------------------
+    def slot_busy(self, slot: int) -> bool:
+        """True while any module on *slot* is keyed, being keyed, or being unkeyed. Loop-only."""
+        return any(s == slot for s, _ in (*self._ptt, *self._ptt_inflight, *self._unkeying))
+
     @staticmethod
     def _is_ptt_cap(cap: dict) -> bool:
         # Generic: a bool action named 'ptt' in the platform vocabulary — no module id.
@@ -535,7 +596,18 @@ class Broker:
 
     async def _unkey(self, slot, module, capability, reason) -> None:
         # Fail-safe: try to drive the module low, then always announce it.
-        await self._execute(slot, module, "do", capability, "false")
+        self._unkeying.add((slot, module))
+        try:
+            result = await self._execute(slot, module, "do", capability, "false", failsafe=True)
+        finally:
+            self._unkeying.discard((slot, module))
+        if not result.get("ok"):
+            logger.warning(
+                "broker: fail-safe PTT unkey on slot %s module %s not confirmed (%s)",
+                slot,
+                module,
+                result.get("error"),
+            )
         await self._send(proto.build_event(slot, module, "ptt_auto_unkey", {"reason": reason}))
 
     async def on_disconnect(self) -> None:
