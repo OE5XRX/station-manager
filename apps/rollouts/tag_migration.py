@@ -67,14 +67,15 @@ def migrate_tags_to_groups(apps, schema_editor=None) -> None:
             "target_tag_id", flat=True
         )
     )
-    functional_ids.update(
+    mf_tag_ids = set(
         target_model.objects.filter(tag__isnull=False).values_list("tag_id", flat=True)
     )
-    functional_ids.update(
+    mf_tag_ids.update(
         target_model.objects.filter(canary_tag__isnull=False).values_list(
             "canary_tag_id", flat=True
         )
     )
+    functional_ids.update(mf_tag_ids)
 
     # 2. One group per (still existing) functional tag.
     tags = {t.pk: t for t in tag_model.objects.filter(pk__in=functional_ids).order_by("name")}
@@ -121,6 +122,13 @@ def migrate_tags_to_groups(apps, schema_editor=None) -> None:
         if len(ranked) < 2:
             continue
         names = sorted(tags[tid].name for tid in tag_ids)
+        basis = (
+            "front-most in sequence"
+            if ranked[0] in position_by_tag
+            else "no tag in sequence; first by name"
+        )
+        dropped = sorted(tags[tid].name for tid in ranked[1:] if tid in mf_tag_ids)
+        carried = f" — not carried over: {dropped}" if dropped else ""
         try:
             with transaction.atomic():
                 audit_model.objects.create(
@@ -128,7 +136,7 @@ def migrate_tags_to_groups(apps, schema_editor=None) -> None:
                     event_type="rollout_group_changed",
                     message=(
                         f"Migration: functional tags {names} → rollout group "
-                        f"'{group.name}' (front-most in sequence)"
+                        f"'{group.name}' ({basis}){carried}"
                     ),
                     user=None,
                 )

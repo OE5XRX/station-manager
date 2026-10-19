@@ -172,7 +172,8 @@ def delete_group(group, *, by_user, ip_address=None, audit_suffix: str = "") -> 
     from apps.stations.models import StationAuditLog
 
     with transaction.atomic():
-        for station in group.stations.all():
+        # Lock members so a concurrent assignment can't be SET_NULLed unaudited.
+        for station in group.stations.select_for_update():
             StationAuditLog.log(
                 station=station,
                 event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,

@@ -127,6 +127,8 @@
             <div class="empty-title">
               {% if group.is_unassigned %}
                 {% trans "Every station is assigned to a rollout group." %}
+              {% elif group.is_empty %}
+                {% trans "No stations in this group." %}
               {% else %}
                 {% trans "All stations in this group are up to date." %}
               {% endif %}

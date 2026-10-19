@@ -285,6 +285,19 @@ def test_station_patch_rollout_group_denied_for_member(api_topology, bearer, gro
     assert station.rollout_group is None
 
 
+def test_station_patch_rollout_group_denied_for_region_manager(api_topology, bearer, group):
+    # Station→group assignment is staff/admin only, even in the manager's own region.
+    station = api_topology["station_in"]
+    resp = bearer(api_topology["region_mgr"]).patch(
+        reverse("api:station-detail", args=[station.pk]),
+        {"rollout_group": group.pk},
+        format="json",
+    )
+    assert resp.status_code == 403
+    station.refresh_from_db()
+    assert station.rollout_group is None
+
+
 def test_station_filter_by_rollout_group(api_topology, bearer, group):
     other = RolloutGroup.objects.create(name="Other", slug="other")
     api_topology["station_in"].rollout_group = group

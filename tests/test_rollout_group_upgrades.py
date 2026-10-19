@@ -207,6 +207,17 @@ def test_dashboard_dev_station_up_to_date_on_dev_latest(
     assert (s, dev_latest) in r.context["up_to_date"]
     by_key = {g["key"]: g for g in r.context["groups"]}
     assert by_key[dev.slug]["rows"] == []
+    assert b"All stations in this group are up to date." in r.content
+
+
+def test_dashboard_empty_group_says_no_stations(client, admin_user, make_rollout_group):
+    group = make_rollout_group("Lonely")
+    client.force_login(admin_user)
+    r = client.get(reverse("rollouts:upgrade_dashboard"))
+
+    by_key = {g["key"]: g for g in r.context["groups"]}
+    assert by_key[group.slug]["is_empty"]
+    assert b"No stations in this group." in r.content
 
 
 # --- station card -----------------------------------------------------------

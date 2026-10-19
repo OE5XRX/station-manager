@@ -12,6 +12,10 @@ from .models import (
 )
 
 
+def _admin_ip(request):
+    return request.META.get("REMOTE_ADDR") or None
+
+
 class StationPhotoInline(admin.TabularInline):
     model = StationPhoto
     extra = 0
@@ -101,6 +105,17 @@ class RolloutGroupAdmin(admin.ModelAdmin):
     list_filter = ("channel",)
     prepopulated_fields = {"slug": ("name",)}
     search_fields = ("name",)
+
+    def delete_model(self, request, obj):
+        from apps.rollouts.services import delete_group
+
+        delete_group(obj, by_user=request.user, ip_address=_admin_ip(request))
+
+    def delete_queryset(self, request, queryset):
+        from apps.rollouts.services import delete_group
+
+        for group in queryset:
+            delete_group(group, by_user=request.user, ip_address=_admin_ip(request))
 
 
 @admin.register(StationPhoto)

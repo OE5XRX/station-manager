@@ -143,7 +143,28 @@ def test_tie_break_by_name_for_tags_outside_sequence(migrator):
     new = migrator.apply_tested_migration(TESTED).apps
     station = new.get_model("stations", "Station").objects.get(name="s")
     assert station.rollout_group.slug == "alpha"
-    assert _audits(new).count() == 1
+    audit = _audits(new).get()
+    assert audit.message == (
+        "Migration: functional tags ['alpha', 'zeta'] → rollout group 'alpha' "
+        "(no tag in sequence; first by name)"
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_audit_lists_mf_tags_not_carried_over(migrator):
+    seed = _Seed(migrator.apply_initial_migration(PRE_SCHEMA).apps)
+    a, b = seed.tag("a"), seed.tag("b")
+    seed.entry(a, 0)
+    mt = seed.module_type()
+    seed.Target.objects.create(module_type=mt, version="1.0", scope="tag", tag=b)
+    seed.station("s", a, b)
+
+    new = migrator.apply_tested_migration(TESTED).apps
+    audit = _audits(new).get()
+    assert audit.message == (
+        "Migration: functional tags ['a', 'b'] → rollout group 'a' "
+        "(front-most in sequence) — not carried over: ['b']"
+    )
 
 
 @pytest.mark.django_db(transaction=True)

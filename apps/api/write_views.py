@@ -281,15 +281,17 @@ class RolloutGroupViewSet(
         audit_config_write(self.request, message=f"RolloutGroup {group.slug} updated")
 
     def perform_destroy(self, instance):
-        audit_config_write(self.request, message=f"RolloutGroup {instance.slug} deleted")
-        # Same semantics as the UI delete view: per-member ROLLOUT_GROUP_CHANGED
-        # rows + actor-stamped sequence renumber, atomically with the delete.
-        rollout_services.delete_group(
-            instance,
-            by_user=self.request.user,
-            ip_address=_client_ip(self.request),
-            audit_suffix=_token_suffix(self.request),
-        )
+        # One transaction: a failed delete must not leave a "deleted" row.
+        with transaction.atomic():
+            audit_config_write(self.request, message=f"RolloutGroup {instance.slug} deleted")
+            # Same semantics as the UI delete view: per-member
+            # ROLLOUT_GROUP_CHANGED rows + actor-stamped sequence renumber.
+            rollout_services.delete_group(
+                instance,
+                by_user=self.request.user,
+                ip_address=_client_ip(self.request),
+                audit_suffix=_token_suffix(self.request),
+            )
 
 
 def _save_assignment(serializer, *, actor, is_create):

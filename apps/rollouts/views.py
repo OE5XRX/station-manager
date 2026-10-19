@@ -302,6 +302,7 @@ class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
                     "name": group.name if group else _("No group"),
                     "channel": group.channel if group else RolloutGroup.Channel.RELEASE,
                     "is_unassigned": group is None,
+                    "is_empty": not stations_in_group,
                     "rows": rows,
                     "upgradable": sum(1 for row in rows if row["upgrade"].ok),
                 }
