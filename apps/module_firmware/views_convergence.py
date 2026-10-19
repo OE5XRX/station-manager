@@ -14,7 +14,7 @@ from apps.accounts.client_ip import client_ip
 from apps.accounts.permissions import AreaPermissionMixin
 from apps.stations.models import Station
 
-from . import services
+from . import ops, services
 from .models import (
     Module,
     ModuleAssignmentHistory,
@@ -99,11 +99,7 @@ class ConvergenceOverviewView(AreaPermissionMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         modules = list(ctx["modules"])
         # One query for the page's release keys instead of an EXISTS per row.
-        release_keys = set(
-            ModuleFirmwareRelease.objects.filter(
-                module_type_id__in={m.module_type_id for m in modules}
-            ).values_list("module_type_id", "variant", "version")
-        )
+        release_keys = ops.active_release_keys({m.module_type_id for m in modules})
         rows = []
         for module in modules:
             assignment = module.open_assignments[0] if module.open_assignments else None

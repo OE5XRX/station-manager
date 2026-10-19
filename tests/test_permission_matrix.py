@@ -102,6 +102,9 @@ API = {
     ("users", "view"): ("GET", "/api/v1/users/", None),
     ("users", "manage"): ("PATCH", "/api/v1/users/{other_user}/", {"first_name": "Z"}),
     ("control", "manage"): ("POST", "/api/v1/stations/{station}/audio-diagnostics/", {}),
+    ("modules", "view"): ("GET", "/api/v1/modules/", None),
+    # Empty body: the allowed Staff/Admin get a 400, nothing is created.
+    ("modules", "manage"): ("POST", "/api/v1/module-types/", {}),
 }
 
 # (ws path builder, area, verb, action)

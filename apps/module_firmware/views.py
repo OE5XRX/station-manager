@@ -1,5 +1,4 @@
 from django.contrib import messages
-from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
@@ -12,8 +11,7 @@ from apps.accounts.permissions import AreaPermissionMixin
 from apps.images import github_releases
 from apps.stations.models import Station
 
-from . import services
-from .audit import audit_config
+from . import ops, services
 from .models import (
     Module,
     ModuleAssignmentHistory,
@@ -21,8 +19,7 @@ from .models import (
     ModuleFirmwareRelease,
     ModuleType,
 )
-from .releases import parse_variant_assets
-from .trust import import_blockers, is_valid_tag
+from .trust import import_blockers
 from .views_convergence import firmware_row, is_int_param
 
 # ---------------------------------------------------------------------------
@@ -38,12 +35,6 @@ def _importable_module_types():
     the importer share one rule and the UI never offers doomed imports.
     """
     return [t for t in ModuleType.objects.order_by("key") if not import_blockers(t)]
-
-
-_ACTIVE_JOB_STATUSES = [
-    ModuleFirmwareImportJob.Status.PENDING,
-    ModuleFirmwareImportJob.Status.RUNNING,
-]
 
 
 # Lifecycle states an operator may set by hand. ``deployed`` is excluded: it is
@@ -257,7 +248,9 @@ def _import_jobs_context():
     )
     # has_active is queried over ALL jobs, not just the 20 shown: an old
     # still-running job must keep the panel polling.
-    has_active = ModuleFirmwareImportJob.objects.filter(status__in=_ACTIVE_JOB_STATUSES).exists()
+    has_active = ModuleFirmwareImportJob.objects.filter(
+        status__in=ops.ACTIVE_JOB_STATUSES
+    ).exists()
     return {"jobs": jobs, "has_active": has_active}
 
 
@@ -302,61 +295,12 @@ class GitHubFirmwareReleasesPartialView(AreaPermissionMixin, View):
                 },
             )
         try:
-            releases = github_releases.fetch_releases(module_type.firmware_repo)
+            rows = ops.github_release_rows(module_type)
         except github_releases.GitHubAPIError as exc:
             return render(
                 request,
                 "module_firmware/_github_releases.html",
                 {"error": str(exc), "module_type": module_type},
-            )
-
-        in_flight_tags = set(
-            ModuleFirmwareImportJob.objects.filter(
-                module_type=module_type, status__in=_ACTIVE_JOB_STATUSES
-            ).values_list("tag", flat=True)
-        )
-        # Variants actually present in the fleet for this type — a release
-        # lacking one of them would leave those modules without a candidate.
-        fleet_variants = set(
-            Module.objects.filter(module_type=module_type)
-            .exclude(variant="")
-            .values_list("variant", flat=True)
-        )
-        existing = set(
-            ModuleFirmwareRelease.objects.filter(module_type=module_type).values_list(
-                "source_tag", "variant"
-            )
-        )
-
-        rows = []
-        for rel in releases:
-            parsed_variants = parse_variant_assets(
-                set(rel.asset_names), module_type.release_asset_prefix
-            )
-            variants = [va.variant for va in parsed_variants]
-            # invalid_tag first: FirmwareImportView refuses such a tag, so it
-            # must never get an Import button.  Then no_assets: a release with
-            # no matching asset pair can never import, whatever job history it
-            # has.  A tag is only "imported"
-            # once EVERY variant it offers has an active row; a
-            # partial import stays importable so the operator can fill the gap.
-            if not is_valid_tag(rel.tag):
-                state = "invalid_tag"
-            elif not parsed_variants:
-                state = "no_assets"
-            elif all((rel.tag, v) in existing for v in variants):
-                state = "imported"
-            elif rel.tag in in_flight_tags:
-                state = "queued"
-            else:
-                state = "ready"
-            rows.append(
-                {
-                    "release": rel,
-                    "state": state,
-                    "variants": variants,
-                    "missing_variants": sorted(fleet_variants - set(variants)),
-                }
             )
 
         return render(
@@ -383,72 +327,28 @@ class FirmwareImportView(AreaPermissionMixin, View):
         if not tag or not is_int_param(module_type_id):
             messages.error(request, _("Select a module type and a release tag to import."))
             return redirect
-        if not is_valid_tag(tag):
-            messages.error(request, _("Invalid release tag."))
-            return redirect
-        created = False
-        # Resolve + lock the module type row INSIDE the atomic block to
-        # serialise concurrent POSTs for the same type on Postgres.  SQLite
-        # silently ignores select_for_update but stays green.
-        with transaction.atomic():
-            module_type = ModuleType.objects.select_for_update().filter(pk=module_type_id).first()
-            if module_type is None:
-                messages.error(request, _("Module type not found."))
-                return redirect
-            # Reject not-import-ready types (missing repo/prefix, untrusted
-            # owner) — a doomed job can never succeed and just adds noise.
-            blockers = import_blockers(module_type)
-            if blockers:
+        try:
+            _job, created = ops.queue_import(request, module_type_id, tag)
+        except ops.ImportRejected as exc:
+            if exc.code == "invalid_tag":
+                messages.error(request, _("Invalid release tag."))
+            else:
                 messages.error(
                     request,
                     _("%(type)s is not ready for import: %(reasons)s.")
-                    % {"type": module_type, "reasons": ", ".join(blockers)},
+                    % {"type": exc.module_type, "reasons": str(exc)},
                 )
-                return redirect
-            # Dedup: only prevent duplicate in-flight work.  The importer is
-            # per-variant idempotent (skips active variants, restores archived),
-            # so we do NOT block on active-release existence — a tag with some
-            # variants active and others archived/missing must be re-importable.
-            in_flight_exists = ModuleFirmwareImportJob.objects.filter(
-                module_type=module_type, tag=tag, status__in=_ACTIVE_JOB_STATUSES
-            ).exists()
-            if not in_flight_exists:
-                ModuleFirmwareImportJob.objects.create(
-                    module_type=module_type,
-                    source_repo=module_type.firmware_repo,
-                    tag=tag,
-                    status=ModuleFirmwareImportJob.Status.PENDING,
-                    requested_by=request.user,
-                )
-                created = True
+            return redirect
+        except ModuleType.DoesNotExist:
+            messages.error(request, _("Module type not found."))
+            return redirect
         if created:
-            audit_config(
-                request,
-                obj="module_firmware_import",
-                action="queued",
-                message=f"Firmware import queued: {module_type.key} {tag}",
-                details={"module_type": module_type.key, "tag": tag},
-            )
             messages.success(request, _("Import of %(tag)s queued.") % {"tag": tag})
         else:
             messages.info(
                 request, _("An import of %(tag)s is already in progress.") % {"tag": tag}
             )
         return redirect
-
-
-def _audit_release(request, release, action):
-    audit_config(
-        request,
-        obj="module_firmware_release",
-        action=action,
-        message=f"Firmware release {action}: {release}",
-        details={
-            "module_type": release.module_type.key,
-            "variant": release.variant,
-            "version": release.version,
-        },
-    )
 
 
 class FirmwareArchiveView(AreaPermissionMixin, View):
@@ -459,9 +359,7 @@ class FirmwareArchiveView(AreaPermissionMixin, View):
         release = get_object_or_404(
             ModuleFirmwareRelease.all_objects.select_related("module_type"), pk=pk
         )
-        if release.archive():
-            _audit_release(request, release, "archived")
-            services.reconcile_module_type(release.module_type)
+        if ops.archive_release(request, release):
             messages.success(request, _("Release %(rel)s archived.") % {"rel": release})
         else:
             messages.info(request, _("Release %(rel)s was already archived.") % {"rel": release})
@@ -476,9 +374,7 @@ class FirmwareRestoreView(AreaPermissionMixin, View):
         release = get_object_or_404(
             ModuleFirmwareRelease.all_objects.select_related("module_type"), pk=pk
         )
-        if release.restore():
-            _audit_release(request, release, "restored")
-            services.reconcile_module_type(release.module_type)
+        if ops.restore_release(request, release):
             messages.success(request, _("Release %(rel)s restored.") % {"rel": release})
         else:
             messages.info(request, _("Release %(rel)s is not archived.") % {"rel": release})
