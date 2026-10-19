@@ -160,6 +160,42 @@ def test_invalid_channel_400(api_topology, bearer):
     assert not RolloutGroup.objects.filter(slug="weird").exists()
 
 
+def test_api_audit_rows_carry_details(api_topology, bearer):
+    client = bearer(api_topology["staff"])
+    resp = client.post(
+        reverse("api:rollout-group-list"),
+        {"name": "Dev", "slug": "dev", "channel": "dev"},
+        format="json",
+    )
+    assert resp.status_code == 201, resp.data
+    rows = AccountAuditLog.objects.filter(event_type=AccountAuditLog.EventType.CONFIG_CHANGED)
+    assert rows.get().details["changes"] == {"channel": "dev"}
+
+    client.patch(
+        reverse("api:rollout-group-detail", args=[resp.data["id"]]),
+        {"slug": "dev-boxes"},
+        format="json",
+    )
+    log = rows.latest("pk")
+    assert log.message.startswith("RolloutGroup dev-boxes updated via API token ")
+    assert log.details["changes"] == {"slug": {"old": "dev", "new": "dev-boxes"}}
+
+
+def test_delete_race_integrity_error_is_409(api_topology, bearer, group, monkeypatch):
+    from django.db import IntegrityError
+
+    def racing_delete(self, *a, **kw):
+        raise IntegrityError("deferred FK violation")
+
+    monkeypatch.setattr(RolloutGroup, "delete", racing_delete)
+    before = AccountAuditLog.objects.count()
+    resp = bearer(api_topology["staff"]).delete(
+        reverse("api:rollout-group-detail", args=[group.pk])
+    )
+    assert resp.status_code == 409, resp.data
+    assert AccountAuditLog.objects.count() == before
+
+
 def test_channel_is_fixed_after_create(api_topology, bearer, group):
     url = reverse("api:rollout-group-detail", args=[group.pk])
     client = bearer(api_topology["staff"])

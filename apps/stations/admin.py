@@ -1,5 +1,8 @@
 from django.contrib import admin
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
+
+from apps.accounts.client_ip import client_ip
 
 from .models import (
     RolloutGroup,
@@ -97,10 +100,47 @@ class StationTagAdmin(admin.ModelAdmin):
 
 @admin.register(RolloutGroup)
 class RolloutGroupAdmin(admin.ModelAdmin):
+    """Same rules as the UI/API: channel fixed after create, every write
+    audited (CONFIG_CHANGED); PROTECT FKs block deleting a referenced group."""
+
     list_display = ("name", "slug", "channel", "created_at")
     list_filter = ("channel",)
     prepopulated_fields = {"slug": ("name",)}
     search_fields = ("name",)
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("channel",) if obj else ()
+
+    def _audit(self, request, obj, action, before=None):
+        from apps.rollouts.services import audit_group
+
+        audit_group(
+            obj,
+            action,
+            actor=request.user,
+            ip_address=client_ip(request),
+            suffix=f" by {request.user} (admin)",
+            before=before,
+        )
+
+    def save_model(self, request, obj, form, change):
+        from apps.rollouts.services import group_snapshot
+
+        before = group_snapshot(RolloutGroup.objects.get(pk=obj.pk)) if change else None
+        with transaction.atomic():
+            super().save_model(request, obj, form, change)
+            self._audit(request, obj, "updated" if change else "created", before)
+
+    def delete_model(self, request, obj):
+        with transaction.atomic():
+            self._audit(request, obj, "deleted")
+            super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        with transaction.atomic():
+            for obj in queryset:
+                self._audit(request, obj, "deleted")
+            super().delete_queryset(request, queryset)
 
 
 @admin.register(StationPhoto)

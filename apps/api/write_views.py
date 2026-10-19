@@ -25,7 +25,13 @@ from rest_framework.response import Response
 from apps.accounts.models import AccountAuditLog, User
 from apps.accounts.permissions import require
 from apps.api import read_serializers, read_views
-from apps.api.audit import audit_account_write, audit_config_write, audit_station_write
+from apps.api.audit import (
+    _client_ip,
+    _token_suffix,
+    audit_account_write,
+    audit_config_write,
+    audit_station_write,
+)
 from apps.api.write_serializers import (
     AlertRuleWriteSerializer,
     DeploymentCreateSerializer,
@@ -266,24 +272,36 @@ class RolloutGroupViewSet(
 ):
     write_serializer_class = RolloutGroupWriteSerializer
 
+    def _audit(self, group, action, before=None):
+        rollout_services.audit_group(
+            group,
+            action,
+            actor=self.request.user,
+            ip_address=_client_ip(self.request),
+            suffix=_token_suffix(self.request),
+            before=before,
+        )
+
     def perform_create(self, serializer):
-        group = serializer.save()
-        audit_config_write(self.request, message=f"RolloutGroup {group.slug} created")
+        with transaction.atomic():
+            self._audit(serializer.save(), "created")
 
     def perform_update(self, serializer):
-        group = serializer.save()
-        audit_config_write(self.request, message=f"RolloutGroup {group.slug} updated")
+        before = rollout_services.group_snapshot(serializer.instance)
+        with transaction.atomic():
+            self._audit(serializer.save(), "updated", before)
 
     def perform_destroy(self, instance):
         # Every FK to a group is PROTECT: stations, sequence entries and MF
         # (canary) targets must be moved off first. The audit row rolls back
         # with a blocked delete.
-        slug = instance.slug
         try:
             with transaction.atomic():
-                audit_config_write(self.request, message=f"RolloutGroup {slug} deleted")
+                self._audit(instance, "deleted")
                 instance.delete()
-        except ProtectedError:
+        except (ProtectedError, IntegrityError):
+            # IntegrityError: a concurrent write referenced the group between
+            # the PROTECT check and commit (deferred FK on PostgreSQL).
             refs = rollout_services.group_references(instance)
             blocking = ", ".join(f"{k}={v}" for k, v in refs.items() if v)
             err = APIException(

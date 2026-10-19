@@ -168,3 +168,40 @@ def group_references(group) -> dict[str, int]:
         "firmware_targets": group.firmware_targets.count(),
         "canary_targets": group.canary_targets.count(),
     }
+
+
+GROUP_AUDIT_FIELDS = ("name", "slug", "channel", "description")
+
+
+def group_snapshot(group) -> dict[str, str]:
+    """Field values to diff against after an update (see :func:`audit_group`)."""
+    return {f: str(getattr(group, f)) for f in GROUP_AUDIT_FIELDS}
+
+
+def audit_group(group, action, *, actor, ip_address=None, suffix="", before=None) -> None:
+    """CONFIG_CHANGED row for a rollout-group create/update/delete.
+
+    Shared by the UI, the API and the Django admin so all three record the
+    same shape. *before* is a :func:`group_snapshot` taken before an update;
+    the row then carries an old/new diff. A create records the channel.
+    """
+    from apps.accounts.models import AccountAuditLog
+
+    if before is not None:
+        after = group_snapshot(group)
+        changes = {
+            f: {"old": before[f], "new": after[f]}
+            for f in GROUP_AUDIT_FIELDS
+            if before[f] != after[f]
+        }
+    elif action == "created":
+        changes = {"channel": group.channel}
+    else:
+        changes = {}
+    AccountAuditLog.log(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        actor=actor,
+        ip_address=ip_address,
+        message=f"RolloutGroup {group.slug} {action}{suffix}",
+        details={"object": "rollout_group", "action": action, "changes": changes},
+    )

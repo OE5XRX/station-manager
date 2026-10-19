@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Min, Q
 from django.db.models.deletion import ProtectedError
 from django.http import HttpResponseRedirect
@@ -16,7 +16,6 @@ from django.views.generic import (
     UpdateView,
 )
 
-from apps.accounts.models import AccountAuditLog
 from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import DeploymentResult
@@ -52,15 +51,14 @@ def _get_client_ip(request):
     return client_ip(request)
 
 
-def _audit_group(request, group, action, changes=None):
-    """CONFIG_CHANGED row for a UI rollout-group write (the API path writes
-    its own via ``audit_config_write``)."""
-    AccountAuditLog.log(
-        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+def _audit_group(request, group, action, before=None):
+    rollout_services.audit_group(
+        group,
+        action,
         actor=request.user,
         ip_address=_get_client_ip(request),
-        message=f"RolloutGroup {group.slug} {action} by {request.user}",
-        details={"object": "rollout_group", "action": action, "changes": changes or {}},
+        suffix=f" by {request.user}",
+        before=before,
     )
 
 
@@ -528,7 +526,7 @@ class RolloutGroupCreateView(AreaPermissionMixin, CreateView):
     def form_valid(self, form):
         with transaction.atomic():
             response = super().form_valid(form)
-            _audit_group(self.request, self.object, "created", {"channel": self.object.channel})
+            _audit_group(self.request, self.object, "created")
         messages.success(self.request, _("Rollout group created successfully."))
         return response
 
@@ -547,14 +545,12 @@ class RolloutGroupUpdateView(AreaPermissionMixin, UpdateView):
     success_url = reverse_lazy("stations:group_list")
 
     def form_valid(self, form):
-        changes = {
-            f: {"old": str(form.initial.get(f, "")), "new": str(form.cleaned_data[f])}
-            for f in form.changed_data
-        }
+        # form.instance already carries the POSTed values; diff against the DB row.
+        before = rollout_services.group_snapshot(RolloutGroup.objects.get(pk=form.instance.pk))
         with transaction.atomic():
             response = super().form_valid(form)
-            if changes:
-                _audit_group(self.request, self.object, "updated", changes)
+            if form.has_changed():
+                _audit_group(self.request, self.object, "updated", before)
         messages.success(self.request, _("Rollout group updated successfully."))
         return response
 
@@ -589,7 +585,9 @@ class RolloutGroupDeleteView(AreaPermissionMixin, DeleteView):
             with transaction.atomic():
                 _audit_group(self.request, group, "deleted")
                 group.delete()
-        except ProtectedError:
+        except (ProtectedError, IntegrityError):
+            # IntegrityError: a concurrent write referenced the group between
+            # the PROTECT check and commit (deferred FK on PostgreSQL).
             messages.error(
                 self.request,
                 _("Rollout group is still in use and cannot be deleted."),
