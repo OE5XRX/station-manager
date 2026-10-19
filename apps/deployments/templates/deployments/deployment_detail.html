@@ -117,7 +117,7 @@
             <dt>{% trans "Target type" %}</dt><dd>{{ deployment.get_target_type_display }}</dd>
             <dt>{% trans "Target" %}</dt>
             <dd>
-              {% if deployment.target_type == "group" %}{% if deployment.target_group %}<span class="pill pill-muted">{% blocktrans with name=deployment.target_group.name %}By Group: {{ name }}{% endblocktrans %}</span>{% else %}<span class="pill pill-muted">{% trans "By Group (deleted)" %}</span>{% endif %}
+              {% if deployment.target_type == "group" %}{% if deployment.target_group_label %}<span class="pill pill-muted">{% if deployment.target_group %}{% blocktrans with name=deployment.target_group_label %}By Group: {{ name }}{% endblocktrans %}{% else %}{% blocktrans with name=deployment.target_group_label %}By Group: {{ name }} (deleted){% endblocktrans %}{% endif %}</span>{% else %}<span class="pill pill-muted">{% trans "By Group (deleted)" %}</span>{% endif %}
               {% elif deployment.target_station %}<span class="callsign">{{ deployment.target_station }}</span>
               {% else %}<span class="pill pill-accent">{% trans "ALL" %}</span>{% endif %}
             </dd>

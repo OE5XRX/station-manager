@@ -339,3 +339,20 @@ def test_drop_target_tag_scope_never_aborts_on_leftovers(migrator):
         kept.pk: ("group", g2.pk, None),
         fleet.pk: ("fleet", None, None),
     }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_tag_deployments_get_group_name_snapshot(migrator):
+    seed = _Seed(migrator.apply_initial_migration(PRE_SCHEMA).apps)
+    beta = seed.tag("beta")
+    gone = seed.tag("gone")
+    kept = seed.deployment(beta)
+    orphan = seed.deployment(gone)
+    gone.delete()  # tag deleted before the migration → FK already NULL
+
+    new = migrator.apply_tested_migration(
+        [("deployments", "0006_deployment_target_group_name")]
+    ).apps
+    Deployment = new.get_model("deployments", "Deployment")
+    assert Deployment.objects.get(pk=kept.pk).target_group_name == "beta"
+    assert Deployment.objects.get(pk=orphan.pk).target_group_name == ""

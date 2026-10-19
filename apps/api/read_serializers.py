@@ -239,6 +239,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
             "image_release",
             "target_type",
             "target_group",
+            "target_group_name",
             "target_station",
             "strategy",
             "phase_config",

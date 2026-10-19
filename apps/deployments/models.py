@@ -46,6 +46,9 @@ class Deployment(models.Model):
         blank=True,
         related_name="deployments",
     )
+    # Snapshot of the group name at deploy time, so history stays readable
+    # after the group is renamed or deleted (target_group is SET_NULL).
+    target_group_name = models.CharField(_("target group name"), max_length=100, blank=True)
     target_station = models.ForeignKey(
         Station,
         verbose_name=_("target station"),
@@ -90,6 +93,18 @@ class Deployment(models.Model):
 
     def __str__(self):
         return f"Deployment #{self.pk} - {self.image_release} ({self.get_status_display()})"
+
+    def save(self, *args, **kwargs):
+        if self.target_group_id and not self.target_group_name:
+            self.target_group_name = self.target_group.name
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "target_group_name"}
+        super().save(*args, **kwargs)
+
+    @property
+    def target_group_label(self) -> str:
+        """Deploy-time group name; falls back to the live FK for old rows."""
+        return self.target_group_name or (self.target_group.name if self.target_group else "")
 
     def get_target_stations(self):
         """Resolve the queryset of stations targeted by this deployment."""

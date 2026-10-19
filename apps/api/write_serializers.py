@@ -378,7 +378,7 @@ class DeploymentCreateSerializer(serializers.ModelSerializer):
     """Create-only serializer for triggering a single-station deployment.
 
     Safe inputs only: image_release, target_station, strategy, phase_config.
-    Everything else (target_type, status, created_by, target_tag) is server-set
+    Everything else (target_type, status, created_by, target_group) is server-set
     or absent — client values are silently discarded.
     """
 

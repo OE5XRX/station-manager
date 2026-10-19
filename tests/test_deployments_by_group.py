@@ -58,13 +58,32 @@ def test_detail_shows_group_and_deleted_group_label(
     url = reverse("deployments:deployment_detail", kwargs={"pk": dep.pk})
     assert "By Group: canary" in client.get(url).content.decode()
 
+    assert dep.target_group_name == "canary"
+
+    # Rename: history keeps the deploy-time name.
+    group.name = "renamed"
+    group.save()
+    assert "By Group: canary" in client.get(url).content.decode()
+
     group.delete()
     dep.refresh_from_db()
     assert dep.target_group is None
-    assert "By Group (deleted)" in client.get(url).content.decode()
+    assert "By Group: canary (deleted)" in client.get(url).content.decode()
     assert (
-        "By Group (deleted)" in client.get(reverse("deployments:deployment_list")).content.decode()
+        "By Group: canary (deleted)"
+        in client.get(reverse("deployments:deployment_list")).content.decode()
     )
+
+
+@pytest.mark.django_db
+def test_group_less_legacy_deployment_shows_deleted_label(client, staff_user, image_release):
+    # A tag deployment whose tag was already gone before the migration.
+    dep = Deployment.objects.create(
+        image_release=image_release, target_type=Deployment.TargetType.GROUP
+    )
+    client.force_login(staff_user)
+    url = reverse("deployments:deployment_detail", kwargs={"pk": dep.pk})
+    assert "By Group (deleted)" in client.get(url).content.decode()
 
 
 @pytest.mark.django_db

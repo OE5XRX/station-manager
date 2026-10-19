@@ -70,7 +70,7 @@
           </td>
           <td data-label="{% trans 'Target' %}">
             {% if d.target_type == "group" %}
-              {% if d.target_group %}<span class="pill pill-muted">{% blocktrans with name=d.target_group.name %}By Group: {{ name }}{% endblocktrans %}</span>{% else %}<span class="pill pill-muted">{% trans "By Group (deleted)" %}</span>{% endif %}
+              {% if d.target_group_label %}<span class="pill pill-muted">{% if d.target_group %}{% blocktrans with name=d.target_group_label %}By Group: {{ name }}{% endblocktrans %}{% else %}{% blocktrans with name=d.target_group_label %}By Group: {{ name }} (deleted){% endblocktrans %}{% endif %}</span>{% else %}<span class="pill pill-muted">{% trans "By Group (deleted)" %}</span>{% endif %}
             {% elif d.target_type == "station" and d.target_station %}
               <span class="callsign">{{ d.target_station.callsign|default:d.target_station.name }}</span>
             {% else %}
