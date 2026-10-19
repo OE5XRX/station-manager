@@ -5,9 +5,8 @@ mutating entries, so concurrent API / UI calls serialize through a single gate.
 They also renumber remaining positions to maintain a 0-based, gap-free ordering
 and stamp updated_by / updated_at on the parent in the same transaction.
 
-These functions back the API write path (apps/api/write_views.py).  The UI
-views (apps/rollouts/views.py) retain their own parallel implementation;
-shared extraction is a tracked follow-up.
+These functions back both the API write path (apps/api/write_views.py) and the
+UI add/remove views (apps/rollouts/views.py).
 """
 
 from django.db import transaction

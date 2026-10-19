@@ -2,7 +2,6 @@ import logging
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Max
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.translation import gettext_lazy as _
@@ -16,6 +15,7 @@ from apps.deployments.supersession import (
     supersede_pending_for_station,
 )
 from apps.images.models import ImageRelease
+from apps.rollouts import services as rollout_services
 from apps.rollouts.grouping import UNASSIGNED_KEY, group_stations_by_sequence
 from apps.stations.models import Station, StationAuditLog, StationTag
 
@@ -392,29 +392,12 @@ class SequenceAddView(AreaPermissionMixin, View):
         seq = current_sequence()
         form = SequenceAddForm(request.POST, sequence=seq)
         if form.is_valid():
-            # Lock the RolloutSequence row so two concurrent Add clicks
-            # can't both compute the same max(position)+1 and race into
-            # an IntegrityError on uniq_position_per_sequence.
-            with transaction.atomic():
-                (RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first())
-                tag = form.cleaned_data["tag"]
-                # Two admins may each pass the form's uniqueness check
-                # against the same empty-seq snapshot and then both
-                # enter this block serially. Re-check under the lock so
-                # the second one doesn't fall off the (sequence, tag)
-                # unique constraint as an IntegrityError 500. The net
-                # effect is the same "tag is already in the sequence"
-                # the first commit would have caused — so silently
-                # skip and redirect.
-                if not seq.entries.filter(tag=tag).exists():
-                    next_pos = (seq.entries.aggregate(Max("position"))["position__max"] or -1) + 1
-                    RolloutSequenceEntry.objects.create(
-                        sequence=seq,
-                        tag=tag,
-                        position=next_pos,
-                    )
-                    seq.updated_by = request.user
-                    seq.save(update_fields=["updated_by", "updated_at"])
+            # The service locks the sequence row, re-checks uniqueness under
+            # the lock (idempotent no-op if a concurrent click won) and
+            # appends at max(position) + 1. It used to be duplicated here as
+            # `(max or -1) + 1`, which turned max == 0 into position 0 again
+            # and 500'd on the second entry (uniq_position_per_sequence).
+            rollout_services.add_entry(seq, form.cleaned_data["tag"], by_user=request.user)
         return redirect("rollouts:sequence_edit")
 
 
@@ -425,20 +408,8 @@ class SequenceRemoveView(AreaPermissionMixin, View):
     def post(self, request, entry_pk):
         seq = current_sequence()
         entry = get_object_or_404(RolloutSequenceEntry, pk=entry_pk, sequence=seq)
-        # Delete + normalize positions + bump sequence metadata all in
-        # one atomic block so a failure mid-way doesn't leave the
-        # sequence with a gap or with updated_by unset. Lock the
-        # RolloutSequence row so concurrent Add/Remove/Reorder clicks
-        # all serialize through the same gate.
-        with transaction.atomic():
-            RolloutSequence.objects.select_for_update().filter(pk=seq.pk).first()
-            entry.delete()
-            for idx, e in enumerate(seq.entries.order_by("position")):
-                if e.position != idx:
-                    e.position = idx
-                    e.save(update_fields=["position"])
-            seq.updated_by = request.user
-            seq.save(update_fields=["updated_by", "updated_at"])
+        # Locked delete + gap-free renumber + updated_by stamp, all atomic.
+        rollout_services.remove_entry(entry=entry, by_user=request.user)
         return redirect("rollouts:sequence_edit")
 
 
