@@ -59,7 +59,7 @@ def broadcast_deployment_status(deployment, result=None):
     }
 
     if result is not None:
-        image = deployment.image_release
+        image = result.image_release
         data["result"] = {
             "id": result.id,
             "station_id": result.station_id,

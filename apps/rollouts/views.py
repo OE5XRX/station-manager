@@ -10,10 +10,7 @@ from django.views.generic import TemplateView
 
 from apps.accounts.permissions import AreaPermissionMixin
 from apps.deployments.models import Deployment, DeploymentResult
-from apps.deployments.supersession import (
-    ActiveDeploymentConflictError,
-    supersede_pending_for_station,
-)
+from apps.deployments.services import NoEligibleStationsError, create_deployment
 from apps.rollouts import services as rollout_services
 from apps.rollouts.grouping import group_stations_by_sequence, ordered_groups
 from apps.rollouts.targeting import (
@@ -22,69 +19,12 @@ from apps.rollouts.targeting import (
     reason_message,
     resolve_upgrade,
 )
-from apps.stations.models import RolloutGroup, Station, StationAuditLog
+from apps.stations.models import RolloutGroup, Station
 
 from .forms import SequenceAddForm
 from .models import RolloutSequence, RolloutSequenceEntry, current_sequence
 
 logger = logging.getLogger(__name__)
-
-
-def _best_effort_audit_log(*, station, event_type, message, user=None):
-    """Audit logging must never break the real operation.
-
-    Safe to call OUTSIDE a transaction.atomic() block. Inside one,
-    use _defer_audit_log so a transient DB error on the audit table
-    can't poison the enclosing transaction.
-    """
-    try:
-        StationAuditLog.log(
-            station=station,
-            event_type=event_type,
-            message=message,
-            user=user,
-        )
-    except Exception as exc:
-        logger.warning("Audit log write failed (%s): %s", event_type, exc)
-
-
-def _defer_audit_log(*, station, event_type, message, user=None):
-    """Queue a best-effort audit log to run after the current transaction commits.
-
-    Inside a transaction.atomic() block, catching a DatabaseError from an
-    INSERT puts the whole transaction into a rollback-only state, which
-    then poisons every subsequent query in that block. Queuing the write
-    with transaction.on_commit() sidesteps that entirely: the callback
-    runs only after the enclosing atomic block has already committed, so
-    any failure during the audit INSERT can't mark that block rollback-
-    only or abort the real operation.
-    """
-    station_pk = station.pk
-    # Resolve SimpleLazyObject (request.user) to a concrete User *now*,
-    # so each on_commit callback doesn't do a separate SELECT for the
-    # actor — in batch flows like UpgradeGroupView this was an extra
-    # query per station. Touching .pk materializes the lazy wrapper;
-    # ._wrapped is then the real User instance (Django's FK descriptor
-    # previously stumbled on SimpleLazyObject on some code paths).
-    resolved_user = None
-    if user is not None and getattr(user, "pk", None):
-        resolved_user = getattr(user, "_wrapped", user) or user
-
-    def _write() -> None:
-        try:
-            # Pass station_id directly — StationAuditLog.log supports
-            # it natively, which saves a query AND avoids a ValueError
-            # if the station row was deleted between post and commit.
-            StationAuditLog.log(
-                station_id=station_pk,
-                event_type=event_type,
-                message=message,
-                user=resolved_user,
-            )
-        except Exception as exc:
-            logger.warning("Deferred audit log failed (%s): %s", event_type, exc)
-
-    transaction.on_commit(_write)
 
 
 class UpgradeStationView(AreaPermissionMixin, View):
@@ -110,44 +50,34 @@ class UpgradeStationView(AreaPermissionMixin, View):
             notify(request, reason_message(upgrade, station))
             return redirect("stations:station_detail", pk=station.pk)
         target = upgrade.target
+        user = request.user
 
         try:
-            with transaction.atomic():
-                dep = Deployment.objects.create(
-                    image_release=target,
-                    target_type=Deployment.TargetType.STATION,
-                    target_station=station,
-                    status=Deployment.Status.IN_PROGRESS,
-                    created_by=request.user,
-                )
-                DeploymentResult.objects.create(
-                    deployment=dep,
-                    station=station,
-                    status=DeploymentResult.Status.PENDING,
-                    previous_version=station.current_os_version or "",
-                )
-                supersede_pending_for_station(station=station, new_deployment=dep)
-        except ActiveDeploymentConflictError as exc:
-            messages.error(request, str(exc))
+            create_deployment(
+                tag=target.tag,
+                channel=target.channel,
+                target_type=Deployment.TargetType.STATION,
+                target_station=station,
+                stations=[station],
+                user=user,
+                audit_message=lambda s, dep, release: (
+                    f"Upgrade triggered: {s.current_os_version or '?'} "
+                    f"\u2192 {release.tag} (deployment #{dep.pk}) by {user.username}"
+                ),
+            )
+        except NoEligibleStationsError as exc:
+            messages.error(request, exc.plans[0].message)
             return redirect("stations:station_detail", pk=station.pk)
 
-        _best_effort_audit_log(
-            station=station,
-            event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-            message=(
-                f"Upgrade triggered: {station.current_os_version or '?'} "
-                f"\u2192 {target.tag} (deployment #{dep.pk}) by {request.user.username}"
-            ),
-            user=request.user,
-        )
         messages.success(request, _("Upgrade to %(tag)s queued.") % {"tag": target.tag})
         return redirect("stations:station_detail", pk=station.pk)
 
 
 class UpgradeGroupView(AreaPermissionMixin, View):
     """Create Deployments for every station in the given rollout group
-    (one Deployment per machine, each targeting the newest OTA-ready image of
-    the group's channel). Works for any group, in the sequence or not.
+    (one Deployment per resolved target version (tag, channel) of the
+    group's channel; each result carries its station's machine image).
+    Works for any group, in the sequence or not.
     """
 
     area = "rollouts"
@@ -167,10 +97,11 @@ class UpgradeGroupView(AreaPermissionMixin, View):
         # Resolve every station against one prebuilt index. Stations without
         # a platform, without a newer / OTA-ready image, or already up to date
         # are counted as skipped so the flash message doesn't silently lose
-        # them. The rest are bucketed by machine (all stations of a group
-        # share its channel, so one machine means one target image).
+        # them. The rest are bucketed by target version (tag, channel); the
+        # service resolves each station's own machine image for it, so a
+        # mixed qemu+RPi group with the same latest tag is one deployment.
         index = latest_index()
-        by_machine: dict[str, tuple] = {}
+        by_version: dict[tuple[str, str], list] = {}
         skipped = 0
         for s in stations:
             upgrade = resolve_upgrade(s, index)
@@ -178,9 +109,18 @@ class UpgradeGroupView(AreaPermissionMixin, View):
                 skipped += 1
                 continue
             target = upgrade.target
-            by_machine.setdefault(target.machine, (target, []))[1].append(s)
+            by_version.setdefault((target.tag, target.channel), []).append(s)
 
         created = 0
+        user = request.user
+
+        def audit_message(s, dep, release):
+            return (
+                f"Upgrade triggered (group '{group.name}', channel {group.channel}): "
+                f"{s.current_os_version or '?'} \u2192 {release.tag} "
+                f"(deployment #{dep.pk}) by {user.username}"
+            )
+
         with transaction.atomic():
             # Lock the members and drop any that moved to another group since
             # the read above: their target was resolved for this group's
@@ -188,57 +128,46 @@ class UpgradeGroupView(AreaPermissionMixin, View):
             still_members = set(
                 Station.objects.select_for_update()
                 .filter(pk__in=[s.pk for s in stations], rollout_group=group)
+                .order_by("pk")  # same lock order as create_deployment (no deadlock)
                 .values_list("pk", flat=True)
             )
-            for target, eligible in by_machine.values():
+            # Lock the members' open results on other deployments in one
+            # (station, pk)-ordered pass. The per-version create_deployment
+            # calls below supersede them bucket by bucket, which on its own
+            # would lock out of global order (e.g. S3, S5, then S1).
+            list(
+                DeploymentResult.objects.select_for_update()
+                .filter(
+                    station_id__in=still_members,
+                    status__in=DeploymentResult.NON_TERMINAL_STATUSES,
+                )
+                .order_by("station_id", "pk")
+                .values_list("pk")
+            )
+            for (tag, channel), eligible in by_version.items():
                 moved = [s for s in eligible if s.pk not in still_members]
                 skipped += len(moved)
                 eligible = [s for s in eligible if s.pk in still_members]
                 if not eligible:
                     continue
-                dep = Deployment.objects.create(
-                    image_release=target,
-                    target_type=Deployment.TargetType.GROUP,
-                    target_group=group,
-                    status=Deployment.Status.IN_PROGRESS,
-                    created_by=request.user,
-                )
-                for s in eligible:
-                    DeploymentResult.objects.create(
-                        deployment=dep,
-                        station=s,
-                        status=DeploymentResult.Status.PENDING,
-                        previous_version=s.current_os_version or "",
+                try:
+                    dep = create_deployment(
+                        tag=tag,
+                        channel=channel,
+                        target_type=Deployment.TargetType.GROUP,
+                        target_group=group,
+                        stations=eligible,
+                        user=user,
+                        audit_message=audit_message,
                     )
-                    try:
-                        supersede_pending_for_station(station=s, new_deployment=dep)
-                    except ActiveDeploymentConflictError:
-                        # Drop this station from the deployment - it will
-                        # be picked up next time.
-                        DeploymentResult.objects.filter(deployment=dep, station=s).delete()
-                        skipped += 1
-                        continue
-                    # Defer audit-log write until AFTER the atomic block
-                    # commits. Running it inside the block risks a
-                    # DatabaseError on the audit table flipping the main
-                    # transaction into rollback-only, which would then
-                    # swallow every subsequent create in the loop.
-                    _defer_audit_log(
-                        station=s,
-                        event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-                        message=(
-                            f"Upgrade triggered (group '{group.name}', channel {group.channel}): "
-                            f"{s.current_os_version or '?'} \u2192 {target.tag} "
-                            f"(deployment #{dep.pk}) by {request.user.username}"
-                        ),
-                        user=request.user,
-                    )
-                    created += 1
-
-                # If every station in this wave conflicted, back out the
-                # empty deployment we just created.
-                if not dep.results.exists():
-                    dep.delete()
+                except NoEligibleStationsError:
+                    # Every station of this bucket conflicted (mid-flight
+                    # elsewhere) — nothing was created; picked up next time.
+                    skipped += len(eligible)
+                    continue
+                n_ok = sum(1 for p in dep.plans if p.ok)
+                created += n_ok
+                skipped += len(dep.plans) - n_ok
 
         messages.success(
             request,
@@ -287,7 +216,7 @@ class UpgradeDashboardView(AreaPermissionMixin, TemplateView):
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
             .order_by("station_id", "-pk")
-            .select_related("deployment__image_release")
+            .select_related("deployment", "image_release")
         ):
             active_result_by_station.setdefault(r.station_id, r)
 

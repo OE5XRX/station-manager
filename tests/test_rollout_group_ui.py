@@ -252,7 +252,8 @@ def test_delete_unreferenced_group_keeps_deployment_history(
 ):
     group = make_rollout_group("Old")
     dep = Deployment.objects.create(
-        image_release=image_release,
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
         target_type=Deployment.TargetType.GROUP,
         target_group=group,
     )

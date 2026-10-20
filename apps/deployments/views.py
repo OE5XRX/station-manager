@@ -2,17 +2,16 @@ from django.contrib import messages
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
-from django.views.generic import CreateView, DetailView, ListView
+from django.views.generic import DetailView, FormView, ListView, TemplateView
 
 from apps.accounts.permissions import AreaPermissionMixin
-from apps.stations.models import StationAuditLog
 
 from .forms import DeploymentForm
 from .models import Deployment, DeploymentResult
+from .services import NoEligibleStationsError, create_deployment
 
 
 def _get_client_ip(request):
@@ -32,7 +31,7 @@ class DeploymentListView(AreaPermissionMixin, ListView):
         qs = (
             super()
             .get_queryset()
-            .select_related("image_release", "target_group", "target_station", "created_by")
+            .select_related("target_group", "target_station", "created_by")
             .annotate(
                 result_total=Count("results"),
                 result_completed=Count(
@@ -81,66 +80,93 @@ class DeploymentDetailView(AreaPermissionMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("image_release", "target_group", "target_station", "created_by")
-            .prefetch_related("results__station")
+            .select_related("target_group", "target_station", "created_by")
+            .prefetch_related("results__station", "results__image_release")
         )
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Uses the prefetched results — no extra query.
+        context["machines"] = sorted({r.image_release.machine for r in self.object.results.all()})
+        return context
 
-class DeploymentCreateView(AreaPermissionMixin, CreateView):
+
+def preview_context(form) -> dict:
+    """Template context for ``deployments/_preview.html``.
+
+    ``plans`` is ``None`` while version/target are incomplete or invalid
+    (empty state). Never writes anything.
+    """
+    plans = form.plans if form.is_bound else None
+    if plans is None:
+        return {"plans": None}
+    ok = sum(1 for p in plans if p.ok)
+    return {
+        "plans": plans,
+        "preview_ok": ok,
+        "preview_skipped": len(plans) - ok,
+        "preview_tag": form.cleaned_data.get("tag"),
+        "preview_channel": form.cleaned_data.get("channel"),
+    }
+
+
+class DeploymentCreateView(AreaPermissionMixin, FormView):
     area = "deployments"
     verb = "manage"
-    model = Deployment
     form_class = DeploymentForm
     template_name = "deployments/deployment_form.html"
 
-    def get_success_url(self):
-        return reverse("deployments:deployment_detail", kwargs={"pk": self.object.pk})
-
     def form_valid(self, form):
-        form.instance.created_by = self.request.user
-        response = super().form_valid(form)
-
-        # Create DeploymentResult for each target station
-        stations = self.object.get_target_stations()
-        results = []
-        for station in stations:
-            results.append(
-                DeploymentResult(
-                    deployment=self.object,
-                    station=station,
-                    status=DeploymentResult.Status.PENDING,
-                    previous_version=station.current_os_version or "",
-                )
-            )
-        DeploymentResult.objects.bulk_create(results)
-
-        # Update deployment status
-        if results:
-            self.object.status = Deployment.Status.IN_PROGRESS
-            self.object.save(update_fields=["status", "updated_at"])
-
-        # Audit log for each target station
-        for station in stations:
-            StationAuditLog.log(
-                station=station,
-                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-                message=(
-                    f"Deployment #{self.object.pk} created: "
-                    f"{self.object.image_release} targeting {station.name}."
-                ),
+        data = form.cleaned_data
+        try:
+            deployment = create_deployment(
+                tag=data["tag"],
+                channel=data["channel"],
+                target_type=data["target_type"],
+                target_group=data.get("target_group"),
+                target_station=data.get("target_station"),
                 user=self.request.user,
+                strategy=data["strategy"],
+                phase_config=data["phase_config"],
                 ip_address=_get_client_ip(self.request),
             )
+        except NoEligibleStationsError as exc:
+            # Raced: the plan was servable in clean() but nothing survived
+            # (e.g. every station went mid-flight meanwhile).
+            form.plans = exc.plans
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
 
+        ok = sum(1 for p in deployment.plans if p.ok)
         messages.success(
             self.request,
-            _("Deployment created with %(count)d target station(s).") % {"count": len(results)},
+            _("Deployment created for %(count)d station(s), %(skipped)d skipped.")
+            % {"count": ok, "skipped": len(deployment.plans) - ok},
         )
-        return response
+        return redirect("deployments:deployment_detail", pk=deployment.pk)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["form_title"] = _("Create Deployment")
+        context.update(preview_context(context["form"]))
+        return context
+
+
+class DeploymentPreviewView(AreaPermissionMixin, TemplateView):
+    """HTMX partial: what a deployment with the given form values would do.
+
+    Same permission as creating one; read-only (GET, no writes).
+    """
+
+    area = "deployments"
+    verb = "manage"
+    template_name = "deployments/_preview.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        form = DeploymentForm(data=self.request.GET)
+        form.is_valid()
+        context.update(preview_context(form))
         return context
 
 
@@ -165,9 +191,24 @@ class DeploymentCancelView(AreaPermissionMixin, View):
         # even though the parent deployment was cancelled long ago. The
         # orphan persists until manually reconciled.
         with transaction.atomic():
+            open_results = deployment.results.filter(
+                status__in=DeploymentResult.NON_TERMINAL_STATUSES
+            )
+            # Lock order: result rows in (station, pk) order first — the
+            # order create_deployment's supersede pass takes them in, before
+            # it touches any Deployment row — and only then the Deployment.
+            # Saving the Deployment first would invert that order and could
+            # deadlock against a concurrent create that supersedes one of
+            # these results.
+            list(open_results.select_for_update().order_by("station_id", "pk").values_list("pk"))
+            deployment = Deployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status not in (Deployment.Status.PENDING, Deployment.Status.IN_PROGRESS):
+                # Finished (e.g. all results superseded) while we waited.
+                messages.warning(request, _("This deployment cannot be cancelled."))
+                return redirect("deployments:deployment_detail", pk=pk)
             deployment.status = Deployment.Status.CANCELLED
             deployment.save(update_fields=["status", "updated_at"])
-            deployment.results.filter(status__in=DeploymentResult.NON_TERMINAL_STATUSES).update(
+            open_results.update(
                 status=DeploymentResult.Status.CANCELLED,
                 completed_at=timezone.now(),
                 error_message="Parent deployment was cancelled.",

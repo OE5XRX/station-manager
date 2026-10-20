@@ -377,15 +377,30 @@ class AlertRuleWriteSerializer(serializers.ModelSerializer):
 class DeploymentCreateSerializer(serializers.ModelSerializer):
     """Create-only serializer for triggering a single-station deployment.
 
-    Safe inputs only: image_release, target_station, strategy, phase_config.
-    Everything else (target_type, status, created_by, target_group) is server-set
-    or absent — client values are silently discarded.
+    Inputs are a *version* — ``image_tag`` + ``image_channel`` (default
+    ``release``) — plus ``target_station``, ``strategy``, ``phase_config``.
+    The server resolves the station's machine image for that version
+    (``apps.deployments.services``). Everything else (target_type, status,
+    created_by, target_group) is server-set or absent — client values are
+    silently discarded. ``skipped_stations`` is output only.
     """
+
+    image_tag = serializers.CharField(max_length=64)
+    image_channel = serializers.CharField(max_length=32, default="release")
+    target_station = serializers.PrimaryKeyRelatedField(queryset=Station.objects.all())
 
     class Meta:
         model = Deployment
-        fields = ["id", "image_release", "target_station", "strategy", "phase_config"]
-        read_only_fields = ["id"]
+        fields = [
+            "id",
+            "image_tag",
+            "image_channel",
+            "target_station",
+            "strategy",
+            "phase_config",
+            "skipped_stations",
+        ]
+        read_only_fields = ["id", "skipped_stations"]
 
 
 class ProvisioningJobCreateSerializer(serializers.ModelSerializer):

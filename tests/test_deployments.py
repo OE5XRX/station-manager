@@ -12,7 +12,7 @@ class TestDeploymentCheck:
     def test_check_returns_pending_deployment(self, client, station_with_key, deployment_result):
         station, private_key = station_with_key
         result = deployment_result
-        release = result.deployment.image_release
+        release = result.image_release
 
         body = json.dumps({"current_version": ""}).encode("utf-8")
         response = client.post(
@@ -107,7 +107,7 @@ class TestDeploymentCheck:
         """After the extraction change, the check response must point
         the agent at the rootfs artifact, not the full wic."""
         station, private_key = station_with_key
-        release = deployment_result.deployment.image_release
+        release = deployment_result.image_release
         release.rootfs_s3_key = "images/test/qemux86-64.rootfs.bz2"
         release.rootfs_sha256 = "c" * 64
         release.rootfs_size_bytes = 250_000_000
@@ -135,7 +135,7 @@ class TestDeploymentCheck:
         return 204 (not 200, not 409) so the agent falls back to the
         no-deployment-for-me path instead of retry-looping."""
         station, private_key = station_with_key
-        release = deployment_result.deployment.image_release
+        release = deployment_result.image_release
         release.rootfs_s3_key = ""
         release.save(update_fields=["rootfs_s3_key"])
 
@@ -224,7 +224,9 @@ class TestDeploymentStatusUpdate:
         # Status must NOT have moved off CANCELLED.
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
 
-    def test_check_deployment_complete_does_not_overwrite_cancelled(self, deployment, station):
+    def test_check_deployment_complete_does_not_overwrite_cancelled(
+        self, deployment, station, image_release
+    ):
         """Race: an operator cancel commits while an agent's failure
         report is in flight. The agent's status update guard now
         rejects post-cancel writes to the result row, but
@@ -245,10 +247,16 @@ class TestDeploymentStatusUpdate:
 
         s_failed = Station.objects.create(name="failed-child", callsign="FC")
         DeploymentResult.objects.create(
-            deployment=deployment, station=station, status=DeploymentResult.Status.CANCELLED
+            deployment=deployment,
+            image_release=image_release,
+            station=station,
+            status=DeploymentResult.Status.CANCELLED,
         )
         DeploymentResult.objects.create(
-            deployment=deployment, station=s_failed, status=DeploymentResult.Status.FAILED
+            deployment=deployment,
+            image_release=image_release,
+            station=s_failed,
+            status=DeploymentResult.Status.FAILED,
         )
 
         # Act
@@ -303,7 +311,7 @@ class TestDeploymentCommit:
         # Version must match the deployment's image_release tag ("v1-alpha"
         # from the shared image_release fixture) — mismatches are
         # treated as bootloader rollbacks now.
-        target_tag = deployment_result.deployment.image_release.tag
+        target_tag = deployment_result.image_release.tag
         body = json.dumps({"version": target_tag}).encode("utf-8")
         response = client.post(
             reverse("api:deployment_commit"),
@@ -338,7 +346,7 @@ class TestDeploymentCommit:
         assert "rollback" in deployment_result.error_message.lower()
         # Station's current_image_release must NOT have been bumped.
         station.refresh_from_db()
-        assert station.current_image_release_id != deployment_result.deployment.image_release_id
+        assert station.current_image_release_id != deployment_result.image_release_id
 
     def test_commit_completes_deployment(self, client, station_with_key, deployment_result):
         """When all results are done, deployment status should update."""
@@ -346,7 +354,7 @@ class TestDeploymentCommit:
         deployment_result.status = DeploymentResult.Status.REBOOTING
         deployment_result.save(update_fields=["status"])
 
-        target_tag = deployment_result.deployment.image_release.tag
+        target_tag = deployment_result.image_release.tag
         body = json.dumps({"version": target_tag}).encode("utf-8")
         client.post(
             reverse("api:deployment_commit"),
@@ -363,11 +371,13 @@ class TestDeploymentCommit:
 class TestDeploymentWebViews:
     def test_create_deployment_creates_results(self, client, staff_user, image_release, station):
         """Creating a deployment should create DeploymentResult per target station."""
+        station.current_image_release = image_release  # platform known
+        station.save(update_fields=["current_image_release"])
         client.force_login(staff_user)
         response = client.post(
             reverse("deployments:deployment_create"),
             data={
-                "image_release": image_release.pk,
+                "version": f"{image_release.channel}|{image_release.tag}",
                 "target_type": Deployment.TargetType.STATION,
                 "target_station": station.pk,
                 "strategy": Deployment.Strategy.IMMEDIATE,
@@ -378,7 +388,28 @@ class TestDeploymentWebViews:
         dep = Deployment.objects.latest("created_at")
         assert dep.results.count() == 1
         assert dep.results.first().station == station
+        assert dep.results.first().image_release == image_release
+        assert (dep.image_tag, dep.image_channel) == (image_release.tag, image_release.channel)
         assert dep.status == Deployment.Status.IN_PROGRESS
+
+    def test_create_deployment_nothing_servable_shows_error(
+        self, client, staff_user, image_release, station
+    ):
+        """An unprovisioned target is skipped; with nothing left the form errors."""
+        client.force_login(staff_user)
+        response = client.post(
+            reverse("deployments:deployment_create"),
+            data={
+                "version": f"{image_release.channel}|{image_release.tag}",
+                "target_type": Deployment.TargetType.STATION,
+                "target_station": station.pk,
+                "strategy": Deployment.Strategy.IMMEDIATE,
+                "phase_config": "{}",
+            },
+        )
+        assert response.status_code == 200
+        assert not Deployment.objects.exists()
+        assert "Platform unknown" in response.content.decode()
 
     def test_cancel_deployment(self, client, staff_user, deployment, deployment_result):
         """Cancelling should set deployment and pending results to cancelled."""
@@ -391,6 +422,28 @@ class TestDeploymentWebViews:
         assert deployment.status == Deployment.Status.CANCELLED
         deployment_result.refresh_from_db()
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
+
+    def test_cancel_rechecks_status_under_lock(
+        self, client, staff_user, deployment, deployment_result, monkeypatch
+    ):
+        """A deployment that finished while the cancel waited for its locks
+        (e.g. every result superseded) is not flipped to CANCELLED."""
+        from apps.deployments import views
+
+        stale = Deployment.objects.get(pk=deployment.pk)  # still IN_PROGRESS
+        Deployment.objects.filter(pk=deployment.pk).update(status=Deployment.Status.COMPLETED)
+        monkeypatch.setattr(views, "get_object_or_404", lambda *a, **k: stale)
+        client.force_login(staff_user)
+
+        response = client.post(
+            reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
+        )
+
+        assert response.status_code == 302
+        deployment.refresh_from_db()
+        assert deployment.status == Deployment.Status.COMPLETED
+        deployment_result.refresh_from_db()
+        assert deployment_result.status == DeploymentResult.Status.PENDING
 
     def test_cancel_cascades_in_flight_results(
         self, client, staff_user, deployment, deployment_result
@@ -419,7 +472,9 @@ class TestDeploymentWebViews:
         assert deployment_result.completed_at is not None
         assert "cancelled" in deployment_result.error_message.lower()
 
-    def test_cancel_leaves_terminal_results_alone(self, client, staff_user, deployment, station):
+    def test_cancel_leaves_terminal_results_alone(
+        self, client, staff_user, deployment, station, image_release
+    ):
         """Mixed-status cancel: non-terminal children flip to CANCELLED,
         already-terminal children (SUCCESS / FAILED / ROLLED_BACK /
         CANCELLED / SUPERSEDED) keep the status they earned.
@@ -433,19 +488,34 @@ class TestDeploymentWebViews:
         s_rolled = Station.objects.create(name="rolled", callsign="RB")
 
         DeploymentResult.objects.create(
-            deployment=deployment, station=s_pending, status=DeploymentResult.Status.PENDING
+            deployment=deployment,
+            image_release=image_release,
+            station=s_pending,
+            status=DeploymentResult.Status.PENDING,
         )
         r_inflight = DeploymentResult.objects.create(
-            deployment=deployment, station=s_inflight, status=DeploymentResult.Status.REBOOTING
+            deployment=deployment,
+            image_release=image_release,
+            station=s_inflight,
+            status=DeploymentResult.Status.REBOOTING,
         )
         r_success = DeploymentResult.objects.create(
-            deployment=deployment, station=s_success, status=DeploymentResult.Status.SUCCESS
+            deployment=deployment,
+            image_release=image_release,
+            station=s_success,
+            status=DeploymentResult.Status.SUCCESS,
         )
         r_failed = DeploymentResult.objects.create(
-            deployment=deployment, station=s_failed, status=DeploymentResult.Status.FAILED
+            deployment=deployment,
+            image_release=image_release,
+            station=s_failed,
+            status=DeploymentResult.Status.FAILED,
         )
         r_rolled = DeploymentResult.objects.create(
-            deployment=deployment, station=s_rolled, status=DeploymentResult.Status.ROLLED_BACK
+            deployment=deployment,
+            image_release=image_release,
+            station=s_rolled,
+            status=DeploymentResult.Status.ROLLED_BACK,
         )
 
         client.force_login(staff_user)
@@ -483,7 +553,8 @@ class TestDeploymentWebViews:
 
         deps = [
             Deployment.objects.create(
-                image_release=image_release,
+                image_tag=image_release.tag,
+                image_channel=image_release.channel,
                 target_type=Deployment.TargetType.STATION,
                 target_station=station,
                 status=Deployment.Status.IN_PROGRESS,
@@ -536,19 +607,34 @@ class TestDeploymentWebViews:
         s5 = Station.objects.create(name="s5", callsign="S5TEST")
 
         DeploymentResult.objects.create(
-            deployment=deployment, station=station, status=DeploymentResult.Status.SUCCESS
+            deployment=deployment,
+            image_release=image_release,
+            station=station,
+            status=DeploymentResult.Status.SUCCESS,
         )
         DeploymentResult.objects.create(
-            deployment=deployment, station=s2, status=DeploymentResult.Status.DOWNLOADING
+            deployment=deployment,
+            image_release=image_release,
+            station=s2,
+            status=DeploymentResult.Status.DOWNLOADING,
         )
         DeploymentResult.objects.create(
-            deployment=deployment, station=s3, status=DeploymentResult.Status.PENDING
+            deployment=deployment,
+            image_release=image_release,
+            station=s3,
+            status=DeploymentResult.Status.PENDING,
         )
         DeploymentResult.objects.create(
-            deployment=deployment, station=s4, status=DeploymentResult.Status.CANCELLED
+            deployment=deployment,
+            image_release=image_release,
+            station=s4,
+            status=DeploymentResult.Status.CANCELLED,
         )
         DeploymentResult.objects.create(
-            deployment=deployment, station=s5, status=DeploymentResult.Status.SUPERSEDED
+            deployment=deployment,
+            image_release=image_release,
+            station=s5,
+            status=DeploymentResult.Status.SUPERSEDED,
         )
 
         p = deployment.progress
@@ -567,16 +653,21 @@ class TestDeploymentWebViews:
 
 @pytest.mark.django_db
 class TestDeploymentImageReleaseFK:
-    def test_deployment_uses_image_release(self, image_release, station, admin_user):
+    def test_result_uses_image_release(self, image_release, station, admin_user):
         from apps.deployments.models import Deployment
 
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             created_by=admin_user,
         )
-        assert dep.image_release == image_release
+        result = DeploymentResult.objects.create(
+            deployment=dep, station=station, image_release=image_release
+        )
+        assert result.image_release == image_release
+        assert not hasattr(dep, "image_release")
         assert not hasattr(dep, "firmware_artifact")
 
     def test_superseded_status_exists(self):
@@ -590,11 +681,15 @@ class TestDeploymentImageReleaseFK:
 
         from apps.deployments.models import Deployment
 
-        Deployment.objects.create(
-            image_release=image_release,
+        dep = Deployment.objects.create(
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             created_by=admin_user,
+        )
+        DeploymentResult.objects.create(
+            deployment=dep, station=station, image_release=image_release
         )
         with pytest.raises(ProtectedError):
             image_release.delete()
@@ -621,16 +716,20 @@ class TestSupersession:
         from apps.deployments.supersession import supersede_pending_for_station
 
         dep1 = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             created_by=admin_user,
         )
-        r1 = DeploymentResult.objects.create(deployment=dep1, station=station)
+        r1 = DeploymentResult.objects.create(
+            deployment=dep1, image_release=image_release, station=station
+        )
 
         newer = self._second_release()
         dep2 = Deployment.objects.create(
-            image_release=newer,
+            image_tag=newer.tag,
+            image_channel=newer.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             created_by=admin_user,
@@ -649,20 +748,23 @@ class TestSupersession:
         )
 
         dep1 = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             created_by=admin_user,
         )
         DeploymentResult.objects.create(
             deployment=dep1,
+            image_release=image_release,
             station=station,
             status=DeploymentResult.Status.INSTALLING,
         )
 
         newer = self._second_release()
         dep2 = Deployment.objects.create(
-            image_release=newer,
+            image_tag=newer.tag,
+            image_channel=newer.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             created_by=admin_user,
@@ -683,14 +785,18 @@ class TestDeploymentDownload:
 
         station, priv = station_with_key
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             status=Deployment.Status.IN_PROGRESS,
             created_by=admin_user,
         )
         DeploymentResult.objects.create(
-            deployment=dep, station=station, status=DeploymentResult.Status.PENDING
+            deployment=dep,
+            image_release=image_release,
+            station=station,
+            status=DeploymentResult.Status.PENDING,
         )
 
         monkeypatch.setattr(
@@ -719,7 +825,8 @@ class TestDeploymentDownload:
 
         station_a, _ = station_with_key
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station_a,
             status=Deployment.Status.IN_PROGRESS,
@@ -727,6 +834,7 @@ class TestDeploymentDownload:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=image_release,
             station=station_a,
             status=DeploymentResult.Status.PENDING,
         )
@@ -758,7 +866,8 @@ class TestDeploymentDownload:
 
         station, priv = station_with_key
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             status=Deployment.Status.IN_PROGRESS,
@@ -766,6 +875,7 @@ class TestDeploymentDownload:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=image_release,
             station=station,
             status=DeploymentResult.Status.PENDING,
         )
@@ -794,14 +904,18 @@ class TestDeploymentDownload:
 
         station, priv = station_with_key
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             status=Deployment.Status.IN_PROGRESS,
             created_by=admin_user,
         )
         DeploymentResult.objects.create(
-            deployment=dep, station=station, status=DeploymentResult.Status.PENDING
+            deployment=dep,
+            image_release=image_release,
+            station=station,
+            status=DeploymentResult.Status.PENDING,
         )
         monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(b"X" * 1000))
         headers = device_auth_headers(priv, station.pk, b"")
@@ -842,14 +956,18 @@ class TestDeploymentDownload:
 
         station, priv = station_with_key
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             status=Deployment.Status.IN_PROGRESS,
             created_by=admin_user,
         )
         DeploymentResult.objects.create(
-            deployment=dep, station=station, status=DeploymentResult.Status.PENDING
+            deployment=dep,
+            image_release=image_release,
+            station=station,
+            status=DeploymentResult.Status.PENDING,
         )
         monkeypatch.setattr(
             "apps.images.storage.open_stream", lambda key: NoSeekStream(b"X" * 1000)
@@ -871,7 +989,7 @@ class TestDeploymentDownload:
         from apps.images import storage as image_storage
 
         station, private_key = station_with_key
-        release = deployment_result.deployment.image_release
+        release = deployment_result.image_release
         deployment_result.status = deployment_result.Status.DOWNLOADING
         deployment_result.save(update_fields=["status"])
 
@@ -901,7 +1019,7 @@ class TestDeploymentDownload:
         station, private_key = station_with_key
         deployment_result.status = deployment_result.Status.DOWNLOADING
         deployment_result.save(update_fields=["status"])
-        release = deployment_result.deployment.image_release
+        release = deployment_result.image_release
         release.rootfs_s3_key = ""
         release.save(update_fields=["rootfs_s3_key"])
 
@@ -926,7 +1044,8 @@ class TestCommitSetsCurrentImage:
 
         station, priv = station_with_key
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             status=Deployment.Status.IN_PROGRESS,
@@ -934,6 +1053,7 @@ class TestCommitSetsCurrentImage:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=image_release,
             station=station,
             status=DeploymentResult.Status.REBOOTING,
         )
@@ -969,7 +1089,8 @@ def test_broadcast_includes_machine_and_tag(station, image_release, admin_user, 
     )
 
     dep = Deployment.objects.create(
-        image_release=image_release,
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
         target_type=Deployment.TargetType.STATION,
         target_station=station,
         status=Deployment.Status.IN_PROGRESS,
@@ -977,6 +1098,7 @@ def test_broadcast_includes_machine_and_tag(station, image_release, admin_user, 
     )
     result = DeploymentResult.objects.create(
         deployment=dep,
+        image_release=image_release,
         station=station,
         status=DeploymentResult.Status.INSTALLING,
     )

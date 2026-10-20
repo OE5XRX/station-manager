@@ -198,7 +198,8 @@ def make_rollout_group(db):
 def deployment(image_release, station, staff_user):
     """An in-progress Deployment targeting a single station."""
     dep = Deployment.objects.create(
-        image_release=image_release,
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
         target_type=Deployment.TargetType.STATION,
         target_station=station,
         status=Deployment.Status.IN_PROGRESS,
@@ -208,11 +209,12 @@ def deployment(image_release, station, staff_user):
 
 
 @pytest.fixture
-def deployment_result(deployment, station):
+def deployment_result(deployment, station, image_release):
     """A pending DeploymentResult for the deployment/station pair."""
     return DeploymentResult.objects.create(
         deployment=deployment,
         station=station,
+        image_release=image_release,
         status=DeploymentResult.Status.PENDING,
         previous_version="0.9.0",
     )

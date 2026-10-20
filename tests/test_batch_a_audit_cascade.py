@@ -327,7 +327,8 @@ class TestStationDeleteProtect:
 
         t = api_topology
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=t["station_in"],
             status=Deployment.Status.IN_PROGRESS,
@@ -335,6 +336,7 @@ class TestStationDeleteProtect:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=image_release,
             station=t["station_in"],
             status=DeploymentResult.Status.PENDING,
             previous_version="0.9.0",
@@ -351,7 +353,8 @@ class TestStationDeleteProtect:
 
         t = api_topology
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=t["station_in"],
             status=Deployment.Status.IN_PROGRESS,
@@ -359,6 +362,7 @@ class TestStationDeleteProtect:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=image_release,
             station=t["station_in"],
             status=DeploymentResult.Status.PENDING,
             previous_version="0.9.0",
@@ -375,7 +379,8 @@ class TestStationDeleteProtect:
 
         t = api_topology
         dep = Deployment.objects.create(
-            image_release=image_release,
+            image_tag=image_release.tag,
+            image_channel=image_release.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=t["station_in"],
             status=Deployment.Status.IN_PROGRESS,
@@ -383,6 +388,7 @@ class TestStationDeleteProtect:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=image_release,
             station=t["station_in"],
             status=DeploymentResult.Status.PENDING,
             previous_version="0.9.0",

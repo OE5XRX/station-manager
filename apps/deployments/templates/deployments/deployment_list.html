@@ -14,9 +14,9 @@
 
   <div class="page-head">
     <div class="page-head-main">
-      <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Rollouts" %}</div>
+      <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Deployments" %}</div>
       <h1 class="page-title">{% trans "Deployments" %}</h1>
-      <p class="page-sub">{% trans "Every firmware rollout, live or historical. Click a row for per-station progress." %}</p>
+      <p class="page-sub">{% trans "Every OS image deployment, live or historical. Click a row for per-station progress." %}</p>
     </div>
     <div class="page-head-actions">
       {% if can.deployments.manage %}
@@ -45,7 +45,7 @@
       <thead>
         <tr>
           <th>{% trans "Deployment" %}</th>
-          <th>{% trans "Image release" %}</th>
+          <th>{% trans "Version" %}</th>
           <th>{% trans "Target" %}</th>
           <th>{% trans "Strategy" %}</th>
           <th>{% trans "Status" %}</th>
@@ -62,10 +62,9 @@
               <span class="frame-id">{{ d.pk|stringformat:"04d" }}</span>
             </a>
           </td>
-          <td data-label="{% trans 'Image release' %}">
+          <td data-label="{% trans 'Version' %}">
             <div class="stack-gap-2">
-              <span style="font-weight:600;color:var(--ink-0);">{{ d.image_release.tag }}</span> {% include "images/_channel_badge.html" with channel=d.image_release.channel %}
-              <span class="t-mono-sm t-muted">{{ d.image_release.machine }}</span>
+              <span style="font-weight:600;color:var(--ink-0);">{{ d.image_tag }}</span> {% include "images/_channel_badge.html" with channel=d.image_channel %}
             </div>
           </td>
           <td data-label="{% trans 'Target' %}">

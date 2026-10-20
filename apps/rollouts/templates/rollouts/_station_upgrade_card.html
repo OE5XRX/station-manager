@@ -49,7 +49,7 @@
               <td class="t-mono">
                 {{ d.previous_version|default:'?' }}
                 <span class="t-muted">&rarr;</span>
-                {{ d.deployment.image_release.tag }}
+                {{ d.image_release.tag }}
               </td>
               <td>
                 <span class="pill pill-{{ d.status }}"><span class="dot"></span>{{ d.get_status_display|upper }}</span>

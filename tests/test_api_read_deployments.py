@@ -17,9 +17,11 @@ def _dep(topology, *stations):  # noqa: F811
     rel = ImageRelease.objects.create(
         tag=tag, machine="qemux86-64", sha256="a" * 64, s3_key=f"images/{tag}.wic", size_bytes=1000
     )
-    dep = Deployment.objects.create(image_release=rel, target_type="all")
+    dep = Deployment.objects.create(
+        image_tag=rel.tag, image_channel=rel.channel, target_type="all"
+    )
     for station in stations:
-        DeploymentResult.objects.create(deployment=dep, station=station)
+        DeploymentResult.objects.create(deployment=dep, image_release=rel, station=station)
     return dep
 
 

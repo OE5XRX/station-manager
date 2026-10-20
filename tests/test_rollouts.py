@@ -147,7 +147,7 @@ class TestUpgradeActions:
         )
         assert response.status_code == 302
         dep = Deployment.objects.get(target_station=station)
-        assert dep.image_release == newer
+        assert dep.results.get().image_release == newer
         assert DeploymentResult.objects.filter(deployment=dep, station=station).exists()
 
     def test_upgrade_station_refuses_release_without_rootfs(
@@ -241,7 +241,8 @@ class TestUpgradeActions:
         assert response.status_code == 302
         dep = Deployment.objects.filter(target_group=group).first()
         assert dep is not None
-        assert dep.image_release.tag == "v2"
+        assert dep.image_tag == "v2"
+        assert {r.image_release.tag for r in dep.results.all()} == {"v2"}
 
     def test_upgrade_group_skips_releases_without_rootfs(
         self, client, admin_user, make_rollout_group, image_release
@@ -325,7 +326,7 @@ class TestUpgradeActions:
         # Exactly one Deployment — for qemu, because rpi's release isn't OTA-ready.
         deployments = Deployment.objects.all()
         assert deployments.count() == 1
-        assert deployments.first().image_release_id == qemu_ready.pk
+        assert deployments.first().results.get().image_release_id == qemu_ready.pk
 
         # Summary message: "Queued 1 upgrades (1 skipped)".
         msgs = [str(m) for m in response.context["messages"]]
@@ -439,7 +440,8 @@ class TestUpgradeDashboard:
             is_latest=True,
         )
         dep = Deployment.objects.create(
-            image_release=newer,
+            image_tag=newer.tag,
+            image_channel=newer.channel,
             target_type=Deployment.TargetType.STATION,
             target_station=station,
             status=Deployment.Status.IN_PROGRESS,
@@ -447,6 +449,7 @@ class TestUpgradeDashboard:
         )
         DeploymentResult.objects.create(
             deployment=dep,
+            image_release=newer,
             station=station,
             status=DeploymentResult.Status.DOWNLOADING,
         )

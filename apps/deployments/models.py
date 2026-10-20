@@ -27,12 +27,14 @@ class Deployment(models.Model):
         FAILED = "failed", _("Failed")
         CANCELLED = "cancelled", _("Cancelled")
 
-    image_release = models.ForeignKey(
-        "images.ImageRelease",
-        verbose_name=_("image release"),
-        on_delete=models.PROTECT,
-        related_name="deployments",
-    )
+    # The chosen *version* (tag + channel). Machine-agnostic: every target
+    # station gets the ImageRelease of this version for its own machine,
+    # pinned per station on ``DeploymentResult.image_release``.
+    image_tag = models.CharField(_("image tag"), max_length=64)
+    image_channel = models.CharField(_("image channel"), max_length=32, default="release")
+    # Stations of the target that could not be served, with the reason:
+    # [{"station_id", "station_name", "reason", "message"}, ...].
+    skipped_stations = models.JSONField(_("skipped stations"), default=list, blank=True)
     target_type = models.CharField(
         _("target type"),
         max_length=10,
@@ -92,7 +94,10 @@ class Deployment(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Deployment #{self.pk} - {self.image_release} ({self.get_status_display()})"
+        return (
+            f"Deployment #{self.pk} - {self.image_tag} [{self.image_channel}] "
+            f"({self.get_status_display()})"
+        )
 
     def save(self, *args, **kwargs):
         if self.target_group_id and not self.target_group_name:
@@ -179,6 +184,14 @@ class DeploymentResult(models.Model):
     station = models.ForeignKey(
         Station,
         verbose_name=_("station"),
+        on_delete=models.PROTECT,
+        related_name="deployment_results",
+    )
+    # The image this station gets: the deployment's version resolved for the
+    # station's machine. This is what the agent endpoints serve.
+    image_release = models.ForeignKey(
+        "images.ImageRelease",
+        verbose_name=_("image release"),
         on_delete=models.PROTECT,
         related_name="deployment_results",
     )

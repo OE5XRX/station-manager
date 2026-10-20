@@ -71,7 +71,7 @@ class DeploymentCheckView(APIView):
                 status__in=DeploymentResult.NON_TERMINAL_STATUSES,
                 deployment__status=Deployment.Status.IN_PROGRESS,
             )
-            .select_related("deployment__image_release")
+            .select_related("deployment", "image_release")
             .order_by("-deployment__created_at", "-pk")
             .first()
         )
@@ -79,7 +79,7 @@ class DeploymentCheckView(APIView):
         if result is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        image = result.deployment.image_release
+        image = result.image_release
         if not image.is_ota_ready:
             # Defense-in-depth: the creation-time guard in
             # UpgradeStationView/UpgradeGroupView should prevent
@@ -149,7 +149,7 @@ class DeploymentStatusUpdateView(APIView):
             try:
                 result = (
                     DeploymentResult.objects.select_for_update()
-                    .select_related("deployment__image_release")
+                    .select_related("deployment", "image_release")
                     .get(pk=pk, station=station)
                 )
             except DeploymentResult.DoesNotExist:
@@ -285,7 +285,7 @@ class DeploymentCommitView(APIView):
                     DeploymentResult.Status.INSTALLING,
                 ],
             )
-            .select_related("deployment__image_release")
+            .select_related("deployment", "image_release")
             .order_by("-deployment__created_at")
             .first()
         )
@@ -296,7 +296,7 @@ class DeploymentCommitView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        expected_tag = result.deployment.image_release.tag
+        expected_tag = result.image_release.tag
         if version != expected_tag:
             # Agent is running a different image than the one this
             # deployment targets — most likely a bootloader rollback
@@ -363,7 +363,7 @@ class DeploymentCommitView(APIView):
 
             # Update the station's "provisioned with" pointer so the UI reflects
             # what's running on disk right now.
-            station.current_image_release = result.deployment.image_release
+            station.current_image_release = result.image_release
             station.updated_at = timezone.now()
             station.save(update_fields=["current_image_release", "updated_at"])
 
@@ -437,7 +437,7 @@ class DeploymentDownloadView(APIView):
         # cheap way to unblock recovery compared with stuck deployments
         # that need admin intervention.
         result = (
-            DeploymentResult.objects.select_related("deployment__image_release")
+            DeploymentResult.objects.select_related("deployment", "image_release")
             .filter(
                 deployment_id=pk,
                 station=station,
@@ -451,7 +451,7 @@ class DeploymentDownloadView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        image = result.deployment.image_release
+        image = result.image_release
         if not image.is_ota_ready:
             # Defense-in-depth — the creation-time guard should keep
             # us out of this branch, but we refuse rather than stream
