@@ -7,7 +7,7 @@ from tests.test_api_read_fixtures import client_for, topology  # noqa: F401
 
 def _post(client, image_release, **extra):
     data = {
-        "image_release": image_release.pk,
+        "version": f"{image_release.channel}|{image_release.tag}",
         "target_type": Deployment.TargetType.GROUP,
         "strategy": Deployment.Strategy.IMMEDIATE,
         "phase_config": "{}",

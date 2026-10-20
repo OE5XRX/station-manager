@@ -1,0 +1,65 @@
+{% comment %}
+apps/deployments/templates/deployments/_preview.html
+HTMX partial (also rendered inline by the create view): per-station plan of
+the deployment the form currently describes. Read-only.
+{% endcomment %}
+{% load i18n %}
+<section class="panel" aria-live="polite">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot"></span>{% trans "Preview" %}</div>
+    {% if plans is not None %}
+    <span class="t-mono-sm" data-preview-summary>
+      <span class="{% if preview_ok %}t-signal{% else %}t-danger{% endif %}">{% blocktrans count n=preview_ok %}{{ n }} will be deployed{% plural %}{{ n }} will be deployed{% endblocktrans %}</span>
+      <span class="t-muted">· {% blocktrans count n=preview_skipped %}{{ n }} skipped{% plural %}{{ n }} skipped{% endblocktrans %}</span>
+    </span>
+    {% endif %}
+  </div>
+  <div class="panel-body flush" data-mobile-cards>
+    {% if plans is None %}
+    <div class="empty" data-preview-empty>
+      <div class="empty-title">{% trans "Pick a version and a target to see which image each station gets." %}</div>
+    </div>
+    {% elif not plans %}
+    <div class="empty" data-preview-empty-target>
+      <div class="empty-title">{% trans "The selected target has no stations." %}</div>
+    </div>
+    {% else %}
+    <table class="t-table">
+      <thead>
+        <tr>
+          <th>{% trans "Station" %}</th>
+          <th>{% trans "Machine" %}</th>
+          <th>{% trans "Group" %}</th>
+          <th>{% trans "Image" %}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in plans %}
+        <tr data-plan-reason="{{ p.reason }}">
+          <td data-primary>
+            <span class="callsign">{{ p.station.name }}</span>
+          </td>
+          <td class="t-mono-sm" data-label="{% trans 'Machine' %}">{{ p.station.current_image_release.machine|default:"—" }}</td>
+          <td data-label="{% trans 'Group' %}">
+            {% if p.station.rollout_group %}{{ p.station.rollout_group.name }} {% include "images/_channel_badge.html" with channel=p.station.rollout_group.channel %}{% else %}<span class="t-muted">{% trans "No group" %}</span> {% include "images/_channel_badge.html" with channel="release" %}{% endif %}
+          </td>
+          <td data-label="{% trans 'Image' %}">
+            {% if p.ok %}
+            <span class="t-mono-sm" style="color:var(--ink-0);">{{ p.release.tag }} · {{ p.release.machine }}</span>
+            {% else %}
+            <span class="pill pill-muted">{% trans "SKIP" %}</span>
+            <span class="t-muted" style="font-size:12px;">{{ p.message }}</span>
+            {% endif %}
+          </td>
+          <td class="actions" data-label="{% trans 'Notes' %}">
+            {% if p.channel_switch %}<span class="pill pill-warn" title="{% blocktrans with channel=preview_channel %}The station's group follows another channel than {{ channel }}.{% endblocktrans %}">{% trans "Channel switch" %}</span>{% endif %}
+            {% if p.downgrade %}<span class="pill pill-violet" title="{% blocktrans with current=p.station.current_image_release.tag %}Not newer than the running {{ current }}.{% endblocktrans %}">{% trans "Downgrade" %}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</section>

@@ -20,7 +20,11 @@
         <span class="pill pill-{{ deployment.status|slugify }}" data-deployment-status style="margin-left:8px;">{{ deployment.get_status_display|upper }}</span>
       </div>
       <h1 class="page-title">{{ deployment.image_tag }} {% include "images/_channel_badge.html" with channel=deployment.image_channel %}</h1>
-      <div class="row-gap-8 mt-10">
+      <div class="row-gap-8 mt-10" style="flex-wrap:wrap;">
+        {% if machines %}
+        <span class="t-label">{% trans "Machines" %}</span>
+        <span class="t-mono-sm" data-deployment-machines>{{ machines|join:", " }}</span>
+        {% endif %}
         <span class="t-label">{% trans "Strategy" %}</span>
         <span class="pill pill-muted">{{ deployment.get_strategy_display|upper }}</span>
         <span class="t-label">{% trans "Created" %}</span>
@@ -44,7 +48,7 @@
     <div class="panel-body">
       <div class="row-split mb-14">
         <div class="stack-gap-2">
-          <div class="t-label">{% trans "Rollout progress" %}</div>
+          <div class="t-label">{% trans "Deployment progress" %}</div>
           <div class="t-display-lg"><span data-deployment-pct>{{ p.percentage }}%</span></div>
         </div>
         <div class="stack-gap-2" style="text-align:right;">
@@ -68,6 +72,7 @@
   {% endwith %}
 
   <div class="grid grid-main">
+    <div class="stack-gap-20" style="min-width:0;">
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title"><span class="dot"></span>{% trans "Per-station results" %}</div>
@@ -80,6 +85,7 @@
             <tr>
               <th>{% trans "Station" %}</th>
               <th>{% trans "Status" %}</th>
+              <th>{% trans "Image" %}</th>
               <th>{% trans "From → To" %}</th>
               <th>{% trans "Started" %}</th>
               <th>{% trans "Completed" %}</th>
@@ -93,7 +99,8 @@
                 <a href="{% url 'stations:station_detail' r.station.pk %}" class="callsign">{{ r.station.callsign|default:r.station.name }}</a>
               </td>
               <td data-label="{% trans 'Status' %}"><span class="pill pill-{{ r.status }}" data-result-status>{{ r.get_status_display|upper }}</span></td>
-              <td class="t-mono-sm" data-label="{% trans 'Version' %}">{{ r.previous_version|default:"—" }} → {{ r.new_version|default:"…" }}</td>
+              <td class="t-mono-sm" data-label="{% trans 'Image' %}" style="color:var(--ink-0);">{{ r.image_release.tag }} · {{ r.image_release.machine }}</td>
+              <td class="t-mono-sm" data-label="{% trans 'From → To' %}">{{ r.previous_version|default:"—" }} → {{ r.new_version|default:"…" }}</td>
               <td class="t-mono-sm t-muted" data-label="{% trans 'Started' %}">{% if r.started_at %}{{ r.started_at|date:"H:i:s" }}{% else %}—{% endif %}</td>
               <td class="t-mono-sm t-muted" data-label="{% trans 'Completed' %}">{% if r.completed_at %}{{ r.completed_at|date:"H:i:s" }}{% else %}—{% endif %}</td>
               <td class="t-mono-sm t-danger" data-label="{% trans 'Error' %}">{{ r.error_message|truncatechars:36|default:"" }}</td>
@@ -107,12 +114,40 @@
       </div>
     </section>
 
+    {% if deployment.skipped_stations %}
+    <section class="panel" data-skipped-stations>
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot" style="background:var(--warn)"></span>{% trans "Skipped stations" %}</div>
+        <span class="t-label">{{ deployment.skipped_stations|length }}</span>
+      </div>
+      <div class="panel-body flush" data-mobile-cards>
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "Station" %}</th>
+              <th>{% trans "Reason" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in deployment.skipped_stations %}
+            <tr data-skip-reason="{{ s.reason }}">
+              <td data-primary><span class="callsign">{{ s.station_name }}</span></td>
+              <td class="t-muted" style="font-size:12.5px;" data-label="{% trans 'Reason' %}">{{ s.message|default:s.reason }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+    </div>
+
     <aside>
       <section class="panel">
         <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Configuration" %}</div></div>
         <div class="panel-body">
           <dl class="dlist">
-            <dt>{% trans "Image release" %}</dt>
+            <dt>{% trans "Version" %}</dt>
             <dd>{{ deployment.image_tag }} {% include "images/_channel_badge.html" with channel=deployment.image_channel %}</dd>
             <dt>{% trans "Target type" %}</dt><dd>{{ deployment.get_target_type_display }}</dd>
             <dt>{% trans "Target" %}</dt>

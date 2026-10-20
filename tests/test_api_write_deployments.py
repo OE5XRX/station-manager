@@ -31,7 +31,7 @@ def test_deploy_trigger_creates_result_and_supersedes(
 ):
     t = api_topology
     payload = {
-        "image_release": image_release.pk,
+        "image_tag": image_release.tag,
         "target_station": t["station_in"].pk,
         "status": "completed",  # must be IGNORED
     }
@@ -48,7 +48,7 @@ def test_region_mgr_cannot_trigger_403(api_topology, bearer, image_release):
     # deployments.manage is Staff; a region-manager assignment grants nothing,
     # not even for a station in the managed region.
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": image_release.tag, "target_station": t["station_in"].pk}
     r = bearer(t["region_mgr"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 403
     assert r.json()["required"] == "deployments.manage"
@@ -67,7 +67,7 @@ def test_deployment_no_delete_no_update(api_topology, bearer, deployment):
 def test_staff_can_trigger(api_topology, bearer, image_release, provisioned_station_in):
     """Internal (staff) user may trigger for any station."""
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": image_release.tag, "target_station": t["station_in"].pk}
     r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201
 
@@ -76,7 +76,7 @@ def test_staff_can_trigger(api_topology, bearer, image_release, provisioned_stat
 def test_applicant_cannot_trigger(api_topology, bearer, image_release):
     """Applicant-level user is forbidden at the permission gate (403)."""
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": image_release.tag, "target_station": t["station_in"].pk}
     r = session(t["applicant"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 403
 
@@ -85,7 +85,7 @@ def test_applicant_cannot_trigger(api_topology, bearer, image_release):
 def test_anon_cannot_trigger(anon_client, api_topology, image_release):
     """Unauthenticated request is rejected with 401."""
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": image_release.tag, "target_station": t["station_in"].pk}
     r = anon_client.post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 401
 
@@ -98,7 +98,7 @@ def test_deploy_trigger_audit_row_created(
     'via API token' in the message."""
     t = api_topology
     station = t["station_in"]
-    payload = {"image_release": image_release.pk, "target_station": station.pk}
+    payload = {"image_tag": image_release.tag, "target_station": station.pk}
     bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     log = (
         StationAuditLog.objects.filter(
@@ -119,7 +119,7 @@ def test_deploy_trigger_target_type_forced_station(
     """target_type is always STATION regardless of client input."""
     t = api_topology
     payload = {
-        "image_release": image_release.pk,
+        "image_tag": image_release.tag,
         "target_station": t["station_in"].pk,
         "target_type": "all",  # must be ignored
     }
@@ -135,7 +135,7 @@ def test_deploy_trigger_result_is_pending(
 ):
     """The DeploymentResult created starts as PENDING, not anything else."""
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": image_release.tag, "target_station": t["station_in"].pk}
     bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     dep = Deployment.objects.latest("id")
     result = DeploymentResult.objects.get(deployment=dep, station=t["station_in"])
@@ -160,11 +160,11 @@ def test_deploy_wrong_machine_image_400(api_topology, bearer, provisioned_statio
         rootfs_sha256="d" * 64,
         rootfs_size_bytes=500,
     )
-    payload = {"image_release": other.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": other.tag, "target_station": t["station_in"].pk}
     before = Deployment.objects.count()
     r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 400
-    assert "image_release" in r.data
+    assert "image_tag" in r.data
     assert Deployment.objects.count() == before
 
 
@@ -186,11 +186,11 @@ def test_deploy_non_ota_ready_image_400(api_topology, bearer):
     assert non_ota.is_ota_ready is False
     station.current_image_release = non_ota
     station.save(update_fields=["current_image_release"])
-    payload = {"image_release": non_ota.pk, "target_station": station.pk}
+    payload = {"image_tag": non_ota.tag, "target_station": station.pk}
     before = Deployment.objects.count()
     r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 400
-    assert "image_release" in r.data
+    assert "image_tag" in r.data
     assert Deployment.objects.count() == before
 
 
@@ -200,7 +200,7 @@ def test_deploy_unprovisioned_station_400(api_topology, bearer, image_release):
     t = api_topology
     station = t["station_in"]
     assert station.current_image_release is None  # unprovisioned by default
-    payload = {"image_release": image_release.pk, "target_station": station.pk}
+    payload = {"image_tag": image_release.tag, "target_station": station.pk}
     before = Deployment.objects.count()
     r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 400
@@ -224,7 +224,7 @@ def test_deploy_trigger_station_lock_happy_path(
     This test confirms the complete create+lock+supersede still succeeds.
     """
     t = api_topology
-    payload = {"image_release": image_release.pk, "target_station": t["station_in"].pk}
+    payload = {"image_tag": image_release.tag, "target_station": t["station_in"].pk}
     r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201
     dep = Deployment.objects.latest("id")
@@ -257,6 +257,6 @@ def test_deploy_trigger_station_lock_supersedes_existing(
         previous_version="",
     )
     # Trigger a new deployment for the same station/image — supersession fires
-    payload = {"image_release": image_release.pk, "target_station": station.pk}
+    payload = {"image_tag": image_release.tag, "target_station": station.pk}
     r = bearer(t["staff"]).post(reverse("api:deployment-list"), payload, format="json")
     assert r.status_code == 201

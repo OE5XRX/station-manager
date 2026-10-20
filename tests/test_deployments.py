@@ -377,7 +377,7 @@ class TestDeploymentWebViews:
         response = client.post(
             reverse("deployments:deployment_create"),
             data={
-                "image_release": image_release.pk,
+                "version": f"{image_release.channel}|{image_release.tag}",
                 "target_type": Deployment.TargetType.STATION,
                 "target_station": station.pk,
                 "strategy": Deployment.Strategy.IMMEDIATE,
@@ -400,7 +400,7 @@ class TestDeploymentWebViews:
         response = client.post(
             reverse("deployments:deployment_create"),
             data={
-                "image_release": image_release.pk,
+                "version": f"{image_release.channel}|{image_release.tag}",
                 "target_type": Deployment.TargetType.STATION,
                 "target_station": station.pk,
                 "strategy": Deployment.Strategy.IMMEDIATE,

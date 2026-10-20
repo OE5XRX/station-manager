@@ -50,7 +50,13 @@ from apps.api.write_serializers import (
     UserWriteSerializer,
 )
 from apps.deployments.models import Deployment
-from apps.deployments.services import NoEligibleStationsError, create_deployment
+from apps.deployments.services import (
+    SKIP_NO_IMAGE,
+    SKIP_NO_PLATFORM,
+    SKIP_NOT_OTA_READY,
+    NoEligibleStationsError,
+    create_deployment,
+)
 from apps.images import github_releases
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning.models import ProvisioningJob
@@ -713,46 +719,21 @@ class DeploymentViewSet(
 
     def perform_create(self, serializer):
         station = serializer.validated_data["target_station"]
-        image_release = serializer.validated_data["image_release"]
-
-        # Input-validation parity with the canonical UI trigger
-        # (apps.rollouts.views.UpgradeStationView): field-specific 400s BEFORE
-        # any DB write, so a wrong-architecture or non-deployable image can't be
-        # queued.
-        current = station.current_image_release
-        if current is None:
-            raise DRFValidationError(
-                {
-                    "target_station": (
-                        "Station has no current image release; cannot target a deployment."
-                    )
-                }
-            )
-        if image_release.machine != current.machine:
-            raise DRFValidationError(
-                {
-                    "image_release": (
-                        f"Image machine {image_release.machine} does not match "
-                        f"station machine {current.machine}."
-                    )
-                }
-            )
-        if not image_release.is_ota_ready:
-            raise DRFValidationError(
-                {"image_release": f"Image release {image_release.tag} is not OTA-ready."}
-            )
-
+        tag = serializer.validated_data["image_tag"]
+        channel = serializer.validated_data["image_channel"]
         strategy = serializer.validated_data.get("strategy", Deployment.Strategy.IMMEDIATE)
         phase_config = serializer.validated_data.get("phase_config", {})
 
-        # The service locks the station row before any FK-bearing insert
-        # (PostgreSQL key-share → update deadlock under concurrent triggers),
-        # creates the deployment + result and supersedes pending results.
-        # A station mid-flight elsewhere comes back as "nothing servable".
+        # The service resolves the station's machine image for (tag, channel),
+        # locks the station row before any FK-bearing insert (PostgreSQL
+        # key-share → update deadlock under concurrent triggers), creates the
+        # deployment + result and supersedes pending results. If the station
+        # can't be served it raises before anything is written; the skip
+        # reason becomes a field-specific 400 (parity with the UI triggers).
         try:
             dep = create_deployment(
-                tag=image_release.tag,
-                channel=image_release.channel,
+                tag=tag,
+                channel=channel,
                 target_type=Deployment.TargetType.STATION,
                 target_station=station,
                 stations=[station],
@@ -762,9 +743,7 @@ class DeploymentViewSet(
                 audit=False,  # audited below with the API token suffix
             )
         except NoEligibleStationsError as exc:
-            # Single station: surface its own skip reason (e.g. the
-            # mid-deployment conflict) exactly as before.
-            raise DRFValidationError(exc.plans[0].message)
+            raise self._skip_error(exc.plans[0], tag, channel)
 
         audit_station_write(
             self.request,
@@ -776,6 +755,24 @@ class DeploymentViewSet(
         # 201 response (CreateModelMixin.create() calls serializer.save() which
         # we bypassed — set instance directly so get_success_headers works too).
         serializer.instance = dep
+
+    @staticmethod
+    def _skip_error(plan, tag, channel) -> DRFValidationError:
+        """Map a single-station skip reason to a 400 on the responsible field."""
+        if plan.reason == SKIP_NO_PLATFORM:
+            return DRFValidationError({"target_station": plan.message})
+        if (
+            plan.reason == SKIP_NO_IMAGE
+            and not ImageRelease.objects.filter(tag=tag, channel=channel).exists()
+        ):
+            return DRFValidationError(
+                {"image_tag": f"Unknown version {tag} ({channel}): no imported image."}
+            )
+        if plan.reason in (SKIP_NO_IMAGE, SKIP_NOT_OTA_READY):
+            return DRFValidationError({"image_tag": plan.message})
+        # SKIP_ACTIVE: the station is mid-deployment elsewhere — not a field
+        # problem, retry later.
+        return DRFValidationError(plan.message)
 
 
 class ProvisioningJobViewSet(

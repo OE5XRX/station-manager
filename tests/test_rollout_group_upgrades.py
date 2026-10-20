@@ -352,3 +352,74 @@ def test_upgrade_group_same_tag_both_machines_is_one_deployment(
         rpi.pk: rpi_new,
         qemu.pk: qemu_new,
     }
+
+
+def _mid_flight(station, release):
+    """A result of another deployment past PENDING → supersession conflict."""
+    other = Deployment.objects.create(
+        image_tag=release.tag,
+        image_channel=release.channel,
+        target_type=Deployment.TargetType.STATION,
+        target_station=station,
+        status=Deployment.Status.IN_PROGRESS,
+    )
+    DeploymentResult.objects.create(
+        deployment=other,
+        station=station,
+        image_release=release,
+        status=DeploymentResult.Status.DOWNLOADING,
+    )
+    return other
+
+
+def test_upgrade_group_counts_active_conflict_as_skipped(
+    client, admin_user, make_release, make_rollout_group
+):
+    group = make_rollout_group("Busy")
+    cur = make_release("2026.10.01-01", latest=False)
+    new = make_release("2026.10.18-01")
+    free = Station.objects.create(name="free", rollout_group=group, current_image_release=cur)
+    busy = Station.objects.create(name="busy", rollout_group=group, current_image_release=cur)
+    _mid_flight(busy, cur)
+
+    client.force_login(admin_user)
+    r = client.post(reverse("rollouts:upgrade_group", args=[group.slug]), follow=True)
+
+    dep = Deployment.objects.get(target_group=group)
+    assert list(dep.results.values_list("station_id", flat=True)) == [free.pk]
+    assert dep.results.get().image_release == new
+    assert [(s["station_id"], s["reason"]) for s in dep.skipped_stations] == [
+        (busy.pk, "active_deployment")
+    ]
+    assert any("Queued 1" in m and "1 skipped" in m for m in _messages(r))
+
+
+def test_upgrade_group_all_conflicting_creates_nothing(
+    client, admin_user, make_release, make_rollout_group
+):
+    group = make_rollout_group("AllBusy")
+    cur = make_release("2026.10.01-01", latest=False)
+    make_release("2026.10.18-01")
+    for name in ("a", "b"):
+        s = Station.objects.create(name=name, rollout_group=group, current_image_release=cur)
+        _mid_flight(s, cur)
+
+    client.force_login(admin_user)
+    r = client.post(reverse("rollouts:upgrade_group", args=[group.slug]), follow=True)
+
+    assert not Deployment.objects.filter(target_group=group).exists()
+    assert any("Queued 0" in m and "2 skipped" in m for m in _messages(r))
+
+
+def test_upgrade_station_active_conflict_shows_reason(client, admin_user, station, make_release):
+    cur = make_release("2026.10.01-01", latest=False)
+    make_release("2026.10.18-01")
+    station.current_image_release = cur
+    station.save()
+    blocking = _mid_flight(station, cur)
+
+    client.force_login(admin_user)
+    r = client.post(reverse("rollouts:upgrade_station", args=[station.pk]), follow=True)
+
+    assert list(Deployment.objects.values_list("pk", flat=True)) == [blocking.pk]
+    assert any(m for m in _messages(r))

@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
-from django.views.generic import DetailView, FormView, ListView
+from django.views.generic import DetailView, FormView, ListView, TemplateView
 
 from apps.accounts.permissions import AreaPermissionMixin
 
@@ -84,6 +84,31 @@ class DeploymentDetailView(AreaPermissionMixin, DetailView):
             .prefetch_related("results__station", "results__image_release")
         )
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Uses the prefetched results — no extra query.
+        context["machines"] = sorted({r.image_release.machine for r in self.object.results.all()})
+        return context
+
+
+def preview_context(form) -> dict:
+    """Template context for ``deployments/_preview.html``.
+
+    ``plans`` is ``None`` while version/target are incomplete or invalid
+    (empty state). Never writes anything.
+    """
+    plans = form.plans if form.is_bound else None
+    if plans is None:
+        return {"plans": None}
+    ok = sum(1 for p in plans if p.ok)
+    return {
+        "plans": plans,
+        "preview_ok": ok,
+        "preview_skipped": len(plans) - ok,
+        "preview_tag": form.cleaned_data.get("tag"),
+        "preview_channel": form.cleaned_data.get("channel"),
+    }
+
 
 class DeploymentCreateView(AreaPermissionMixin, FormView):
     area = "deployments"
@@ -93,11 +118,10 @@ class DeploymentCreateView(AreaPermissionMixin, FormView):
 
     def form_valid(self, form):
         data = form.cleaned_data
-        release = data["image_release"]
         try:
             deployment = create_deployment(
-                tag=release.tag,
-                channel=release.channel,
+                tag=data["tag"],
+                channel=data["channel"],
                 target_type=data["target_type"],
                 target_group=data.get("target_group"),
                 target_station=data.get("target_station"),
@@ -107,19 +131,42 @@ class DeploymentCreateView(AreaPermissionMixin, FormView):
                 ip_address=_get_client_ip(self.request),
             )
         except NoEligibleStationsError as exc:
+            # Raced: the plan was servable in clean() but nothing survived
+            # (e.g. every station went mid-flight meanwhile).
+            form.plans = exc.plans
             form.add_error(None, str(exc))
             return self.form_invalid(form)
 
+        ok = sum(1 for p in deployment.plans if p.ok)
         messages.success(
             self.request,
-            _("Deployment created with %(count)d target station(s).")
-            % {"count": deployment.results.count()},
+            _("Deployment created for %(count)d station(s), %(skipped)d skipped.")
+            % {"count": ok, "skipped": len(deployment.plans) - ok},
         )
         return redirect("deployments:deployment_detail", pk=deployment.pk)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["form_title"] = _("Create Deployment")
+        context.update(preview_context(context["form"]))
+        return context
+
+
+class DeploymentPreviewView(AreaPermissionMixin, TemplateView):
+    """HTMX partial: what a deployment with the given form values would do.
+
+    Same permission as creating one; read-only (GET, no writes).
+    """
+
+    area = "deployments"
+    verb = "manage"
+    template_name = "deployments/_preview.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        form = DeploymentForm(data=self.request.GET)
+        form.is_valid()
+        context.update(preview_context(form))
         return context
 
 

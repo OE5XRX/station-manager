@@ -11,9 +11,9 @@
 
 {% block content %}
 <div class="page-head"><div class="page-head-main">
-  <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Rollout plan" %}</div>
+  <div class="page-eyebrow">{% trans "OTA" %} · {% trans "Deployment" %}</div>
   <h1 class="page-title">{% trans "New deployment" %}</h1>
-  <p class="page-sub">{% trans "Pick an image release, a target, and a strategy. Progress streams live once the rollout starts." %}</p>
+  <p class="page-sub">{% trans "Pick a version, a target, and a strategy. The image for each station is chosen by its machine. Progress streams live once the deployment starts." %}</p>
 </div></div>
 
 <form method="post" style="max-width:720px;">
@@ -21,9 +21,19 @@
   <section class="panel">
     <div class="panel-body">
       {{ form.non_field_errors }}
+      {% comment %}
+      Any change to version/target re-renders the preview below. Only the
+      planning fields are sent (no CSRF token in the GET query string).
+      {% endcomment %}
+      <div hx-get="{% url 'deployments:deployment_preview' %}"
+           hx-trigger="change"
+           hx-include="[name=version],[name=target_type],[name=target_group],[name=target_station]"
+           hx-target="#deployment-preview"
+           hx-sync="this:replace">
       <div class="form-group">
-        <label class="form-label">{% trans "Image release" %}</label>
-        {{ form.image_release }}{{ form.image_release.errors }}
+        <label class="form-label" for="{{ form.version.id_for_label }}">{% trans "Version" %}</label>
+        {{ form.version }}{{ form.version.errors }}
+        <div class="form-help">{% trans "Grouped by channel. Each station gets the image of this version built for its machine; stations without one are skipped." %}</div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -45,6 +55,7 @@
           {{ form.target_station }}{{ form.target_station.errors }}
         </div>
       </div>
+      </div>
       <div class="form-group">
         <label class="form-label">{% trans "Phase config (JSON)" %}</label>
         {{ form.phase_config }}
@@ -52,9 +63,12 @@
       </div>
     </div>
     <div class="panel-foot row-gap-8">
-      <button type="submit" class="btn btn-primary btn-lg">{% trans "Launch rollout" %}</button>
+      <button type="submit" class="btn btn-primary btn-lg">{% trans "Start deployment" %}</button>
       <a href="{% url 'deployments:deployment_list' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
     </div>
   </section>
+  <div id="deployment-preview" class="mt-24">
+    {% include "deployments/_preview.html" %}
+  </div>
 </form>
 {% endblock %}
