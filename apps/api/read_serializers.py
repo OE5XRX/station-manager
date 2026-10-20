@@ -211,6 +211,7 @@ class DeploymentResultSerializer(serializers.ModelSerializer):
             "id",
             "deployment",
             "station",
+            "image_release",
             "status",
             "started_at",
             "completed_at",
@@ -236,7 +237,9 @@ class DeploymentSerializer(serializers.ModelSerializer):
         model = Deployment
         fields = [
             "id",
-            "image_release",
+            "image_tag",
+            "image_channel",
+            "skipped_stations",
             "target_type",
             "target_group",
             "target_group_name",

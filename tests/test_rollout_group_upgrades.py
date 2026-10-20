@@ -64,7 +64,8 @@ def test_upgrade_station_dev_group_queues_dev_image(
 
     assert r.status_code == 302
     dep = Deployment.objects.get(target_station=station)
-    assert dep.image_release == dev_latest
+    assert dep.results.get().image_release == dev_latest
+    assert (dep.image_tag, dep.image_channel) == (dev_latest.tag, "dev")
 
 
 def test_upgrade_station_refuses_downgrade(client, admin_user, station, make_release):
@@ -111,7 +112,7 @@ def test_upgrade_group_creates_group_deployment(
     dep = Deployment.objects.get()
     assert dep.target_type == "group"
     assert dep.target_group == group
-    assert dep.image_release == new
+    assert {r.image_release for r in dep.results.all()} == {new}
     assert set(dep.results.values_list("station_id", flat=True)) == {s1.pk, s2.pk}
 
 
@@ -132,10 +133,12 @@ def test_upgrade_group_mixed_machines_and_unprovisioned(
     r = client.post(reverse("rollouts:upgrade_group", args=[group.slug]), follow=True)
 
     deps = Deployment.objects.filter(target_group=group)
-    assert {d.image_release for d in deps} == {rpi_new, qemu_new}
+    assert {d.results.get().image_release for d in deps} == {rpi_new, qemu_new}
     for d in deps:
         assert d.results.count() == 1
-        assert d.results.get().station.current_image_release.machine == d.image_release.machine
+        result = d.results.get()
+        assert result.station.current_image_release.machine == result.image_release.machine
+        assert d.image_tag == result.image_release.tag
     assert any("Queued 2" in m and "2 skipped" in m for m in _messages(r))
 
 
@@ -325,5 +328,27 @@ def test_upgrade_group_skips_station_moved_out_concurrently(
     client.post(reverse("rollouts:upgrade_group", args=[group.slug]))
 
     dep = Deployment.objects.get()
-    assert dep.image_release == new
+    assert dep.results.get().image_release == new
     assert list(dep.results.values_list("station_id", flat=True)) == [s1.pk]
+
+
+def test_upgrade_group_same_tag_both_machines_is_one_deployment(
+    client, admin_user, make_release, make_rollout_group
+):
+    group = make_rollout_group("SameTag")
+    rpi_cur = make_release("2026.10.01-01", machine=RPI, latest=False)
+    qemu_cur = make_release("2026.10.01-01", machine=QEMU, latest=False)
+    rpi_new = make_release("2026.10.10-01", machine=RPI)
+    qemu_new = make_release("2026.10.10-01", machine=QEMU)
+    rpi = Station.objects.create(name="rpi", rollout_group=group, current_image_release=rpi_cur)
+    qemu = Station.objects.create(name="qemu", rollout_group=group, current_image_release=qemu_cur)
+
+    client.force_login(admin_user)
+    client.post(reverse("rollouts:upgrade_group", args=[group.slug]))
+
+    dep = Deployment.objects.get(target_group=group)
+    assert (dep.image_tag, dep.image_channel) == ("2026.10.10-01", "release")
+    assert {r.station_id: r.image_release for r in dep.results.all()} == {
+        rpi.pk: rpi_new,
+        qemu.pk: qemu_new,
+    }

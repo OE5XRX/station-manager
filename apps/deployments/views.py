@@ -2,17 +2,16 @@ from django.contrib import messages
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.views import View
-from django.views.generic import CreateView, DetailView, ListView
+from django.views.generic import DetailView, FormView, ListView
 
 from apps.accounts.permissions import AreaPermissionMixin
-from apps.stations.models import StationAuditLog
 
 from .forms import DeploymentForm
 from .models import Deployment, DeploymentResult
+from .services import NoEligibleStationsError, create_deployment
 
 
 def _get_client_ip(request):
@@ -32,7 +31,7 @@ class DeploymentListView(AreaPermissionMixin, ListView):
         qs = (
             super()
             .get_queryset()
-            .select_related("image_release", "target_group", "target_station", "created_by")
+            .select_related("target_group", "target_station", "created_by")
             .annotate(
                 result_total=Count("results"),
                 result_completed=Count(
@@ -81,62 +80,42 @@ class DeploymentDetailView(AreaPermissionMixin, DetailView):
         return (
             super()
             .get_queryset()
-            .select_related("image_release", "target_group", "target_station", "created_by")
-            .prefetch_related("results__station")
+            .select_related("target_group", "target_station", "created_by")
+            .prefetch_related("results__station", "results__image_release")
         )
 
 
-class DeploymentCreateView(AreaPermissionMixin, CreateView):
+class DeploymentCreateView(AreaPermissionMixin, FormView):
     area = "deployments"
     verb = "manage"
-    model = Deployment
     form_class = DeploymentForm
     template_name = "deployments/deployment_form.html"
 
-    def get_success_url(self):
-        return reverse("deployments:deployment_detail", kwargs={"pk": self.object.pk})
-
     def form_valid(self, form):
-        form.instance.created_by = self.request.user
-        response = super().form_valid(form)
-
-        # Create DeploymentResult for each target station
-        stations = self.object.get_target_stations()
-        results = []
-        for station in stations:
-            results.append(
-                DeploymentResult(
-                    deployment=self.object,
-                    station=station,
-                    status=DeploymentResult.Status.PENDING,
-                    previous_version=station.current_os_version or "",
-                )
-            )
-        DeploymentResult.objects.bulk_create(results)
-
-        # Update deployment status
-        if results:
-            self.object.status = Deployment.Status.IN_PROGRESS
-            self.object.save(update_fields=["status", "updated_at"])
-
-        # Audit log for each target station
-        for station in stations:
-            StationAuditLog.log(
-                station=station,
-                event_type=StationAuditLog.EventType.FIRMWARE_UPDATE,
-                message=(
-                    f"Deployment #{self.object.pk} created: "
-                    f"{self.object.image_release} targeting {station.name}."
-                ),
+        data = form.cleaned_data
+        release = data["image_release"]
+        try:
+            deployment = create_deployment(
+                tag=release.tag,
+                channel=release.channel,
+                target_type=data["target_type"],
+                target_group=data.get("target_group"),
+                target_station=data.get("target_station"),
                 user=self.request.user,
+                strategy=data["strategy"],
+                phase_config=data["phase_config"],
                 ip_address=_get_client_ip(self.request),
             )
+        except NoEligibleStationsError as exc:
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
 
         messages.success(
             self.request,
-            _("Deployment created with %(count)d target station(s).") % {"count": len(results)},
+            _("Deployment created with %(count)d target station(s).")
+            % {"count": deployment.results.count()},
         )
-        return response
+        return redirect("deployments:deployment_detail", pk=deployment.pk)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

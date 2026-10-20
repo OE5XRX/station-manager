@@ -39,16 +39,25 @@ def _no_storage_calls(monkeypatch):
 
 @pytest.mark.django_db
 def test_delete_release_blocked_by_deployment(client, admin_user, monkeypatch):
-    from apps.deployments.models import Deployment
+    from apps.deployments.models import Deployment, DeploymentResult
     from apps.images.models import ImageRelease
+    from apps.stations.models import Station
 
     _no_storage_calls(monkeypatch)
     rel = _release()
-    Deployment.objects.create(
-        image_release=rel,
+    dep = Deployment.objects.create(
+        image_tag=rel.tag,
+        image_channel=rel.channel,
         target_type=Deployment.TargetType.ALL,
         strategy=Deployment.Strategy.IMMEDIATE,
         status=Deployment.Status.COMPLETED,
+    )
+    # The image is pinned per station result — that FK is what PROTECTs it.
+    DeploymentResult.objects.create(
+        deployment=dep,
+        station=Station.objects.create(name="s"),
+        image_release=rel,
+        status=DeploymentResult.Status.SUCCESS,
     )
 
     client.force_login(admin_user)

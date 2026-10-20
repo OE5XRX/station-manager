@@ -49,11 +49,8 @@ from apps.api.write_serializers import (
     StationWriteSerializer,
     UserWriteSerializer,
 )
-from apps.deployments.models import Deployment, DeploymentResult
-from apps.deployments.supersession import (
-    ActiveDeploymentConflictError,
-    supersede_pending_for_station,
-)
+from apps.deployments.models import Deployment
+from apps.deployments.services import NoEligibleStationsError, create_deployment
 from apps.images import github_releases
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.provisioning.models import ProvisioningJob
@@ -748,46 +745,26 @@ class DeploymentViewSet(
         strategy = serializer.validated_data.get("strategy", Deployment.Strategy.IMMEDIATE)
         phase_config = serializer.validated_data.get("phase_config", {})
 
+        # The service locks the station row before any FK-bearing insert
+        # (PostgreSQL key-share → update deadlock under concurrent triggers),
+        # creates the deployment + result and supersedes pending results.
+        # A station mid-flight elsewhere comes back as "nothing servable".
         try:
-            with transaction.atomic():
-                # Acquire the station row lock BEFORE any FK-bearing inserts.
-                #
-                # On PostgreSQL, inserting a Deployment or DeploymentResult with
-                # a target_station/station FK takes an implicit key-share lock on
-                # the Station row to enforce referential integrity. If two
-                # concurrent triggers each INSERT first and then both call
-                # supersede_pending_for_station() (which needs an UPDATE lock),
-                # they deadlock upgrading key-share → update. Locking the station
-                # row explicitly at the top of the block prevents this: the second
-                # caller blocks at the SELECT FOR UPDATE until the first commits,
-                # so only one caller ever reaches the INSERT phase at a time.
-                #
-                # UpgradeStationView (apps/rollouts/views.py) does not lock the
-                # station row first — it has the same latent deadlock risk under
-                # concurrent triggers, but it is a human-driven UI path where
-                # concurrency is rare. The API is the automation surface where
-                # concurrent requests are the norm, so we fix it here and note
-                # the UI parity gap.
-                Station.objects.select_for_update().filter(pk=station.pk).first()
-
-                dep = Deployment.objects.create(
-                    image_release=image_release,
-                    target_type=Deployment.TargetType.STATION,
-                    target_station=station,
-                    status=Deployment.Status.IN_PROGRESS,
-                    created_by=self.request.user,
-                    strategy=strategy,
-                    phase_config=phase_config,
-                )
-                DeploymentResult.objects.create(
-                    deployment=dep,
-                    station=station,
-                    status=DeploymentResult.Status.PENDING,
-                    previous_version=station.current_os_version or "",
-                )
-                supersede_pending_for_station(station=station, new_deployment=dep)
-        except ActiveDeploymentConflictError as exc:
-            raise DRFValidationError(str(exc))
+            dep = create_deployment(
+                tag=image_release.tag,
+                channel=image_release.channel,
+                target_type=Deployment.TargetType.STATION,
+                target_station=station,
+                stations=[station],
+                user=self.request.user,
+                strategy=strategy,
+                phase_config=phase_config,
+                audit=False,  # audited below with the API token suffix
+            )
+        except NoEligibleStationsError as exc:
+            # Single station: surface its own skip reason (e.g. the
+            # mid-deployment conflict) exactly as before.
+            raise DRFValidationError(exc.plans[0].message)
 
         audit_station_write(
             self.request,

@@ -20,6 +20,7 @@
   {% csrf_token %}
   <section class="panel">
     <div class="panel-body">
+      {{ form.non_field_errors }}
       <div class="form-group">
         <label class="form-label">{% trans "Image release" %}</label>
         {{ form.image_release }}{{ form.image_release.errors }}

@@ -382,6 +382,12 @@ class DeploymentCreateSerializer(serializers.ModelSerializer):
     or absent — client values are silently discarded.
     """
 
+    # Input only: the release just names the version (tag + channel); the
+    # deployment itself stores tag/channel and pins the image per result.
+    image_release = serializers.PrimaryKeyRelatedField(
+        queryset=ImageRelease.objects.all(), write_only=True
+    )
+
     class Meta:
         model = Deployment
         fields = ["id", "image_release", "target_station", "strategy", "phase_config"]

@@ -34,9 +34,7 @@ class IndexView(AreaPermissionMixin, TemplateView):
             "-created_at"
         )[:5]
         context["deployment_count"] = Deployment.objects.count()
-        context["recent_deployments"] = Deployment.objects.select_related(
-            "image_release",
-        ).order_by("-created_at")[:5]
+        context["recent_deployments"] = Deployment.objects.order_by("-created_at")[:5]
         context["stations"] = Station.objects.all().order_by("name")
         context["active_alerts_count"] = Alert.objects.filter(is_resolved=False).count()
         context["user_count"] = User.objects.count()

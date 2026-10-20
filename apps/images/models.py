@@ -80,12 +80,12 @@ class ImageRelease(models.Model):
     class Meta:
         verbose_name = _("image release")
         verbose_name_plural = _("image releases")
-        # FK dereference (Deployment.image_release, ProvisioningJob.
+        # FK dereference (DeploymentResult.image_release, ProvisioningJob.
         # image_release, ImageImportJob.image_release) goes through the
         # *base* manager, which defaults to the FIRST declared manager —
         # that's our filtering ImageReleaseManager. Without this override
         # archiving a release would silently break every related-object
-        # access pointing at it: deployment.image_release becomes None
+        # access pointing at it: result.image_release becomes None
         # mid-flight, the agent's deployment-check 500s, the audit trail
         # disappears from the UI. Pin the base manager to all_objects so
         # related lookups always see the row regardless of archived_at;

@@ -203,13 +203,18 @@ def test_archive_view_404_on_unknown_pk(client, admin_user):
 def test_archive_view_works_on_release_with_referenced_deployment(client, admin_user):
     """The whole point of archive vs hard-delete: archive succeeds
     even when Deployment/ProvisioningJob FKs would PROTECT a delete."""
-    from apps.deployments.models import Deployment
+    from apps.deployments.models import Deployment, DeploymentResult
+    from apps.stations.models import Station
 
     rel = _make_release(tag="v1-shipped")
-    Deployment.objects.create(
-        image_release=rel,
+    dep = Deployment.objects.create(
+        image_tag=rel.tag,
+        image_channel=rel.channel,
         target_type=Deployment.TargetType.ALL,
         created_by=admin_user,
+    )
+    DeploymentResult.objects.create(
+        deployment=dep, station=Station.objects.create(name="s"), image_release=rel
     )
 
     client.force_login(admin_user)
@@ -223,31 +228,36 @@ def test_archive_view_works_on_release_with_referenced_deployment(client, admin_
 @pytest.mark.django_db
 def test_fk_dereference_still_resolves_to_archived_release(admin_user):
     """Archiving must not break related-object access — a mid-flight
-    Deployment that references a release being archived needs to keep
-    resolving ``deployment.image_release`` to the actual row, otherwise
+    DeploymentResult that references a release being archived needs to keep
+    resolving ``result.image_release`` to the actual row, otherwise
     the agent's deployment-check 500s and the audit trail disappears
     from the UI.
 
     Django resolves forward FKs through the model's *base* manager, which
     defaults to the first declared one — our filtering
     ``ImageReleaseManager``. Without ``Meta.base_manager_name =
-    "all_objects"`` this test fails (``deployment.image_release`` would
+    "all_objects"`` this test fails (``result.image_release`` would
     raise ``ImageRelease.DoesNotExist`` after archive)."""
-    from apps.deployments.models import Deployment
+    from apps.deployments.models import Deployment, DeploymentResult
+    from apps.stations.models import Station
 
     rel = _make_release(tag="v1-shipped")
     deployment = Deployment.objects.create(
-        image_release=rel,
+        image_tag=rel.tag,
+        image_channel=rel.channel,
         target_type=Deployment.TargetType.ALL,
         created_by=admin_user,
+    )
+    result = DeploymentResult.objects.create(
+        deployment=deployment, station=Station.objects.create(name="s"), image_release=rel
     )
 
     rel.archive()
 
-    # Re-fetch the Deployment from the DB so the FK cache is cold —
+    # Re-fetch the result from the DB so the FK cache is cold —
     # we're exercising the resolution path, not the previously loaded
     # in-memory pointer.
-    fresh = Deployment.objects.get(pk=deployment.pk)
+    fresh = DeploymentResult.objects.get(pk=result.pk)
     assert fresh.image_release.pk == rel.pk
     assert fresh.image_release.archived_at is not None
 

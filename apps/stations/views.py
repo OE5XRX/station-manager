@@ -169,7 +169,7 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             context["upgrade_message"] = reason_message(upgrade, self.object)
             context["recent_deployments"] = list(
                 DeploymentResult.objects.filter(station=self.object)
-                .select_related("deployment__image_release")
+                .select_related("deployment", "image_release")
                 .order_by("-pk")[:5]
             )
         if can(user, "topology", "manage"):

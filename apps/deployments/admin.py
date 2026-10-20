@@ -6,7 +6,14 @@ from apps.deployments.models import Deployment, DeploymentResult
 class DeploymentResultInline(admin.TabularInline):
     model = DeploymentResult
     extra = 0
-    readonly_fields = ["station", "status", "started_at", "completed_at", "error_message"]
+    readonly_fields = [
+        "station",
+        "image_release",
+        "status",
+        "started_at",
+        "completed_at",
+        "error_message",
+    ]
     can_delete = False
 
 
@@ -14,7 +21,8 @@ class DeploymentResultInline(admin.TabularInline):
 class DeploymentAdmin(admin.ModelAdmin):
     list_display = [
         "__str__",
-        "image_release",
+        "image_tag",
+        "image_channel",
         "target_type",
         "strategy",
         "status",
@@ -28,10 +36,11 @@ class DeploymentAdmin(admin.ModelAdmin):
         "created_at",
     ]
     search_fields = [
-        "image_release__tag",
-        "image_release__machine",
+        "image_tag",
+        "image_channel",
     ]
     readonly_fields = [
+        "skipped_stations",
         "created_at",
         "updated_at",
     ]

@@ -164,13 +164,15 @@ def _delete_blockers(release: ImageRelease) -> list[str]:
     """Return human-readable labels for objects that PROTECT this release.
 
     Kept in sync with the on_delete=PROTECT FKs declared on
-    ``apps.deployments.models.Deployment.image_release`` and
+    ``apps.deployments.models.DeploymentResult.image_release`` and
     ``apps.provisioning.models.ProvisioningJob.image_release``. The
     ``stations.Station.current_image_release`` FK is SET_NULL and
     therefore does NOT block deletion.
     """
     parts: list[str] = []
-    deployments = release.deployments.count()
+    # Deployments pin the image per station result; count the deployments
+    # (not the results) that reference this release.
+    deployments = release.deployment_results.values("deployment_id").distinct().count()
     if deployments:
         parts.append(
             _("%(n)d deployment(s)") % {"n": deployments},

@@ -242,7 +242,8 @@ def test_deploy_trigger_station_lock_supersedes_existing(
     station = t["station_in"]
     # Create a prior IN_PROGRESS deployment + pending result (the one to supersede)
     old_dep = Deployment.objects.create(
-        image_release=image_release,
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
         target_type=Deployment.TargetType.STATION,
         target_station=station,
         status=Deployment.Status.IN_PROGRESS,
@@ -250,6 +251,7 @@ def test_deploy_trigger_station_lock_supersedes_existing(
     )
     DeploymentResult.objects.create(
         deployment=old_dep,
+        image_release=image_release,
         station=station,
         status=DeploymentResult.Status.PENDING,
         previous_version="",

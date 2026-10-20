@@ -21,8 +21,8 @@ def test_create_by_group_targets_group_stations(
     client, staff_user, image_release, station_factory, make_rollout_group
 ):
     group = make_rollout_group("canary")
-    in_group = station_factory(rollout_group=group)
-    station_factory()  # ungrouped, must not be targeted
+    in_group = station_factory(rollout_group=group, current_image_release=image_release)
+    station_factory(current_image_release=image_release)  # ungrouped, must not be targeted
     client.force_login(staff_user)
 
     response = _post(client, image_release, target_group=group.pk)
@@ -50,7 +50,8 @@ def test_detail_shows_group_and_deleted_group_label(
 ):
     group = make_rollout_group("canary")
     dep = Deployment.objects.create(
-        image_release=image_release,
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
         target_type=Deployment.TargetType.GROUP,
         target_group=group,
     )
@@ -79,7 +80,9 @@ def test_detail_shows_group_and_deleted_group_label(
 def test_group_less_legacy_deployment_shows_deleted_label(client, staff_user, image_release):
     # A tag deployment whose tag was already gone before the migration.
     dep = Deployment.objects.create(
-        image_release=image_release, target_type=Deployment.TargetType.GROUP
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
+        target_type=Deployment.TargetType.GROUP,
     )
     client.force_login(staff_user)
     url = reverse("deployments:deployment_detail", kwargs={"pk": dep.pk})
@@ -90,7 +93,8 @@ def test_group_less_legacy_deployment_shows_deleted_label(client, staff_user, im
 def test_api_deployment_exposes_target_group(topology, image_release, make_rollout_group):  # noqa: F811
     group = make_rollout_group("canary")
     dep = Deployment.objects.create(
-        image_release=image_release,
+        image_tag=image_release.tag,
+        image_channel=image_release.channel,
         target_type=Deployment.TargetType.GROUP,
         target_group=group,
     )

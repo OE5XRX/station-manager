@@ -87,8 +87,12 @@ def test_deployments_not_scoped_by_results(topology):  # noqa: F811
         s3_key="images/v1/qemux86-64.wic.bz2",
         size_bytes=1000,
     )
-    dep_all = Deployment.objects.create(image_release=rel, target_type="all")
-    DeploymentResult.objects.create(deployment=dep_all, station=topology["station_out"])
+    dep_all = Deployment.objects.create(
+        image_tag=rel.tag, image_channel=rel.channel, target_type="all"
+    )
+    DeploymentResult.objects.create(
+        deployment=dep_all, image_release=rel, station=topology["station_out"]
+    )
 
     for role in ("region_mgr", "station_user", "applicant", "admin"):
         client = client_for(topology[role])
