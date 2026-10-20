@@ -131,6 +131,19 @@ class UpgradeGroupView(AreaPermissionMixin, View):
                 .order_by("pk")  # same lock order as create_deployment (no deadlock)
                 .values_list("pk", flat=True)
             )
+            # Lock the members' open results on other deployments in one
+            # (station, pk)-ordered pass. The per-version create_deployment
+            # calls below supersede them bucket by bucket, which on its own
+            # would lock out of global order (e.g. S3, S5, then S1).
+            list(
+                DeploymentResult.objects.select_for_update()
+                .filter(
+                    station_id__in=still_members,
+                    status__in=DeploymentResult.NON_TERMINAL_STATUSES,
+                )
+                .order_by("station_id", "pk")
+                .values_list("pk")
+            )
             for (tag, channel), eligible in by_version.items():
                 moved = [s for s in eligible if s.pk not in still_members]
                 skipped += len(moved)

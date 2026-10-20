@@ -191,15 +191,23 @@ class DeploymentCancelView(AreaPermissionMixin, View):
         # even though the parent deployment was cancelled long ago. The
         # orphan persists until manually reconciled.
         with transaction.atomic():
-            deployment.status = Deployment.Status.CANCELLED
-            deployment.save(update_fields=["status", "updated_at"])
             open_results = deployment.results.filter(
                 status__in=DeploymentResult.NON_TERMINAL_STATUSES
             )
-            # Lock the rows in (station, pk) order first — the same order
-            # create_deployment's supersede pass takes them in — so a cancel
-            # racing a multi-station create can't cross-wait into a deadlock.
+            # Lock order: result rows in (station, pk) order first — the
+            # order create_deployment's supersede pass takes them in, before
+            # it touches any Deployment row — and only then the Deployment.
+            # Saving the Deployment first would invert that order and could
+            # deadlock against a concurrent create that supersedes one of
+            # these results.
             list(open_results.select_for_update().order_by("station_id", "pk").values_list("pk"))
+            deployment = Deployment.objects.select_for_update().get(pk=deployment.pk)
+            if deployment.status not in (Deployment.Status.PENDING, Deployment.Status.IN_PROGRESS):
+                # Finished (e.g. all results superseded) while we waited.
+                messages.warning(request, _("This deployment cannot be cancelled."))
+                return redirect("deployments:deployment_detail", pk=pk)
+            deployment.status = Deployment.Status.CANCELLED
+            deployment.save(update_fields=["status", "updated_at"])
             open_results.update(
                 status=DeploymentResult.Status.CANCELLED,
                 completed_at=timezone.now(),

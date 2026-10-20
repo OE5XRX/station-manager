@@ -423,6 +423,28 @@ class TestDeploymentWebViews:
         deployment_result.refresh_from_db()
         assert deployment_result.status == DeploymentResult.Status.CANCELLED
 
+    def test_cancel_rechecks_status_under_lock(
+        self, client, staff_user, deployment, deployment_result, monkeypatch
+    ):
+        """A deployment that finished while the cancel waited for its locks
+        (e.g. every result superseded) is not flipped to CANCELLED."""
+        from apps.deployments import views
+
+        stale = Deployment.objects.get(pk=deployment.pk)  # still IN_PROGRESS
+        Deployment.objects.filter(pk=deployment.pk).update(status=Deployment.Status.COMPLETED)
+        monkeypatch.setattr(views, "get_object_or_404", lambda *a, **k: stale)
+        client.force_login(staff_user)
+
+        response = client.post(
+            reverse("deployments:deployment_cancel", kwargs={"pk": deployment.pk}),
+        )
+
+        assert response.status_code == 302
+        deployment.refresh_from_db()
+        assert deployment.status == Deployment.Status.COMPLETED
+        deployment_result.refresh_from_db()
+        assert deployment_result.status == DeploymentResult.Status.PENDING
+
     def test_cancel_cascades_in_flight_results(
         self, client, staff_user, deployment, deployment_result
     ):
