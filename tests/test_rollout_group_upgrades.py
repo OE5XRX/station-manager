@@ -394,6 +394,33 @@ def test_upgrade_group_counts_active_conflict_as_skipped(
     assert any("Queued 1" in m and "1 skipped" in m for m in _messages(r))
 
 
+def test_upgrade_group_supersedes_queued_result_elsewhere(
+    client, admin_user, make_release, make_rollout_group
+):
+    group = make_rollout_group("Queued")
+    cur = make_release("2026.10.01-01", latest=False)
+    new = make_release("2026.10.18-01")
+    queued_st = Station.objects.create(name="q", rollout_group=group, current_image_release=cur)
+    free = Station.objects.create(name="f", rollout_group=group, current_image_release=cur)
+    other = _mid_flight(queued_st, cur)
+    other.results.update(status=DeploymentResult.Status.PENDING)
+
+    client.force_login(admin_user)
+    r = client.post(reverse("rollouts:upgrade_group", args=[group.slug]), follow=True)
+
+    dep = Deployment.objects.get(target_group=group)
+    assert {res.station_id: res.image_release for res in dep.results.all()} == {
+        queued_st.pk: new,
+        free.pk: new,
+    }
+    assert dep.skipped_stations == []
+    old = other.results.get()
+    assert old.status == DeploymentResult.Status.SUPERSEDED
+    other.refresh_from_db()
+    assert other.status != Deployment.Status.IN_PROGRESS
+    assert any("Queued 2" in m for m in _messages(r))
+
+
 def test_upgrade_group_all_conflicting_creates_nothing(
     client, admin_user, make_release, make_rollout_group
 ):
