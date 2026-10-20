@@ -66,7 +66,11 @@ class DeploymentResultAdmin(admin.ModelAdmin):
         "station__callsign",
         "error_message",
     ]
+    # image_release is what the agent was told to install; never re-pointed by
+    # hand. Read-only also keeps the form valid when that release is archived
+    # (the default manager hides archived rows from the choice queryset).
     readonly_fields = [
+        "image_release",
         "started_at",
         "completed_at",
     ]
