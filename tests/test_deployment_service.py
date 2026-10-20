@@ -5,7 +5,7 @@ import pytest
 from apps.deployments import services
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageRelease
-from apps.stations.models import RolloutGroup, StationAuditLog
+from apps.stations.models import RolloutGroup, Station, StationAuditLog
 
 QEMU = ImageRelease.Machine.QEMU
 RPI = ImageRelease.Machine.RPI
@@ -440,9 +440,34 @@ def test_plan_pending_elsewhere_is_not_active(make_release, on):
     cur = make_release("v1")
     make_release("v2")
     s = on(cur)
-    _mid_flight(s, cur, status=DeploymentResult.Status.PENDING)
+    queued = _mid_flight(s, cur, status=DeploymentResult.Status.PENDING)
     (plan,) = services.plan_deployment("v2", "release", [s])
     assert plan.ok
+    assert plan.supersedes == queued.pk
+
+
+def test_plan_without_other_results_supersedes_nothing(make_release, on):
+    cur = make_release("v1")
+    make_release("v2")
+    (plan,) = services.plan_deployment("v2", "release", [on(cur)])
+    assert plan.supersedes is None
+
+
+def test_create_reports_skips_in_target_order(make_release, on, staff_user):
+    cur = make_release("v1")
+    make_release("v2")
+    first, second = on(cur), on(cur)
+    blocking = _mid_flight(first, cur)
+    dep = services.create_deployment(
+        tag="v2",
+        channel="release",
+        target_type=Deployment.TargetType.ALL,
+        stations=Station.objects.filter(pk__in=[second.pk, first.pk]).order_by("-pk"),
+        user=staff_user,
+    )
+    assert [p.station.pk for p in dep.plans] == [second.pk, first.pk]
+    assert dep.skipped_stations[0]["station_id"] == first.pk
+    assert f"#{blocking.pk}" in dep.skipped_stations[0]["message"]
 
 
 def test_plan_terminal_elsewhere_is_not_active(make_release, on):

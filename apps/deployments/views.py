@@ -193,7 +193,14 @@ class DeploymentCancelView(AreaPermissionMixin, View):
         with transaction.atomic():
             deployment.status = Deployment.Status.CANCELLED
             deployment.save(update_fields=["status", "updated_at"])
-            deployment.results.filter(status__in=DeploymentResult.NON_TERMINAL_STATUSES).update(
+            open_results = deployment.results.filter(
+                status__in=DeploymentResult.NON_TERMINAL_STATUSES
+            )
+            # Lock the rows in (station, pk) order first — the same order
+            # create_deployment's supersede pass takes them in — so a cancel
+            # racing a multi-station create can't cross-wait into a deadlock.
+            list(open_results.select_for_update().order_by("station_id", "pk").values_list("pk"))
+            open_results.update(
                 status=DeploymentResult.Status.CANCELLED,
                 completed_at=timezone.now(),
                 error_message="Parent deployment was cancelled.",

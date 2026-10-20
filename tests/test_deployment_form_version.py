@@ -254,6 +254,18 @@ def _mid_flight(station, release, status=DeploymentResult.Status.INSTALLING):
 
 @pytest.mark.django_db
 class TestActiveDeployment:
+    def test_preview_flags_superseded_queued_result(self, client, staff_user, fleet):
+        queued = _mid_flight(fleet["qemu"], fleet["q1"], status=DeploymentResult.Status.PENDING)
+        client.force_login(staff_user)
+        response = client.get(
+            reverse("deployments:deployment_preview"), data=_data("release|2026.02.01")
+        )
+        rows = {p.station.name: p for p in response.context["plans"]}
+        assert rows["Alpha"].ok and rows["Alpha"].supersedes == queued.pk
+        assert rows["Bravo"].supersedes is None
+        assert f"Replaces queued #{queued.pk}" in response.content.decode()
+        assert DeploymentResult.objects.get(deployment=queued).status == "pending"
+
     def test_preview_row_shows_active_reason(self, client, staff_user, fleet):
         blocking = _mid_flight(fleet["qemu"], fleet["q1"])
         client.force_login(staff_user)

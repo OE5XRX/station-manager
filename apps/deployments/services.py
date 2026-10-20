@@ -50,6 +50,9 @@ class StationPlan:
     # the station runs.
     channel_switch: bool = False
     downgrade: bool = False
+    # Queued (PENDING) deployment elsewhere that creating this one will
+    # supersede, so the preview can say so.
+    supersedes: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -78,27 +81,34 @@ def active_conflict_message(station_pk, status_label, deployment_pk) -> str:
     )
 
 
-def _mid_flight_results(stations: list[Station]) -> dict[int, tuple[str, int]]:
-    """``{station_pk: (status, deployment_pk)}`` of results past PENDING.
+def _other_results(stations: list[Station]) -> tuple[dict, dict]:
+    """Non-terminal results of ``stations`` on existing deployments.
 
-    Same condition under which :func:`supersede_pending_for_station` raises
-    :class:`ActiveDeploymentConflictError` (a non-PENDING, non-terminal
-    result), so the plan predicts the conflict instead of reporting OK.
+    Returns ``(mid_flight, queued)``: ``{station_pk: (status, deployment_pk)}``
+    for results past PENDING — the same condition under which
+    :func:`supersede_pending_for_station` raises
+    :class:`ActiveDeploymentConflictError`, so the plan predicts the conflict
+    instead of reporting OK — and ``{station_pk: deployment_pk}`` for PENDING
+    results a new deployment would supersede.
     """
+    mid_flight: dict[int, tuple[str, int]] = {}
+    queued: dict[int, int] = {}
     if not stations:
-        return {}
-    active: dict[int, tuple[str, int]] = {}
+        return mid_flight, queued
     rows = (
         DeploymentResult.objects.filter(
             station_id__in=[s.pk for s in stations],
-            status__in=DeploymentResult.ACTIVE_STATUSES,
+            status__in=DeploymentResult.NON_TERMINAL_STATUSES,
         )
         .order_by("station_id", "-pk")
         .values_list("station_id", "status", "deployment_id")
     )
     for station_id, status, deployment_id in rows:
-        active.setdefault(station_id, (status, deployment_id))
-    return active
+        if status == DeploymentResult.Status.PENDING:
+            queued.setdefault(station_id, deployment_id)
+        else:
+            mid_flight.setdefault(station_id, (status, deployment_id))
+    return mid_flight, queued
 
 
 def _not_in_target(plan: StationPlan, target_group) -> StationPlan:
@@ -121,7 +131,7 @@ def plan_deployment(tag: str, channel: str, stations: Iterable[Station]) -> list
     """
     stations = list(stations)
     releases = {r.machine: r for r in ImageRelease.objects.filter(tag=tag, channel=channel)}
-    mid_flight = _mid_flight_results(stations)
+    mid_flight, queued = _other_results(stations)
     plans = []
     for station in stations:
         machine = station_platform(station)
@@ -184,6 +194,7 @@ def plan_deployment(tag: str, channel: str, stations: Iterable[Station]) -> list
                 reason=PLAN_OK,
                 channel_switch=channel_switch,
                 downgrade=downgrade,
+                supersedes=queued.get(station.pk),
             )
         )
     return plans
@@ -346,7 +357,10 @@ def create_deployment(
             status=Deployment.Status.IN_PROGRESS,
             created_by=user if getattr(user, "pk", None) else None,
         )
-        for plan in plans:
+        # Station pk order, like the locks above: supersede locks other
+        # deployments' result rows per station, and a fixed order keeps two
+        # multi-station writers from cross-waiting.
+        for plan in sorted(plans, key=lambda p: p.station.pk):
             if not plan.ok:
                 final_plans.append(plan)
                 continue
@@ -382,6 +396,10 @@ def create_deployment(
                     user=user,
                     ip_address=ip_address,
                 )
+
+        # Report in target order, not lock order.
+        position = {p.station.pk: i for i, p in enumerate(plans)}
+        final_plans.sort(key=lambda p: position[p.station.pk])
 
         if not any(p.ok for p in final_plans):
             # Rolls back the deployment and drops the queued audit callbacks.

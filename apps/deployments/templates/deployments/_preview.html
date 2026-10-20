@@ -54,6 +54,7 @@ the deployment the form currently describes. Read-only.
           </td>
           <td class="actions" data-label="{% trans 'Notes' %}">
             {% if p.channel_switch %}<span class="pill pill-warn" title="{% blocktrans with channel=preview_channel %}The station's group follows another channel than {{ channel }}.{% endblocktrans %}">{% trans "Channel switch" %}</span>{% endif %}
+            {% if p.supersedes %}<span class="pill pill-muted" title="{% trans 'Its queued, not yet started result on that deployment is superseded.' %}">{% blocktrans with pk=p.supersedes %}Replaces queued #{{ pk }}{% endblocktrans %}</span>{% endif %}
             {% if p.downgrade %}<span class="pill pill-violet" title="{% blocktrans with current=p.station.current_image_release.tag %}Not newer than the running {{ current }}.{% endblocktrans %}">{% trans "Downgrade" %}</span>{% endif %}
           </td>
         </tr>

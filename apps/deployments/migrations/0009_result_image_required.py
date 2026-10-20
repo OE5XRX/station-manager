@@ -24,8 +24,9 @@ class Migration(migrations.Migration):
         ),
         # Irreversible: Deployment.image_release is gone and results of
         # multi-machine deployments carry different images, so there is no
-        # single value to restore. Reverse runs operations last-to-first, so
-        # this raises IrreversibleError before any schema change is undone
-        # (instead of a raw DB error re-adding the NOT NULL column).
+        # single value to restore. Django checks every operation for
+        # reversibility before unapplying any of them, so this makes a
+        # backward migrate fail with IrreversibleError up front (instead of a
+        # raw DB error re-adding the NOT NULL column).
         migrations.RunPython(migrations.RunPython.noop),
     ]
