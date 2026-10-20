@@ -87,3 +87,30 @@ def test_backfill_on_empty_tables_is_noop(migrator):
     migrator.apply_initial_migration(BEFORE)
     new = migrator.apply_tested_migration(AFTER).apps
     assert not new.get_model("deployments", "Deployment").objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_0009_is_explicitly_irreversible():
+    """Migrating back to 0008 fails cleanly with IrreversibleError, schema untouched."""
+    from django.db import connection
+    from django.db.migrations.exceptions import IrreversibleError
+    from django.db.migrations.executor import MigrationExecutor
+
+    executor = MigrationExecutor(connection)
+    try:
+        with pytest.raises(IrreversibleError):
+            executor.migrate([("deployments", "0008_backfill_version_fields")])
+        # Nothing was reverted: 0009 still applied, result.image_release present.
+        executor.loader.build_graph()
+        assert ("deployments", "0009_result_image_required") in executor.loader.applied_migrations
+    finally:
+        # Leave the schema fully migrated for the rest of the session.
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
+    columns = {
+        c.name
+        for c in connection.introspection.get_table_description(
+            connection.cursor(), "deployments_deploymentresult"
+        )
+    }
+    assert "image_release_id" in columns

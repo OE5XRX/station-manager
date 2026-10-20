@@ -423,3 +423,77 @@ def test_upgrade_station_active_conflict_shows_reason(client, admin_user, statio
 
     assert list(Deployment.objects.values_list("pk", flat=True)) == [blocking.pk]
     assert any(m for m in _messages(r))
+
+
+# --- deferred audit (on_commit) ---------------------------------------------
+
+
+def _fw_logs():
+    from apps.stations.models import StationAuditLog
+
+    return StationAuditLog.objects.filter(event_type=StationAuditLog.EventType.FIRMWARE_UPDATE)
+
+
+def test_upgrade_station_writes_one_audit_after_commit(
+    client, admin_user, station, make_release, django_capture_on_commit_callbacks
+):
+    cur = make_release("2026.10.01-01", latest=False)
+    make_release("2026.10.18-01")
+    station.current_image_release = cur
+    station.current_os_version = "2026.10.01-01"
+    station.save()
+
+    client.force_login(admin_user)
+    with django_capture_on_commit_callbacks(execute=True):
+        client.post(reverse("rollouts:upgrade_station", args=[station.pk]))
+
+    dep = Deployment.objects.get(target_station=station)
+    (log,) = _fw_logs()
+    assert log.station_id == station.pk
+    assert log.user == admin_user
+    assert "2026.10.18-01" in log.message
+    assert f"deployment #{dep.pk}" in log.message
+    assert admin_user.username in log.message
+
+
+def test_upgrade_station_conflict_writes_no_audit(
+    client, admin_user, station, make_release, django_capture_on_commit_callbacks
+):
+    cur = make_release("2026.10.01-01", latest=False)
+    make_release("2026.10.18-01")
+    station.current_image_release = cur
+    station.save()
+    _mid_flight(station, cur)
+
+    client.force_login(admin_user)
+    with django_capture_on_commit_callbacks(execute=True):
+        client.post(reverse("rollouts:upgrade_station", args=[station.pk]))
+
+    assert not _fw_logs().exists()
+
+
+def test_upgrade_group_audits_served_stations_only(
+    client, admin_user, make_release, make_rollout_group, django_capture_on_commit_callbacks
+):
+    group = make_rollout_group("Audit")
+    cur = make_release("2026.10.01-01", latest=False)
+    make_release("2026.10.18-01")
+    a = Station.objects.create(name="a", rollout_group=group, current_image_release=cur)
+    b = Station.objects.create(name="b", rollout_group=group, current_image_release=cur)
+    busy = Station.objects.create(name="busy", rollout_group=group, current_image_release=cur)
+    unprov = Station.objects.create(name="unprov", rollout_group=group)  # skipped
+    _mid_flight(busy, cur)
+
+    client.force_login(admin_user)
+    with django_capture_on_commit_callbacks(execute=True):
+        client.post(reverse("rollouts:upgrade_group", args=[group.slug]))
+
+    dep = Deployment.objects.get(target_group=group)
+    logs = _fw_logs()
+    assert sorted(logs.values_list("station_id", flat=True)) == sorted([a.pk, b.pk])
+    assert not logs.filter(station__in=[busy, unprov]).exists()
+    for log in logs:
+        assert "2026.10.18-01" in log.message
+        assert f"deployment #{dep.pk}" in log.message
+        assert admin_user.username in log.message
+        assert "group 'Audit'" in log.message

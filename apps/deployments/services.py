@@ -34,6 +34,7 @@ SKIP_NO_PLATFORM = "no_platform"
 SKIP_NO_IMAGE = "no_image"
 SKIP_NOT_OTA_READY = "not_ota_ready"
 SKIP_ACTIVE = "active_deployment"
+SKIP_NOT_IN_TARGET = "not_in_target"
 
 
 @dataclass(frozen=True)
@@ -70,14 +71,57 @@ def _skip(station, reason, message, **flags) -> StationPlan:
     return StationPlan(station=station, release=None, reason=reason, message=message, **flags)
 
 
-def plan_deployment(tag: str, channel: str, stations: Iterable[Station]) -> list[StationPlan]:
-    """Resolve ``(tag, channel)`` per station. One query for the releases.
+def active_conflict_message(station_pk, status_label, deployment_pk) -> str:
+    """Skip message for a station mid-flight on another deployment."""
+    return (
+        f"Station {station_pk} is mid-deployment ({status_label} on deployment #{deployment_pk})"
+    )
 
-    Stations should come with ``current_image_release`` and ``rollout_group``
+
+def _mid_flight_results(stations: list[Station]) -> dict[int, tuple[str, int]]:
+    """``{station_pk: (status, deployment_pk)}`` of results past PENDING.
+
+    Same condition under which :func:`supersede_pending_for_station` raises
+    :class:`ActiveDeploymentConflictError` (a non-PENDING, non-terminal
+    result), so the plan predicts the conflict instead of reporting OK.
+    """
+    if not stations:
+        return {}
+    active: dict[int, tuple[str, int]] = {}
+    rows = (
+        DeploymentResult.objects.filter(
+            station_id__in=[s.pk for s in stations],
+            status__in=DeploymentResult.ACTIVE_STATUSES,
+        )
+        .order_by("station_id", "-pk")
+        .values_list("station_id", "status", "deployment_id")
+    )
+    for station_id, status, deployment_id in rows:
+        active.setdefault(station_id, (status, deployment_id))
+    return active
+
+
+def _not_in_target(plan: StationPlan, target_group) -> StationPlan:
+    if target_group is not None:
+        message = _("Station is no longer in rollout group %(group)s.") % {
+            "group": target_group.name
+        }
+    else:
+        message = _("Station is no longer part of the deployment target.")
+    return _skip(plan.station, SKIP_NOT_IN_TARGET, message)
+
+
+def plan_deployment(tag: str, channel: str, stations: Iterable[Station]) -> list[StationPlan]:
+    """Resolve ``(tag, channel)`` per station.
+
+    Two queries regardless of fleet size: the releases of the version and the
+    stations' mid-flight results (``active_deployment`` skips). Stations
+    should come with ``current_image_release`` and ``rollout_group``
     selected. Archived releases are not deployable (default manager).
     """
     stations = list(stations)
     releases = {r.machine: r for r in ImageRelease.objects.filter(tag=tag, channel=channel)}
+    mid_flight = _mid_flight_results(stations)
     plans = []
     for station in stations:
         machine = station_platform(station)
@@ -113,6 +157,21 @@ def plan_deployment(tag: str, channel: str, stations: Iterable[Station]) -> list
                     reason=SKIP_NOT_OTA_READY,
                     message=_("Release %(tag)s is not OTA-ready (rootfs artifact missing).")
                     % {"tag": release.tag},
+                    channel_switch=channel_switch,
+                    downgrade=downgrade,
+                )
+            )
+            continue
+        if station.pk in mid_flight:
+            status, deployment_pk = mid_flight[station.pk]
+            plans.append(
+                StationPlan(
+                    station=station,
+                    release=release,
+                    reason=SKIP_ACTIVE,
+                    message=active_conflict_message(
+                        station.pk, DeploymentResult.Status(status).label, deployment_pk
+                    ),
                     channel_switch=channel_switch,
                     downgrade=downgrade,
                 )
@@ -255,7 +314,26 @@ def create_deployment(
         # multi-station creators can't lock-order deadlock either) makes the
         # second caller wait until the first commits.
         ok_pks = sorted(p.station.pk for p in plans if p.ok)
-        list(Station.objects.select_for_update().filter(pk__in=ok_pks).order_by("pk"))
+        # of=("self",): lock only the station rows (PostgreSQL refuses FOR
+        # UPDATE on the nullable side of the rollout_group outer join).
+        locked = (
+            Station.objects.select_for_update(of=("self",))
+            .filter(pk__in=ok_pks)
+            .select_related("current_image_release", "rollout_group")
+            .order_by("pk")
+        )
+        member_of = target_group if target_type == Deployment.TargetType.GROUP else None
+        if member_of is not None:
+            locked = locked.filter(rollout_group_id=member_of.pk)
+        locked_by_pk = {s.pk: s for s in locked}
+        # The plan above ran on unlocked rows: membership, machine and
+        # mid-flight state may have changed since. Re-plan on the locked
+        # rows; stations that dropped out of the target become skips.
+        replanned = {p.station.pk: p for p in plan_deployment(tag, channel, locked_by_pk.values())}
+        plans = [
+            p if not p.ok else replanned.get(p.station.pk) or _not_in_target(p, member_of)
+            for p in plans
+        ]
 
         deployment = Deployment.objects.create(
             image_tag=tag,

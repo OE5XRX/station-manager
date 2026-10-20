@@ -141,7 +141,7 @@ def test_plan_same_image_is_not_downgrade(make_release, on):
     assert plan.downgrade is False
 
 
-def test_plan_single_release_query(make_release, on, django_assert_num_queries):
+def test_plan_two_queries_regardless_of_fleet(make_release, on, django_assert_num_queries):
     make_release("v2")
     make_release("v2", machine=RPI)
     stations = [on(make_release("v1")), on(make_release("v1", machine=RPI))]
@@ -150,7 +150,7 @@ def test_plan_single_release_query(make_release, on, django_assert_num_queries):
         .objects.filter(pk__in=[s.pk for s in stations])
         .select_related("current_image_release", "rollout_group")
     )
-    with django_assert_num_queries(1):
+    with django_assert_num_queries(2):  # releases + mid-flight results
         services.plan_deployment("v2", "release", stations)
 
 
@@ -399,4 +399,145 @@ def test_create_skips_not_ota_ready_but_serves_rest(make_release, on, staff_user
     assert [(x.station_id, x.image_release_id) for x in dep.results.all()] == [(r.pk, good.pk)]
     assert [(s["station_id"], s["reason"]) for s in dep.skipped_stations] == [
         (q.pk, services.SKIP_NOT_OTA_READY)
+    ]
+
+
+# --- active-deployment in plan + re-plan on locked rows ----------------------
+
+
+def _mid_flight(station, release, status=DeploymentResult.Status.INSTALLING):
+    other = Deployment.objects.create(
+        image_tag=release.tag,
+        image_channel=release.channel,
+        target_type=Deployment.TargetType.STATION,
+        target_station=station,
+        status=Deployment.Status.IN_PROGRESS,
+    )
+    DeploymentResult.objects.create(
+        deployment=other, station=station, image_release=release, status=status
+    )
+    return other
+
+
+def test_plan_reports_active_deployment(make_release, on):
+    cur = make_release("v1")
+    target = make_release("v2")
+    busy, free = on(cur), on(cur)
+    blocking = _mid_flight(busy, cur)
+
+    plans = _plan_by_name(services.plan_deployment("v2", "release", [busy, free]))
+
+    assert plans[free.name].ok
+    plan = plans[busy.name]
+    assert plan.reason == services.SKIP_ACTIVE
+    assert plan.release == target
+    assert plan.message == (
+        f"Station {busy.pk} is mid-deployment (Installing on deployment #{blocking.pk})"
+    )
+
+
+def test_plan_pending_elsewhere_is_not_active(make_release, on):
+    cur = make_release("v1")
+    make_release("v2")
+    s = on(cur)
+    _mid_flight(s, cur, status=DeploymentResult.Status.PENDING)
+    (plan,) = services.plan_deployment("v2", "release", [s])
+    assert plan.ok
+
+
+def test_plan_terminal_elsewhere_is_not_active(make_release, on):
+    cur = make_release("v1")
+    make_release("v2")
+    s = on(cur)
+    _mid_flight(s, cur, status=DeploymentResult.Status.FAILED)
+    (plan,) = services.plan_deployment("v2", "release", [s])
+    assert plan.ok
+
+
+def test_create_skips_station_moved_out_of_group_before_lock(
+    make_release, on, make_rollout_group, staff_user, monkeypatch
+):
+    group = make_rollout_group("Beta")
+    other = make_rollout_group("Gamma")
+    cur = make_release("v1")
+    make_release("v2")
+    stay, leave = on(cur, group=group), on(cur, group=group)
+
+    real_plan = services.plan_deployment
+    calls = []
+
+    def plan_then_move(tag, channel, stations):
+        plans = real_plan(tag, channel, stations)
+        if not calls:  # after the pre-lock plan, before the row locks
+            type(stay).objects.filter(pk=leave.pk).update(rollout_group=other)
+        calls.append(1)
+        return plans
+
+    monkeypatch.setattr(services, "plan_deployment", plan_then_move)
+    dep = services.create_deployment(
+        tag="v2",
+        channel="release",
+        target_type=Deployment.TargetType.GROUP,
+        target_group=group,
+        user=staff_user,
+    )
+
+    assert list(dep.results.values_list("station_id", flat=True)) == [stay.pk]
+    assert [(s["station_id"], s["reason"]) for s in dep.skipped_stations] == [
+        (leave.pk, services.SKIP_NOT_IN_TARGET)
+    ]
+    assert "Beta" in dep.skipped_stations[0]["message"]
+
+
+def test_create_replans_against_machine_changed_before_lock(
+    make_release, on, staff_user, monkeypatch
+):
+    q1, r1 = make_release("v1"), make_release("v1", machine=RPI)
+    make_release("v2")
+    r2 = make_release("v2", machine=RPI)
+    s = on(q1)
+
+    real_plan = services.plan_deployment
+    calls = []
+
+    def plan_then_reprovision(tag, channel, stations):
+        plans = real_plan(tag, channel, stations)
+        if not calls:
+            type(s).objects.filter(pk=s.pk).update(current_image_release=r1)
+        calls.append(1)
+        return plans
+
+    monkeypatch.setattr(services, "plan_deployment", plan_then_reprovision)
+    dep = services.create_deployment(
+        tag="v2", channel="release", target_type="station", target_station=s, user=staff_user
+    )
+
+    assert dep.results.get().image_release == r2
+    assert dep.plans[0].release == r2
+
+
+def test_create_skips_station_gone_mid_flight_before_lock(
+    make_release, on, staff_user, monkeypatch
+):
+    cur = make_release("v1")
+    make_release("v2")
+    busy, free = on(cur), on(cur)
+
+    real_plan = services.plan_deployment
+    calls = []
+
+    def plan_then_busy(tag, channel, stations):
+        plans = real_plan(tag, channel, stations)
+        if not calls:
+            _mid_flight(busy, cur)
+        calls.append(1)
+        return plans
+
+    monkeypatch.setattr(services, "plan_deployment", plan_then_busy)
+    dep = services.create_deployment(
+        tag="v2", channel="release", target_type="all", user=staff_user
+    )
+    assert list(dep.results.values_list("station_id", flat=True)) == [free.pk]
+    assert [(s["station_id"], s["reason"]) for s in dep.skipped_stations] == [
+        (busy.pk, services.SKIP_ACTIVE)
     ]

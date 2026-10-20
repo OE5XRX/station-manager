@@ -22,4 +22,10 @@ class Migration(migrations.Migration):
             model_name="deployment",
             name="image_release",
         ),
+        # Irreversible: Deployment.image_release is gone and results of
+        # multi-machine deployments carry different images, so there is no
+        # single value to restore. Reverse runs operations last-to-first, so
+        # this raises IrreversibleError before any schema change is undone
+        # (instead of a raw DB error re-adding the NOT NULL column).
+        migrations.RunPython(migrations.RunPython.noop),
     ]

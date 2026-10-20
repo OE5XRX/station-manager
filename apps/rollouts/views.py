@@ -128,6 +128,7 @@ class UpgradeGroupView(AreaPermissionMixin, View):
             still_members = set(
                 Station.objects.select_for_update()
                 .filter(pk__in=[s.pk for s in stations], rollout_group=group)
+                .order_by("pk")  # same lock order as create_deployment (no deadlock)
                 .values_list("pk", flat=True)
             )
             for (tag, channel), eligible in by_version.items():

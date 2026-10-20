@@ -236,3 +236,103 @@ def test_detail_query_count_independent_of_results(
     with django_assert_max_num_queries(len(ctx.captured_queries)):
         response = client.get(url(big))
     assert response.context["machines"] == [QEMU]
+
+
+def _mid_flight(station, release, status=DeploymentResult.Status.INSTALLING):
+    other = Deployment.objects.create(
+        image_tag=release.tag,
+        image_channel=release.channel,
+        target_type=Deployment.TargetType.STATION,
+        target_station=station,
+        status=Deployment.Status.IN_PROGRESS,
+    )
+    DeploymentResult.objects.create(
+        deployment=other, station=station, image_release=release, status=status
+    )
+    return other
+
+
+@pytest.mark.django_db
+class TestActiveDeployment:
+    def test_preview_row_shows_active_reason(self, client, staff_user, fleet):
+        blocking = _mid_flight(fleet["qemu"], fleet["q1"])
+        client.force_login(staff_user)
+        response = client.get(
+            reverse("deployments:deployment_preview"), data=_data("release|2026.02.01")
+        )
+        rows = {p.station.name: p for p in response.context["plans"]}
+        assert rows["Alpha"].reason == "active_deployment"
+        assert rows["Bravo"].ok
+        body = response.content.decode()
+        assert 'data-plan-reason="active_deployment"' in body
+        assert f"deployment #{blocking.pk}" in body
+        assert "1 will be deployed" in body
+
+    def test_single_mid_flight_station_is_form_error(self, client, staff_user, fleet):
+        blocking = _mid_flight(fleet["qemu"], fleet["q1"])
+        form = DeploymentForm(
+            data=_data(
+                "release|2026.02.01",
+                Deployment.TargetType.STATION,
+                target_station=fleet["qemu"].pk,
+            )
+        )
+        assert not form.is_valid()  # caught by clean(), not only by the create race guard
+        assert any("mid-deployment" in e for e in form.non_field_errors())
+        client.force_login(staff_user)
+        response = client.post(
+            reverse("deployments:deployment_create"),
+            data=_data(
+                "release|2026.02.01",
+                Deployment.TargetType.STATION,
+                target_station=fleet["qemu"].pk,
+            ),
+        )
+        assert response.status_code == 200
+        assert response.context["form"].non_field_errors()
+        assert list(Deployment.objects.values_list("pk", flat=True)) == [blocking.pk]
+        assert "mid-deployment" in response.content.decode()
+
+    def test_mixed_fleet_lists_mid_flight_station_as_skipped(self, client, staff_user, fleet):
+        blocking = _mid_flight(fleet["qemu"], fleet["q1"])
+        client.force_login(staff_user)
+        response = client.post(
+            reverse("deployments:deployment_create"), data=_data("release|2026.02.01")
+        )
+        assert response.status_code == 302
+        dep = Deployment.objects.exclude(pk=blocking.pk).get()
+        assert list(dep.results.values_list("station_id", flat=True)) == [fleet["rpi"].pk]
+        reasons = {s["station_name"]: s["reason"] for s in dep.skipped_stations}
+        assert reasons == {"Alpha": "active_deployment", "Charlie": "no_platform"}
+
+    def test_create_race_after_clean_renders_form_error(
+        self, client, staff_user, fleet, monkeypatch
+    ):
+        """Servable in clean(), mid-flight by the time create runs → 200, no 500."""
+        from apps.deployments import forms
+
+        real_plan = forms.plan_deployment
+
+        def plan_then_go_mid_flight(tag, channel, stations):
+            plans = real_plan(tag, channel, stations)
+            _mid_flight(fleet["qemu"], fleet["q1"])
+            return plans
+
+        monkeypatch.setattr(forms, "plan_deployment", plan_then_go_mid_flight)
+        client.force_login(staff_user)
+        n_before = Deployment.objects.count()
+        response = client.post(
+            reverse("deployments:deployment_create"),
+            data=_data(
+                "release|2026.02.01",
+                Deployment.TargetType.STATION,
+                target_station=fleet["qemu"].pk,
+            ),
+        )
+        assert response.status_code == 200
+        # Only the blocking deployment the patch created — none from the form.
+        assert Deployment.objects.count() == n_before + 1
+        assert not Deployment.objects.filter(image_tag="2026.02.01").exists()
+        errors = response.context["form"].non_field_errors()
+        assert errors and "mid-deployment" in errors[0]
+        assert "mid-deployment" in response.content.decode()
