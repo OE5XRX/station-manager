@@ -334,7 +334,7 @@ ALERT_WEBPUSH_ENABLED = bool(WEBPUSH_VAPID_PUBLIC_KEY and WEBPUSH_VAPID_PRIVATE_
 # so token signatures survive container restarts.
 #
 # OIDC_ISS_ENDPOINT MUST be set explicitly in prod.py (or via env) to
-# the public base URL — e.g. "https://ham.oe5xrx.org/sso". Without it
+# the public base URL — e.g. "https://remote.oe5xrx.org/sso". Without it
 # DOT auto-derives the issuer from the request host, which drifts
 # behind nginx (SECURE_PROXY_SSL_HEADER masks the original scheme) and
 # breaks token validation on every RP. Empty default = DOT auto-derive,

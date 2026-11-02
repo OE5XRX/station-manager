@@ -50,11 +50,11 @@ class TestConfigRender:
         from apps.provisioning.config_render import render_config
 
         yaml_text = render_config(
-            server_url="https://ham.oe5xrx.org",
+            server_url="https://remote.oe5xrx.org",
             station_id=station.id,
         )
         assert f"station_id: {station.id}" in yaml_text
-        assert "server_url: https://ham.oe5xrx.org" in yaml_text
+        assert "server_url: https://remote.oe5xrx.org" in yaml_text
         assert "ed25519_key_path: /etc/stationagent/device_key.pem" in yaml_text
         assert "terminal_enabled: true" in yaml_text
         assert "terminal_shell: /bin/sh" in yaml_text
@@ -73,7 +73,7 @@ class TestConfigRender:
         from station_agent.config import CONFIG_PATH_ENV, load_config
 
         yaml_text = render_config(
-            server_url="https://ham.oe5xrx.org",
+            server_url="https://remote.oe5xrx.org",
             station_id=station.id,
         )
         assert "audio_enabled" not in yaml_text
@@ -219,7 +219,7 @@ class TestProvisioningWorker:
         )
         from apps.provisioning.models import ProvisioningJob
 
-        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+        settings.SERVER_PUBLIC_URL = "https://remote.oe5xrx.org"
 
         # Stubs for IO-bound steps
         monkeypatch.setattr(
@@ -268,7 +268,7 @@ class TestProvisioningWorker:
         from apps.provisioning.models import ProvisioningJob
         from apps.stations.models import StationAuditLog
 
-        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+        settings.SERVER_PUBLIC_URL = "https://remote.oe5xrx.org"
 
         monkeypatch.setattr(
             "apps.images.storage.open_stream",
@@ -315,7 +315,7 @@ class TestProvisioningWorker:
         from apps.provisioning.models import ProvisioningJob
         from apps.stations.models import StationAuditLog
 
-        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+        settings.SERVER_PUBLIC_URL = "https://remote.oe5xrx.org"
 
         def boom(key):
             raise RuntimeError("simulated S3 failure")
@@ -351,7 +351,7 @@ class TestProvisioningWorker:
         from apps.provisioning.models import ProvisioningJob
         from apps.stations.models import StationAuditLog
 
-        settings.SERVER_PUBLIC_URL = "https://ham.oe5xrx.org"
+        settings.SERVER_PUBLIC_URL = "https://remote.oe5xrx.org"
 
         monkeypatch.setattr(
             "apps.images.storage.open_stream",

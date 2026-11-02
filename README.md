@@ -10,7 +10,7 @@ Stationen](https://www.oe5xrx.at) (Austria). Manages up to ~100 remote
 amateur-radio stations (Raspberry Pi CM4 carrier + STM32 mainboard),
 paired with the [linux-image][li] Yocto build.
 
-Live at [ham.oe5xrx.org](https://ham.oe5xrx.org).
+Live at [remote.oe5xrx.org](https://remote.oe5xrx.org).
 
 [li]: https://github.com/OE5XRX/linux-image
 
@@ -199,7 +199,7 @@ an empty country/city — token issuance is never blocked.
    - **Post logout redirect URIs** — one per line if RP needs RP-initiated logout
 4. Save and **copy the `client_secret`** from the success page — it's only shown once.
 5. Hand `client_id`, `client_secret`, and the discovery URL
-   `https://ham.oe5xrx.org/sso/.well-known/openid-configuration`
+   `https://remote.oe5xrx.org/sso/.well-known/openid-configuration`
    to the RP operator.
 
 ### Granting users access to an app
@@ -239,7 +239,7 @@ Pushing to `main` triggers [`deploy.yml`](.github/workflows/deploy.yml):
 3. `docker compose up -d --force-recreate` across web/db/redis/nginx
    plus the two workers (`station-monitor`, `alert-monitor`)
 4. `manage.py migrate --noinput`
-5. Health check against `https://ham.oe5xrx.org/api/v1/health/`
+5. Health check against `https://remote.oe5xrx.org/api/v1/health/`
 
 The prod compose file lives under `deploy/`. Secrets (DB password,
 Django key, Telegram token, SMTP credentials) are passed through
