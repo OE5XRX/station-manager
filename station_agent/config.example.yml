@@ -1,4 +1,4 @@
-server_url: https://ham.oe5xrx.org
+server_url: https://remote.oe5xrx.org
 
 # Authentication: Ed25519 signature (required)
 station_id: 1
