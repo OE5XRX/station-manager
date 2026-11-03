@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% load i18n l10n %}
+
+{% block title %}{% trans "Metrics" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'monitoring:alert_list' %}">{% trans "Alerts" %}</a>
+  <span class="sep">/</span>
+  <a href="{% url 'monitoring:alert_settings' %}">{% trans "Rules" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Metrics" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <div class="page-eyebrow">{% trans "Monitoring" %} · {% trans "Metric definitions" %}</div>
+    <h1 class="page-title">{% trans "Metrics" %}</h1>
+    <p class="page-sub">{% trans "Every metric key the agents have described. Overrides always win over the agent's values." %}</p>
+  </div>
+  <div class="page-head-actions">
+    {% if not can.alert_rules.manage %}{% include "includes/readonly_badge.html" %}{% endif %}
+    <a href="{% url 'monitoring:alert_settings' %}#threshold-rules" class="btn btn-ghost">{% trans "Threshold rules" %}</a>
+  </div>
+</div>
+
+<form class="filter-bar" method="get" action="{% url 'monitoring:metric_definitions' %}">
+  <select name="group" class="form-select" style="width:auto;min-width:160px;" data-submit-on-change aria-label="{% trans 'Group' %}">
+    <option value="">{% trans "All groups" %} ({{ total_count }})</option>
+    {% for g, n in groups %}
+    <option value="{{ g }}"{% if current_group == g %} selected{% endif %}>{{ g }} ({{ n }})</option>
+    {% endfor %}
+  </select>
+  <select name="state" class="form-select" style="width:auto;min-width:160px;" data-submit-on-change aria-label="{% trans 'State' %}">
+    <option value="">{% trans "Any state" %}</option>
+    <option value="rejected"{% if current_state == "rejected" %} selected{% endif %}>{% trans "Recently rejected" %} ({{ rejected_count }})</option>
+    <option value="hidden"{% if current_state == "hidden" %} selected{% endif %}>{% trans "Hidden" %}</option>
+    <option value="blocked"{% if current_state == "blocked" %} selected{% endif %}>{% trans "Blocked" %}</option>
+  </select>
+  <noscript><button type="submit" class="btn btn-sm">{% trans "Filter" %}</button></noscript>
+</form>
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Definitions" %}</div>
+    <span class="t-label">{% trans "Hidden: stored + alertable, not shown on stations · Blocked: values dropped on ingest" %}</span>
+  </div>
+  <div class="panel-body flush" style="overflow-x:auto;">
+    <table class="t-table md-table">
+      <thead>
+        <tr>
+          <th>{% trans "Key" %} / {% trans "Agent label" %}</th>
+          <th>{% trans "Unit" %}</th>
+          <th>{% trans "Group" %}</th>
+          <th>{% trans "Plausible range" %}</th>
+          <th>{% trans "Last seen" %}</th>
+          <th>{% trans "Label override" %}</th>
+          <th>{% trans "Min override" %}</th>
+          <th>{% trans "Max override" %}</th>
+          <th>{% trans "Visibility" %}</th>
+          {% if can.alert_rules.manage %}<th></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in definitions %}
+        <tr id="metric-{{ d.pk }}" class="md-row{% if d.is_hidden %} is-hidden{% endif %}{% if d.is_blocked %} is-blocked{% endif %}">
+          <td>
+            <div class="md-key">{{ d.key }}</div>
+            <div class="t-mono-sm t-muted">{{ d.label|default:"—" }}</div>
+            {% if d.last_rejected_at %}
+            <div class="md-rejected" data-rejected>
+              <span class="pill pill-warn" title="{{ d.last_rejected_at|date:'c' }}">{% trans "Rejected" %}</span>
+              <span>{{ d.last_rejected_at|timesince }} {% trans "ago" %}</span>
+              {% if d.last_rejected_value is not None %}
+              <span class="t-muted">
+                {% if d.last_rejected_value.avg is not None %}min {{ d.last_rejected_value.min|unlocalize }} · avg {{ d.last_rejected_value.avg|unlocalize }} · max {{ d.last_rejected_value.max|unlocalize }}{% else %}{{ d.last_rejected_value|unlocalize }}{% endif %}
+              </span>
+              {% endif %}
+            </div>
+            {% endif %}
+          </td>
+          <td class="t-mono">{{ d.unit|default:"—" }}</td>
+          <td><span class="tag">{{ d.group }}</span></td>
+          <td class="md-range">
+            {% if d.min_value is not None %}{{ d.min_value|unlocalize }}{% else %}−∞{% endif %} … {% if d.max_value is not None %}{{ d.max_value|unlocalize }}{% else %}+∞{% endif %}
+          </td>
+          <td class="t-mono-sm t-muted" title="{{ d.last_seen|date:'c' }}">{{ d.last_seen|timesince }}</td>
+          {% if can.alert_rules.manage %}
+          <td>
+            <input type="text" name="label_override" form="md-form-{{ d.pk }}" maxlength="64"
+                   value="{{ d.label_override }}" placeholder="{{ d.label|default:d.key }}"
+                   aria-label="{% trans 'Label override' %} {{ d.key }}">
+          </td>
+          <td>
+            <input type="number" step="any" lang="en" inputmode="decimal" name="min_override" form="md-form-{{ d.pk }}"
+                   {% if d.min_override is not None %}value="{{ d.min_override|unlocalize }}"{% endif %}
+                   {% if d.min_value is not None %}placeholder="{{ d.min_value|unlocalize }}"{% endif %}
+                   aria-label="{% trans 'Min override' %} {{ d.key }}">
+          </td>
+          <td>
+            <input type="number" step="any" lang="en" inputmode="decimal" name="max_override" form="md-form-{{ d.pk }}"
+                   {% if d.max_override is not None %}value="{{ d.max_override|unlocalize }}"{% endif %}
+                   {% if d.max_value is not None %}placeholder="{{ d.max_value|unlocalize }}"{% endif %}
+                   aria-label="{% trans 'Max override' %} {{ d.key }}">
+          </td>
+          <td>
+            <div class="stack-gap-6">
+              <label class="md-check"><input type="checkbox" name="is_hidden" form="md-form-{{ d.pk }}"{% if d.is_hidden %} checked{% endif %}> {% trans "Hidden" %}</label>
+              <label class="md-check"><input type="checkbox" name="is_blocked" form="md-form-{{ d.pk }}"{% if d.is_blocked %} checked{% endif %}> {% trans "Blocked" %}</label>
+            </div>
+          </td>
+          <td>
+            <form id="md-form-{{ d.pk }}" method="post" action="{% url 'monitoring:metric_definition_update' d.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ current_url }}">
+              <button type="submit" class="btn btn-sm">{% trans "Save" %}</button>
+            </form>
+          </td>
+          {% else %}
+          <td>{{ d.label_override|default:"—" }}</td>
+          <td class="t-mono">{% if d.min_override is not None %}{{ d.min_override|unlocalize }}{% else %}—{% endif %}</td>
+          <td class="t-mono">{% if d.max_override is not None %}{{ d.max_override|unlocalize }}{% else %}—{% endif %}</td>
+          <td>
+            {% if d.is_blocked %}<span class="pill pill-offline">{% trans "Blocked" %}</span>
+            {% elif d.is_hidden %}<span class="pill pill-muted">{% trans "Hidden" %}</span>
+            {% else %}<span class="pill pill-online">{% trans "Visible" %}</span>{% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="10">
+            <div class="empty">
+              <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19h16M7 15l3-4 3 2 4-6"/></svg></div>
+              <div class="empty-title">{% trans "No metric definitions" %}</div>
+              <div>{% trans "Definitions appear automatically when an agent describes its metrics in a heartbeat." %}</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if page_obj.has_other_pages %}
+  <div class="panel-foot row-gap-8">
+    {% if page_obj.has_previous %}<a class="btn btn-sm" href="?page={{ page_obj.previous_page_number }}&amp;group={{ current_group|urlencode }}&amp;state={{ current_state|urlencode }}">&larr;</a>{% endif %}
+    <span class="t-mono-sm t-muted">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}<a class="btn btn-sm" href="?page={{ page_obj.next_page_number }}&amp;group={{ current_group|urlencode }}&amp;state={{ current_state|urlencode }}">&rarr;</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

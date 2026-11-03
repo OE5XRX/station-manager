@@ -101,6 +101,7 @@
       <button type="button" class="tab active" data-tab="overview" aria-selected="true">{% trans "Overview" %}</button>
       <button type="button" class="tab" data-tab="photos" aria-selected="false">{% trans "Photos" %} <span class="count">{{ station.photos.count }}</span></button>
       <button type="button" class="tab" data-tab="logbook" aria-selected="false">{% trans "Logbook" %} <span class="count">{{ station.log_entries.count }}</span></button>
+      <button type="button" class="tab" data-tab="metrics" aria-selected="false">{% trans "Metrics" %}{% if metric_count %} <span class="count">{{ metric_count }}</span>{% endif %}</button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
       <button type="button" class="tab" data-tab="telemetry" aria-selected="false">{% trans "Telemetry" %}</button>
       {% if can.stations.manage %}
@@ -278,11 +279,18 @@
     </section>
   </div>
 
+  <div data-tab-panel="metrics" hidden>
+    {% include "stations/_metrics_panel.html" %}
+  </div>
+
   <div data-tab-panel="inventory" hidden>
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Hardware inventory" %}</div>
-        {% if station.inventory %}<span class="t-label">{% trans "Updated" %} {{ station.inventory.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+        <div class="row-gap-8">
+          {% if station.inventory %}<span class="t-label">{% trans "Updated" %} {{ station.inventory.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+          <a class="btn btn-sm btn-ghost" href="#metrics" data-tab-link="metrics">{% trans "Live readings → Metrics" %}</a>
+        </div>
       </div>
       <div class="panel-body">
         {% if inventory_data %}

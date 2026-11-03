@@ -15,6 +15,27 @@ urlpatterns = [
         name="alert_rule_update",
     ),
     path(
+        "settings/thresholds/new/",
+        views.ThresholdRuleCreateView.as_view(),
+        name="threshold_rule_create",
+    ),
+    path(
+        "settings/thresholds/<int:pk>/",
+        views.ThresholdRuleUpdateView.as_view(),
+        name="threshold_rule_update",
+    ),
+    path(
+        "settings/thresholds/<int:pk>/delete/",
+        views.ThresholdRuleDeleteView.as_view(),
+        name="threshold_rule_delete",
+    ),
+    path("metrics/", views.MetricDefinitionListView.as_view(), name="metric_definitions"),
+    path(
+        "metrics/<int:pk>/",
+        views.MetricDefinitionUpdateView.as_view(),
+        name="metric_definition_update",
+    ),
+    path(
         "test/email/",
         views.TestNotificationView.as_view(),
         name="test_email",

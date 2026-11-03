@@ -108,6 +108,71 @@ class StationListView(AreaPermissionMixin, ListView):
         return context
 
 
+# Display order + labels of the Metrics tab groups (spec §6).
+METRIC_GROUP_LABELS = (
+    ("system", _("System")),
+    ("network", _("Network")),
+    ("power", _("Power")),
+    ("disk", _("Disk")),
+    ("module", _("Modules")),
+    ("other", _("Other")),
+)
+
+
+def _fmt_metric(value, precision):
+    try:
+        return f"{float(value):.{max(0, int(precision))}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def metric_groups(station):
+    """Current metric values of ``station`` grouped for the Metrics tab.
+
+    Returns ``[(group_label, [row, ...]), ...]`` in METRIC_GROUP_LABELS order,
+    empty groups omitted. Keys without a definition, hidden or blocked keys
+    are skipped. ``row["breached"]`` is the severity of an open threshold
+    alert on that concrete key (``"critical"`` wins), else ``""``.
+    """
+    from apps.monitoring.models import MetricDefinition, ThresholdState
+
+    telemetry = getattr(station, "telemetry", None)
+    values = (telemetry.metrics if telemetry else None) or {}
+    if not isinstance(values, dict) or not values:
+        return []
+    definitions = MetricDefinition.objects.filter(
+        key__in=list(values), is_hidden=False, is_blocked=False
+    )
+    breached = {}
+    for key, severity in ThresholdState.objects.filter(
+        station=station, alert__isnull=False, alert__is_resolved=False
+    ).values_list("metric_key", "alert__severity"):
+        if breached.get(key) != "critical":
+            breached[key] = severity
+    grouped = {}
+    for d in sorted(definitions, key=lambda d: d.key):
+        value = values.get(d.key)
+        if not isinstance(value, dict) or value.get("avg") is None:
+            continue
+        lo, hi, avg = value.get("min", value["avg"]), value.get("max", value["avg"]), value["avg"]
+        grouped.setdefault(d.group, []).append(
+            {
+                "key": d.key,
+                "label": d.display_label,
+                "unit": d.unit,
+                "precision": d.precision,
+                "min": _fmt_metric(lo, d.precision),
+                "max": _fmt_metric(hi, d.precision),
+                "avg": _fmt_metric(avg, d.precision),
+                "is_aggregate": lo != hi,
+                "breached": breached.get(d.key, ""),
+            }
+        )
+    known = [g for g, _label in METRIC_GROUP_LABELS]
+    order = [*METRIC_GROUP_LABELS, *((g, g) for g in grouped if g not in known)]
+    return [(str(label), grouped[g]) for g, label in order if g in grouped]
+
+
 class StationDetailView(AreaPermissionMixin, DetailView):
     area = "stations"
     model = Station
@@ -140,6 +205,12 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             context["raw_private_key"] = raw_private_key
         user = self.request.user
         context["drain"] = module_drain.drain_status(self.object)
+        groups = metric_groups(self.object)
+        context["metric_groups"] = groups
+        context["metric_count"] = sum(len(rows) for _label, rows in groups)
+        context["metric_breached_count"] = sum(
+            1 for _label, rows in groups for r in rows if r["breached"]
+        )
         inventory = getattr(self.object, "inventory", None)
         context["inventory_data"] = inventory_for_viewer(
             inventory.data if inventory else None, can(user, "stations", "manage")

@@ -122,6 +122,16 @@
     });
     try { history.replaceState(null, "", "#" + name); } catch (_) {}
   });
+  // Link that switches to a tab of the page's tab group (e.g. Inventory -> Metrics).
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest("[data-tab-link]");
+    if (!link) return;
+    var target = document.querySelector('[data-tabs] [data-tab="' + link.getAttribute("data-tab-link") + '"]');
+    if (!target) return;
+    e.preventDefault();
+    target.click();
+    target.scrollIntoView({ block: "nearest" });
+  });
   if (location.hash) {
     var h = location.hash.substring(1);
     var initial = document.querySelector('[data-tab="' + h + '"]');

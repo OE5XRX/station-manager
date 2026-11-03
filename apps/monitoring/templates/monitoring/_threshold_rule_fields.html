@@ -1,0 +1,65 @@
+{% load i18n l10n %}
+{% comment %}
+  Editable threshold-rule expression. Context: f (ThresholdRuleForm),
+  unit (str), operator_choices / aggregate_choices / severity_choices,
+  delete_url (optional). Number inputs: dot decimal via unlocalize + lang="en".
+{% endcomment %}
+<div class="tr-ident">
+  <input type="text" name="name" maxlength="100" value="{{ f.name.value|default_if_none:'' }}"
+         placeholder="{% trans 'Rule name' %}" aria-label="{% trans 'Rule name' %}">
+  <input type="text" name="description" maxlength="200" value="{{ f.description.value|default_if_none:'' }}"
+         placeholder="{% trans 'Description (optional)' %}" aria-label="{% trans 'Description' %}">
+</div>
+<div class="tr-expr">
+  <span class="tr-kw">{% trans "When" %}</span>
+  <select name="aggregate" aria-label="{% trans 'Aggregate' %}">
+    {% for val, lbl in aggregate_choices %}
+    <option value="{{ val }}"{% if f.aggregate.value == val %} selected{% endif %}>{{ val|upper }}</option>
+    {% endfor %}
+  </select>
+  <span class="tr-paren">(</span>
+  <input type="text" name="metric_key" list="metric-key-list" maxlength="64" required
+         value="{{ f.metric_key.value|default_if_none:'' }}" placeholder="disk.*.used_pct"
+         spellcheck="false" autocomplete="off" aria-label="{% trans 'Metric key or pattern' %}"
+         {% if f.metric_key.errors %}aria-invalid="true"{% endif %}>
+  <span class="tr-paren">)</span>
+  <select name="operator" required aria-label="{% trans 'Operator' %}">
+    {% for val, lbl in operator_choices %}
+    <option value="{{ val }}"{% if f.operator.value == val %} selected{% endif %}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <input type="number" step="any" lang="en" inputmode="decimal" name="threshold" required
+         {% if f.threshold.value is not None %}value="{{ f.threshold.value|unlocalize }}"{% endif %}
+         aria-label="{% trans 'Threshold' %}" {% if f.threshold.errors %}aria-invalid="true"{% endif %}>
+  <span class="tr-unit">{{ unit }}</span>
+  <span class="tr-kw">{% trans "for" %}</span>
+  <input type="number" step="any" lang="en" inputmode="numeric" min="0" name="duration_seconds" required
+         value="{% if f.duration_seconds.value is not None %}{{ f.duration_seconds.value|unlocalize }}{% else %}0{% endif %}"
+         aria-label="{% trans 'Duration in seconds' %}" {% if f.duration_seconds.errors %}aria-invalid="true"{% endif %}>
+  <span class="tr-unit">s</span>
+  <span class="tr-spacer"></span>
+  <span class="tr-actions">
+    <select name="severity" aria-label="{% trans 'Severity' %}">
+      {% for val, lbl in severity_choices %}
+      <option value="{{ val }}"{% if f.severity.value == val %} selected{% endif %}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+    <label class="tr-toggle">
+      <input type="checkbox" name="is_active"{% if f.is_active.value %} checked{% endif %}>
+      {% trans "Active" %}
+    </label>
+    <button type="submit" class="btn btn-sm btn-primary">{% trans "Save" %}</button>
+    {% if delete_url %}
+    <button type="submit" class="btn btn-sm btn-danger" formaction="{{ delete_url }}" formnovalidate
+            data-confirm="{% trans 'Delete this threshold rule? Its open alerts are resolved.' %}">{% trans "Delete" %}</button>
+    {% endif %}
+  </span>
+</div>
+{% if f.errors %}
+<div class="tr-errors" role="alert">
+  <ul class="errorlist">
+    {% for field in f %}{% for err in field.errors %}<li><span class="t-mono-sm">{{ field.name }}</span> — {{ err }}</li>{% endfor %}{% endfor %}
+    {% for err in f.non_field_errors %}<li>{{ err }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
