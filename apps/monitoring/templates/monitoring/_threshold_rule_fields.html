@@ -33,7 +33,7 @@
          aria-label="{% trans 'Threshold' %}" {% if f.threshold.errors %}aria-invalid="true"{% endif %}>
   <span class="tr-unit">{{ unit }}</span>
   <span class="tr-kw">{% trans "for" %}</span>
-  <input type="number" step="any" lang="en" inputmode="numeric" min="0" name="duration_seconds" required
+  <input type="number" step="1" lang="en" inputmode="numeric" min="0" name="duration_seconds" required
          value="{% if f.duration_seconds.value is not None %}{{ f.duration_seconds.value|unlocalize }}{% else %}0{% endif %}"
          aria-label="{% trans 'Duration in seconds' %}" {% if f.duration_seconds.errors %}aria-invalid="true"{% endif %}>
   <span class="tr-unit">s</span>

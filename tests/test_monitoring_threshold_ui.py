@@ -213,7 +213,9 @@ class TestSettingsPage:
         assert inputs, "no number inputs rendered"
         for tag in inputs:
             assert 'lang="en"' in tag, tag
-            assert 'step="any"' in tag, tag
+            # Integer seconds use step="1"; every other number input is step="any".
+            expected_step = 'step="1"' if 'name="duration_seconds"' in tag else 'step="any"'
+            assert expected_step in tag, tag
         assert 'value="11.0"' in content
         assert 'value="11,0"' not in content
         # Empty create form never leaks Python's None into inputs.
