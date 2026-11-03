@@ -4,7 +4,7 @@ import pytest
 from django.urls import reverse
 
 from apps.module_firmware.models import ModuleFirmwareConvergenceState
-from tests.module_firmware.test_update_status import _cs, _module, _online, _release, _target
+from tests.module_firmware.update_status_helpers import _cs, _module, _online, _release, _target
 
 State = ModuleFirmwareConvergenceState.State
 POLL = 'hx-trigger="every 5s"'
@@ -98,3 +98,43 @@ def test_templates_have_no_multiline_hash_comments():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+CARD_SETTLED = 'hx-trigger="every 30s, fw-status-refresh from:body"'
+CARD_LIVE = 'hx-trigger="every 5s, fw-status-refresh from:body"'
+
+
+@pytest.mark.django_db
+def test_partial_card_mode_always_polls(client, applicant_user, base):
+    station, rel, m = base
+    client.force_login(applicant_user)
+    url = reverse("module_firmware:module_update_status", args=[m.uid]) + "?compact=1&card=1"
+    body = client.get(url).content.decode()  # pending -> live
+    assert CARD_LIVE in body
+    assert "?compact=1&amp;card=1" in body
+    m.last_reported_version = rel.version
+    m.save(update_fields=["last_reported_version"])
+    body = client.get(url).content.decode()  # current -> settled, still slow-polls
+    assert "Aktuell" in body
+    assert CARD_SETTLED in body
+    assert "hx-get" in body
+
+
+@pytest.mark.django_db
+def test_partial_non_card_settled_does_not_poll(client, applicant_user, base):
+    station, rel, m = base
+    m.last_reported_version = rel.version
+    m.save(update_fields=["last_reported_version"])
+    client.force_login(applicant_user)
+    body = client.get(_url(m, compact=True)).content.decode()
+    assert "hx-get" not in body and "fw-status-refresh" not in body
+
+
+@pytest.mark.django_db
+def test_partial_htmx_anonymous_stops_polling(client, base):
+    """Session expired mid-poll: answer 286 (htmx: stop polling) instead of
+    redirecting, so the login page never gets swapped into the pill."""
+    station, rel, m = base
+    resp = client.get(_url(m, compact=True), HTTP_HX_REQUEST="true")
+    assert resp.status_code == 286
+    assert resp.content == b""

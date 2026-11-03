@@ -2,8 +2,21 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
-from apps.module_firmware.models import Module, ModuleAssignmentHistory, ModuleType
+from apps.module_firmware.mcuboot import DEV_KEY_HASH_PREFIX
+from apps.module_firmware.models import (
+    Module,
+    ModuleAssignmentHistory,
+    ModuleFirmwareConvergenceState,
+    ModuleType,
+)
 from apps.stations.models import StationAuditLog
+from tests.module_firmware.update_status_helpers import (
+    _cs,
+    _module,
+    _online,
+    _release,
+    _target,
+)
 
 User = get_user_model()
 
@@ -41,16 +54,6 @@ def test_detail_edit_controls_only_for_staff(client, module):
 
 
 # --- Task 9: update status, retry button, boot key -------------------------
-
-from apps.module_firmware.mcuboot import DEV_KEY_HASH_PREFIX  # noqa: E402
-from apps.module_firmware.models import ModuleFirmwareConvergenceState  # noqa: E402
-from tests.module_firmware.test_update_status import (  # noqa: E402
-    _cs,
-    _module,
-    _online,
-    _release,
-    _target,
-)
 
 State = ModuleFirmwareConvergenceState.State
 RETRY = "Erneut versuchen"
@@ -134,3 +137,15 @@ def test_detail_boot_key_unknown_shows_dash_without_badge(client, member_user, d
     body = _detail(client, m)
     assert "Bootloader-Schlüssel" in body
     assert "Dev-Key" not in body
+
+
+@pytest.mark.django_db
+def test_detail_settled_status_does_not_poll(client, member_user, drifted):
+    rel, m = drifted
+    m.last_reported_version = rel.version
+    m.save(update_fields=["last_reported_version"])
+    client.force_login(member_user)
+    body = _detail(client, m)
+    assert "Aktuell" in body
+    assert "/update-status/" not in body
+    assert "fw-status-refresh" not in body

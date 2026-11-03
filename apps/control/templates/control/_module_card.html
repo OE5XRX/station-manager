@@ -35,7 +35,7 @@ PTT is rendered last within the card so it can span full width.
           <span class="cp-module-fw-status"
                 x-show="!isUpdating('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
                 {% if m.firmware_updating %}x-cloak{% endif %}>
-            {% include "module_firmware/_update_status_pill.html" with module=m.tracked_module status=m.update_status compact=True only %}
+            {% include "module_firmware/_update_status_pill.html" with module=m.tracked_module status=m.update_status compact=True card=True only %}
           </span>
         {% endif %}
       {% endif %}

@@ -1,17 +1,23 @@
 {% comment %}
 Firmware update status of one module (update_status.UpdateStatus).
-Expects `module` and `status`; optional `compact` (module list / station card:
-short label, full reason as tooltip) and optional `nopoll` (module list: a
-reload is enough). Without `compact` (module detail) the
-full reason line sits next to the pill.
+Expects `module` and `status`. Optional flags:
+- `compact`: short label, full reason as tooltip (module list, station card).
+  Without it (module detail) the full reason line sits next to the pill.
+- `nopoll`: never poll (module list: a reload is enough).
+- `card`: station card. Always polls: every 5 s while live, otherwise every
+  30 s, plus right away on the `fw-status-refresh` body event that
+  control-panel.js fires when a module leaves the live flash state. A card on
+  an open control panel must never freeze on a pre-flash or settled state.
 
-While the state can still change on its own (status.is_live) the root element
-re-fetches itself every 5 s via HTMX and swaps itself out; a settled state
-renders without hx-* attributes, so the polling stops by itself.
+Outside the card, the root element re-fetches itself every 5 s only while the
+state can still change on its own (status.is_live); a settled state renders
+without hx-* attributes, so the polling stops by itself.
 {% endcomment %}
 {% with s=status.state %}
 <span class="fw-status{% if compact %} fw-status-compact{% endif %}"
-      {% if status.is_live and not nopoll %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}{% if compact %}?compact=1{% endif %}"
+      {% if card %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}?compact=1&amp;card=1"
+      hx-trigger="{% if status.is_live %}every 5s{% else %}every 30s{% endif %}, fw-status-refresh from:body"
+      hx-swap="outerHTML"{% elif status.is_live and not nopoll %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}{% if compact %}?compact=1{% endif %}"
       hx-trigger="every 5s"
       hx-swap="outerHTML"{% endif %}
       {% if compact %}title="{{ status.reason_text }}"{% endif %}>

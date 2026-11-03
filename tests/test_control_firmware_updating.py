@@ -16,8 +16,10 @@ from django.urls import reverse
 from apps.accounts.models import User
 from apps.control.models import StationModule
 from apps.module_firmware.drain import DrainStatus
+from apps.module_firmware.models import ModuleType
 from apps.stations.models import Station
 from config.asgi import application
+from tests.module_firmware.update_status_helpers import _module, _online, _release, _target
 
 DRAIN_STATUS = "apps.module_firmware.drain.drain_status"
 INGEST = "apps.control.registry.ingest_module"
@@ -26,6 +28,9 @@ BANNER = "Station wartet auf Firmware-Update seit"
 SINCE = datetime(2026, 10, 18, 8, 5, tzinfo=UTC)
 ACTIVE = DrainStatus(active=True, since=SINCE, module_uids=("uid-1",))
 INACTIVE = DrainStatus(active=False, since=None, module_uids=())
+
+CARD_LIVE_TRIGGER = "every 5s, fw-status-refresh from:body"
+CARD_SETTLED_TRIGGER = "every 30s, fw-status-refresh from:body"
 
 FM_CAPS = [{"name": "frequency", "kind": "setting", "type": "float"}]
 
@@ -446,9 +451,6 @@ def test_inventory_without_drain_change_sends_no_lock(control_agent_auth):
 
 @pytest.mark.django_db
 def test_control_card_shows_update_pill(client, applicant_user):
-    from apps.module_firmware.models import ModuleType
-    from tests.module_firmware.test_update_status import _module, _online, _release, _target
-
     station = Station.objects.create(name="fwu11", status="online")
     fm = ModuleType.objects.create(key="fmc", display_name="FMC")
     _online(station, backends=())  # waiting: agent without module OTA
@@ -470,7 +472,35 @@ def test_control_card_shows_update_pill(client, applicant_user):
     assert 'title="Wartet: Station-Agent kann keine Module flashen (Image zu alt)"' in body
     # Live (waiting) -> the card pill self-polls the compact partial.
     url = reverse("module_firmware:module_update_status", args=[tracked.uid])
-    assert f"{url}?compact=1" in body
-    assert 'hx-trigger="every 5s"' in body
+    assert f"{url}?compact=1&amp;card=1" in body
+    assert f'hx-trigger="{CARD_LIVE_TRIGGER}"' in body
     # Hidden while the WS-live "Firmware-Update läuft" banner speaks.
     assert "!isUpdating('slot0','fm0')" in body
+
+
+@pytest.mark.django_db
+def test_control_card_settled_pill_keeps_slow_poll_and_refresh_event(client):
+    """A settled card pill (here: current) must still re-check the server state:
+    slowly, and right away when the live flash strip disappears."""
+    station = Station.objects.create(name="fwu12", status="online")
+    fm = ModuleType.objects.create(key="fmc2", display_name="FMC2")
+    _online(station)
+    rel_version = _release(fm).version
+    _target(fm)
+    tracked = _module(fm, station, version=rel_version)
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm0",
+        type="fm",
+        online=True,
+        tracked_module=tracked,
+    )
+    client.force_login(_member("fwcard4"))
+    with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
+        body = client.get(reverse("control:station_control", args=[station.pk])).content.decode()
+    assert "Aktuell" in body
+    url = reverse("module_firmware:module_update_status", args=[tracked.uid])
+    assert f'hx-get="{url}?compact=1&amp;card=1"' in body
+    assert f'hx-trigger="{CARD_SETTLED_TRIGGER}"' in body
+    assert "every 5s" not in body

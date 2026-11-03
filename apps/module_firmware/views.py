@@ -1,8 +1,10 @@
 from django.contrib import messages
+from django.contrib.auth.decorators import login_not_required
 from django.db.models import Prefetch, Q
-from django.http import HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils.decorators import method_decorator
 from django.utils.translation import gettext as _
 from django.views import View
 from django.views.generic import DetailView, ListView
@@ -157,6 +159,13 @@ class ModuleDetailView(AreaPermissionMixin, DetailView):
         return ctx
 
 
+HTMX_STOP_POLLING = 286
+
+
+# The global login gate would redirect before our dispatch runs; we take the
+# anonymous case over ourselves (HTMX -> 286, else AreaPermissionMixin's
+# login redirect), so the view is never reachable without a login.
+@method_decorator(login_not_required, name="dispatch")
 class ModuleUpdateStatusPartialView(AreaPermissionMixin, View):
     """HTMX partial: the update status pill of one module. Re-polls itself
     (every 5 s) only while the state is live; ``?compact=1`` keeps the short
@@ -164,15 +173,24 @@ class ModuleUpdateStatusPartialView(AreaPermissionMixin, View):
 
     area = "modules"
 
+    def dispatch(self, request, *args, **kwargs):
+        # Session expired mid-poll: 286 tells htmx to stop polling. A redirect
+        # would be followed and the login page swapped into the pill.
+        if not request.user.is_authenticated and request.headers.get("HX-Request") == "true":
+            return HttpResponse(status=HTMX_STOP_POLLING)
+        return super().dispatch(request, *args, **kwargs)
+
     def get(self, request, uid):
         module = get_object_or_404(Module, uid=uid)
+        compact = request.GET.get("compact") == "1"
         return render(
             request,
             "module_firmware/_update_status_pill.html",
             {
                 "module": module,
                 "status": module_update_status(module),
-                "compact": request.GET.get("compact") == "1",
+                "compact": compact,
+                "card": compact and request.GET.get("card") == "1",
             },
         )
 

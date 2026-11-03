@@ -12,11 +12,13 @@ const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const listeners = {};
+const bodyEvents = [];
 globalThis.window = {};
 globalThis.document = {
   addEventListener: (n, fn) => {
     listeners[n] = fn;
   },
+  body: { dispatchEvent: (e) => bodyEvents.push(e.type) },
 };
 const L = require(path.resolve(here, "../../static/js/control-logic.js"));
 window.OE5XRXControlLogic = L;
@@ -179,6 +181,30 @@ ok("init seeds drainSince from the server-rendered data attribute", () => {
   d.$el = c.$el;
   d.init();
   assert.equal(d.drainSince, null);
+});
+
+ok("leaving the updating state dispatches fw-status-refresh on body", () => {
+  const { c } = make();
+  c._ingestInventory(inv());
+  bodyEvents.length = 0;
+  c._route(ev("firmware_update_started", {}));
+  assert.deepEqual(bodyEvents, []);
+  c._route(ev("firmware_update_finished", { result: "failed" }));
+  assert.deepEqual(bodyEvents, ["fw-status-refresh"]);
+  // A finish for a module that was not updating does not fire again.
+  c._route(ev("firmware_update_finished", { result: "success" }));
+  assert.deepEqual(bodyEvents, ["fw-status-refresh"]);
+});
+ok("an inventory that clears updating dispatches fw-status-refresh once", () => {
+  const { c } = make();
+  c._ingestInventory(inv({ status: "updating" }));
+  bodyEvents.length = 0;
+  c._ingestInventory(inv({ status: "updating" }));
+  assert.deepEqual(bodyEvents, []);
+  c._ingestInventory(inv());
+  assert.deepEqual(bodyEvents, ["fw-status-refresh"]);
+  c._ingestInventory(inv());
+  assert.deepEqual(bodyEvents, ["fw-status-refresh"]);
 });
 
 console.log("\n" + passed + " assertions passed");

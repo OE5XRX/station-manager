@@ -3,6 +3,12 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 
 from apps.module_firmware.models import Module, ModuleType
+from tests.module_firmware.update_status_helpers import (
+    _module,
+    _online,
+    _release,
+    _target,
+)
 
 User = get_user_model()
 
@@ -32,13 +38,6 @@ def test_list_visible_to_any_user_and_filters(client, data):
 
 
 # --- Task 9: firmware update status column ---------------------------------
-
-from tests.module_firmware.test_update_status import (  # noqa: E402
-    _module,
-    _online,
-    _release,
-    _target,
-)
 
 
 @pytest.mark.django_db
