@@ -18,8 +18,8 @@ passt, wird gleich mit umgestellt (User-Entscheidung: nicht warten).
 
 ## Ziele
 
-1. Ein generischer `metrics`-Block im Heartbeat; neue Messwerte brauchen
-   serverseitig nur einen Katalog-Eintrag, **keine Migration**.
+1. Ein generischer `metrics`-Block im Heartbeat, vom Agent selbst beschrieben;
+   neue Messwerte brauchen **keine Server-Änderung** (kein Code, keine Migration).
 2. Generische Schwellwert-Alarmregeln mit **Mindestdauer**, vollständig in der
    UI (und API) konfigurierbar — nichts davon fest im Code außer Startwerten.
 3. Bestehende reine Messwert-Alarme (CPU-Temp, Disk, RAM) laufen über den
@@ -81,17 +81,56 @@ Neues optionales Top-Level-Feld im Heartbeat-Payload (neben `inventory`, `teleme
 - Fehlt eine Quelle (qemu, kein PowerBoard, kein Interface): Key weglassen, nie `null`/0.
 - Max. 200 Keys pro Heartbeat; Überschuss wird verworfen + geloggt.
 
-## 3. Server: Katalog, Ablage, Ingest
+### 2.1 Selbstbeschreibung durch den Agent (`metric_descriptors`)
 
-### 3.1 `METRIC_CATALOG` (Code, `apps/monitoring/metrics.py` o. ä.)
+Der Agent beschreibt seine Metriken selbst — **ein neuer Messwert ist damit nur
+noch eine Agent-Änderung, der Server wird nie angefasst** (User-Entscheidung).
 
-Pro Key bzw. Key-Muster: Label, Einheit, Anzeigegruppe, Nachkommastellen,
-plausibler Wertebereich. Muster für Instanzen (`net.*.rx_kbps`,
-`disk.*.used_pct`) erlaubt. Unit/Label leben **nicht** in der DB (konstant pro Key).
+- Jeder Heartbeat trägt `metric_descriptors_hash` (SHA-256 über die sortierte
+  Descriptor-Liste).
+- Die volle Liste `metric_descriptors` wird mitgeschickt beim ersten Heartbeat nach
+  Agent-Start, wenn sich der Hash ändert, und wenn die Heartbeat-Antwort
+  `"metric_descriptors_required": true` enthält (Server kennt den Hash nicht,
+  z. B. nach DB-Reset).
+- Descriptor pro **konkretem** Key:
+  ```json
+  {"key": "pwr.12v.voltage_v", "label": "12 V rail voltage", "unit": "V",
+   "group": "power", "precision": 2, "min": 0, "max": 30}
+  ```
+  `group` aus fester Menge (`system`, `disk`, `network`, `power`, `module`, `other`;
+  Unbekanntes → `other`). `label` ≤ 64 Zeichen, Englisch. `min`/`max` = plausibler
+  Bereich, optional.
+- Einheit ist Teil des Key-Namens (`_v`, `_pct`, `_kbps`) — eine Einheitenänderung
+  ist damit immer ein neuer Key; bestehende Werte/Regeln/Historie bleiben konsistent.
+- Module (z. B. FM-Firmware) können später eigene Metriken liefern, die der Agent
+  samt Descriptor durchreicht (`group: module`) — nicht Teil dieses PR, aber der
+  Kontrakt muss es tragen.
 
-**Unbekannte Keys:** werden mit gespeichert (im Rohwert), aber **nicht** angezeigt
-und **nicht** alarmierbar, bis sie im Katalog stehen. Werte außerhalb des
-plausiblen Bereichs werden verworfen + geloggt.
+## 3. Server: Definitionen, Ablage, Ingest
+
+### 3.1 `MetricDefinition` (DB, kein Katalog im Code)
+
+Tabelle, global (nicht pro Station), eine Zeile pro Key:
+
+- Vom Agent gelieferte Felder: `key` (unique), `label`, `unit`, `group`,
+  `precision`, `min_value`, `max_value`, `source_agent_version`, `first_seen`,
+  `last_seen`.
+- Operator-Felder (UI): `label_override`, `is_hidden`, `is_blocked`.
+- **Auflösung:** Override gewinnt immer. Agent-Felder werden aktualisiert, wenn der
+  Descriptor von einer **gleichen oder neueren** Agent-Version kommt; ältere Agents
+  überschreiben nicht (verhindert Ping-Pong bei gemischten Versionen).
+- Neuer Key → Zeile automatisch anlegen, sofort sichtbar und alarmierbar.
+- `is_blocked`: Werte dieses Keys werden beim Ingest verworfen (Agent-Bug-Schutz).
+  `is_hidden`: gespeichert + alarmierbar, aber nicht in der Station-Ansicht.
+- **Flutschutz:** globale Obergrenze 2000 Definitionen; darüber werden neue Keys
+  nicht angelegt (Werte verworfen, Warnung geloggt, einmal pro Key und Stunde).
+- Werte außerhalb `min_value`/`max_value` werden verworfen + geloggt.
+- Werte zu Keys **ohne** Definition (Descriptor fehlt noch): gespeichert, nicht
+  angezeigt, nicht alarmierbar; Antwort fordert Descriptors an.
+- Zeilen werden nie automatisch gelöscht (Regeln + spätere Historie referenzieren
+  den Key); Operator kann ausblenden/sperren.
+- Übersetzung: Agent-Labels sind Englisch und nicht über gettext übersetzbar;
+  deutsche Bezeichnung bei Bedarf per `label_override`.
 
 ### 3.2 Aktuelle Werte
 
@@ -109,6 +148,9 @@ Server die heutigen Metriken aus `inventory` ab (`cpu.temperature_c` →
 `cpu.temp_c`, `ram.usage_percent` → `mem.used_pct`, Disks → `disk.<mount>.used_pct`,
 Uptime → `sys.uptime_s`), **nur wenn** der jeweilige Key nicht im `metrics`-Block
 steht. So greifen die migrierten Alarme sofort für alle Stationen.
+Die `MetricDefinition`-Zeilen für genau diese Legacy-Keys legt eine
+**Datenmigration** an (Daten, kein Code-Katalog) — alte Agents liefern keine
+Descriptors.
 
 ## 4. Metrik-Umfang (User-Entscheidung: alles außer „optional")
 
@@ -140,8 +182,10 @@ Empfänger-Routing über Topology und UI hängen daran):
   `aggregate` (`avg`/`min`/`max`, Default `avg`), `duration_seconds` (Default 0),
   `name`.
 - Alle Felder in der UI editierbar; Regeln anlegen/löschen in der UI.
-- `metric_key` muss im Katalog stehen (Validierung, Auswahlfeld in der UI);
-  Muster-Keys (`disk.*.used_pct`) gelten für alle Instanzen.
+- `metric_key` = Key einer `MetricDefinition` **oder** Muster mit genau einem `*`
+  als ganzem Segment (`disk.*.used_pct`), das mindestens eine Definition trifft
+  (Validierung; UI = Auswahl aus den Definitionen + Muster-Vorschläge). Muster gelten
+  für alle Instanzen, auch später neu auftauchende.
 
 ### 5.2 Auswertung (`check_alerts`, läuft alle 30 s)
 
@@ -156,7 +200,7 @@ Eine generische Funktion ersetzt `_check_cpu_temperature`, `_check_disk_usage`,
   auslösen noch auflösen (Offline hat seinen eigenen Alarm).
 - Zustand persistent (kleine Tabelle oder JSON auf `StationTelemetry`), damit ein
   Neustart von `check_alerts` die Dauer nicht verliert.
-- Alarm-Text generisch aus Katalog: „{Label} auf {Station}: {Wert}{Einheit}
+- Alarm-Text generisch aus der `MetricDefinition`: „{Label} auf {Station}: {Wert}{Einheit}
   {unter/über} {Schwelle}{Einheit} seit {Dauer}".
 - **Regel geändert oder gelöscht:** offene Alarme dieser Regel werden
   auto-resolved und ihr Auswertungs-Zustand verworfen (Zustand hängt per CASCADE an
@@ -191,7 +235,10 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
   „Regel hinzufügen", Löschen. DE-Locale-Regel: `lang="en"`/dot-decimal an allen
   Zahl-Inputs. `AlertRuleUpdateView` erweitern bzw. eigene Create/Delete-Views,
   gleiche Berechtigung (`area="alert_rules"`, `verb="manage"`).
-- **Station-Detail:** neuer Abschnitt/Tab „Metriken", generisch aus Katalog-Gruppen
+- **Metrik-Verwaltung** (neu, gleiche Berechtigung `alert_rules`): Liste aller
+  `MetricDefinition`s mit Agent-Label, Einheit, Gruppe, zuletzt gesehen; editierbar
+  `label_override`, ausblenden, sperren.
+- **Station-Detail:** neuer Abschnitt/Tab „Metriken", generisch aus den `group`s
   gerendert (System / Netz / Strom / Disk): aktueller Wert, bei min/max/avg alle drei,
   Hervorhebung wenn eine Regel verletzt ist. Keine Diagramme (kommen mit der Historie).
   `frontend-design`-Skill ist Pflicht (Projektregel).
@@ -201,10 +248,11 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
 ## 7. API
 
 - Read-Serializer der Station liefert `metrics` (aktuelle Werte) mit Label/Einheit
-  aus dem Katalog.
+  aus `MetricDefinition`.
 - `AlertRule` in der Automation-API: neue Felder lesen/schreiben (Phase-3-Rechte
   für AlertRule gelten unverändert), Validierung wie in der UI.
-- `GET /api/v1/metrics/catalog/` (read-only) für Clients.
+- `GET /api/v1/metrics/definitions/` (read-only für Leser; Override/hidden/blocked
+  schreibbar mit `alert_rules.manage`).
 - drf-spectacular-Schema muss die neuen Felder sauber zeigen.
 
 ## 8. Agent + linux-image (Begleit-PR)
@@ -225,11 +273,14 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
 - Ob der Inventory-Fallback (§3.3) im Ingest oder in einem Adapter lebt.
 - Aufteilung der Agent-Sammler in Module; Sampler-Thread-Details.
 - Konkretes Layout der Metrik-Ansicht (innerhalb der Projekt-Designsprache).
-- Plausible Wertebereiche je Katalog-Key.
+- Plausible Wertebereiche und Labels je Agent-Descriptor.
+- Speicherort des Descriptor-Hashs pro Station.
 
 ## Tests (Mindestumfang)
 
-- Ingest: skalare + min/max/avg-Werte, unbekannte Keys, ungültige Keys/Werte,
+- Descriptors: Anlage, Update nur von ≥ Agent-Version, Override gewinnt, blocked
+  verwirft, Obergrenze, Hash-Mismatch → `metric_descriptors_required`.
+- Ingest: skalare + min/max/avg-Werte, Keys ohne Definition, ungültige Keys/Werte,
   >200 Keys, fehlender Block, Inventory-Fallback für alte Agents.
 - Engine: Dauer erreicht/nicht erreicht, Hysterese beim Auflösen, kein Wert =
   eingefroren, Muster-Keys (mehrere Disks), Warnung+Kritisch parallel,
@@ -237,4 +288,4 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
 - Datenmigration: übernimmt geänderte Operator-Werte, bestehende Alerts behalten FK.
 - UI/API: Rechte (nur `alert_rules.manage` schreibt), Validierung `metric_key`.
 - Agent: jede Quelle fehlt → Key fehlt, kein Crash; hwmon-Zuordnung über Device-Pfad;
-  CPU-%/Netz-Deltas.
+  CPU-%/Netz-Deltas; Descriptor-Hash stabil, volle Liste nur bei Start/Änderung/Anforderung.
