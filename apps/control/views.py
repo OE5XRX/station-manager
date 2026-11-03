@@ -36,10 +36,11 @@ class StationControlView(AreaPermissionMixin, DetailView):
             for m in station.modules.select_related("tracked_module__module_type").all()
             if m.type != "audio_router"
         ]
-        # Firmware update pill per tracked module (one bulk pass; all of them sit
-        # on this station, so it replaces the open-assignment lookup).
+        # Firmware update pill per tracked module (one bulk pass). Resolved via
+        # each module's open assignment — like the HTMX poll — since a tracked
+        # module may already be assigned to another station.
         tracked = [m.tracked_module for m in ctx["modules"] if m.tracked_module is not None]
-        statuses = bulk_update_status(tracked, station=station)
+        statuses = bulk_update_status(tracked)
         for m in ctx["modules"]:
             if m.tracked_module is not None:
                 m.update_status = statuses.get(m.tracked_module.pk)

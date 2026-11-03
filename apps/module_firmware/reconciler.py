@@ -192,12 +192,17 @@ def _decide(cs, module, desired, *, station):
     transient cap > updating."""
     reported = module.last_reported_version or ""
 
+    # The sticky state a not_updatable detour stands in for (§5.2: quarantine
+    # and failed are never released automatically, not even via a key detour).
+    sticky = cs.state_before_not_updatable if cs.state == State.NOT_UPDATABLE else cs.state
+
     # 1) Reached the desired version: always OK — except quarantine, which is
     #    only ever released explicitly (unchanged behaviour).
-    if reported == desired.version and cs.state != State.QUARANTINED:
+    if reported == desired.version and sticky != State.QUARANTINED:
         cs.state = State.OK
         cs.transient_failures = 0
         cs.reason_code = ""
+        cs.state_before_not_updatable = ""
         cs.phase = ""
         cs.phase_at = None
         cs.instructed_at = None
@@ -206,6 +211,7 @@ def _decide(cs, module, desired, *, station):
                 "state",
                 "transient_failures",
                 "reason_code",
+                "state_before_not_updatable",
                 "phase",
                 "phase_at",
                 "instructed_at",
@@ -222,6 +228,10 @@ def _decide(cs, module, desired, *, station):
     #    Ends the open instruction, so after UPDATABLE_AGAIN the next one is audited.
     if reported != desired.version and boot_key_mismatch(module, desired):
         if cs.state != State.NOT_UPDATABLE:
+            # Remember an overridden quarantine/failed so the key fix restores it.
+            cs.state_before_not_updatable = (
+                cs.state if cs.state in (State.QUARANTINED, State.FAILED) else ""
+            )
             cs.state = State.NOT_UPDATABLE
             cs.reason_code = ModuleFirmwareConvergenceState.ReasonCode.BOOT_KEY_MISMATCH
             cs.phase = ""
@@ -230,6 +240,7 @@ def _decide(cs, module, desired, *, station):
             cs.save(
                 update_fields=[
                     "state",
+                    "state_before_not_updatable",
                     "reason_code",
                     "phase",
                     "phase_at",
@@ -248,12 +259,36 @@ def _decide(cs, module, desired, *, station):
 
     # 3) Keys known and equal again (e.g. after a bench reflash): release ONLY
     #    not_updatable, with fresh counters. Falls through to the updating branch.
+    #    A detour from quarantined/failed restores that sticky state instead
+    #    (counters and last_error_* untouched) — never an automatic release.
+    #    A quarantine detour that already reached the desired version (step 1
+    #    skipped it) is restored the same way.
     released = False
+    keys_match = bool(module.reported_boot_key) and (
+        module.reported_boot_key == desired.boot_key_hash
+    )
     if (
         cs.state == State.NOT_UPDATABLE
-        and module.reported_boot_key
-        and module.reported_boot_key == desired.boot_key_hash
+        and cs.state_before_not_updatable
+        and (keys_match or reported == desired.version)
     ):
+        cs.state = cs.state_before_not_updatable
+        cs.state_before_not_updatable = ""
+        cs.reason_code = (
+            ModuleFirmwareConvergenceState.ReasonCode.TRANSIENT_LIMIT
+            if cs.state == State.FAILED
+            else ""
+        )
+        cs.save(update_fields=["state", "state_before_not_updatable", "reason_code", "updated_at"])
+        if keys_match:
+            _audit(
+                module,
+                StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
+                f"Modul {module.uid}: Bootloader-Schlüssel passt wieder zur Release "
+                f"(Ziel {desired.version}) – Zustand {cs.state} bleibt bestehen.",
+                station=station,
+            )
+    elif cs.state == State.NOT_UPDATABLE and keys_match:
         cs.state = State.UPDATING
         cs.attempts = 0
         cs.transient_failures = 0

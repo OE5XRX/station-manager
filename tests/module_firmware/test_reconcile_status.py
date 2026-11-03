@@ -244,3 +244,91 @@ def test_status_409_on_ok_row_not_audited(client, station_with_key, fm):
     cs.save(update_fields=["state"])
     assert _post(client, priv, station.pk, cs.pk, {"status": "rolled_back"}).status_code == 409
     assert not StationAuditLog.objects.filter(module=m).exists()
+
+
+# --- review round 1 ------------------------------------------------------------------
+
+
+def _events(m):
+    return list(
+        StationAuditLog.objects.filter(module=m)
+        .order_by("pk")
+        .values_list("event_type", flat=True)
+    )
+
+
+@pytest.mark.django_db
+def test_gave_up_audit_follows_triggering_failed(client, station_with_key, fm):
+    """Cause before consequence: FLASH_FAILED is written before FLASH_GAVE_UP."""
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.transient_failures = DRAIN_TRANSIENT_LIMIT - 1
+    cs.save()
+    resp = _post(client, priv, station.pk, cs.pk, {"status": "failed", "error_message": "x"})
+    assert resp.status_code == 200
+    ev = StationAuditLog.EventType
+    assert _events(m) == [ev.MODULE_FLASH_FAILED, ev.MODULE_FLASH_GAVE_UP]
+
+
+@pytest.mark.django_db
+def test_quarantine_audit_follows_triggering_rolled_back(client, station_with_key, fm):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.attempts = QUARANTINE_ATTEMPT_LIMIT - 1
+    cs.save()
+    resp = _post(client, priv, station.pk, cs.pk, {"status": "rolled_back"})
+    assert resp.status_code == 200
+    ev = StationAuditLog.EventType
+    assert _events(m) == [ev.MODULE_FLASH_ROLLED_BACK, ev.MODULE_QUARANTINED]
+
+
+@pytest.mark.django_db
+def test_commit_mismatch_rolled_back_audit_precedes_quarantine(client, station_with_key, fm):
+    import json
+
+    from tests.conftest import device_auth_headers
+
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.attempts = QUARANTINE_ATTEMPT_LIMIT - 1
+    cs.save()
+    body = json.dumps({"convergence_id": cs.pk, "version": "26.09.10-01"}).encode()
+    resp = client.post(
+        reverse("module_firmware_api:reconcile_commit"),
+        data=body,
+        content_type="application/json",
+        **device_auth_headers(priv, station.pk, body),
+    )
+    assert resp.status_code == 409
+    ev = StationAuditLog.EventType
+    assert _events(m) == [ev.MODULE_FLASH_ROLLED_BACK, ev.MODULE_QUARANTINED]
+
+
+@pytest.mark.django_db
+def test_long_error_message_is_truncated_not_rejected(client, station_with_key, fm):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.transient_failures = DRAIN_TRANSIENT_LIMIT - 1
+    cs.save()
+    resp = _post(
+        client, priv, station.pk, cs.pk, {"status": "failed", "error_message": "E" * 5000}
+    )
+    assert resp.status_code == 200
+    cs.refresh_from_db()
+    assert len(cs.last_error_message) == 500
+    assert cs.last_error_message == "E" * 499 + "…"
+    gave_up = StationAuditLog.objects.get(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_GAVE_UP
+    )
+    assert "E" * 500 not in gave_up.message
+
+
+@pytest.mark.django_db
+def test_short_error_message_kept_verbatim(client, station_with_key, fm):
+    station, priv = station_with_key
+    _m, cs = _setup(fm, station)
+    msg = "D" * 500
+    resp = _post(client, priv, station.pk, cs.pk, {"status": "failed", "error_message": msg})
+    assert resp.status_code == 200
+    cs.refresh_from_db()
+    assert cs.last_error_message == msg

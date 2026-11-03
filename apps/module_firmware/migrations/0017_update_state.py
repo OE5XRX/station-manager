@@ -36,6 +36,11 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, choices=[('transient_limit', 'Transient limit reached'), ('boot_key_mismatch', 'Boot key mismatch')], default='', max_length=32, verbose_name='reason code'),
         ),
         migrations.AddField(
+            model_name='modulefirmwareconvergencestate',
+            name='state_before_not_updatable',
+            field=models.CharField(blank=True, default='', help_text='Sticky state (quarantined/failed) a boot-key mismatch overrode; restored when the keys match again so the detour never auto-releases it.', max_length=16, verbose_name='state before not updatable'),
+        ),
+        migrations.AddField(
             model_name='modulefirmwarerelease',
             name='boot_key_hash',
             field=models.CharField(blank=True, default='', max_length=16, verbose_name='boot key hash'),

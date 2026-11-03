@@ -534,3 +534,111 @@ def test_record_error_clears_phase_and_instructed_at(fm, station, mode):
     assert cs.phase == ""
     assert cs.phase_at is None
     assert cs.instructed_at is None
+
+
+# --- review round 1: a key-mismatch detour never auto-releases quarantine/failed ------
+
+
+def _set_key(m, key):
+    m.reported_boot_key = key
+    m.save(update_fields=["reported_boot_key"])
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("start", "reason", "rollup"),
+    [
+        (State.QUARANTINED, "", Module.Convergence.QUARANTINED),
+        (State.FAILED, Reason.TRANSIENT_LIMIT, Module.Convergence.FAILED),
+    ],
+)
+def test_mismatch_then_match_restores_sticky_state(fm, station, start, reason, rollup):
+    m, _rel, cs = _setup(
+        fm,
+        station,
+        module_key=RELEASE_KEY,
+        cs_kw={
+            "state": start,
+            "reason_code": reason,
+            "attempts": 3,
+            "transient_failures": DRAIN_TRANSIENT_LIMIT,
+            "last_error_mode": Mode.ROLLED_BACK,
+            "last_error_message": "boom",
+        },
+    )
+    _set_key(m, OTHER_KEY)
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.NOT_UPDATABLE
+    assert cs.state_before_not_updatable == start
+
+    _set_key(m, RELEASE_KEY)
+    out = reconcile_module(m)
+    cs.refresh_from_db()
+    m.refresh_from_db()
+    assert out.state == start
+    assert cs.state == start
+    assert cs.state_before_not_updatable == ""
+    assert cs.reason_code == reason
+    assert cs.attempts == 3
+    assert cs.transient_failures == DRAIN_TRANSIENT_LIMIT
+    assert cs.last_error_mode == Mode.ROLLED_BACK
+    assert cs.last_error_message == "boom"
+    assert m.firmware_convergence == rollup
+    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 1
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == start
+    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 1
+
+
+@pytest.mark.django_db
+def test_mismatch_then_match_still_releases_updating(fm, station):
+    m, _rel, cs = _setup(
+        fm, station, module_key=RELEASE_KEY, cs_kw={"state": State.UPDATING, "attempts": 2}
+    )
+    _set_key(m, OTHER_KEY)
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.NOT_UPDATABLE
+    assert cs.state_before_not_updatable == ""
+    _set_key(m, RELEASE_KEY)
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.UPDATING
+    assert cs.attempts == 0
+    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 1
+
+
+@pytest.mark.django_db
+def test_quarantine_detour_not_released_by_reaching_version(fm, station):
+    """quarantined -> mismatch -> desired version reported: stays quarantined."""
+    m, _rel, cs = _setup(fm, station, module_key=RELEASE_KEY, cs_kw={"state": State.QUARANTINED})
+    _set_key(m, OTHER_KEY)
+    reconcile_module(m)
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
+    reconcile_module(m)
+    cs.refresh_from_db()
+    m.refresh_from_db()
+    assert cs.state == State.QUARANTINED
+    assert cs.state_before_not_updatable == ""
+    assert m.firmware_convergence == Module.Convergence.QUARANTINED
+
+
+@pytest.mark.django_db
+def test_failed_detour_cleared_when_version_reached(fm, station):
+    m, _rel, cs = _setup(
+        fm,
+        station,
+        module_key=RELEASE_KEY,
+        cs_kw={"state": State.FAILED, "reason_code": Reason.TRANSIENT_LIMIT},
+    )
+    _set_key(m, OTHER_KEY)
+    reconcile_module(m)
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.OK
+    assert cs.state_before_not_updatable == ""

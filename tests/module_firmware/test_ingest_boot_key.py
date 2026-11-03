@@ -61,3 +61,17 @@ def test_ingest_boot_key_no_audit_spam(fm, station_factory):
     for _ in range(5):
         _ingest(station, boot_key="e30466f6b8470c1f")
     assert StationAuditLog.objects.filter(module=m).count() == baseline
+
+
+@pytest.mark.django_db
+def test_malformed_boot_key_warning_is_bounded(fm, station_factory, caplog):
+    import logging
+
+    huge = "Z" * 10_000
+    with caplog.at_level(logging.WARNING, logger="apps.module_firmware.ingest"):
+        _ingest(station_factory(), boot_key=huge)
+    [rec] = [r for r in caplog.records if "malformed boot_key" in r.getMessage()]
+    msg = rec.getMessage()
+    assert "Z" * 100 not in msg
+    assert len(msg) < 200
+    assert "uid=BK1" in msg

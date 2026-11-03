@@ -88,3 +88,44 @@ def test_parse_without_keyhash_returns_empty():
 )
 def test_normalize_boot_key(raw, expected):
     assert normalize_boot_key(raw) == expected
+
+
+# --- protected TLV area (0x6908) -----------------------------------------------------
+
+
+def _with_protected(entries: bytes, *, total: int | None = None, keyhash_type: int = 0x01):
+    """dev-signed.bin with a protected TLV area (info 0x6908 + ``entries``) inserted
+    before the unprotected one; header protect_tlv_size set accordingly.
+    ``keyhash_type`` rewrites the type of the unprotected KEYHASH entry."""
+    blob = bytearray(_dev())
+    off = _tlv_info_offset(blob)
+    keyhash_off = off + 4 + 4 + 32
+    assert struct.unpack_from("<HH", blob, keyhash_off) == (0x01, 32)
+    struct.pack_into("<H", blob, keyhash_off, keyhash_type)
+    size = 4 + len(entries)
+    prot = struct.pack("<HH", 0x6908, size if total is None else total) + entries
+    struct.pack_into("<H", blob, 10, size)  # ih_protect_tlv_size
+    return bytes(blob[:off] + prot + blob[off:])
+
+
+def _dev_keyhash_entry() -> bytes:
+    blob = _dev()
+    off = _tlv_info_offset(blob) + 4 + 4 + 32
+    return blob[off : off + 4 + 32]
+
+
+def test_protected_area_without_keyhash_falls_through_to_unprotected():
+    other = struct.pack("<HH", 0x50, 4) + b"\x01\x02\x03\x04"  # e.g. a SEC_CNT entry
+    assert parse_boot_key_hash(_with_protected(other)) == DEV_KEY_HASH_PREFIX
+
+
+def test_keyhash_inside_protected_area():
+    # KEYHASH only in the protected area; the unprotected one is renamed away.
+    blob = _with_protected(_dev_keyhash_entry(), keyhash_type=0x7F)
+    assert parse_boot_key_hash(blob) == DEV_KEY_HASH_PREFIX
+
+
+@pytest.mark.parametrize("total", [0xFFFF, 2])
+def test_malformed_protected_length_returns_empty(total):
+    other = struct.pack("<HH", 0x50, 4) + b"\x01\x02\x03\x04"
+    assert parse_boot_key_hash(_with_protected(other, total=total)) == ""

@@ -185,7 +185,11 @@ def _decide(module, station, target, release, row, busy_station_ids) -> UpdateSt
         and bool(module.reported_boot_key)
         and module.reported_boot_key == release.boot_key_hash
     )
-    if released:
+    if released and row.state_before_not_updatable:
+        # key fixed on a quarantined/failed detour: the reconciler restores it
+        state = row.state_before_not_updatable
+        released = False
+    elif released:
         state = _ROW.UPDATING  # key fixed: the reconciler retries with fresh counters
 
     if state == _ROW.QUARANTINED:

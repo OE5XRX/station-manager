@@ -79,8 +79,8 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None, came_on
     boot_key = normalize_boot_key(raw_boot_key)
     if raw_boot_key and not boot_key:
         # Log only (no audit row): a malformed value would otherwise append one
-        # audit row per heartbeat.
-        logger.warning("ingest: malformed boot_key %r (uid=%s)", raw_boot_key, uid)
+        # audit row per heartbeat. Bounded repr: the value is agent-supplied.
+        logger.warning("ingest: malformed boot_key %s (uid=%s)", repr(raw_boot_key)[:64], uid)
 
     module, created = Module.objects.get_or_create(
         uid=uid,

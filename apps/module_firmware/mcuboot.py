@@ -75,6 +75,10 @@ NOT_UPDATABLE_OTHER_TEXT = (
     "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (anderer Schlüssel) "
     "– SWD-Reflash an der Bench nötig"
 )
+NOT_UPDATABLE_NEUTRAL_TEXT = (
+    "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release "
+    "– SWD-Reflash an der Bench nötig"
+)
 KEY_UNKNOWN_HINT = (
     "Mögliche Ursache: Bootloader-Schlüssel passt nicht zur Release (z. B. Dev-Key) "
     "– Modul-Firmware zu alt, um das zu prüfen."
@@ -92,6 +96,9 @@ def boot_key_mismatch(module, release) -> bool:
 
 
 def not_updatable_text(module) -> str:
+    if not module.reported_boot_key:
+        # The module no longer reports a key: say nothing about which key it is.
+        return NOT_UPDATABLE_NEUTRAL_TEXT
     if is_dev_key(module.reported_boot_key):
         return NOT_UPDATABLE_DEV_TEXT
     return NOT_UPDATABLE_OTHER_TEXT

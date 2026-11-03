@@ -496,6 +496,16 @@ class ModuleFirmwareConvergenceState(models.Model):
     reason_code = models.CharField(
         _("reason code"), max_length=32, choices=ReasonCode.choices, blank=True, default=""
     )
+    state_before_not_updatable = models.CharField(
+        _("state before not updatable"),
+        max_length=16,
+        blank=True,
+        default="",
+        help_text=_(
+            "Sticky state (quarantined/failed) a boot-key mismatch overrode; restored "
+            "when the keys match again so the detour never auto-releases it."
+        ),
+    )
     instructed_at = models.DateTimeField(
         _("instructed at"),
         null=True,

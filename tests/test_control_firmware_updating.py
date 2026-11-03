@@ -504,3 +504,64 @@ def test_control_card_settled_pill_keeps_slow_poll_and_refresh_event(client):
     assert f'hx-get="{url}?compact=1&amp;card=1"' in body
     assert f'hx-trigger="{CARD_SETTLED_TRIGGER}"' in body
     assert "every 5s" not in body
+
+
+@pytest.mark.django_db
+def test_control_card_pill_uses_open_assignment_station(client):
+    """A tracked module whose open assignment moved to another station shows the
+    same status on first render as the HTMX poll (open-assignment resolution)."""
+    from apps.module_firmware.update_status import module_update_status
+
+    here = Station.objects.create(name="fwu13", status="online")
+    there = Station.objects.create(name="fwu14", status="offline")
+    fm = ModuleType.objects.create(key="fmc3", display_name="FMC3")
+    _online(here, backends=())  # here: would say "agent too old"
+    _target(fm)
+    _release(fm)
+    tracked = _module(fm, there)  # open assignment at the offline station
+    StationModule.objects.create(
+        station=here, slot="slot0", module_id="fm0", type="fm", online=True, tracked_module=tracked
+    )
+    expected = module_update_status(tracked).reason_text
+    assert expected == "Wartet: Station offline"
+    client.force_login(_member("fwcard5"))
+    with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
+        body = client.get(reverse("control:station_control", args=[here.pk])).content.decode()
+    assert f'title="{expected}"' in body
+    assert "Image zu alt" not in body
+
+
+@pytest.mark.django_db
+def test_control_card_pill_query_count_constant(client):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    station = Station.objects.create(name="fwu15", status="online")
+    fm = ModuleType.objects.create(key="fmc4", display_name="FMC4")
+    _online(station)
+    _target(fm)
+    _release(fm)
+    client.force_login(_member("fwcard6"))
+    url = reverse("control:station_control", args=[station.pk])
+
+    def _add(i):
+        StationModule.objects.create(
+            station=station,
+            slot=f"slot{i}",
+            module_id=f"fm{i}",
+            type="fm",
+            online=True,
+            tracked_module=_module(fm, station, slot=f"slot{i}"),
+        )
+
+    _add(0)
+    with mock.patch(DRAIN_STATUS, return_value=INACTIVE), CaptureQueriesContext(connection) as one:
+        client.get(url)
+    _add(1)
+    _add(2)
+    with (
+        mock.patch(DRAIN_STATUS, return_value=INACTIVE),
+        CaptureQueriesContext(connection) as three,
+    ):
+        client.get(url)
+    assert len(three) == len(one)

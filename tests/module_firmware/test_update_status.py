@@ -511,3 +511,39 @@ def test_bulk_with_station_override(fm, station_factory, admin_user):
     assert len(q_override) <= len(q_plain)
     for m in on_s1:
         assert override[m.pk] == module_update_status(m, station=s1)
+
+
+@pytest.mark.parametrize("prior", [State.QUARANTINED, State.FAILED])
+def test_key_fixed_restores_sticky_state_display(base, prior):
+    """Mirrors reconciler step 3: a not_updatable detour of a quarantined/failed
+    row shows the restored sticky state once the keys match again, not pending."""
+    station, rel, m = base
+    rel.boot_key_hash = RELEASE_KEY
+    rel.save()
+    m.reported_boot_key = RELEASE_KEY
+    m.save()
+    _cs(
+        m,
+        rel,
+        state=State.NOT_UPDATABLE,
+        reason_code="boot_key_mismatch",
+        state_before_not_updatable=prior,
+        attempts=3,
+        last_error_mode="rolled_back",
+        last_error_message="boom",
+    )
+    s = module_update_status(m)
+    assert s.state == prior.value
+
+
+def test_not_updatable_without_reported_key_has_neutral_text(base):
+    station, rel, m = base
+    rel.boot_key_hash = RELEASE_KEY
+    rel.save()
+    _cs(m, rel, state=State.NOT_UPDATABLE, reason_code="boot_key_mismatch")
+    s = module_update_status(m)
+    assert s.state == "not_updatable"
+    assert s.reason_text == (
+        "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release "
+        "– SWD-Reflash an der Bench nötig"
+    )

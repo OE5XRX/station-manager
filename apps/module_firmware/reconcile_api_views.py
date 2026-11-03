@@ -297,8 +297,8 @@ class ReconcileStatusUpdateView(APIView):
 
             error_mode = _STATUS_TO_ERROR.get(new_status)
             if error_mode is not None:
-                # record_error also ends the attempt (clears phase, instructed_at).
-                record_error(cs, error_mode, error_message=error_message, station=station)
+                # Cause before consequence: the outcome audit precedes the
+                # GAVE_UP / QUARANTINED audit that record_error may write.
                 _audit(
                     cs.module,
                     _STATUS_TO_AUDIT[new_status],
@@ -310,6 +310,8 @@ class ReconcileStatusUpdateView(APIView):
                     ),
                     station=station,
                 )
+                # record_error also ends the attempt (clears phase, instructed_at).
+                record_error(cs, error_mode, error_message=error_message, station=station)
             else:
                 # progress (downloading/flashing/verifying). ``verifying`` means the
                 # image was written: real progress, so the drain's transient cap
@@ -434,13 +436,8 @@ class ReconcileCommitView(APIView):
             expected = cs.target_release.version
             if version != expected:
                 # Bootloader rollback / version mismatch: treat as rolled_back,
-                # deterministic, no retry (same policy as record_error).
-                record_error(
-                    cs,
-                    ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
-                    error_message=(f"Commit version {version!r} != target {expected!r}."),
-                    station=station,
-                )
+                # deterministic, no retry (same policy as record_error). Audit the
+                # cause before record_error's possible QUARANTINED audit.
                 _audit(
                     cs.module,
                     StationAuditLog.EventType.MODULE_FLASH_ROLLED_BACK,
@@ -450,6 +447,12 @@ class ReconcileCommitView(APIView):
                         cs,
                         ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
                     ),
+                    station=station,
+                )
+                record_error(
+                    cs,
+                    ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
+                    error_message=(f"Commit version {version!r} != target {expected!r}."),
                     station=station,
                 )
                 return Response(

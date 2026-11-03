@@ -202,6 +202,7 @@ def release_quarantine(module, *, user, ip_address=None, audit_suffix=""):
     picked.transient_failures = 0
     picked.last_error_mode = ""
     picked.last_error_message = ""
+    picked.state_before_not_updatable = ""
     picked.save(
         update_fields=[
             "state",
@@ -209,6 +210,7 @@ def release_quarantine(module, *, user, ip_address=None, audit_suffix=""):
             "transient_failures",
             "last_error_mode",
             "last_error_message",
+            "state_before_not_updatable",
             "updated_at",
         ]
     )
@@ -266,6 +268,7 @@ def retry_failed(module, *, user, ip_address=None, audit_suffix=""):
     cs.phase = ""
     cs.phase_at = None
     cs.reason_code = ""
+    cs.state_before_not_updatable = ""
     cs.instructed_at = None
     cs.save(
         update_fields=[
@@ -274,6 +277,7 @@ def retry_failed(module, *, user, ip_address=None, audit_suffix=""):
             "phase",
             "phase_at",
             "reason_code",
+            "state_before_not_updatable",
             "instructed_at",
             "updated_at",
         ]
