@@ -13,7 +13,7 @@ from apps.accounts.visibility import Audience, audience_for, directory_visible_f
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
-from apps.monitoring.models import Alert, AlertRule
+from apps.monitoring.models import Alert, AlertRule, MetricDefinition
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.inventory import inventory_for_viewer
@@ -108,7 +108,23 @@ class StationSerializer(serializers.ModelSerializer):
         return data
 
 
+class StationMetricSerializer(serializers.Serializer):
+    """Schema-only shape of one current metric value (see ``StationTelemetrySerializer``)."""
+
+    key = serializers.CharField()
+    label = serializers.CharField()
+    unit = serializers.CharField()
+    group = serializers.CharField()
+    precision = serializers.IntegerField()
+    min = serializers.FloatField()
+    max = serializers.FloatField()
+    avg = serializers.FloatField()
+    ts = serializers.CharField(allow_null=True)
+
+
 class StationTelemetrySerializer(serializers.ModelSerializer):
+    metrics = serializers.SerializerMethodField()
+
     class Meta:
         model = StationTelemetry
         fields = [
@@ -130,8 +146,42 @@ class StationTelemetrySerializer(serializers.ModelSerializer):
             "worst_life_time_pct",
             "worst_pre_eol",
             "io_error_count",
+            "metrics",
             "updated_at",
         ]  # excludes power_alerted_boot_id, alerted_io_error_count (internal alerting)
+
+    @extend_schema_field(StationMetricSerializer(many=True))
+    def get_metrics(self, obj) -> list:
+        """Current metric values with label/unit from ``MetricDefinition``.
+
+        Only keys with a visible (non-hidden, non-blocked) definition are listed;
+        values without a definition yet are stored but not shown (spec §3.1).
+        """
+        values = obj.metrics if isinstance(obj.metrics, dict) else {}
+        if not values:
+            return []
+        defs = MetricDefinition.objects.filter(
+            key__in=list(values), is_hidden=False, is_blocked=False
+        )  # one query; ordered by (group, key)
+        out = []
+        for d in defs:
+            v = values.get(d.key)
+            if not isinstance(v, dict):
+                continue
+            out.append(
+                {
+                    "key": d.key,
+                    "label": d.display_label,
+                    "unit": d.unit,
+                    "group": d.group,
+                    "precision": d.precision,
+                    "min": v.get("min"),
+                    "max": v.get("max"),
+                    "avg": v.get("avg"),
+                    "ts": v.get("ts"),
+                }
+            )
+        return out
 
 
 class StationInventorySerializer(serializers.ModelSerializer):
@@ -260,12 +310,85 @@ class AlertRuleSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "alert_type",
+            "name",
+            "metric_key",
+            "operator",
+            "aggregate",
+            "duration_seconds",
             "threshold",
             "severity",
             "is_active",
             "description",
             "created_at",
         ]
+
+
+class MetricDefinitionSerializer(serializers.ModelSerializer):
+    """Agent-described metric definition.
+
+    Agent fields are read-only; only the operator overrides and the
+    hidden/blocked flags are writable (``alert_rules.manage``).
+    """
+
+    display_label = serializers.CharField(read_only=True)
+    range_min = serializers.FloatField(read_only=True, allow_null=True)
+    range_max = serializers.FloatField(read_only=True, allow_null=True)
+
+    WRITABLE_FIELDS = ("label_override", "min_override", "max_override", "is_hidden", "is_blocked")
+
+    class Meta:
+        model = MetricDefinition
+        fields = [
+            "id",
+            "key",
+            "label",
+            "unit",
+            "group",
+            "precision",
+            "min_value",
+            "max_value",
+            "source_agent_version",
+            "first_seen",
+            "last_seen",
+            "label_override",
+            "min_override",
+            "max_override",
+            "is_hidden",
+            "is_blocked",
+            "last_rejected_at",
+            "last_rejected_value",
+            "display_label",
+            "range_min",
+            "range_max",
+        ]
+        read_only_fields = [
+            "id",
+            "key",
+            "label",
+            "unit",
+            "group",
+            "precision",
+            "min_value",
+            "max_value",
+            "source_agent_version",
+            "first_seen",
+            "last_seen",
+            "last_rejected_at",
+            "last_rejected_value",
+        ]
+
+    def validate(self, attrs):
+        def current(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, None) if self.instance is not None else None
+
+        lo, hi = current("min_override"), current("max_override")
+        if lo is not None and hi is not None and lo > hi:
+            raise serializers.ValidationError(
+                {"min_override": "Minimum override must not exceed maximum override."}
+            )
+        return attrs
 
 
 class AlertSerializer(serializers.ModelSerializer):

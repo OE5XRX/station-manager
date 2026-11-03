@@ -668,8 +668,9 @@ class AlertRuleViewSet(
 ):
     """Full CRUD for AlertRule (``alert_rules.manage``).
 
-    alert_type is UNIQUE per the model, so create will fail with 400 if the
-    client POSTs a duplicate type.
+    Event alert_types are unique (conditional UniqueConstraint), so creating a
+    duplicate event type fails with 400; any number of ``threshold`` rules is
+    allowed. Evaluation reset on rule changes happens via model signals.
     """
 
     write_serializer_class = AlertRuleWriteSerializer
@@ -678,22 +679,41 @@ class AlertRuleViewSet(
         rule = serializer.save()
         audit_config_write(
             self.request,
-            message=f"AlertRule {rule.alert_type} created",
+            message=f"AlertRule {rule.alert_type} ({rule}) created",
         )
 
     def perform_update(self, serializer):
         rule = serializer.save()
         audit_config_write(
             self.request,
-            message=f"AlertRule {rule.alert_type} updated",
+            message=f"AlertRule {rule.alert_type} ({rule}) updated",
         )
 
     def perform_destroy(self, instance):
         audit_config_write(
             self.request,
-            message=f"AlertRule {instance.alert_type} deleted",
+            message=f"AlertRule {instance.alert_type} ({instance}) deleted",
         )
         instance.delete()
+
+
+class MetricDefinitionViewSet(UpdateModelMixin, read_views.MetricDefinitionViewSet):
+    """Metric definitions: list/retrieve (``alert_rules.view``), update/partial
+    update of the operator fields only (``alert_rules.manage``).
+
+    Rows are created by heartbeat ingest and never deleted (rules reference
+    keys), so POST/DELETE are excluded -> 405.
+    """
+
+    http_method_names = ["get", "put", "patch", "head", "options"]
+
+    def perform_update(self, serializer):
+        changed = sorted(serializer.validated_data)
+        definition = serializer.save()
+        audit_config_write(
+            self.request,
+            message=f"MetricDefinition {definition.key} updated ({', '.join(changed) or '-'})",
+        )
 
 
 class DeploymentViewSet(

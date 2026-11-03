@@ -4,6 +4,7 @@ Curated writable fields only — server-side actor fields and computed/
 status/secret fields are read-only or absent. No ``fields="__all__"``.
 """
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
@@ -11,6 +12,7 @@ from apps.accounts.models import User
 from apps.deployments.models import Deployment
 from apps.images.models import ImageRelease
 from apps.monitoring.models import AlertRule
+from apps.monitoring.rules import validate_metric_key
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.models import (
@@ -360,11 +362,24 @@ class RolloutSequenceEntryWriteSerializer(serializers.ModelSerializer):
 
 
 class AlertRuleWriteSerializer(serializers.ModelSerializer):
+    """Writable AlertRule incl. threshold-rule fields (spec §5.1).
+
+    ``threshold`` rules need ``metric_key`` (a known key or a one-``*`` pattern
+    matching at least one definition) and ``operator``; event rules must leave
+    both empty. Event types stay unique (conditional UniqueConstraint, enforced
+    by DRF's UniqueConstraintValidator -> 400).
+    """
+
     class Meta:
         model = AlertRule
         fields = [
             "id",
             "alert_type",
+            "name",
+            "metric_key",
+            "operator",
+            "aggregate",
+            "duration_seconds",
             "threshold",
             "severity",
             "is_active",
@@ -372,6 +387,47 @@ class AlertRuleWriteSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        instance = self.instance
+
+        def current(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(instance, field) if instance is not None else ""
+
+        alert_type = current("alert_type")
+        metric_key = current("metric_key") or ""
+        operator = current("operator") or ""
+        errors = {}
+        if alert_type == AlertRule.AlertType.THRESHOLD:
+            # Only (re)validate the key against the definitions when it changes:
+            # seeded rules (e.g. the 12 V rule) may reference keys whose
+            # definition only appears once an agent describes it, and editing
+            # their threshold must not be blocked by that.
+            key_changed = (
+                instance is None
+                or instance.alert_type != AlertRule.AlertType.THRESHOLD
+                or metric_key != instance.metric_key
+            )
+            if not metric_key:
+                errors["metric_key"] = ["Threshold rules require a metric key."]
+            elif key_changed:
+                try:
+                    validate_metric_key(metric_key)
+                except DjangoValidationError as exc:
+                    errors["metric_key"] = list(exc.messages)
+            if not operator:
+                errors["operator"] = ["Threshold rules require an operator."]
+        else:
+            if metric_key:
+                errors["metric_key"] = ["Only threshold rules may set a metric key."]
+            if operator:
+                errors["operator"] = ["Only threshold rules may set an operator."]
+        if errors:
+            raise DRFValidationError(errors)
+        return attrs
 
 
 class DeploymentCreateSerializer(serializers.ModelSerializer):

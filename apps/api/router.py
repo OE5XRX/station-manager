@@ -48,6 +48,9 @@ router.register(
     r"deployment-results", read_views.DeploymentResultViewSet, basename="deployment-result"
 )
 router.register(r"alert-rules", write_views.AlertRuleViewSet, basename="alert-rule")
+router.register(
+    r"metrics/definitions", write_views.MetricDefinitionViewSet, basename="metric-definition"
+)
 router.register(r"alerts", read_views.AlertViewSet, basename="alert")
 router.register(
     r"provisioning-jobs", write_views.ProvisioningJobViewSet, basename="provisioning-job"

@@ -260,3 +260,179 @@ def test_threshold_as_json_number(api_topology, bearer, cpu_temp_alert_rule):
     resp = bearer(api_topology["admin"]).patch(url, {"threshold": 82.5}, format="json")
     assert resp.status_code == 200
     assert resp.data["threshold"] == 82.5
+
+
+# ---------------------------------------------------------------------------
+# Threshold rule fields + validation (spec §5.1 / §7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def disk_defs(db):
+    from apps.monitoring.models import MetricDefinition
+
+    for key in ("disk.root.used_pct", "disk.data.used_pct"):
+        MetricDefinition.objects.update_or_create(
+            key=key, defaults={"label": key, "unit": "%", "group": "disk"}
+        )
+
+
+_THRESHOLD_PAYLOAD = {
+    "alert_type": "threshold",
+    "name": "Disk full",
+    "metric_key": "disk.*.used_pct",
+    "operator": "gte",
+    "aggregate": "max",
+    "duration_seconds": 120,
+    "threshold": 90.0,
+    "severity": "critical",
+    "is_active": True,
+}
+
+
+def test_read_exposes_threshold_fields(api_topology, bearer, cpu_temp_alert_rule):
+    url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
+    resp = bearer(api_topology["staff"]).get(url)
+    assert resp.status_code == 200
+    for field in ("name", "metric_key", "operator", "aggregate", "duration_seconds"):
+        assert field in resp.data
+    assert resp.data["metric_key"] == "cpu.temp_c"
+
+
+def test_create_threshold_rule_with_pattern(api_topology, bearer, disk_defs):
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), _THRESHOLD_PAYLOAD, format="json"
+    )
+    assert resp.status_code == 201, resp.content
+    assert resp.data["metric_key"] == "disk.*.used_pct"
+    assert resp.data["aggregate"] == "max"
+    assert resp.data["duration_seconds"] == 120
+
+
+def test_create_second_threshold_rule_allowed(api_topology, bearer, disk_defs):
+    client = bearer(api_topology["admin"])
+    url = reverse("api:alert-rule-list")
+    assert client.post(url, _THRESHOLD_PAYLOAD, format="json").status_code == 201
+    second = {**_THRESHOLD_PAYLOAD, "threshold": 80.0, "severity": "warning"}
+    assert client.post(url, second, format="json").status_code == 201
+
+
+def test_create_threshold_rule_audit_uses_str(api_topology, bearer, disk_defs):
+    from apps.accounts.models import AccountAuditLog
+
+    bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), _THRESHOLD_PAYLOAD, format="json"
+    )
+    log = AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        message__contains="via API token",
+    ).latest("created_at")
+    assert "Disk full" in log.message
+
+
+def test_create_threshold_rule_unknown_metric_key(api_topology, bearer, disk_defs):
+    payload = {**_THRESHOLD_PAYLOAD, "metric_key": "nope.does_not_exist"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "metric_key" in resp.data
+
+
+def test_create_threshold_rule_invalid_pattern(api_topology, bearer, disk_defs):
+    payload = {**_THRESHOLD_PAYLOAD, "metric_key": "disk.*.*"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "metric_key" in resp.data
+
+
+def test_create_threshold_rule_requires_metric_key(api_topology, bearer, disk_defs):
+    payload = {k: v for k, v in _THRESHOLD_PAYLOAD.items() if k != "metric_key"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "metric_key" in resp.data
+
+
+def test_create_threshold_rule_requires_operator(api_topology, bearer, disk_defs):
+    payload = {k: v for k, v in _THRESHOLD_PAYLOAD.items() if k != "operator"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "operator" in resp.data
+
+
+def test_create_event_rule_with_metric_key_rejected(api_topology, bearer, disk_defs):
+    _ensure_no_rule(_CREATE_TYPE)
+    payload = {**_CREATE_PAYLOAD, "metric_key": "disk.root.used_pct"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "metric_key" in resp.data
+
+
+def test_create_event_rule_with_operator_rejected(api_topology, bearer):
+    _ensure_no_rule(_CREATE_TYPE)
+    payload = {**_CREATE_PAYLOAD, "operator": "gt"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "operator" in resp.data
+
+
+def test_create_duplicate_ota_failed_rejected(api_topology, bearer, ota_failed_alert_rule):
+    payload = {"alert_type": "ota_failed", "threshold": 0, "severity": "warning"}
+    resp = bearer(api_topology["admin"]).post(
+        reverse("api:alert-rule-list"), payload, format="json"
+    )
+    assert resp.status_code == 400
+    assert "alert_type" in resp.data or "non_field_errors" in resp.data
+
+
+def test_patch_threshold_rule_metric_key_validated(api_topology, bearer, cpu_temp_alert_rule):
+    url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
+    resp = bearer(api_topology["admin"]).patch(url, {"metric_key": "bad key"}, format="json")
+    assert resp.status_code == 400
+    assert "metric_key" in resp.data
+
+
+def test_patch_threshold_rule_to_event_type_with_metric_key_rejected(
+    api_topology, bearer, cpu_temp_alert_rule
+):
+    """Switching a threshold rule to an event type keeps its metric_key -> 400."""
+    _ensure_no_rule(_CREATE_TYPE)
+    url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
+    resp = bearer(api_topology["admin"]).patch(url, {"alert_type": _CREATE_TYPE}, format="json")
+    assert resp.status_code == 400
+
+
+def test_patch_threshold_rule_duration(api_topology, bearer, cpu_temp_alert_rule):
+    url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
+    resp = bearer(api_topology["admin"]).patch(url, {"duration_seconds": 300}, format="json")
+    assert resp.status_code == 200, resp.content
+    cpu_temp_alert_rule.refresh_from_db()
+    assert cpu_temp_alert_rule.duration_seconds == 300
+
+
+def test_patch_rule_with_undescribed_key_threshold_only(api_topology, bearer):
+    """Seeded 12 V rule references a key without a definition yet; editing
+    only the threshold must still work (key unchanged -> not re-validated)."""
+    from apps.monitoring.models import AlertRule, MetricDefinition
+
+    MetricDefinition.objects.filter(key="pwr.12v.voltage_v").delete()
+    rule = AlertRule.objects.create(
+        alert_type="threshold",
+        metric_key="pwr.12v.voltage_v",
+        operator="lt",
+        threshold=11.0,
+        severity="warning",
+    )
+    url = reverse("api:alert-rule-detail", args=[rule.pk])
+    resp = bearer(api_topology["admin"]).patch(url, {"threshold": 10.5}, format="json")
+    assert resp.status_code == 200, resp.content
