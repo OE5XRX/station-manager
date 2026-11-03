@@ -242,3 +242,68 @@ def release_quarantine(module, *, user, ip_address=None, audit_suffix=""):
         logger.warning("release_quarantine: audit write failed", exc_info=True)
     module.firmware_convergence = locked.firmware_convergence
     return versions
+
+
+@transaction.atomic
+def retry_failed(module, *, user, ip_address=None, audit_suffix=""):
+    """Retry ("Erneut versuchen") for a module whose current update row is FAILED (§5.3).
+
+    Reconciles first (under the module lock) so the decision is taken on the
+    row of the CURRENT target, then — only if that row is FAILED — resets it to
+    UPDATING with a fresh transient streak and no in-flight attempt
+    (``attempts`` and ``last_error_*`` stay as history). Quarantine keeps its
+    own release and ``not_updatable`` has no retry by design.
+
+    Returns the retried target versions; an empty list means nothing to retry
+    (no-op, no audit)."""
+    locked = Module.objects.select_for_update().get(pk=module.pk)
+    cs = reconcile_module(locked)
+    if cs is None or cs.state != ModuleFirmwareConvergenceState.State.FAILED:
+        module.firmware_convergence = locked.firmware_convergence
+        return []
+    cs.state = ModuleFirmwareConvergenceState.State.UPDATING
+    cs.transient_failures = 0
+    cs.phase = ""
+    cs.phase_at = None
+    cs.reason_code = ""
+    cs.instructed_at = None
+    cs.save(
+        update_fields=[
+            "state",
+            "transient_failures",
+            "phase",
+            "phase_at",
+            "reason_code",
+            "instructed_at",
+            "updated_at",
+        ]
+    )
+    versions = [cs.target_release.version]
+    reconcile_module(locked)
+    open_assignment = (
+        ModuleAssignmentHistory.objects.filter(module=locked, to_ts__isnull=True)
+        .select_related("station")
+        .first()
+    )
+    if open_assignment is not None:
+        # The retry (re)starts the drain: fresh lock frame + agent nudge.
+        nudge_stations([open_assignment.station_id])
+        refresh_lock_status([open_assignment.station_id])
+    try:
+        with transaction.atomic():
+            StationAuditLog.log(
+                station=open_assignment.station if open_assignment else None,
+                module=locked,
+                event_type=StationAuditLog.EventType.MODULE_FLASH_RETRY,
+                message=(
+                    f"Update für Modul {locked.uid} wird erneut versucht: "
+                    f"{', '.join(versions)}.{audit_suffix}"
+                ),
+                changes={"retried_targets": versions},
+                user=user,
+                ip_address=ip_address,
+            )
+    except Exception:
+        logger.warning("retry_failed: audit write failed", exc_info=True)
+    module.firmware_convergence = locked.firmware_convergence
+    return versions

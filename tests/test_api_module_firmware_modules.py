@@ -303,3 +303,75 @@ def test_release_quarantine_forbidden(api_topology, bearer, anon_client, fm, rol
     cs.refresh_from_db()
     assert cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED
     assert not _module_audits().exists()
+
+
+# --------------------------------------------------------------- retry-update
+
+RETRY = "api:module-retry-update"
+
+
+def _failed(fm, station):
+    from django.utils import timezone
+
+    from apps.module_firmware.models import DRAIN_TRANSIENT_LIMIT
+
+    station.last_seen = timezone.now()
+    station.agent_capabilities = {"module_ota": {"backends": ["dfu"]}}
+    station.save(update_fields=["last_seen", "agent_capabilities"])
+    m, cs = _quarantined(fm, station)
+    Module.objects.filter(pk=m.pk).update(firmware_convergence=Module.Convergence.FAILED)
+    ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(
+        state=ModuleFirmwareConvergenceState.State.FAILED,
+        transient_failures=DRAIN_TRANSIENT_LIMIT,
+        reason_code=ModuleFirmwareConvergenceState.ReasonCode.TRANSIENT_LIMIT,
+        last_error_mode=ModuleFirmwareConvergenceState.ErrorMode.TRANSIENT,
+        last_error_message="usb timeout",
+    )
+    cs.refresh_from_db()
+    return m, cs
+
+
+@pytest.mark.parametrize("role", ["staff", "admin"])
+def test_api_retry_update_staff(api_topology, bearer, fm, role):
+    station = api_topology["station_in"]
+    m, cs = _failed(fm, station)
+    user = api_topology[role]
+    resp = bearer(user).post(reverse(RETRY, args=[m.pk]))
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["retried_targets"] == [TARGET]
+    assert body["module"]["uid"] == "Q1"
+    assert body["module"]["firmware_convergence"] == Module.Convergence.UPDATING
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING
+    assert cs.transient_failures == 0
+    (log,) = StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.MODULE_FLASH_RETRY
+    )
+    assert log.user == user
+    assert log.module == m
+    assert log.station == station
+    assert log.message.endswith(f"via API token {_prefix(user)}")
+
+
+def test_api_retry_update_noop(api_topology, bearer, fm):
+    m, cs = _quarantined(fm, api_topology["station_in"])
+    resp = bearer(api_topology["staff"]).post(reverse(RETRY, args=[m.pk]))
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["retried_targets"] == []
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED
+    assert not StationAuditLog.objects.filter(
+        event_type=StationAuditLog.EventType.MODULE_FLASH_RETRY
+    ).exists()
+
+
+@pytest.mark.parametrize("role,expected", DENIED)
+def test_api_retry_update_member_forbidden(api_topology, bearer, anon_client, fm, role, expected):
+    m, cs = _failed(fm, api_topology["station_in"])
+    client = _client(api_topology, bearer, anon_client, role)
+    resp = client.post(reverse(RETRY, args=[m.pk]))
+    assert resp.status_code in expected
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.FAILED
+    assert not _module_audits().exists()

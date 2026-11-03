@@ -38,4 +38,9 @@ urlpatterns = [
         views_convergence.ModuleReleaseQuarantineView.as_view(),
         name="module_release_quarantine",
     ),
+    path(
+        "<str:uid>/retry-update/",
+        views_convergence.ModuleRetryUpdateView.as_view(),
+        name="module_retry_update",
+    ),
 ]

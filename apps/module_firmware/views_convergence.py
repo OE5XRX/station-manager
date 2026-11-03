@@ -1,4 +1,4 @@
-"""Firmware convergence overview + quarantine release (GUI)."""
+"""Firmware convergence overview + quarantine release + failed-update retry (GUI)."""
 
 from django.contrib import messages
 from django.db.models import Count, Prefetch
@@ -150,9 +150,35 @@ class ModuleReleaseQuarantineView(AreaPermissionMixin, View):
             )
         else:
             messages.info(request, _("%(uid)s is not quarantined.") % {"uid": module.uid})
-        nxt = request.POST.get("next", "")
-        if nxt and url_has_allowed_host_and_scheme(
-            nxt, allowed_hosts={request.get_host()}, require_https=request.is_secure()
-        ):
-            return HttpResponseRedirect(nxt)
-        return HttpResponseRedirect(reverse("module_firmware:module_detail", args=[uid]))
+        return _redirect_back(request, uid)
+
+
+class ModuleRetryUpdateView(AreaPermissionMixin, View):
+    """Retry ("Erneut versuchen") for a failed module update (same rights as the
+    quarantine release)."""
+
+    area = "modules"
+    verb = "manage"
+
+    def post(self, request, uid):
+        module = get_object_or_404(Module, uid=uid)
+        versions = services.retry_failed(module, user=request.user, ip_address=client_ip(request))
+        if versions:
+            messages.success(
+                request,
+                _("Update für %(uid)s wird erneut versucht (%(versions)s).")
+                % {"uid": module.uid, "versions": ", ".join(versions)},
+            )
+        else:
+            messages.info(request, _("%(uid)s ist nicht im Fehlerzustand.") % {"uid": module.uid})
+        return _redirect_back(request, uid)
+
+
+def _redirect_back(request, uid):
+    """Safe ``next`` (same host/scheme) or the module detail page."""
+    nxt = request.POST.get("next", "")
+    if nxt and url_has_allowed_host_and_scheme(
+        nxt, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return HttpResponseRedirect(nxt)
+    return HttpResponseRedirect(reverse("module_firmware:module_detail", args=[uid]))
