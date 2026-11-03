@@ -340,6 +340,13 @@ def test_legacy_fallback_does_not_override_explicit_metrics(station):
     assert stored["mem.used_pct"]["avg"] == 42.0
 
 
+def test_legacy_fallback_respects_max_keys(station):
+    metrics = {f"x.k{i}": 1.0 for i in range(MAX_KEYS)}
+    disks = [{"mount": f"/d{i}", "usage_percent": 10.0} for i in range(500)]
+    _ingest(station, metrics=metrics, inventory={"disk": disks})
+    assert len(_stored(station)) == MAX_KEYS
+
+
 def test_nothing_to_store_creates_no_telemetry_row(station):
     _ingest(station, metrics=None, inventory={})
     assert not StationTelemetry.objects.filter(station=station).exists()

@@ -101,7 +101,7 @@ def _legacy_values(inventory, telemetry) -> dict[str, dict]:
     ]
     disks = inv.get("disk")
     if isinstance(disks, list):
-        for disk in disks:
+        for disk in disks[:MAX_KEYS]:
             disk = _as_dict(disk)
             mount = disk.get("mount")
             if isinstance(mount, str) and mount:
@@ -189,6 +189,10 @@ def ingest_metrics(
 
     values = _collect_values(metrics)
     for key, value in _legacy_values(inventory, telemetry).items():
+        # MAX_KEYS bounds the merged set: an inventory with many disks must not
+        # bypass the per-heartbeat cap via the legacy fallback.
+        if len(values) >= MAX_KEYS:
+            break
         values.setdefault(key, value)
 
     lookup_keys = set(values) | {d["key"] for d in cleaned}

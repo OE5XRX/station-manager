@@ -94,6 +94,22 @@ def _send_webpush_notification(alert):
     logger.info("Alert web-push delivered to %d subscription(s).", count)
 
 
+_TELEGRAM_MD_SPECIALS = ("\\", "_", "*", "`", "[")
+
+
+def _telegram_md_escape(text) -> str:
+    """Escape legacy-Markdown specials in dynamic text.
+
+    Titles/messages embed station names and agent-described metric labels/keys
+    (e.g. ``net.eth0.rx_kbps``); an unbalanced ``_``/``*`` makes Telegram reject
+    the whole message, silently dropping the alert.
+    """
+    text = str(text)
+    for ch in _TELEGRAM_MD_SPECIALS:
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
 def _send_telegram_notification(alert):
     """Send alert message via Telegram bot."""
     token = getattr(settings, "TELEGRAM_BOT_TOKEN", "")
@@ -105,9 +121,9 @@ def _send_telegram_notification(alert):
 
     severity_emoji = "\u26a0\ufe0f" if alert.severity == "warning" else "\U0001f6a8"
     message = (
-        f"{severity_emoji} *{alert.get_severity_display()}*: {alert.title}\n"
-        f"Station: {alert.station.name}\n\n"
-        f"{alert.message}"
+        f"{severity_emoji} *{alert.get_severity_display()}*: {_telegram_md_escape(alert.title)}\n"
+        f"Station: {_telegram_md_escape(alert.station.name)}\n\n"
+        f"{_telegram_md_escape(alert.message)}"
     )
 
     try:
