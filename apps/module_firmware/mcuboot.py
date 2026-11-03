@@ -61,3 +61,44 @@ def normalize_boot_key(value: object) -> str:
 
 def is_dev_key(prefix: str) -> bool:
     return prefix == DEV_KEY_HASH_PREFIX
+
+
+# --- Boot-key check (spec §7, §5.5) ------------------------------------------------
+
+_SYNTHETIC = "synthetic"  # Module.UidSource.SYNTHETIC; no models import (keeps this module pure)
+
+NOT_UPDATABLE_DEV_TEXT = (
+    "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (Dev-Key) "
+    "– SWD-Reflash an der Bench nötig"
+)
+NOT_UPDATABLE_OTHER_TEXT = (
+    "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (anderer Schlüssel) "
+    "– SWD-Reflash an der Bench nötig"
+)
+KEY_UNKNOWN_HINT = (
+    "Mögliche Ursache: Bootloader-Schlüssel passt nicht zur Release (z. B. Dev-Key) "
+    "– Modul-Firmware zu alt, um das zu prüfen."
+)
+
+
+def boot_key_mismatch(module, release) -> bool:
+    """True only if both keys are known and differ. Synthetic (sim) modules never
+    carry an MCUboot TLV, so they always skip the check."""
+    if module.uid_source == _SYNTHETIC:
+        return False
+    if not module.reported_boot_key or not release.boot_key_hash:
+        return False
+    return module.reported_boot_key != release.boot_key_hash
+
+
+def not_updatable_text(module) -> str:
+    if is_dev_key(module.reported_boot_key):
+        return NOT_UPDATABLE_DEV_TEXT
+    return NOT_UPDATABLE_OTHER_TEXT
+
+
+def key_hint_applies(module, release, error_mode: str) -> bool:
+    """§5.5: a rolled-back flash on a real module whose key could not be compared."""
+    if error_mode != "rolled_back" or module.uid_source == _SYNTHETIC:
+        return False
+    return module.reported_boot_key == "" or release.boot_key_hash == ""

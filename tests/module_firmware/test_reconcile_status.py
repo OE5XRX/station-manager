@@ -2,6 +2,7 @@ import pytest
 from django.urls import reverse
 
 from apps.module_firmware.models import (
+    DRAIN_TRANSIENT_LIMIT,
     QUARANTINE_ATTEMPT_LIMIT,
     Module,
     ModuleAssignmentHistory,
@@ -94,7 +95,8 @@ def test_status_rolled_back_counts_to_quarantine(client, station_with_key, fm):
 def test_status_failed_is_transient(client, station_with_key, fm):
     station, priv = station_with_key
     m, cs = _setup(fm, station)
-    for _ in range(5):
+    # Below the transient cap: at DRAIN_TRANSIENT_LIMIT the row becomes FAILED (Task 4).
+    for _ in range(DRAIN_TRANSIENT_LIMIT - 1):
         resp = _post(client, priv, station.pk, cs.pk, {"status": "failed"})
         assert resp.status_code == 200
     cs.refresh_from_db()
