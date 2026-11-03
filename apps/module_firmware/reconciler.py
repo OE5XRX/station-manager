@@ -277,23 +277,41 @@ def _decide(cs, module, desired, *, station):
 
 def _give_up(cs, module, *, station=None):
     """updating -> failed at the transient cap; audits MODULE_FLASH_GAVE_UP once
-    (callers only reach this from a non-failed row)."""
+    (callers only reach this from a non-failed row). Ends any in-flight attempt."""
     cs.state = State.FAILED
     cs.reason_code = ModuleFirmwareConvergenceState.ReasonCode.TRANSIENT_LIMIT
-    cs.save(update_fields=["state", "reason_code", "updated_at"])
-    _set_convergence_rollup(module, Module.Convergence.FAILED)
-    _audit(
-        module,
-        StationAuditLog.EventType.MODULE_FLASH_GAVE_UP,
-        f"Modul {module.uid}: Update nach {cs.transient_failures} Fehlversuchen in Folge "
-        f"abgebrochen (Ziel {cs.target_release.version}). "
-        f"Letzte Meldung: {cs.last_error_message}",
-        station=station,
+    cs.phase = ""
+    cs.phase_at = None
+    cs.instructed_at = None
+    cs.save(
+        update_fields=["state", "reason_code", "phase", "phase_at", "instructed_at", "updated_at"]
     )
+    _set_convergence_rollup(module, Module.Convergence.FAILED)
+    message = (
+        f"Modul {module.uid}: Update nach {cs.transient_failures} Fehlversuchen in Folge "
+        f"abgebrochen (Ziel {cs.target_release.version})."
+    )
+    if cs.last_error_message:
+        message += f" Letzte Meldung: {cs.last_error_message}"
+    _audit(module, StationAuditLog.EventType.MODULE_FLASH_GAVE_UP, message, station=station)
+
+
+def _open_assignment_station(module):
+    """Best-effort station of the module's open assignment (audit subject), or None."""
+    try:
+        a = (
+            ModuleAssignmentHistory.objects.filter(module=module, to_ts__isnull=True)
+            .select_related("station")
+            .first()
+        )
+    except Exception:
+        logger.warning("reconciler: open-assignment lookup failed", exc_info=True)
+        return None
+    return a.station if a is not None else None
 
 
 @transaction.atomic
-def record_error(convergence, error_mode, error_message=""):
+def record_error(convergence, error_mode, error_message="", *, station=None):
     """Apply a reported failure to a ConvergenceState per the quarantine rules:
 
     - rejected  -> immediate quarantine, attempts unchanged (retry never helps);
@@ -303,7 +321,14 @@ def record_error(convergence, error_mode, error_message=""):
       (reason transient_limit, audit MODULE_FLASH_GAVE_UP).
 
     Every mode ends the in-flight attempt: phase, phase_at and instructed_at are
-    cleared. Stamps last_attempt_at/last_error_mode and maintains the rollup."""
+    cleared. Stamps last_attempt_at/last_error_mode and maintains the rollup.
+
+    The caller must hold the module and convergence row locks (lock order module
+    → assignment → convergence): the "GAVE_UP / QUARANTINED audited once"
+    guarantee relies on ``convergence.state`` and the rollup being current.
+
+    ``station`` is the audit subject; when None (direct callers) it falls back to
+    the module's open-assignment station, if any."""
     convergence.last_error_mode = error_mode
     convergence.last_error_message = error_message
     convergence.last_attempt_at = timezone.now()
@@ -343,8 +368,15 @@ def record_error(convergence, error_mode, error_message=""):
     convergence.save(update_fields=fields)
     module = convergence.module
 
+    needs_audit = give_up or (
+        convergence.state == State.QUARANTINED
+        and module.firmware_convergence != Module.Convergence.QUARANTINED
+    )
+    if needs_audit and station is None:
+        station = _open_assignment_station(module)
+
     if give_up:
-        _give_up(convergence, module)
+        _give_up(convergence, module, station=station)
     elif convergence.state == State.QUARANTINED:
         was_quarantined = module.firmware_convergence == Module.Convergence.QUARANTINED
         _set_convergence_rollup(module, Module.Convergence.QUARANTINED)
@@ -355,7 +387,7 @@ def record_error(convergence, error_mode, error_message=""):
             )
             if key_hint_applies(module, convergence.target_release, error_mode):
                 message += f" {KEY_UNKNOWN_HINT}"
-            _audit(module, StationAuditLog.EventType.MODULE_QUARANTINED, message)
+            _audit(module, StationAuditLog.EventType.MODULE_QUARANTINED, message, station=station)
     elif convergence.state in _STICKY_ROLLUP:
         _set_convergence_rollup(module, _STICKY_ROLLUP[convergence.state])
     else:

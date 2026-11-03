@@ -147,6 +147,28 @@ def test_transient_limit_sets_failed_and_audits_once(fm, station):
         f"Modul U1: Update nach {DRAIN_TRANSIENT_LIMIT} Fehlversuchen in Folge abgebrochen "
         "(Ziel 26.09.15-01). Letzte Meldung: boom"
     ]
+    log = StationAuditLog.objects.get(module=m, event_type=Ev.MODULE_FLASH_GAVE_UP)
+    assert log.station_id == station.pk
+
+
+@pytest.mark.django_db
+def test_gave_up_without_message_omits_last_message(fm, station):
+    m, _rel, cs = _setup(fm, station, cs_kw={})
+    for _ in range(DRAIN_TRANSIENT_LIMIT):
+        record_error(cs, Mode.TRANSIENT)
+    assert _msgs(m, Ev.MODULE_FLASH_GAVE_UP) == [
+        f"Modul U1: Update nach {DRAIN_TRANSIENT_LIMIT} Fehlversuchen in Folge abgebrochen "
+        "(Ziel 26.09.15-01)."
+    ]
+
+
+@pytest.mark.django_db
+def test_record_error_audits_use_explicit_station(fm, station, station_factory):
+    other = station_factory()
+    m, _rel, cs = _setup(fm, station, cs_kw={})
+    record_error(cs, Mode.REJECTED, "x", station=other)
+    log = StationAuditLog.objects.get(module=m, event_type=Ev.MODULE_QUARANTINED)
+    assert log.station_id == other.pk
 
 
 @pytest.mark.django_db
@@ -178,12 +200,29 @@ def test_four_transients_then_verifying_reset_never_fails(fm, station):
 
 @pytest.mark.django_db
 def test_reconcile_promotes_updating_row_at_limit_to_failed(fm, station):
-    m, _rel, cs = _setup(fm, station, cs_kw={"transient_failures": DRAIN_TRANSIENT_LIMIT})
+    from django.utils import timezone
+
+    now = timezone.now()
+    m, _rel, cs = _setup(
+        fm,
+        station,
+        cs_kw={
+            "transient_failures": DRAIN_TRANSIENT_LIMIT,
+            "phase": ModuleFirmwareConvergenceState.Phase.FLASHING,
+            "phase_at": now,
+            "instructed_at": now,
+        },
+    )
     out = reconcile_module(m)
     cs.refresh_from_db()
     m.refresh_from_db()
     assert out.pk == cs.pk
     assert cs.state == State.FAILED
+    assert cs.phase == ""
+    assert cs.phase_at is None
+    assert cs.instructed_at is None
+    log = StationAuditLog.objects.get(module=m, event_type=Ev.MODULE_FLASH_GAVE_UP)
+    assert log.station_id == station.pk
     assert cs.reason_code == Reason.TRANSIENT_LIMIT
     assert m.firmware_convergence == Module.Convergence.FAILED
     assert _count(m, Ev.MODULE_FLASH_GAVE_UP) == 1
@@ -367,6 +406,8 @@ def test_quarantine_after_rolled_back_with_unknown_key_has_hint(fm, station):
     msgs = _msgs(m, Ev.MODULE_QUARANTINED)
     assert len(msgs) == 1
     assert msgs[0].endswith(" " + mcuboot.KEY_UNKNOWN_HINT)
+    log = StationAuditLog.objects.get(module=m, event_type=Ev.MODULE_QUARANTINED)
+    assert log.station_id == station.pk
 
 
 @pytest.mark.django_db
@@ -386,6 +427,8 @@ def test_quarantine_after_rejected_has_no_hint(fm, station):
     msgs = _msgs(m, Ev.MODULE_QUARANTINED)
     assert len(msgs) == 1
     assert mcuboot.KEY_UNKNOWN_HINT not in msgs[0]
+    log = StationAuditLog.objects.get(module=m, event_type=Ev.MODULE_QUARANTINED)
+    assert log.station_id == station.pk
 
 
 @pytest.mark.django_db

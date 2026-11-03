@@ -207,7 +207,7 @@ class ReconcileStatusUpdateView(APIView):
 
             error_mode = _STATUS_TO_ERROR.get(new_status)
             if error_mode is not None:
-                record_error(cs, error_mode, error_message=error_message)
+                record_error(cs, error_mode, error_message=error_message, station=station)
                 _audit(
                     cs.module,
                     _STATUS_TO_AUDIT[new_status],
@@ -326,6 +326,7 @@ class ReconcileCommitView(APIView):
                     cs,
                     ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
                     error_message=(f"Commit version {version!r} != target {expected!r}."),
+                    station=station,
                 )
                 _audit(
                     cs.module,

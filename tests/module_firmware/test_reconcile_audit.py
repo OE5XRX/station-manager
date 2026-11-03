@@ -94,4 +94,5 @@ def test_rolled_back_quarantine_without_keys_carries_hint(fm, station_factory):
     log = StationAuditLog.objects.get(
         module=m, event_type=StationAuditLog.EventType.MODULE_QUARANTINED
     )
-    assert log.message.endswith(" Mögliche Ursache: " + KEY_UNKNOWN_HINT.split(": ", 1)[1])
+    assert log.message.endswith(" " + KEY_UNKNOWN_HINT)
+    assert log.station_id == st.pk
