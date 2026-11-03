@@ -385,6 +385,10 @@ def test_ac3_five_transients_failed_then_retry(agent, fm, bearer, client, staff_
     assert pending_updates(agent.station) == []
     assert _count(m, E.MODULE_FLASH_GAVE_UP) == 1
     assert _count(m, E.MODULE_FLASH_FAILED) == DRAIN_TRANSIENT_LIMIT
+    failed_msgs = StationAuditLog.objects.filter(
+        module=m, event_type=E.MODULE_FLASH_FAILED
+    ).values_list("message", flat=True)
+    assert all(msg.endswith("Error: dfu timeout") for msg in failed_msgs)
     assert _count(m, E.MODULE_FLASH_INSTRUCTED) == DRAIN_TRANSIENT_LIMIT
     gave_up = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_GAVE_UP)
     assert "Letzte Meldung: dfu timeout" in gave_up.message

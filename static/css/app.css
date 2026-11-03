@@ -1878,6 +1878,8 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   color: var(--ink-1);
   max-width: 60ch;
 }
+/* Inside the (self-polling) detail pill: own row, left-aligned. */
+.fw-status .fw-retry { flex-basis: 100%; margin-top: 4px; text-align: left; }
 .fw-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

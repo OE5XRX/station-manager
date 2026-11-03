@@ -67,8 +67,11 @@ def _check(client, station, priv):
     )
 
 
-def _status(client, station, priv, cid, status):
-    body = json.dumps({"status": status}).encode()
+def _status(client, station, priv, cid, status, error_message=""):
+    payload = {"status": status}
+    if error_message:
+        payload["error_message"] = error_message
+    body = json.dumps(payload).encode()
     return client.post(
         reverse("module_firmware_api:reconcile_status", args=[cid]),
         data=body,
@@ -311,3 +314,33 @@ def test_mark_instructed_skips_row_no_longer_updating(drifted):
     cs.refresh_from_db()
     assert cs.instructed_at is None
     assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("status", "event"),
+    [
+        ("failed", E.MODULE_FLASH_FAILED),
+        ("rolled_back", E.MODULE_FLASH_ROLLED_BACK),
+        ("rejected", E.MODULE_FLASH_REJECTED),
+    ],
+)
+def test_failure_status_audit_carries_error_text(client, drifted, status, event):
+    """Spec §5.4/§6: failed/rolled_back/rejected are logged with the error text,
+    before the key hint (rolled_back/rejected without known keys)."""
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    assert _status(client, station, priv, cid, status, "dfu-util: timeout").status_code == 200
+    entry = StationAuditLog.objects.get(module=m, event_type=event)
+    assert entry.message.startswith(
+        f"Module {m.uid} flash {status} (target {TARGET}). Error: dfu-util: timeout"
+    )
+
+
+@pytest.mark.django_db
+def test_failure_status_audit_without_error_text_unchanged(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "failed")
+    entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_FAILED)
+    assert entry.message == f"Module {m.uid} flash failed (target {TARGET})."

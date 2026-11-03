@@ -29,8 +29,8 @@ SINCE = datetime(2026, 10, 18, 8, 5, tzinfo=UTC)
 ACTIVE = DrainStatus(active=True, since=SINCE, module_uids=("uid-1",))
 INACTIVE = DrainStatus(active=False, since=None, module_uids=())
 
-CARD_LIVE_TRIGGER = "every 5s [!document.hidden], fw-status-refresh from:body"
-CARD_SETTLED_TRIGGER = "every 30s [!document.hidden], fw-status-refresh from:body"
+CARD_LIVE_TRIGGER = "every 5s, fw-status-refresh from:body"
+CARD_SETTLED_TRIGGER = "every 30s, fw-status-refresh from:body"
 
 FM_CAPS = [{"name": "frequency", "kind": "setting", "type": "float"}]
 
@@ -474,6 +474,7 @@ def test_control_card_shows_update_pill(client, applicant_user):
     url = reverse("module_firmware:module_update_status", args=[tracked.uid])
     assert f"{url}?compact=1&amp;card=1" in body
     assert f'hx-trigger="{CARD_LIVE_TRIGGER}"' in body
+    assert "data-poll-visible-only" in body  # app.js hidden-tab gate
     # Hidden while the WS-live "Firmware-Update läuft" banner speaks.
     assert "!isUpdating('slot0','fm0')" in body
 

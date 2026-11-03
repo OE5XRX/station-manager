@@ -204,8 +204,18 @@ def _decide(cs, module, desired, *, station):
     sticky = cs.state_before_not_updatable if cs.state == State.NOT_UPDATABLE else cs.state
 
     # 1) Reached the desired version: always OK — except quarantine, which is
-    #    only ever released explicitly (unchanged behaviour).
+    #    only ever released explicitly (unchanged behaviour). Leaving
+    #    not_updatable this way (e.g. bench SWD reflash) closes the
+    #    not_updatable/updatable-again audit pair (§6). Leaving plain failed is
+    #    not audited: no existing event fits (it is no flash success).
     if reported == desired.version and sticky != State.QUARANTINED:
+        if cs.state == State.NOT_UPDATABLE:
+            _audit(
+                module,
+                StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
+                f"Modul {module.uid}: Zielversion {desired.version} erreicht.",
+                station=station,
+            )
         cs.state = State.OK
         cs.transient_failures = 0
         cs.reason_code = ""

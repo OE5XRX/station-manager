@@ -100,8 +100,11 @@ def test_templates_have_no_multiline_hash_comments():
     assert result.returncode == 0, result.stderr
 
 
-CARD_SETTLED = 'hx-trigger="every 30s [!document.hidden], fw-status-refresh from:body"'
-CARD_LIVE = 'hx-trigger="every 5s [!document.hidden], fw-status-refresh from:body"'
+CARD_SETTLED = 'hx-trigger="every 30s, fw-status-refresh from:body"'
+CARD_LIVE = 'hx-trigger="every 5s, fw-status-refresh from:body"'
+# Hidden-tab gate: app.js cancels htmx requests from marked elements while
+# document.hidden (no eval'd trigger filter — those fail open under a strict CSP).
+VISIBLE_ONLY = "data-poll-visible-only"
 
 
 @pytest.mark.django_db
@@ -138,3 +141,57 @@ def test_partial_htmx_anonymous_stops_polling(client, base):
     resp = client.get(_url(m, compact=True), HTTP_HX_REQUEST="true")
     assert resp.status_code == 286
     assert resp.content == b""
+
+
+@pytest.mark.django_db
+def test_polling_pills_carry_visibility_marker_and_no_eval_filter(client, applicant_user, base):
+    """Card and detail polls are both gated by app.js while the tab is hidden;
+    no `[...]` trigger filter (htmx evals those via Function())."""
+    station, rel, m = base  # pending -> live
+    client.force_login(applicant_user)
+    card = reverse("module_firmware:module_update_status", args=[m.uid]) + "?compact=1&card=1"
+    for url in (_url(m), _url(m, compact=True), card):
+        body = client.get(url).content.decode()
+        assert VISIBLE_ONLY in body, url
+        assert "document.hidden" not in body, url
+    m.last_reported_version = rel.version
+    m.save(update_fields=["last_reported_version"])
+    assert VISIBLE_ONLY in client.get(card).content.decode()  # settled card still polls
+    assert VISIBLE_ONLY not in client.get(_url(m)).content.decode()  # settled detail: no poll
+
+
+RETRY = "Erneut versuchen"
+
+
+@pytest.mark.django_db
+def test_partial_failed_shows_retry_form_to_staff(client, staff_user, base):
+    """The detail pill swaps itself: once polling lands on failed, the retry
+    form must be in the fragment (with its own CSRF token), not only on the
+    initial page."""
+    station, rel, m = base
+    _cs(m, rel, state=State.FAILED, last_error_message="dfu-util timeout")
+    client.force_login(staff_user)
+    body = client.get(_url(m), HTTP_HX_REQUEST="true").content.decode()
+    assert body.count(RETRY) == 1
+    assert reverse("module_firmware:module_retry_update", args=[m.uid]) in body
+    assert f'data-confirm="Update für {m.uid} erneut versuchen?"' in body
+    assert 'name="csrfmiddlewaretoken"' in body
+    # compact (list/card) never carries the form
+    assert RETRY not in client.get(_url(m, compact=True)).content.decode()
+
+
+@pytest.mark.django_db
+def test_partial_failed_hides_retry_form_from_applicant(client, applicant_user, base):
+    station, rel, m = base
+    _cs(m, rel, state=State.FAILED, last_error_message="dfu-util timeout")
+    client.force_login(applicant_user)
+    body = client.get(_url(m)).content.decode()
+    assert "Fehler: dfu-util timeout" in body
+    assert RETRY not in body
+
+
+@pytest.mark.django_db
+def test_partial_retry_form_only_when_failed(client, staff_user, base):
+    station, rel, m = base  # pending
+    client.force_login(staff_user)
+    assert RETRY not in client.get(_url(m)).content.decode()

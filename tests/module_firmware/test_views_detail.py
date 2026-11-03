@@ -80,7 +80,7 @@ def test_detail_shows_full_reason_and_retry_button_for_staff(client, staff_user,
     client.force_login(staff_user)
     body = _detail(client, m)
     assert "Fehler: dfu-util timeout" in body
-    assert RETRY in body
+    assert body.count(RETRY) == 1  # rendered by the polled pill, not duplicated
     assert reverse("module_firmware:module_retry_update", args=[m.uid]) in body
     assert f'data-confirm="Update für {m.uid} erneut versuchen?"' in body
     assert 'hx-trigger="every 5s"' not in body  # failed is not live

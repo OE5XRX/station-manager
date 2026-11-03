@@ -693,3 +693,41 @@ def test_failed_detour_cleared_when_version_reached(fm, station):
     cs.refresh_from_db()
     assert cs.state == State.OK
     assert cs.state_before_not_updatable == ""
+    # The trail must not end at not_updatable: reaching the version is audited.
+    msgs = _msgs(m, Ev.MODULE_UPDATABLE_AGAIN)
+    assert msgs == [f"Modul {m.uid}: Zielversion 26.09.15-01 erreicht."]
+
+
+@pytest.mark.django_db
+def test_not_updatable_reaching_version_audits_updatable_again(fm, station):
+    """not_updatable (e.g. bench SWD reflash to the target) -> OK must close the
+    not_updatable/updatable-again pair (spec §6), exactly once."""
+    m, _rel, cs = _setup(
+        fm,
+        station,
+        module_key=OTHER_KEY,
+        cs_kw={"state": State.NOT_UPDATABLE, "reason_code": Reason.BOOT_KEY_MISMATCH},
+    )
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.OK
+    assert _msgs(m, Ev.MODULE_UPDATABLE_AGAIN) == [
+        f"Modul {m.uid}: Zielversion 26.09.15-01 erreicht."
+    ]
+    reconcile_module(m)
+    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("start", [State.UPDATING, State.FAILED])
+def test_reaching_version_from_other_states_writes_no_updatable_again(fm, station, start):
+    """Only a not_updatable row pairs its audit; failed has no fitting event."""
+    m, _rel, cs = _setup(fm, station, module_key=RELEASE_KEY, cs_kw={"state": start})
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.OK
+    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 0

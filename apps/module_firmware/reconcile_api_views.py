@@ -299,15 +299,18 @@ class ReconcileStatusUpdateView(APIView):
             if error_mode is not None:
                 # Cause before consequence: the outcome audit precedes the
                 # GAVE_UP / QUARANTINED audit that record_error may write.
+                # Spec §5.4/§6: logged with the (serializer-truncated) error text,
+                # so different failures stay distinguishable in the trail.
+                message = (
+                    f"Module {cs.module.uid} flash {new_status} "
+                    f"(target {cs.target_release.version})."
+                )
+                if error_message:
+                    message += f" Error: {error_message}"
                 _audit(
                     cs.module,
                     _STATUS_TO_AUDIT[new_status],
-                    _with_key_hint(
-                        f"Module {cs.module.uid} flash {new_status} "
-                        f"(target {cs.target_release.version}).",
-                        cs,
-                        error_mode,
-                    ),
+                    _with_key_hint(message, cs, error_mode),
                     station=station,
                 )
                 # record_error also ends the attempt (clears phase, instructed_at).

@@ -60,7 +60,7 @@
   <section class="panel mb-24">
     <div class="panel-head">
       <div class="panel-title"><span class="dot"></span>{% trans "Firmware" %}</div>
-      {% include "module_firmware/_update_status_pill.html" with module=module status=update_status only %}
+      {% include "module_firmware/_update_status_pill.html" with module=module status=update_status can=can csrf_token=csrf_token only %}
     </div>
     <div class="panel-body">
       <div class="fw-detail-grid">
@@ -85,18 +85,6 @@
           </span>
         </div>
       </div>
-      {% if update_status.state == "failed" and can.modules.manage %}
-        <div class="fw-retry">
-          <div class="fw-retry-msg">Automatische Versuche sind ausgesetzt.</div>
-          <form method="post"
-                action="{% url 'module_firmware:module_retry_update' module.uid %}"
-                class="fw-quarantine-form"
-                data-confirm="Update für {{ module.uid }} erneut versuchen?">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-sm">Erneut versuchen</button>
-          </form>
-        </div>
-      {% endif %}
       {% if firmware.quarantine %}
         {% include "module_firmware/_quarantine_note.html" with module=module quarantine=firmware.quarantine %}
       {% endif %}
