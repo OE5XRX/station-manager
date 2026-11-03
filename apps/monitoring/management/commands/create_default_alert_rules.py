@@ -1,50 +1,30 @@
 """Management command to create default alert rules.
 
-The canonical seed runs in apps/monitoring/migrations/0002_seed_default_rules.py
-on every `migrate`. This command remains as an operator escape-hatch for the
-rare case where a rule was manually deleted via Django Admin and the operator
-wants to re-seed without rolling back the migration.
+The canonical seed runs in the monitoring migrations on every `migrate`
+(0002/0004 seed the event rules; 0006_generic_metrics_data converts the legacy
+CPU/Disk/RAM rules to threshold rules and adds the 12 V undervoltage rule).
+This command remains as an operator escape-hatch for the rare case where a rule
+was manually deleted via Django Admin and the operator wants to re-seed without
+rolling back the migration.
 
-Idempotent via get_or_create on the unique alert_type field, same semantics as
-the migration. If you change DEFAULT_RULES here, mirror the change in the
-migration so the two stay in lockstep. Future maintenance plan: delete this
-command once Django Admin grows a "restore default rules" button.
+Idempotent, defaults only apply on first creation:
+- event rules: get_or_create on ``alert_type`` (unique per event type);
+- threshold rules: get_or_create on ``(alert_type="threshold", metric_key,
+  operator, name)`` — the default name distinguishes e.g. the disk warning and
+  critical rules that share ``disk.*.used_pct gte``.
+If you change the defaults here, mirror them in the migrations.
 """
 
 from django.core.management.base import BaseCommand
 
 from apps.monitoring.models import AlertRule
 
-DEFAULT_RULES = [
+EVENT_RULES = [
     {
         "alert_type": AlertRule.AlertType.STATION_OFFLINE,
         "threshold": 5.0,
         "severity": AlertRule.Severity.CRITICAL,
         "description": "Station has not sent a heartbeat for more than 5 minutes.",
-    },
-    {
-        "alert_type": AlertRule.AlertType.CPU_TEMPERATURE,
-        "threshold": 80.0,
-        "severity": AlertRule.Severity.WARNING,
-        "description": "CPU temperature exceeds 80 degrees Celsius.",
-    },
-    {
-        "alert_type": AlertRule.AlertType.DISK_WARNING,
-        "threshold": 90.0,
-        "severity": AlertRule.Severity.WARNING,
-        "description": "Disk usage exceeds 90% (less than 10% free).",
-    },
-    {
-        "alert_type": AlertRule.AlertType.DISK_CRITICAL,
-        "threshold": 95.0,
-        "severity": AlertRule.Severity.CRITICAL,
-        "description": "Disk usage exceeds 95% (less than 5% free).",
-    },
-    {
-        "alert_type": AlertRule.AlertType.RAM_CRITICAL,
-        "threshold": 90.0,
-        "severity": AlertRule.Severity.CRITICAL,
-        "description": "RAM usage exceeds 90%.",
     },
     {
         "alert_type": AlertRule.AlertType.OTA_FAILED,
@@ -72,25 +52,83 @@ DEFAULT_RULES = [
     },
 ]
 
+THRESHOLD_RULES = [
+    {
+        "name": "CPU temperature",
+        "metric_key": "cpu.temp_c",
+        "operator": AlertRule.Operator.GTE,
+        "threshold": 80.0,
+        "severity": AlertRule.Severity.WARNING,
+        "description": "CPU temperature exceeds 80 degrees Celsius.",
+    },
+    {
+        "name": "Disk usage (warning)",
+        "metric_key": "disk.*.used_pct",
+        "operator": AlertRule.Operator.GTE,
+        "threshold": 90.0,
+        "severity": AlertRule.Severity.WARNING,
+        "description": "Disk usage exceeds 90% (less than 10% free).",
+    },
+    {
+        "name": "Disk usage (critical)",
+        "metric_key": "disk.*.used_pct",
+        "operator": AlertRule.Operator.GTE,
+        "threshold": 95.0,
+        "severity": AlertRule.Severity.CRITICAL,
+        "description": "Disk usage exceeds 95% (less than 5% free).",
+    },
+    {
+        "name": "Memory usage",
+        "metric_key": "mem.used_pct",
+        "operator": AlertRule.Operator.GTE,
+        "threshold": 90.0,
+        "severity": AlertRule.Severity.CRITICAL,
+        "description": "RAM usage exceeds 90%.",
+    },
+    {
+        "name": "12 V rail undervoltage",
+        "metric_key": "pwr.12v.voltage_v",
+        "operator": AlertRule.Operator.LT,
+        "threshold": 11.0,
+        "aggregate": AlertRule.Aggregate.AVG,
+        "duration_seconds": 60,
+        "severity": AlertRule.Severity.WARNING,
+        "description": "12 V rail average below 11.0 V for at least 60 s.",
+    },
+]
+
 
 class Command(BaseCommand):
     help = "Create default alert rules if they do not already exist."
 
     def handle(self, *args, **options):
         created_count = 0
-        for rule_data in DEFAULT_RULES:
+        for rule_data in EVENT_RULES:
             _, created = AlertRule.objects.get_or_create(
                 alert_type=rule_data["alert_type"],
                 defaults=rule_data,
             )
-            if created:
-                created_count += 1
-                self.stdout.write(
-                    f"  Created rule: {rule_data['alert_type']} "
-                    f"(threshold={rule_data['threshold']}, "
-                    f"severity={rule_data['severity']})"
-                )
-            else:
-                self.stdout.write(f"  Rule already exists: {rule_data['alert_type']}")
+            created_count += self._report(created, rule_data["alert_type"], rule_data)
+        for rule_data in THRESHOLD_RULES:
+            lookup = {
+                "alert_type": AlertRule.AlertType.THRESHOLD,
+                "metric_key": rule_data["metric_key"],
+                "operator": rule_data["operator"],
+                "name": rule_data["name"],
+            }
+            _, created = AlertRule.objects.get_or_create(**lookup, defaults=rule_data)
+            label = f"{rule_data['name']} ({rule_data['metric_key']} {rule_data['operator']})"
+            created_count += self._report(created, label, rule_data)
 
         self.stdout.write(f"Done. Created {created_count} new rule(s).")
+
+    def _report(self, created, label, rule_data):
+        if created:
+            self.stdout.write(
+                f"  Created rule: {label} "
+                f"(threshold={rule_data['threshold']}, "
+                f"severity={rule_data['severity']})"
+            )
+            return 1
+        self.stdout.write(f"  Rule already exists: {label}")
+        return 0

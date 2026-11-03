@@ -7,12 +7,12 @@ AlertRule is a global config resource — gated purely by alert_rules.manage,
 no topology/station scope.
 
 Design notes:
-- alert_type is UNIQUE; the seed migration (0002_seed_default_rules.py) creates 6 rows:
-  station_offline, cpu_temperature, disk_warning, disk_critical, ram_critical, ota_failed.
-- Unused AlertTypes (not seeded): unexpected_reboot, power_warning, storage_health.
+- Event alert_types are unique (conditional UniqueConstraint; any number of
+  ``threshold`` rules is allowed). The migrations seed the event rules and convert
+  the legacy CPU/Disk/RAM rules to threshold rules (monitoring.0006).
   CREATE tests use unexpected_reboot. To avoid unique-constraint collisions within the
   test session we delete any existing row of that type before POSTing in each create test.
-- UPDATE tests PATCH an existing seeded rule (cpu_temp_alert_rule fixture).
+- UPDATE tests PATCH the seeded ``cpu.temp_c`` threshold rule (cpu_temp_alert_rule fixture).
 - DELETE tests create a fresh unexpected_reboot row and then DELETE it.
 - Numeric threshold posted as JSON number — JSON is always dot-decimal, so the
   de-locale decimal-comma issue does not apply to JSON request bodies.
@@ -132,6 +132,14 @@ def test_create_admin_allowed(api_topology, bearer):
     assert resp.status_code == 201
 
 
+def test_create_duplicate_event_type_rejected(api_topology, bearer):
+    """Event types stay unique via the conditional UniqueConstraint -> 400, never a 500."""
+    _create_rule()
+    url = reverse("api:alert-rule-list")
+    resp = bearer(api_topology["admin"]).post(url, _CREATE_PAYLOAD, format="json")
+    assert resp.status_code == 400
+
+
 def test_create_station_user_forbidden(api_topology, bearer):
     _ensure_no_rule(_CREATE_TYPE)
     url = reverse("api:alert-rule-list")
@@ -208,7 +216,7 @@ def test_update_produces_audit_row(api_topology, bearer, cpu_temp_alert_rule):
         message__contains="via API token",
     ).latest("created_at")
     assert "AlertRule" in log.message
-    assert "cpu_temperature" in log.message
+    assert "threshold" in log.message
 
 
 def test_create_produces_audit_row(api_topology, bearer):

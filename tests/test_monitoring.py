@@ -6,14 +6,10 @@ from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
 from apps.monitoring.engine import (
-    _check_cpu_temperature,
-    _check_disk_usage,
     _check_ota_failed,
-    _check_ram_usage,
     _check_station_offline,
     check_alerts,
 )
-from apps.stations.models import StationInventory
 
 
 @pytest.mark.django_db
@@ -60,78 +56,6 @@ class TestCheckStationOffline:
         alert.refresh_from_db()
         assert alert.is_resolved is True
         assert alert.resolved_at is not None
-
-
-@pytest.mark.django_db
-class TestCheckCpuTemperature:
-    def test_cpu_temperature_alert(self, station, cpu_temp_alert_rule):
-        """Inventory with temp > threshold triggers alert."""
-        StationInventory.objects.create(
-            station=station,
-            data={"cpu": {"temperature_c": 85.0}},
-        )
-        alerts = _check_cpu_temperature()
-        assert len(alerts) == 1
-        assert "temperature" in alerts[0].title.lower()
-
-    def test_cpu_temperature_below_threshold_no_alert(self, station, cpu_temp_alert_rule):
-        """Temp below threshold should not trigger alert."""
-        StationInventory.objects.create(
-            station=station,
-            data={"cpu": {"temperature_c": 50.0}},
-        )
-        alerts = _check_cpu_temperature()
-        assert len(alerts) == 0
-
-
-@pytest.mark.django_db
-class TestCheckDiskUsage:
-    def test_disk_usage_alert(self, station, disk_warning_alert_rule):
-        """Disk > 90% triggers warning.
-
-        Uses 92% to test the warning threshold without crossing the
-        seeded critical threshold (95%) — otherwise the engine would
-        emit both Warning and Critical alerts. See
-        apps/monitoring/migrations/0002_seed_default_rules.py.
-        """
-        StationInventory.objects.create(
-            station=station,
-            data={"disk": [{"mount": "/", "usage_percent": 92.0}]},
-        )
-        alerts = _check_disk_usage()
-        assert len(alerts) == 1
-        assert "disk" in alerts[0].title.lower()
-
-    def test_disk_usage_below_threshold_no_alert(self, station, disk_warning_alert_rule):
-        """Disk below threshold should not trigger alert."""
-        StationInventory.objects.create(
-            station=station,
-            data={"disk": [{"mount": "/", "usage_percent": 50.0}]},
-        )
-        alerts = _check_disk_usage()
-        assert len(alerts) == 0
-
-
-@pytest.mark.django_db
-class TestCheckRamUsage:
-    def test_ram_usage_alert(self, station, ram_critical_alert_rule):
-        """RAM > 90% triggers alert."""
-        StationInventory.objects.create(
-            station=station,
-            data={"ram": {"usage_percent": 95.0}},
-        )
-        alerts = _check_ram_usage()
-        assert len(alerts) == 1
-        assert "ram" in alerts[0].title.lower()
-
-    def test_ram_usage_below_threshold_no_alert(self, station, ram_critical_alert_rule):
-        """RAM below threshold should not trigger alert."""
-        StationInventory.objects.create(
-            station=station,
-            data={"ram": {"usage_percent": 50.0}},
-        )
-        alerts = _check_ram_usage()
-        assert len(alerts) == 0
 
 
 @pytest.mark.django_db

@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
-from apps.stations.models import Station, StationInventory
+from apps.stations.models import Station
 
 from .models import Alert, AlertRule
 
@@ -306,125 +306,6 @@ def _check_station_offline():
     return new_alerts
 
 
-def _check_cpu_temperature():
-    """Check CPU temperature from station inventory data."""
-    new_alerts = []
-    rule = _get_active_rule(AlertRule.AlertType.CPU_TEMPERATURE)
-    if not rule:
-        return new_alerts
-
-    for inventory in StationInventory.objects.select_related("station").all():
-        cpu_data = inventory.data.get("cpu", {})
-        temp = cpu_data.get("temperature_c")
-        if temp is None:
-            continue
-
-        station = inventory.station
-        if temp >= rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.CPU_TEMPERATURE):
-                alert = _create_alert(
-                    station=station,
-                    rule=rule,
-                    title=f"High CPU temperature: {station.name}",
-                    message=(
-                        f"CPU temperature on {station.name} is {temp}C, "
-                        f"exceeding threshold of {rule.threshold}C."
-                    ),
-                )
-                new_alerts.append(alert)
-        else:
-            _auto_resolve(AlertRule.AlertType.CPU_TEMPERATURE, station=station)
-
-    return new_alerts
-
-
-def _check_disk_usage():
-    """Check disk usage from station inventory data."""
-    new_alerts = []
-    warning_rule = _get_active_rule(AlertRule.AlertType.DISK_WARNING)
-    critical_rule = _get_active_rule(AlertRule.AlertType.DISK_CRITICAL)
-
-    if not warning_rule and not critical_rule:
-        return new_alerts
-
-    for inventory in StationInventory.objects.select_related("station").all():
-        disks = inventory.data.get("disk", [])
-        if not isinstance(disks, list):
-            continue
-
-        station = inventory.station
-        max_usage = 0.0
-        for disk in disks:
-            usage = disk.get("usage_percent", 0.0)
-            if usage > max_usage:
-                max_usage = usage
-
-        # Check critical first (higher priority)
-        if critical_rule and max_usage >= critical_rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.DISK_CRITICAL):
-                alert = _create_alert(
-                    station=station,
-                    rule=critical_rule,
-                    title=f"Disk critical: {station.name}",
-                    message=(
-                        f"Disk usage on {station.name} is {max_usage}%, "
-                        f"exceeding critical threshold of {critical_rule.threshold}%."
-                    ),
-                )
-                new_alerts.append(alert)
-        elif critical_rule:
-            _auto_resolve(AlertRule.AlertType.DISK_CRITICAL, station=station)
-
-        if warning_rule and max_usage >= warning_rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.DISK_WARNING):
-                alert = _create_alert(
-                    station=station,
-                    rule=warning_rule,
-                    title=f"Disk warning: {station.name}",
-                    message=(
-                        f"Disk usage on {station.name} is {max_usage}%, "
-                        f"exceeding warning threshold of {warning_rule.threshold}%."
-                    ),
-                )
-                new_alerts.append(alert)
-        elif warning_rule:
-            _auto_resolve(AlertRule.AlertType.DISK_WARNING, station=station)
-
-    return new_alerts
-
-
-def _check_ram_usage():
-    """Check RAM usage from station inventory data."""
-    new_alerts = []
-    rule = _get_active_rule(AlertRule.AlertType.RAM_CRITICAL)
-    if not rule:
-        return new_alerts
-
-    for inventory in StationInventory.objects.select_related("station").all():
-        ram_data = inventory.data.get("ram", {})
-        usage = ram_data.get("usage_percent")
-        if usage is None:
-            continue
-
-        station = inventory.station
-        if usage >= rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.RAM_CRITICAL):
-                alert = _create_alert(
-                    station=station,
-                    rule=rule,
-                    title=f"High RAM usage: {station.name}",
-                    message=(
-                        f"RAM usage on {station.name} is {usage}%, "
-                        f"exceeding threshold of {rule.threshold}%."
-                    ),
-                )
-                new_alerts.append(alert)
-        else:
-            _auto_resolve(AlertRule.AlertType.RAM_CRITICAL, station=station)
-
-    return new_alerts
-
-
 def _check_ota_failed():
     """Check for recent failed/rolled-back OTA deployments."""
     new_alerts = []
@@ -464,9 +345,6 @@ def check_alerts():
 
     new_alerts = []
     new_alerts.extend(_check_station_offline())
-    new_alerts.extend(_check_cpu_temperature())
-    new_alerts.extend(_check_disk_usage())
-    new_alerts.extend(_check_ram_usage())
     new_alerts.extend(_check_ota_failed())
     new_alerts.extend(_check_unexpected_reboot())
     new_alerts.extend(_check_power_warning())
