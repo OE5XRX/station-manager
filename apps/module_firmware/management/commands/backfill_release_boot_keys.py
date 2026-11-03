@@ -13,12 +13,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         qs = ModuleFirmwareRelease.all_objects.filter(boot_key_hash="").exclude(storage_key="")
         total = updated = 0
-        for rel in qs:
+        for rel in qs.iterator():
             total += 1
             try:
                 with storage.open_stream(rel.storage_key) as fh:
                     blob = fh.read()
-            except (OSError, ValueError) as exc:
+            except Exception as exc:  # one bad object must not abort the run
                 self.stderr.write(f"skip {rel.pk} ({rel.storage_key}): {exc}")
                 continue
             prefix = parse_boot_key_hash(blob)
