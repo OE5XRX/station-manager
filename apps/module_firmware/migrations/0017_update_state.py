@@ -47,6 +47,11 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='modulefirmwareconvergencestate',
+            name='transient_failures',
+            field=models.PositiveIntegerField(default=0, help_text="Consecutive 'failed' outcomes since the last real progress; at DRAIN_TRANSIENT_LIMIT the row becomes failed and check stops offering it.", verbose_name='consecutive transient failures'),
+        ),
+        migrations.AlterField(
+            model_name='modulefirmwareconvergencestate',
             name='state',
             field=models.CharField(choices=[('ok', 'OK'), ('updating', 'Updating'), ('quarantined', 'Quarantined'), ('failed', 'Failed'), ('not_updatable', 'Not updatable')], default='updating', max_length=16, verbose_name='state'),
         ),

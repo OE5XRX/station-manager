@@ -2,6 +2,7 @@ import logging
 
 from django.contrib.auth.decorators import login_not_required
 from django.db import transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -24,6 +25,7 @@ from .reconcile_serializers import (
     ReconcileStatusSerializer,
 )
 from .reconciler import _audit, reconcile_module, record_error
+from .update_status import state_label
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ def _conflict(cs, what, station):
     _audit(
         cs.module,
         StationAuditLog.EventType.MODULE_FLASH_CONFLICT,
-        f"Modul {cs.module.uid}: {what} abgelehnt – Zustand {cs.state}.",
+        f"Modul {cs.module.uid}: {what} abgelehnt – Zustand {state_label(cs.state)}.",
         station=station,
     )
     return Response(
@@ -162,14 +164,20 @@ class ReconcileCheckView(APIView):
 
     @staticmethod
     def _mark_instructed(cs, instruction, station):
-        """Audit INSTRUCTED once per open instruction. ``instructed_at`` is the
-        dedup marker: only the poll that flips it from NULL logs (a conditional
-        UPDATE, so concurrent polls cannot both win). A terminal status / commit
-        clears it, so the next attempt's instruction logs again. A fresh
-        instruction also clears a stale phase left by a lost attempt."""
-        rows = ModuleFirmwareConvergenceState.objects.filter(
-            pk=cs.pk, instructed_at__isnull=True
-        ).update(instructed_at=timezone.now(), phase="", phase_at=None)
+        """Audit INSTRUCTED once per attempt (spec §5.4: once since the last
+        status POST / commit). One conditional UPDATE decides, so concurrent polls
+        cannot both win. It matches when no instruction is open (``instructed_at``
+        NULL — cleared by a terminal status, commit, retry or not_updatable) OR a
+        phase is set: the agent only polls check with no flash in flight, so a
+        check after a progress POST is a restarted attempt (agent crash/reboot
+        mid-download) — it is audited again and the stale phase is cleared, so
+        the next progress POST logs STARTED. ``state=UPDATING`` guards against a
+        heartbeat flipping the row between the reconcile and this mark."""
+        rows = (
+            ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk, state=State.UPDATING)
+            .filter(Q(instructed_at__isnull=True) | ~Q(phase=""))
+            .update(instructed_at=timezone.now(), phase="", phase_at=None)
+        )
         if rows == 1:
             _audit(
                 cs.module,

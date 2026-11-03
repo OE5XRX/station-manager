@@ -80,6 +80,18 @@ def test_current(base):
     assert s.state == "current" and s.reason_text == "Aktuell" and s.since is None
 
 
+def test_current_wins_over_key_mismatch(fm, station):
+    """Mirror of the reconciler guard: on the desired version a key mismatch is
+    never shown as not_updatable."""
+    _online(station)
+    _target(fm)
+    rel = _release(fm, boot_key=RELEASE_KEY)
+    m = _module(fm, station, version=TARGET, key="2222222222222222")
+    _cs(m, rel, state=State.QUARANTINED, attempts=3, last_error_mode="rolled_back")
+    s = module_update_status(m)
+    assert s.state == "current"
+
+
 def test_quarantined_rolled_back_text(base):
     station, rel, m = base
     rel.boot_key_hash = RELEASE_KEY

@@ -90,6 +90,14 @@ _SHORT_LABELS = {
     UpdateState.PENDING.value: "Update ausstehend",
 }
 
+
+def state_label(state: str, default: str | None = None) -> str:
+    """German short label of a display state. Convergence-row states that share
+    a value (quarantined / failed / not_updatable) resolve too; anything else
+    falls back to ``default`` (or the raw value)."""
+    return _SHORT_LABELS.get(state, state if default is None else default)
+
+
 _PHASE_TEXT = {
     CS.Phase.DOWNLOADING.value: "Download",
     CS.Phase.FLASHING.value: "Flashen",
@@ -126,7 +134,7 @@ class UpdateStatus:
 
     @property
     def short_label(self) -> str:
-        return _SHORT_LABELS.get(self.state, "")
+        return state_label(self.state, "")
 
 
 _NO_TARGET = UpdateStatus(UpdateState.NO_TARGET, "", "", "Kein Ziel", None)

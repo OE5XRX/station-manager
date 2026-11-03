@@ -244,6 +244,38 @@ def test_ac1_old_agent_shows_waiting_not_updating(agent, fm, bearer, client, sta
 
 
 @pytest.mark.django_db
+def test_agent_crash_mid_download_reinstructs_and_restarts(agent, fm, bearer, staff_user):
+    """Agent crashes/reboots during the download (no marker yet): on restart the
+    check hands out the same instruction, which is audited again with the stale
+    phase cleared, and the restarted download logs STARTED again (§5.4)."""
+    _target_and_release(fm)
+    agent.heartbeat(DFU)
+    agent.inventory(OLD)
+    m = _module()
+
+    cid = agent.check().json()["convergence_id"]
+    assert agent.status(cid, "downloading").status_code == 200
+    # crash -> restart: same instruction, the stale phase must not survive
+    resp = agent.check()
+    assert resp.status_code == 200
+    assert resp.json()["convergence_id"] == cid
+    assert _api_status(bearer, staff_user, m)["state"] == "pending"
+    assert agent.check().json()["convergence_id"] == cid  # re-poll: no extra audit
+    assert agent.status(cid, "downloading").status_code == 200
+    assert _api_status(bearer, staff_user, m)["phase"] == "downloading"
+    agent.inventory(TARGET)
+    assert agent.commit(cid, TARGET).status_code == 200
+
+    assert _lifecycle(m) == [
+        E.MODULE_FLASH_INSTRUCTED,
+        E.MODULE_FLASH_STARTED,
+        E.MODULE_FLASH_INSTRUCTED,
+        E.MODULE_FLASH_STARTED,
+        E.MODULE_FLASH_SUCCESS,
+    ]
+
+
+@pytest.mark.django_db
 def test_ac2_phases_visible_and_audited_once(agent, fm, bearer, client, staff_user):
     _target_and_release(fm)
     agent.heartbeat(DFU)
@@ -271,11 +303,9 @@ def test_ac2_phases_visible_and_audited_once(agent, fm, bearer, client, staff_us
         assert st["reason_text"] == f"Update läuft: {labels[phase]}"
         assert st["since"] is not None
         assert f"Update läuft: {labels[phase]}" in _detail_html(client, staff_user, m)
-        # Polling during the flash (agent resume path) re-offers, never re-audits.
-        resp = agent.check()
-        assert resp.status_code == 200
-        assert resp.json()["convergence_id"] == cid
-        assert _api_status(bearer, staff_user, m)["phase"] == phase
+        # No check poll here: the agent never polls check with a flash in flight
+        # (run_once is sequential; a marker routes to recovery). A check after a
+        # progress POST is a restarted attempt — see the crash test below.
 
     # Post-flash heartbeat reports the target version, then the commit lands.
     agent.inventory(TARGET)

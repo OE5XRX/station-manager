@@ -324,6 +324,39 @@ def test_mismatch_overrides_failed_and_quarantined(fm, station, start):
 
 
 @pytest.mark.django_db
+def test_not_updatable_clears_instructed_at(fm, station):
+    """-> NOT_UPDATABLE ends the open instruction, so after UPDATABLE_AGAIN the
+    first new instruction is audited again."""
+    from django.utils import timezone
+
+    m, _rel, cs = _setup(
+        fm,
+        station,
+        module_key=OTHER_KEY,
+        cs_kw={"state": State.UPDATING, "instructed_at": timezone.now()},
+    )
+    reconcile_module(m)
+    cs.refresh_from_db()
+    assert cs.state == State.NOT_UPDATABLE
+    assert cs.instructed_at is None
+
+
+@pytest.mark.django_db
+def test_quarantined_on_desired_version_with_other_key_is_not_not_updatable(fm, station):
+    """A same-version build (dev bench) already reports the desired version: no
+    flash is pending, so a key mismatch must not turn it into NOT_UPDATABLE."""
+    m, _rel, cs = _setup(fm, station, module_key=OTHER_KEY, cs_kw={"state": State.QUARANTINED})
+    m.last_reported_version = "26.09.15-01"
+    m.save(update_fields=["last_reported_version"])
+    reconcile_module(m)
+    cs.refresh_from_db()
+    m.refresh_from_db()
+    assert cs.state == State.QUARANTINED
+    assert m.firmware_convergence == Module.Convergence.QUARANTINED
+    assert _count(m, Ev.MODULE_NOT_UPDATABLE) == 0
+
+
+@pytest.mark.django_db
 def test_keys_equal_again_releases_only_not_updatable(fm, station):
     m, _rel, cs = _setup(
         fm,

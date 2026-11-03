@@ -120,14 +120,35 @@ def test_instructed_logged_again_after_failed_status(client, drifted):
 
 
 @pytest.mark.django_db
-def test_progress_status_does_not_reset_instructed(client, drifted):
+def test_check_after_progress_is_a_restarted_attempt(client, drifted):
+    """The agent only polls check with no flash in flight (no marker), so a check
+    after a progress POST means the agent crashed/rebooted mid-download: the
+    restarted attempt is audited again and the stale phase is cleared (§5.4)."""
     station, priv, m = drifted
     cid = _instruct(client, station, priv)
     assert _status(client, station, priv, cid, "downloading").status_code == 200
-    _instruct(client, station, priv)
-    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 1
+    _instruct(client, station, priv)  # agent restarted: same instruction again
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 2
     cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
-    assert cs.phase == "downloading"  # a re-poll mid-attempt keeps the live phase
+    assert cs.phase == ""
+    assert cs.phase_at is None
+    assert cs.instructed_at is not None
+    # The restarted download is a fresh first progress POST -> STARTED again.
+    assert _status(client, station, priv, cid, "downloading").status_code == 200
+    assert _count(m, E.MODULE_FLASH_STARTED) == 2
+    assert _count(m, E.MODULE_FLASH_PHASE) == 0
+
+
+@pytest.mark.django_db
+def test_repeated_check_after_restart_logs_once(client, drifted):
+    """No status POST between polls -> one INSTRUCTED per attempt, also after a
+    restart."""
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "flashing")
+    for _ in range(5):
+        _instruct(client, station, priv)
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 2
 
 
 @pytest.mark.django_db
@@ -198,12 +219,13 @@ def test_new_instruction_clears_stale_phase(client, drifted):
 
     station, priv, m = drifted
     cid = _instruct(client, station, priv)
-    # A stale phase left behind by a lost attempt (agent crash, no terminal POST)
-    # with the instruction bookkeeping already reset.
+    # A stale phase left behind by a lost attempt (agent crash, no terminal POST):
+    # instructed_at stays set, exactly as a real crash leaves it.
     ModuleFirmwareConvergenceState.objects.filter(pk=cid).update(
-        phase="flashing", phase_at=timezone.now(), instructed_at=None
+        phase="flashing", phase_at=timezone.now()
     )
     _instruct(client, station, priv)
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 2
     cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
     assert cs.phase == ""
     assert cs.phase_at is None
@@ -269,3 +291,23 @@ def test_commit_mismatch_audit_carries_key_hint(client, drifted):
     assert entry.message.endswith(KEY_UNKNOWN_HINT)
     cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
     assert cs.phase == "" and cs.instructed_at is None
+
+
+@pytest.mark.django_db
+def test_mark_instructed_skips_row_no_longer_updating(drifted):
+    """A heartbeat may flip the row (e.g. to not_updatable) between the check's
+    reconcile and the mark: the conditional UPDATE then matches nothing — no
+    INSTRUCTED audit, no write."""
+    from apps.module_firmware.reconcile_api_views import ReconcileCheckView
+    from apps.module_firmware.reconciler import reconcile_module
+
+    station, _priv, m = drifted
+    cs = reconcile_module(m)
+    ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(
+        state=ModuleFirmwareConvergenceState.State.NOT_UPDATABLE
+    )
+    instruction = {"module_uid": m.uid, "target_version": TARGET, "artifact": "dfu"}
+    ReconcileCheckView._mark_instructed(cs, instruction, station)
+    cs.refresh_from_db()
+    assert cs.instructed_at is None
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0

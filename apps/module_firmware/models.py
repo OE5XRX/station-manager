@@ -486,7 +486,7 @@ class ModuleFirmwareConvergenceState(models.Model):
         default=0,
         help_text=_(
             "Consecutive 'failed' outcomes since the last real progress; at "
-            "DRAIN_TRANSIENT_LIMIT the station stops draining for this row."
+            "DRAIN_TRANSIENT_LIMIT the row becomes failed and check stops offering it."
         ),
     )
     phase = models.CharField(

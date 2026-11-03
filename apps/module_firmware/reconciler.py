@@ -217,13 +217,26 @@ def _decide(cs, module, desired, *, station):
 
     # 2) Both keys known and different: no flash can ever succeed. The precise
     #    diagnosis overrides updating, failed and quarantined. Audit on transition.
-    if boot_key_mismatch(module, desired):
+    #    Only while a flash is still needed: a (quarantined) module already on the
+    #    desired version — e.g. a same-version bench build — is not "not updatable".
+    #    Ends the open instruction, so after UPDATABLE_AGAIN the next one is audited.
+    if reported != desired.version and boot_key_mismatch(module, desired):
         if cs.state != State.NOT_UPDATABLE:
             cs.state = State.NOT_UPDATABLE
             cs.reason_code = ModuleFirmwareConvergenceState.ReasonCode.BOOT_KEY_MISMATCH
             cs.phase = ""
             cs.phase_at = None
-            cs.save(update_fields=["state", "reason_code", "phase", "phase_at", "updated_at"])
+            cs.instructed_at = None
+            cs.save(
+                update_fields=[
+                    "state",
+                    "reason_code",
+                    "phase",
+                    "phase_at",
+                    "instructed_at",
+                    "updated_at",
+                ]
+            )
             _audit(
                 module,
                 StationAuditLog.EventType.MODULE_NOT_UPDATABLE,

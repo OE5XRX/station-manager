@@ -182,6 +182,10 @@ def test_commit_409_on_given_up_row_logs_conflict(client, station_with_key, fm, 
     )
     assert conflicts.count() == 2
     assert all(c.station == station for c in conflicts)
+    label = {"failed": "Fehler", "not_updatable": "Nicht updatebar", "quarantined": "Quarantäne"}
+    assert conflicts.order_by("pk")[0].message == (
+        f"Modul U1: Commit '26.09.15-01' abgelehnt – Zustand {label[state]}."
+    )
     assert not StationAuditLog.objects.filter(
         module=m,
         event_type__in=[
