@@ -86,8 +86,12 @@ Neues optionales Top-Level-Feld im Heartbeat-Payload (neben `inventory`, `teleme
 Der Agent beschreibt seine Metriken selbst — **ein neuer Messwert ist damit nur
 noch eine Agent-Änderung, der Server wird nie angefasst** (User-Entscheidung).
 
-- Jeder Heartbeat trägt `metric_descriptors_hash` (SHA-256 über die sortierte
-  Descriptor-Liste).
+- Jeder Heartbeat trägt `metric_descriptors_hash` = SHA-256 (hex) über die
+  kanonische Serialisierung `json.dumps(sorted(descriptors, key=lambda d: d["key"]),
+  sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. Der Server rechnet
+  beim Empfang einer vollen Liste mit derselben Funktion nach und speichert den Hash
+  **pro Station**; weicht der gesendete Hash vom gespeicherten der Station ab, antwortet
+  er mit `metric_descriptors_required`. Jede Station lädt ihre Liste also einmal hoch.
 - Die volle Liste `metric_descriptors` wird mitgeschickt beim ersten Heartbeat nach
   Agent-Start, wenn sich der Hash ändert, und wenn die Heartbeat-Antwort
   `"metric_descriptors_required": true` enthält (Server kennt den Hash nicht,
@@ -115,16 +119,23 @@ Tabelle, global (nicht pro Station), eine Zeile pro Key:
 - Vom Agent gelieferte Felder: `key` (unique), `label`, `unit`, `group`,
   `precision`, `min_value`, `max_value`, `source_agent_version`, `first_seen`,
   `last_seen`.
-- Operator-Felder (UI): `label_override`, `is_hidden`, `is_blocked`.
-- **Auflösung:** Override gewinnt immer. Agent-Felder werden aktualisiert, wenn der
-  Descriptor von einer **gleichen oder neueren** Agent-Version kommt; ältere Agents
-  überschreiben nicht (verhindert Ping-Pong bei gemischten Versionen).
+- Operator-Felder (UI): `label_override`, `min_override`, `max_override`,
+  `is_hidden`, `is_blocked`.
+- **Auflösung:** Override gewinnt immer. Agent-Felder: **letzter Schreiber gewinnt**
+  (der Agent hat keine echte Versionsnummer — `__version__` ist seit Beginn `0.1.0`,
+  Builds laufen über SRCREV). Bei gemischten Builds kann ein Label kurz wechseln;
+  das ist rein kosmetisch, weil die Einheit im Key steckt. `source_agent_version`
+  wird nur informativ gespeichert.
 - Neuer Key → Zeile automatisch anlegen, sofort sichtbar und alarmierbar.
 - `is_blocked`: Werte dieses Keys werden beim Ingest verworfen (Agent-Bug-Schutz).
   `is_hidden`: gespeichert + alarmierbar, aber nicht in der Station-Ansicht.
 - **Flutschutz:** globale Obergrenze 2000 Definitionen; darüber werden neue Keys
   nicht angelegt (Werte verworfen, Warnung geloggt, einmal pro Key und Stunde).
-- Werte außerhalb `min_value`/`max_value` werden verworfen + geloggt.
+- Plausibilitätsbereich = Override, sonst Agent-Wert. Liegt **irgendein** Aggregat
+  (min/max/avg) außerhalb, wird der ganze Wert dieses Keys für diesen Heartbeat
+  verworfen, geloggt und `last_rejected_at` + `last_rejected_value` an der Definition
+  gesetzt — in der Metrik-Verwaltung sichtbar, damit ein zu enger Agent-Bereich nicht
+  still Messwerte (und damit Alarme) schluckt. Strom darf negativ sein (INA226 misst ±).
 - Werte zu Keys **ohne** Definition (Descriptor fehlt noch): gespeichert, nicht
   angezeigt, nicht alarmierbar; Antwort fordert Descriptors an.
 - Zeilen werden nie automatisch gelöscht (Regeln + spätere Historie referenzieren
@@ -237,7 +248,8 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
   gleiche Berechtigung (`area="alert_rules"`, `verb="manage"`).
 - **Metrik-Verwaltung** (neu, gleiche Berechtigung `alert_rules`): Liste aller
   `MetricDefinition`s mit Agent-Label, Einheit, Gruppe, zuletzt gesehen; editierbar
-  `label_override`, ausblenden, sperren.
+  `label_override`, `min_override`/`max_override`, ausblenden, sperren;
+  „zuletzt verworfen"-Hinweis bei `last_rejected_at`.
 - **Station-Detail:** neuer Abschnitt/Tab „Metriken", generisch aus den `group`s
   gerendert (System / Netz / Strom / Disk): aktueller Wert, bei min/max/avg alle drei,
   Hervorhebung wenn eine Regel verletzt ist. Keine Diagramme (kommen mit der Historie).
@@ -278,8 +290,11 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
 
 ## Tests (Mindestumfang)
 
-- Descriptors: Anlage, Update nur von ≥ Agent-Version, Override gewinnt, blocked
-  verwirft, Obergrenze, Hash-Mismatch → `metric_descriptors_required`.
+- Descriptors: Anlage, letzter Schreiber gewinnt, Override gewinnt, blocked
+  verwirft, Obergrenze, Hash pro Station (unbekannt/abweichend →
+  `metric_descriptors_required`), Server-Nachrechnung = Agent-Hash.
+- Plausibilität: ein Aggregat außerhalb → ganzer Wert verworfen + `last_rejected_*`;
+  Override-Bereich gewinnt.
 - Ingest: skalare + min/max/avg-Werte, Keys ohne Definition, ungültige Keys/Werte,
   >200 Keys, fehlender Block, Inventory-Fallback für alte Agents.
 - Engine: Dauer erreicht/nicht erreicht, Hysterese beim Auflösen, kein Wert =
