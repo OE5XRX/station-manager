@@ -442,3 +442,35 @@ def test_inventory_without_drain_change_sends_no_lock(control_agent_auth):
     station = Station.objects.create(name="fwu-inv-nolock", status="online")
     seen = _inventory_drain_scenario(station, ACTIVE)
     assert [e for e in seen if e["type"] == "control.lock"] == []
+
+
+@pytest.mark.django_db
+def test_control_card_shows_update_pill(client, applicant_user):
+    from apps.module_firmware.models import ModuleType
+    from tests.module_firmware.test_update_status import _module, _online, _release, _target
+
+    station = Station.objects.create(name="fwu11", status="online")
+    fm = ModuleType.objects.create(key="fmc", display_name="FMC")
+    _online(station, backends=())  # waiting: agent without module OTA
+    _target(fm)
+    _release(fm)
+    tracked = _module(fm, station)
+    StationModule.objects.create(
+        station=station,
+        slot="slot0",
+        module_id="fm0",
+        type="fm",
+        online=True,
+        tracked_module=tracked,
+    )
+    client.force_login(_member("fwcard3"))
+    with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
+        body = client.get(reverse("control:station_control", args=[station.pk])).content.decode()
+    assert "Wartet" in body
+    assert 'title="Wartet: Station-Agent kann keine Module flashen (Image zu alt)"' in body
+    # Live (waiting) -> the card pill self-polls the compact partial.
+    url = reverse("module_firmware:module_update_status", args=[tracked.uid])
+    assert f"{url}?compact=1" in body
+    assert 'hx-trigger="every 5s"' in body
+    # Hidden while the WS-live "Firmware-Update läuft" banner speaks.
+    assert "!isUpdating('slot0','fm0')" in body

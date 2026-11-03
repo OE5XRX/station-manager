@@ -26,6 +26,18 @@ PTT is rendered last within the card so it can span full width.
       {% if m.tracked_module %}
         <a class="cp-module-uid t-mono-sm" href="{% url 'module_firmware:module_detail' m.tracked_module.uid %}" title="{% trans 'Open module inventory record' %}">{{ m.tracked_module.uid }}</a>
         {% include "module_firmware/_pills.html" with module=m.tracked_module %}
+        {% if m.update_status %}
+          {% comment %}
+          Server-side update state (HTMX self-poll while live). Hidden while the
+          WS-live "Firmware-Update läuft" strip speaks, so the two never disagree;
+          the wrapper carries x-show because the inner pill swaps itself out.
+          {% endcomment %}
+          <span class="cp-module-fw-status"
+                x-show="!isUpdating('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+                {% if m.firmware_updating %}x-cloak{% endif %}>
+            {% include "module_firmware/_update_status_pill.html" with module=m.tracked_module status=m.update_status compact=True only %}
+          </span>
+        {% endif %}
       {% endif %}
     </div>
     <div class="cp-module-status">

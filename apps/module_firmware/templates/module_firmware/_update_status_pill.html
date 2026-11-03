@@ -1,0 +1,21 @@
+{% comment %}
+Firmware update status of one module (update_status.UpdateStatus).
+Expects `module` and `status`; optional `compact` (module list / station card:
+short label, full reason as tooltip) and optional `nopoll` (module list: a
+reload is enough). Without `compact` (module detail) the
+full reason line sits next to the pill.
+
+While the state can still change on its own (status.is_live) the root element
+re-fetches itself every 5 s via HTMX and swaps itself out; a settled state
+renders without hx-* attributes, so the polling stops by itself.
+{% endcomment %}
+{% with s=status.state %}
+<span class="fw-status{% if compact %} fw-status-compact{% endif %}"
+      {% if status.is_live and not nopoll %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}{% if compact %}?compact=1{% endif %}"
+      hx-trigger="every 5s"
+      hx-swap="outerHTML"{% endif %}
+      {% if compact %}title="{{ status.reason_text }}"{% endif %}>
+  <span class="pill {% if s == 'current' %}pill-online{% elif s == 'running' or s == 'pending' %}pill-updating{% elif s == 'failed' or s == 'quarantined' %}pill-error{% elif s == 'not_updatable' %}pill-warn{% else %}pill-muted{% endif %}{% if s == 'running' %} fw-status-running{% endif %}">{% if s != 'no_target' %}<span class="dot"></span>{% endif %}{% if compact and s == 'running' %}{{ status.reason_text }}{% else %}{{ status.short_label }}{% endif %}</span>
+  {% if not compact and status.reason_text != status.short_label %}<span class="fw-status-reason">{{ status.reason_text }}</span>{% endif %}
+</span>
+{% endwith %}

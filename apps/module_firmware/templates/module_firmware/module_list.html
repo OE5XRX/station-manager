@@ -76,6 +76,7 @@
           <th>{% trans "Status" %}</th>
           <th>{% trans "Location" %}</th>
           <th>{% trans "Version" %}</th>
+          <th>Firmware</th>
           <th>{% trans "Last seen" %}</th>
           <th style="width:1%;"></th>
         </tr>
@@ -101,6 +102,9 @@
             {% endwith %}
           </td>
           <td class="t-mono" data-label="{% trans 'Version' %}">{{ module.last_reported_version|default:"—" }}</td>
+          <td data-label="Firmware">
+            {% include "module_firmware/_update_status_pill.html" with module=module status=module.update_status compact=True nopoll=True only %}
+          </td>
           <td class="t-mono" data-label="{% trans 'Last seen' %}">
             {% if module.last_seen %}{{ module.last_seen|timesince }} {% trans "ago" %}{% else %}<span class="t-muted">{% trans "never" %}</span>{% endif %}
           </td>

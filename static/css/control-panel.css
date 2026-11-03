@@ -233,10 +233,13 @@
 }
 /* Hidden until Alpine decides (no global [x-cloak] rule exists in app.css). */
 .cp-fw-updating[x-cloak],
+.cp-module-fw-status[x-cloak],
 .cp-module-error[x-cloak],
 .fw-drain-banner[x-cloak] { display: none; }
 .cp-fw-updating-title { font-weight: 600; }
 .cp-fw-updating-hint { color: var(--ink-2); font-size: 11px; }
+/* Server-side update pill in the card header (hidden while the strip shows). */
+.cp-module-fw-status { display: inline-flex; flex-shrink: 0; }
 
 /* Widgets stay visible (operators see the last-known state) but recede. */
 .cp-module-card.is-updating .cp-module-widgets {

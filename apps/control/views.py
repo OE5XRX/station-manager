@@ -7,6 +7,7 @@ from apps.accounts.permissions import (
     required_level,
 )
 from apps.module_firmware import drain
+from apps.module_firmware.update_status import bulk_update_status
 from apps.stations.models import Station
 
 from . import serializers
@@ -35,6 +36,13 @@ class StationControlView(AreaPermissionMixin, DetailView):
             for m in station.modules.select_related("tracked_module__module_type").all()
             if m.type != "audio_router"
         ]
+        # Firmware update pill per tracked module (one bulk pass; all of them sit
+        # on this station, so it replaces the open-assignment lookup).
+        tracked = [m.tracked_module for m in ctx["modules"] if m.tracked_module is not None]
+        statuses = bulk_update_status(tracked, station=station)
+        for m in ctx["modules"]:
+            if m.tracked_module is not None:
+                m.update_status = statuses.get(m.tracked_module.pk)
         ctx["initial_inventory"] = serializers.snapshot(station)
         # Cosmetic (Override button); the consumer re-checks on every preempt.
         ctx["can_admin"] = can_override_station(self.request.user, station)

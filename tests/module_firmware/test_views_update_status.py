@@ -1,0 +1,100 @@
+"""Task 9: update-status pill partial (HTMX self-poll while live)."""
+
+import pytest
+from django.urls import reverse
+
+from apps.module_firmware.models import ModuleFirmwareConvergenceState
+from tests.module_firmware.test_update_status import _cs, _module, _online, _release, _target
+
+State = ModuleFirmwareConvergenceState.State
+POLL = 'hx-trigger="every 5s"'
+
+
+@pytest.fixture
+def fm(db):
+    from apps.module_firmware.models import ModuleType
+
+    return ModuleType.objects.create(key="fm", display_name="FM")
+
+
+@pytest.fixture
+def base(fm, station):
+    _online(station)
+    _target(fm)
+    rel = _release(fm)
+    m = _module(fm, station)
+    return station, rel, m
+
+
+def _url(m, compact=False):
+    url = reverse("module_firmware:module_update_status", args=[m.uid])
+    return url + ("?compact=1" if compact else "")
+
+
+@pytest.mark.django_db
+def test_partial_polls_only_while_live(client, applicant_user, base):
+    station, rel, m = base
+    client.force_login(applicant_user)
+    resp = client.get(_url(m))
+    assert resp.status_code == 200
+    body = resp.content.decode()
+    assert "Update ausstehend" in body
+    assert POLL in body
+    assert reverse("module_firmware:module_update_status", args=[m.uid]) in body
+
+    m.last_reported_version = rel.version
+    m.save(update_fields=["last_reported_version"])
+    body = client.get(_url(m)).content.decode()
+    assert "Aktuell" in body
+    assert POLL not in body
+    assert "hx-get" not in body
+
+
+@pytest.mark.django_db
+def test_partial_compact_passes_through(client, applicant_user, base):
+    station, rel, m = base
+    _cs(m, rel, phase="flashing")
+    client.force_login(applicant_user)
+    body = client.get(_url(m, compact=True)).content.decode()
+    assert "Update läuft: Flashen" in body
+    # The polled URL keeps the compact flag so the swap renders the same shape.
+    assert "compact=1" in body
+    assert POLL in body
+
+
+@pytest.mark.django_db
+def test_partial_failed_does_not_poll(client, applicant_user, base):
+    station, rel, m = base
+    _cs(m, rel, state=State.FAILED, last_error_message="dfu-util timeout")
+    client.force_login(applicant_user)
+    body = client.get(_url(m)).content.decode()
+    assert "Fehler: dfu-util timeout" in body
+    assert POLL not in body
+
+
+@pytest.mark.django_db
+def test_partial_unknown_uid_404(client, applicant_user, db):
+    client.force_login(applicant_user)
+    url = reverse("module_firmware:module_update_status", args=["NOPE"])
+    assert client.get(url).status_code == 404
+
+
+@pytest.mark.django_db
+def test_partial_anonymous_redirects(client, base):
+    station, rel, m = base
+    resp = client.get(_url(m))
+    assert resp.status_code == 302
+
+
+def test_templates_have_no_multiline_hash_comments():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts" / "check_template_comments.py")],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
