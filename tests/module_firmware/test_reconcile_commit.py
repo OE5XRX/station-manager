@@ -160,3 +160,32 @@ def test_commit_success_resets_transient_failures(client, station_with_key, fm):
     assert resp.status_code == 200
     cs.refresh_from_db()
     assert cs.transient_failures == 0
+
+
+# --- Task 5: 409 + CONFLICT on given-up rows ------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", ["failed", "not_updatable", "quarantined"])
+def test_commit_409_on_given_up_row_logs_conflict(client, station_with_key, fm, state):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(state=state)
+    for version in ("26.09.15-01", "26.09.99-99"):
+        resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": version})
+        assert resp.status_code == 409
+    cs.refresh_from_db()
+    assert cs.state == state
+    assert cs.last_error_mode == ""
+    conflicts = StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_CONFLICT
+    )
+    assert conflicts.count() == 2
+    assert all(c.station == station for c in conflicts)
+    assert not StationAuditLog.objects.filter(
+        module=m,
+        event_type__in=[
+            StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
+            StationAuditLog.EventType.MODULE_FLASH_ROLLED_BACK,
+        ],
+    ).exists()

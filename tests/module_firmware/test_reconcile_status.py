@@ -204,3 +204,40 @@ def test_progress_status_clears_dfu_stuck_notice(client, station_with_key, fm):
     cs.refresh_from_db()
     assert cs.last_error_message == ""
     assert dfu_stuck_modules() == []
+
+
+# --- Task 5: 409 + CONFLICT on given-up rows ------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", ["failed", "not_updatable", "quarantined"])
+def test_status_409_on_given_up_row_logs_conflict(client, station_with_key, fm, state):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(state=state, attempts=1)
+    for status in ("rolled_back", "rejected"):
+        resp = _post(client, priv, station.pk, cs.pk, {"status": status})
+        assert resp.status_code == 409
+    cs.refresh_from_db()
+    assert cs.state == state  # a late callback never turns it into QUARANTINED
+    assert cs.attempts == 1
+    assert cs.last_error_mode == ""
+    conflicts = StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_CONFLICT
+    ).order_by("pk")
+    assert conflicts.count() == 2
+    assert conflicts[0].station == station
+    assert conflicts[0].message == f"Modul U1: Status 'rolled_back' abgelehnt – Zustand {state}."
+    assert not StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_QUARANTINED
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_status_409_on_ok_row_not_audited(client, station_with_key, fm):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    cs.state = ModuleFirmwareConvergenceState.State.OK
+    cs.save(update_fields=["state"])
+    assert _post(client, priv, station.pk, cs.pk, {"status": "rolled_back"}).status_code == 409
+    assert not StationAuditLog.objects.filter(module=m).exists()

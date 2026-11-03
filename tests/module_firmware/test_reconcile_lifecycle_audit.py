@@ -1,0 +1,271 @@
+"""Task 5: lifecycle audit across check → status → commit (spec §5.4, §6).
+
+INSTRUCTED is logged once per open instruction, phases once per change, and the
+in-flight bookkeeping (phase / phase_at / instructed_at) is cleared when the
+attempt ends."""
+
+import json
+
+import pytest
+from django.urls import reverse
+
+from apps.module_firmware.models import (
+    Module,
+    ModuleAssignmentHistory,
+    ModuleFirmwareConvergenceState,
+    ModuleFirmwareRelease,
+    ModuleFirmwareTarget,
+    ModuleType,
+)
+from apps.stations.models import StationAuditLog
+from tests.conftest import device_auth_headers
+
+E = StationAuditLog.EventType
+TARGET = "26.09.15-01"
+
+
+@pytest.fixture
+def fm(db):
+    return ModuleType.objects.create(key="fm", display_name="FM")
+
+
+@pytest.fixture(autouse=True)
+def _dfu_capable_station(db, station):
+    station.agent_capabilities = {"module_ota": {"backends": ["dfu"]}}
+    station.save(update_fields=["agent_capabilities"])
+
+
+@pytest.fixture
+def drifted(fm, station_with_key):
+    station, priv = station_with_key
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version=TARGET
+    )
+    ModuleFirmwareRelease.objects.create(
+        module_type=fm,
+        variant="vhf",
+        version=TARGET,
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=123,
+        source_repo="r",
+        source_tag="t",
+    )
+    m = Module.objects.create(
+        uid="U1", module_type=fm, variant="vhf", last_reported_version="26.09.10-01"
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=station, slot="slot0")
+    return station, priv, m
+
+
+def _check(client, station, priv):
+    return client.post(
+        reverse("module_firmware_api:reconcile_check"),
+        data="{}",
+        content_type="application/json",
+        **device_auth_headers(priv, station.pk, b"{}"),
+    )
+
+
+def _status(client, station, priv, cid, status):
+    body = json.dumps({"status": status}).encode()
+    return client.post(
+        reverse("module_firmware_api:reconcile_status", args=[cid]),
+        data=body,
+        content_type="application/json",
+        **device_auth_headers(priv, station.pk, body),
+    )
+
+
+def _commit(client, station, priv, cid, version):
+    body = json.dumps({"convergence_id": cid, "version": version}).encode()
+    return client.post(
+        reverse("module_firmware_api:reconcile_commit"),
+        data=body,
+        content_type="application/json",
+        **device_auth_headers(priv, station.pk, body),
+    )
+
+
+def _count(module, event_type):
+    return StationAuditLog.objects.filter(module=module, event_type=event_type).count()
+
+
+def _instruct(client, station, priv):
+    resp = _check(client, station, priv)
+    assert resp.status_code == 200
+    return resp.json()["convergence_id"]
+
+
+@pytest.mark.django_db
+def test_check_polling_logs_instructed_once(client, drifted):
+    station, priv, m = drifted
+    for _ in range(10):
+        _instruct(client, station, priv)
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 1
+    entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_INSTRUCTED)
+    assert entry.station == station
+    assert entry.message == f"Modul U1: Update-Anweisung auf {TARGET} ausgegeben (dfu)."
+    cs = ModuleFirmwareConvergenceState.objects.get(module=m)
+    assert cs.instructed_at is not None
+
+
+@pytest.mark.django_db
+def test_instructed_logged_again_after_failed_status(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    assert _status(client, station, priv, cid, "failed").status_code == 200
+    _instruct(client, station, priv)
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 2
+
+
+@pytest.mark.django_db
+def test_progress_status_does_not_reset_instructed(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    assert _status(client, station, priv, cid, "downloading").status_code == 200
+    _instruct(client, station, priv)
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 1
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    assert cs.phase == "downloading"  # a re-poll mid-attempt keeps the live phase
+
+
+@pytest.mark.django_db
+def test_phases_logged_once_each(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    for s in ["downloading", "downloading", "flashing", "verifying", "verifying"]:
+        assert _status(client, station, priv, cid, s).status_code == 200
+    assert _count(m, E.MODULE_FLASH_STARTED) == 1
+    assert _count(m, E.MODULE_FLASH_PHASE) == 2
+    messages = list(
+        StationAuditLog.objects.filter(module=m, event_type=E.MODULE_FLASH_PHASE)
+        .order_by("pk")
+        .values_list("message", flat=True)
+    )
+    assert messages == [
+        "Modul U1: Phase downloading → flashing.",
+        "Modul U1: Phase flashing → verifying.",
+    ]
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    assert cs.phase == "verifying"
+    assert cs.phase_at is not None
+    assert cs.last_attempt_at is not None
+
+
+@pytest.mark.django_db
+def test_same_phase_twice_logs_once(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "flashing")
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    first_phase_at = cs.phase_at
+    _status(client, station, priv, cid, "flashing")
+    _status(client, station, priv, cid, "flashing")
+    cs.refresh_from_db()
+    assert cs.phase_at == first_phase_at  # no write on a repeated phase
+    assert _count(m, E.MODULE_FLASH_STARTED) == 1
+    assert _count(m, E.MODULE_FLASH_PHASE) == 0
+
+
+@pytest.mark.django_db
+def test_commit_clears_phase(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "verifying")
+    assert _commit(client, station, priv, cid, TARGET).status_code == 200
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    assert cs.phase == ""
+    assert cs.phase_at is None
+    assert cs.instructed_at is None
+
+
+@pytest.mark.django_db
+def test_failed_status_clears_phase(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "flashing")
+    assert _status(client, station, priv, cid, "failed").status_code == 200
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    assert cs.phase == ""
+    assert cs.phase_at is None
+    assert cs.instructed_at is None
+
+
+@pytest.mark.django_db
+def test_new_instruction_clears_stale_phase(client, drifted):
+    from django.utils import timezone
+
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    # A stale phase left behind by a lost attempt (agent crash, no terminal POST)
+    # with the instruction bookkeeping already reset.
+    ModuleFirmwareConvergenceState.objects.filter(pk=cid).update(
+        phase="flashing", phase_at=timezone.now(), instructed_at=None
+    )
+    _instruct(client, station, priv)
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    assert cs.phase == ""
+    assert cs.phase_at is None
+    assert cs.instructed_at is not None
+
+
+@pytest.mark.django_db
+def test_second_attempt_logs_started_again(client, drifted):
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "downloading")
+    _status(client, station, priv, cid, "failed")
+    _instruct(client, station, priv)
+    _status(client, station, priv, cid, "downloading")
+    assert _count(m, E.MODULE_FLASH_STARTED) == 2
+    assert _count(m, E.MODULE_FLASH_PHASE) == 0
+
+
+@pytest.mark.django_db
+def test_rolled_back_status_audit_carries_key_hint(client, drifted):
+    from apps.module_firmware.mcuboot import KEY_UNKNOWN_HINT
+
+    station, priv, m = drifted  # neither module nor release knows a boot key
+    cid = _instruct(client, station, priv)
+    assert _status(client, station, priv, cid, "rolled_back").status_code == 200
+    entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_ROLLED_BACK)
+    assert entry.message.endswith(KEY_UNKNOWN_HINT)
+
+
+@pytest.mark.django_db
+def test_rolled_back_status_audit_no_hint_when_keys_known(client, drifted):
+    from apps.module_firmware.mcuboot import KEY_UNKNOWN_HINT
+
+    station, priv, m = drifted
+    m.reported_boot_key = "0123456789abcdef"
+    m.save(update_fields=["reported_boot_key"])
+    ModuleFirmwareRelease.objects.update(boot_key_hash="0123456789abcdef")
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "rolled_back")
+    entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_ROLLED_BACK)
+    assert KEY_UNKNOWN_HINT not in entry.message
+
+
+@pytest.mark.django_db
+def test_failed_status_audit_no_key_hint(client, drifted):
+    from apps.module_firmware.mcuboot import KEY_UNKNOWN_HINT
+
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    _status(client, station, priv, cid, "failed")
+    entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_FAILED)
+    assert KEY_UNKNOWN_HINT not in entry.message
+
+
+@pytest.mark.django_db
+def test_commit_mismatch_audit_carries_key_hint(client, drifted):
+    from apps.module_firmware.mcuboot import KEY_UNKNOWN_HINT
+
+    station, priv, m = drifted
+    cid = _instruct(client, station, priv)
+    assert _commit(client, station, priv, cid, "26.09.10-01").status_code == 409
+    entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_ROLLED_BACK)
+    assert entry.message.endswith(KEY_UNKNOWN_HINT)
+    cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
+    assert cs.phase == "" and cs.instructed_at is None
