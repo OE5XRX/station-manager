@@ -132,6 +132,23 @@ class HeartbeatView(APIView):
             except Exception:  # noqa: BLE001 - telemetry must not break heartbeat
                 logger.exception("telemetry ingest failed for station %s", station.pk)
 
+        descriptors_required = False
+        try:
+            from apps.monitoring.metrics_ingest import ingest_metrics
+
+            descriptors_required = ingest_metrics(
+                station,
+                metrics=data.get("metrics"),
+                descriptors=data.get("metric_descriptors"),
+                descriptors_hash=data.get("metric_descriptors_hash") or "",
+                agent_version=data.get("agent_version", ""),
+                inventory=inventory_data,
+                telemetry=telemetry if isinstance(telemetry, dict) else None,
+            )
+        except Exception:  # noqa: BLE001 - metrics must not break heartbeat
+            logger.exception("metrics ingest failed for station %s", station.pk)
+            descriptors_required = False
+
         # Broadcast updated status to WebSocket clients.
         try:
             from apps.stations.consumers import broadcast_station_status
@@ -140,13 +157,14 @@ class HeartbeatView(APIView):
         except Exception:
             logger.exception("Failed to broadcast station status via WebSocket.")
 
-        return Response(
-            {
-                "status": "ok",
-                "tx_audio": {
-                    "ceiling_dbfs": effective_ceiling_dbfs(station.tx_audio_ceiling_dbfs),
-                    "calibrated": station.tx_audio_ceiling_dbfs is not None,
-                },
+        body = {
+            "status": "ok",
+            "tx_audio": {
+                "ceiling_dbfs": effective_ceiling_dbfs(station.tx_audio_ceiling_dbfs),
+                "calibrated": station.tx_audio_ceiling_dbfs is not None,
             },
-            status=status.HTTP_200_OK,
-        )
+        }
+        if descriptors_required:
+            # Only present when True: the agent resends its list on this flag.
+            body["metric_descriptors_required"] = True
+        return Response(body, status=status.HTTP_200_OK)
