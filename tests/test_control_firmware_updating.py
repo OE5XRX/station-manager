@@ -29,8 +29,8 @@ SINCE = datetime(2026, 10, 18, 8, 5, tzinfo=UTC)
 ACTIVE = DrainStatus(active=True, since=SINCE, module_uids=("uid-1",))
 INACTIVE = DrainStatus(active=False, since=None, module_uids=())
 
-CARD_LIVE_TRIGGER = "every 5s, fw-status-refresh from:body"
-CARD_SETTLED_TRIGGER = "every 30s, fw-status-refresh from:body"
+CARD_LIVE_TRIGGER = "every 5s [!document.hidden], fw-status-refresh from:body"
+CARD_SETTLED_TRIGGER = "every 30s [!document.hidden], fw-status-refresh from:body"
 
 FM_CAPS = [{"name": "frequency", "kind": "setting", "type": "float"}]
 

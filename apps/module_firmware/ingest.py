@@ -61,7 +61,7 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None, came_on
         # Log only — do NOT write an audit row: rejected UIDs are never
         # persisted, so a station running unregistered-type firmware would
         # append one audit row per heartbeat (unbounded growth).
-        logger.warning("ingest: unknown module type %r (uid=%s)", type_key, uid)
+        logger.warning("ingest: unknown module type %r (uid=%s)", type_key, repr(uid)[:64])
         return None
 
     # uid_source is a TextChoices field but Django does not enforce choices on
@@ -80,7 +80,9 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None, came_on
     if raw_boot_key and not boot_key:
         # Log only (no audit row): a malformed value would otherwise append one
         # audit row per heartbeat. Bounded repr: the value is agent-supplied.
-        logger.warning("ingest: malformed boot_key %s (uid=%s)", repr(raw_boot_key)[:64], uid)
+        logger.warning(
+            "ingest: malformed boot_key %s (uid=%s)", repr(raw_boot_key)[:64], repr(uid)[:64]
+        )
 
     module, created = Module.objects.get_or_create(
         uid=uid,

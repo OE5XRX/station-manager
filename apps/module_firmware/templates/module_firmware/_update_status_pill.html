@@ -8,6 +8,8 @@ Expects `module` and `status`. Optional flags:
   30 s, plus right away on the `fw-status-refresh` body event that
   control-panel.js fires when a module leaves the live flash state. A card on
   an open control panel must never freeze on a pre-flash or settled state.
+  The timed polls only fire while the tab is visible ([!document.hidden]):
+  a background tab must not keep the rolling session alive forever.
 
 Outside the card, the root element re-fetches itself every 5 s only while the
 state can still change on its own (status.is_live); a settled state renders
@@ -16,7 +18,7 @@ without hx-* attributes, so the polling stops by itself.
 {% with s=status.state %}
 <span class="fw-status{% if compact %} fw-status-compact{% endif %}"
       {% if card %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}?compact=1&amp;card=1"
-      hx-trigger="{% if status.is_live %}every 5s{% else %}every 30s{% endif %}, fw-status-refresh from:body"
+      hx-trigger="{% if status.is_live %}every 5s [!document.hidden]{% else %}every 30s [!document.hidden]{% endif %}, fw-status-refresh from:body"
       hx-swap="outerHTML"{% elif status.is_live and not nopoll %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}{% if compact %}?compact=1{% endif %}"
       hx-trigger="every 5s"
       hx-swap="outerHTML"{% endif %}

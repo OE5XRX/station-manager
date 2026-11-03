@@ -130,6 +130,47 @@ def test_effective_target_single_query(fm, station, django_assert_num_queries):
         assert effective_target(station, fm).version == "fleet-v"
 
 
+@pytest.mark.django_db
+def test_effective_target_skips_other_stations_targets(
+    fm, station_factory, django_assert_num_queries, monkeypatch
+):
+    """Hot path: only fleet / own-station / own-group targets are loaded."""
+    group = RolloutGroup.objects.create(name="g", slug="g")
+    other_group = RolloutGroup.objects.create(name="o", slug="o")
+    st = station_factory(rollout_group=group)
+    lone = station_factory()
+    other = station_factory()
+    fleet = ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="fleet-v"
+    )
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.STATION, version="o-v", station=other
+    )
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.GROUP, version="og-v", group=other_group
+    )
+    grp = ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.GROUP, version="g-v", group=group
+    )
+    from apps.module_firmware import reconciler
+
+    loaded = []
+    real = reconciler.resolve_effective_target
+
+    def spy(station, targets):
+        targets = list(targets)
+        loaded.extend(targets)
+        return real(station, targets)
+
+    monkeypatch.setattr(reconciler, "resolve_effective_target", spy)
+    with django_assert_num_queries(1):
+        assert effective_target(lone, fm) == fleet
+    assert {t.version for t in loaded} == {"fleet-v"}
+    loaded.clear()
+    assert effective_target(st, fm) == grp
+    assert {t.version for t in loaded} == {"fleet-v", "g-v"}
+
+
 # --- transient -> failed ---------------------------------------------------------------
 
 
@@ -546,13 +587,13 @@ def _set_key(m, key):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    ("start", "reason", "rollup"),
+    ("start", "reason", "rollup", "label"),
     [
-        (State.QUARANTINED, "", Module.Convergence.QUARANTINED),
-        (State.FAILED, Reason.TRANSIENT_LIMIT, Module.Convergence.FAILED),
+        (State.QUARANTINED, "", Module.Convergence.QUARANTINED, "Quarantäne"),
+        (State.FAILED, Reason.TRANSIENT_LIMIT, Module.Convergence.FAILED, "Fehler"),
     ],
 )
-def test_mismatch_then_match_restores_sticky_state(fm, station, start, reason, rollup):
+def test_mismatch_then_match_restores_sticky_state(fm, station, start, reason, rollup, label):
     m, _rel, cs = _setup(
         fm,
         station,
@@ -585,7 +626,11 @@ def test_mismatch_then_match_restores_sticky_state(fm, station, start, reason, r
     assert cs.last_error_mode == Mode.ROLLED_BACK
     assert cs.last_error_message == "boom"
     assert m.firmware_convergence == rollup
-    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 1
+    msgs = _msgs(m, Ev.MODULE_UPDATABLE_AGAIN)
+    assert len(msgs) == 1
+    assert "Bootloader-Schlüssel passt wieder" in msgs[0]
+    assert f"Zustand {label} bleibt bestehen" in msgs[0]
+    assert start not in msgs[0]
     reconcile_module(m)
     cs.refresh_from_db()
     assert cs.state == start
@@ -624,6 +669,12 @@ def test_quarantine_detour_not_released_by_reaching_version(fm, station):
     assert cs.state == State.QUARANTINED
     assert cs.state_before_not_updatable == ""
     assert m.firmware_convergence == Module.Convergence.QUARANTINED
+    # The trail must not end at not_updatable: the restore is audited too.
+    msgs = _msgs(m, Ev.MODULE_UPDATABLE_AGAIN)
+    assert len(msgs) == 1
+    assert "Zielversion 26.09.15-01 erreicht" in msgs[0]
+    assert "Zustand Quarantäne bleibt bestehen" in msgs[0]
+    assert "quarantined" not in msgs[0]
 
 
 @pytest.mark.django_db

@@ -100,8 +100,8 @@ def test_templates_have_no_multiline_hash_comments():
     assert result.returncode == 0, result.stderr
 
 
-CARD_SETTLED = 'hx-trigger="every 30s, fw-status-refresh from:body"'
-CARD_LIVE = 'hx-trigger="every 5s, fw-status-refresh from:body"'
+CARD_SETTLED = 'hx-trigger="every 30s [!document.hidden], fw-status-refresh from:body"'
+CARD_LIVE = 'hx-trigger="every 5s [!document.hidden], fw-status-refresh from:body"'
 
 
 @pytest.mark.django_db

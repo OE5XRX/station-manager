@@ -6,6 +6,7 @@ reported version, never from local flags."""
 import logging
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.stations.models import StationAuditLog
@@ -67,9 +68,15 @@ def resolve_effective_target(station, targets):
 
 def effective_target(station, module_type):
     """Resolve the effective ModuleFirmwareTarget for (station, module_type) —
-    one query + :func:`resolve_effective_target`."""
+    one query + :func:`resolve_effective_target`. Hot path (per heartbeat
+    reconcile and drain): only the targets that can apply to this station are
+    loaded — fleet, its own station target and its own group target."""
+    scope = ModuleFirmwareTarget.Scope
+    applicable = Q(scope=scope.FLEET) | Q(scope=scope.STATION, station=station)
+    if station.rollout_group_id is not None:
+        applicable |= Q(scope=scope.GROUP, group_id=station.rollout_group_id)
     return resolve_effective_target(
-        station, ModuleFirmwareTarget.objects.filter(module_type=module_type)
+        station, ModuleFirmwareTarget.objects.filter(applicable, module_type=module_type)
     )
 
 
@@ -280,14 +287,19 @@ def _decide(cs, module, desired, *, station):
             else ""
         )
         cs.save(update_fields=["state", "state_before_not_updatable", "reason_code", "updated_at"])
-        if keys_match:
-            _audit(
-                module,
-                StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
-                f"Modul {module.uid}: Bootloader-Schlüssel passt wieder zur Release "
-                f"(Ziel {desired.version}) – Zustand {cs.state} bleibt bestehen.",
-                station=station,
-            )
+        from .update_status import state_label  # local: update_status imports reconciler
+
+        trigger = (
+            f"Bootloader-Schlüssel passt wieder zur Release (Ziel {desired.version})"
+            if keys_match
+            else f"Zielversion {desired.version} erreicht"
+        )
+        _audit(
+            module,
+            StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
+            f"Modul {module.uid}: {trigger} – Zustand {state_label(cs.state)} bleibt bestehen.",
+            station=station,
+        )
     elif cs.state == State.NOT_UPDATABLE and keys_match:
         cs.state = State.UPDATING
         cs.attempts = 0

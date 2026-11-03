@@ -74,4 +74,29 @@ def test_malformed_boot_key_warning_is_bounded(fm, station_factory, caplog):
     msg = rec.getMessage()
     assert "Z" * 100 not in msg
     assert len(msg) < 200
-    assert "uid=BK1" in msg
+    assert "uid='BK1'" in msg
+
+
+# --- review round 2: agent-supplied uid is logged bounded + repr'd ----------------------
+
+
+@pytest.mark.django_db
+def test_unknown_type_log_bounds_and_escapes_uid(station_factory, caplog):
+    uid = "EVIL\nFORGED " + "x" * 200
+    with caplog.at_level("WARNING", logger="apps.module_firmware.ingest"):
+        out = ingest_module(station_factory(), "slot1", "nope", ident(uid=uid), now=timezone.now())
+    assert out is None
+    msg = caplog.records[-1].getMessage()
+    assert "\n" not in msg
+    assert repr(uid)[:64] in msg
+    assert "x" * 100 not in msg
+
+
+@pytest.mark.django_db
+def test_malformed_boot_key_log_bounds_and_escapes_uid(fm, station_factory, caplog):
+    uid = "EVIL\nFORGED"
+    with caplog.at_level("WARNING", logger="apps.module_firmware.ingest"):
+        _ingest(station_factory(), uid=uid, boot_key="xyz")
+    msgs = [r.getMessage() for r in caplog.records if "malformed boot_key" in r.getMessage()]
+    assert msgs and "\n" not in msgs[-1]
+    assert repr(uid)[:64] in msgs[-1]
