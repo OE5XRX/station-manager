@@ -8,8 +8,10 @@ from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
 from apps.stations.models import Station
+from station_agent.metrics_contract import key_matches_pattern
 
-from .models import Alert, AlertRule
+from .models import Alert, AlertRule, MetricDefinition, ThresholdState
+from .rules import ABOVE_OPERATORS, compare, format_duration, format_value
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +340,123 @@ def _check_ota_failed():
     return new_alerts
 
 
+def _threshold_message(defn, station, rule, value, elapsed_seconds):
+    unit = defn.unit
+    direction = "above" if rule.operator in ABOVE_OPERATORS else "below"
+    msg = (
+        f"{defn.display_label} on {station.name}: "
+        f"{format_value(value, defn.precision)}{unit} {direction} "
+        f"{format_value(rule.threshold, defn.precision)}{unit}"
+    )
+    if elapsed_seconds > 0:
+        msg += f" for {format_duration(elapsed_seconds)}"
+    return msg + "."
+
+
+def _check_thresholds(now=None):
+    """Evaluate generic threshold rules per (rule, station, concrete metric key).
+
+    Duration + hysteresis (spec §5.2): a breach must hold ``duration_seconds``
+    before an alert fires, and the value must stay OK for the same duration
+    before it auto-resolves. No current value (station offline or key absent)
+    freezes the state — neither fire nor resolve. State lives in
+    ``ThresholdState`` so a restart keeps the timers.
+
+    Queries are bounded per run: rules, definitions, online telemetry and
+    existing states are each loaded once; writes happen only for alerts that
+    fire/resolve and state rows that actually changed.
+    """
+    from apps.stations.models import StationTelemetry
+
+    now = now or timezone.now()
+    rules = list(
+        AlertRule.objects.filter(alert_type=AlertRule.AlertType.THRESHOLD, is_active=True)
+    )
+    if not rules:
+        return []
+    definitions = {
+        d.key: d
+        for d in MetricDefinition.objects.filter(is_blocked=False).only(
+            "key", "label", "label_override", "unit", "precision"
+        )
+    }
+    # Offline / never-seen stations are skipped entirely → their state is frozen.
+    telemetry = list(
+        StationTelemetry.objects.select_related("station").filter(
+            station__last_seen__gte=now - OFFLINE_THRESHOLD
+        )
+    )
+    states = {
+        (st.rule_id, st.station_id, st.metric_key): st
+        for st in ThresholdState.objects.filter(rule__in=rules).select_related("alert")
+    }
+
+    new_alerts = []
+    to_create = []
+    to_update = []
+    for tel in telemetry:
+        station = tel.station
+        metrics = tel.metrics if isinstance(tel.metrics, dict) else {}
+        for rule in rules:
+            for key, sample in metrics.items():
+                defn = definitions.get(key)
+                if defn is None or not key_matches_pattern(key, rule.metric_key):
+                    continue
+                value = sample.get(rule.aggregate) if isinstance(sample, dict) else None
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+
+                state = states.get((rule.pk, station.pk, key))
+                is_new = state is None
+                if is_new:
+                    state = ThresholdState(rule=rule, station=station, metric_key=key)
+                before = (state.breach_since, state.ok_since, state.alert_id)
+                open_alert = state.alert if state.alert and not state.alert.is_resolved else None
+                duration = timedelta(seconds=rule.duration_seconds)
+
+                if compare(rule.operator, float(value), rule.threshold):
+                    state.ok_since = None
+                    state.breach_since = state.breach_since or now
+                    if open_alert is None and now - state.breach_since >= duration:
+                        elapsed = int((now - state.breach_since).total_seconds())
+                        alert = _create_alert(
+                            station=station,
+                            rule=rule,
+                            title=f"{defn.display_label}: {station.name}",
+                            message=_threshold_message(defn, station, rule, value, elapsed),
+                        )
+                        state.alert = alert
+                        new_alerts.append(alert)
+                else:
+                    state.breach_since = None
+                    if open_alert is not None:
+                        state.ok_since = state.ok_since or now
+                        if now - state.ok_since >= duration:
+                            Alert.objects.filter(pk=open_alert.pk, is_resolved=False).update(
+                                is_resolved=True, resolved_at=now
+                            )
+                            logger.info("Auto-resolved threshold alert %s", open_alert.pk)
+                            state.ok_since = None
+                            state.alert = None
+                    else:
+                        state.ok_since = None
+                        state.alert = None
+
+                if (state.breach_since, state.ok_since, state.alert_id) == before:
+                    continue
+                if is_new:
+                    to_create.append(state)
+                    states[(rule.pk, station.pk, key)] = state
+                else:
+                    to_update.append(state)
+
+    if to_create:
+        ThresholdState.objects.bulk_create(to_create)
+    if to_update:
+        ThresholdState.objects.bulk_update(to_update, ["breach_since", "ok_since", "alert"])
+    return new_alerts
+
+
 def check_alerts():
     """Run all alert checks and return a list of newly created alerts."""
     global _unresolved_cache
@@ -349,6 +468,7 @@ def check_alerts():
     new_alerts.extend(_check_unexpected_reboot())
     new_alerts.extend(_check_power_warning())
     new_alerts.extend(_check_storage_health())
+    new_alerts.extend(_check_thresholds())
 
     if new_alerts:
         logger.info("Alert check complete: %d new alert(s) created.", len(new_alerts))

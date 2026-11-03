@@ -6,3 +6,6 @@ class MonitoringConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "apps.monitoring"
     verbose_name = _("Monitoring")
+
+    def ready(self):
+        import apps.monitoring.signals  # noqa: F401 — AlertRule change/delete → threshold reset

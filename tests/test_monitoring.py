@@ -8,8 +8,11 @@ from apps.deployments.models import DeploymentResult
 from apps.monitoring.engine import (
     _check_ota_failed,
     _check_station_offline,
+    _check_thresholds,
     check_alerts,
 )
+from apps.monitoring.models import AlertRule
+from apps.stations.models import StationTelemetry
 
 
 @pytest.mark.django_db
@@ -56,6 +59,80 @@ class TestCheckStationOffline:
         alert.refresh_from_db()
         assert alert.is_resolved is True
         assert alert.resolved_at is not None
+
+
+def _metrics_station(station, **metrics):
+    """Online station whose telemetry carries ``metrics`` (kwargs: '__' -> '.')."""
+    station.last_seen = timezone.now()
+    station.save(update_fields=["last_seen"])
+    StationTelemetry.objects.update_or_create(
+        station=station,
+        defaults={
+            "metrics": {
+                k.replace("__", "."): {"min": v, "max": v, "avg": v, "ts": "x"}
+                for k, v in metrics.items()
+            }
+        },
+    )
+
+
+def _seeded_rule(metric_key, threshold):
+    """The threshold rule seeded/converted by monitoring.0006 (forced active)."""
+    rule = AlertRule.objects.get(
+        alert_type=AlertRule.AlertType.THRESHOLD, metric_key=metric_key, threshold=threshold
+    )
+    AlertRule.objects.filter(pk=rule.pk).update(is_active=True)
+    return rule
+
+
+@pytest.mark.django_db
+class TestCheckCpuTemperature:
+    """Legacy CPU check, now covered by the generic threshold engine."""
+
+    def test_cpu_temperature_alert(self, station, cpu_temp_alert_rule):
+        _metrics_station(station, cpu__temp_c=85.0)
+        alerts = _check_thresholds()
+        assert len(alerts) == 1
+        assert alerts[0].alert_rule == cpu_temp_alert_rule
+        assert "temperature" in alerts[0].title.lower()
+
+    def test_cpu_temperature_below_threshold_no_alert(self, station, cpu_temp_alert_rule):
+        _metrics_station(station, cpu__temp_c=50.0)
+        assert _check_thresholds() == []
+
+
+@pytest.mark.django_db
+class TestCheckDiskUsage:
+    def test_disk_usage_alert(self, station):
+        """92% crosses the seeded warning (90) but not the critical (95) rule."""
+        warn = _seeded_rule("disk.*.used_pct", 90.0)
+        _seeded_rule("disk.*.used_pct", 95.0)
+        _metrics_station(station, disk__root__used_pct=92.0)
+        alerts = _check_thresholds()
+        assert len(alerts) == 1
+        assert alerts[0].alert_rule == warn
+        assert "disk" in alerts[0].title.lower()
+
+    def test_disk_usage_below_threshold_no_alert(self, station):
+        _seeded_rule("disk.*.used_pct", 90.0)
+        _metrics_station(station, disk__root__used_pct=50.0)
+        assert _check_thresholds() == []
+
+
+@pytest.mark.django_db
+class TestCheckRamUsage:
+    def test_ram_usage_alert(self, station):
+        rule = _seeded_rule("mem.used_pct", 90.0)
+        _metrics_station(station, mem__used_pct=95.0)
+        alerts = _check_thresholds()
+        assert len(alerts) == 1
+        assert alerts[0].alert_rule == rule
+        assert "memory" in alerts[0].title.lower()
+
+    def test_ram_usage_below_threshold_no_alert(self, station):
+        _seeded_rule("mem.used_pct", 90.0)
+        _metrics_station(station, mem__used_pct=50.0)
+        assert _check_thresholds() == []
 
 
 @pytest.mark.django_db
