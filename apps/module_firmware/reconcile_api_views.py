@@ -48,6 +48,39 @@ def _conflict(cs, what, station):
     )
 
 
+_E = StationAuditLog.EventType
+# Flash-lifecycle events that bound an attempt for the commit dedupe below.
+_FLASH_LIFECYCLE = (
+    _E.MODULE_FLASH_INSTRUCTED,
+    _E.MODULE_FLASH_STARTED,
+    _E.MODULE_FLASH_PHASE,
+    _E.MODULE_FLASH_SUCCESS,
+    _E.MODULE_FLASH_FAILED,
+    _E.MODULE_FLASH_ROLLED_BACK,
+    _E.MODULE_FLASH_REJECTED,
+    _E.MODULE_FLASH_GAVE_UP,
+    _E.MODULE_FLASH_RETRY,
+    _E.MODULE_FLASH_CONFLICT,
+)
+
+
+def _is_repeated_commit(module, success_message):
+    """True if the module's newest flash-lifecycle audit entry is already the
+    SUCCESS for this very version (spec §11.2: a re-sent identical commit, e.g.
+    from the agent's marker recovery, logs no second SUCCESS). Row state cannot
+    tell first from repeated commit — a heartbeat may have reconciled the row to
+    OK before the first commit lands — so the audit trail is the attempt
+    boundary: any new INSTRUCTED/STARTED/... entry in between means a new
+    attempt, whose commit is logged again. One query (module FK index)."""
+    newest = (
+        StationAuditLog.objects.filter(module=module, event_type__in=_FLASH_LIFECYCLE)
+        .order_by("-created_at", "-pk")
+        .values_list("event_type", "message")
+        .first()
+    )
+    return newest == (_E.MODULE_FLASH_SUCCESS, success_message)
+
+
 def _with_key_hint(message, cs, error_mode):
     if key_hint_applies(cs.module, cs.target_release, error_mode):
         return f"{message} {KEY_UNKNOWN_HINT}"
@@ -422,12 +455,14 @@ class ReconcileCommitView(APIView):
             # heartbeat has caught up, reconcile_module lands OK; otherwise it
             # stays updating and the next check re-offers it. reconcile_module
             # maintains both the row state and the Module rollup itself.
-            _audit(
-                cs.module,
-                StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
-                f"Module {cs.module.uid} committed version {version}.",
-                station=station,
-            )
+            success_message = f"Module {cs.module.uid} committed version {version}."
+            if not _is_repeated_commit(cs.module, success_message):
+                _audit(
+                    cs.module,
+                    StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
+                    success_message,
+                    station=station,
+                )
             # The attempt is over: reset the drain cap and the in-flight
             # bookkeeping (phase / instruction marker) before deriving the state.
             cs.transient_failures = 0

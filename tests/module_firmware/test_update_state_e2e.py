@@ -33,6 +33,7 @@ from apps.module_firmware.models import (
 )
 from apps.stations.models import StationAuditLog
 from tests.conftest import device_auth_headers
+from tests.test_api_read_fixtures import session
 
 E = StationAuditLog.EventType
 State = ModuleFirmwareConvergenceState.State
@@ -305,18 +306,17 @@ def test_ac2_phases_visible_and_audited_once(agent, fm, bearer, client, staff_us
         assert entry.station == agent.station
 
     # A late progress callback after the commit is a benign 409 (no audit), and a
-    # re-sent commit (agent marker recovery) stays an idempotent 200 that never
-    # re-opens the attempt (no new INSTRUCTED / STARTED / PHASE).
+    # re-sent commit (agent marker recovery) is an idempotent 200 that logs
+    # nothing — the trail stays exactly the five entries (spec §11.2).
     assert agent.status(cid, "verifying").status_code == 409
     assert agent.commit(cid, TARGET).status_code == 200
-    assert _lifecycle(m)[:5] == [
+    assert _lifecycle(m) == [
         E.MODULE_FLASH_INSTRUCTED,
         E.MODULE_FLASH_STARTED,
         E.MODULE_FLASH_PHASE,
         E.MODULE_FLASH_PHASE,
         E.MODULE_FLASH_SUCCESS,
     ]
-    assert set(_lifecycle(m)[5:]) <= {E.MODULE_FLASH_SUCCESS}
     assert _api_status(bearer, staff_user, m)["state"] == "current"
 
     cs = ModuleFirmwareConvergenceState.objects.get(pk=cid)
@@ -426,6 +426,10 @@ def test_ac4_dev_key_vs_prod_release(agent, fm, bearer, client, staff_user):
     assert st["state"] == "not_updatable"
     assert st["reason_code"] == "boot_key_mismatch"
     assert st["reason_text"] == NOT_UPDATABLE_DEV_TEXT
+    assert st["reason_text"] == (
+        "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (Dev-Key) "
+        "– SWD-Reflash an der Bench nötig"
+    )
     assert _count(m, E.MODULE_NOT_UPDATABLE) == 1
     assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0
     (entry,) = StationAuditLog.objects.filter(module=m, event_type=E.MODULE_NOT_UPDATABLE)
@@ -509,6 +513,10 @@ def test_ac5_no_boot_key_legacy_path_with_hint(agent, fm, bearer, client, staff_
     assert st["state"] == "quarantined"
     assert st["reason_code"] == "rolled_back"
     assert KEY_UNKNOWN_HINT in st["reason_text"]
+    assert KEY_UNKNOWN_HINT == (
+        "Mögliche Ursache: Bootloader-Schlüssel passt nicht zur Release (z. B. Dev-Key) "
+        "– Modul-Firmware zu alt, um das zu prüfen."
+    )
     assert st["reason_text"].startswith(f"Quarantäne (Update {QUARANTINE_ATTEMPT_LIMIT}×")
     assert KEY_UNKNOWN_HINT in _detail_html(client, staff_user, m)
 
@@ -544,7 +552,15 @@ def test_ac7_visibility_unchanged(agent, fm, bearer, client, anon_client, applic
     client.force_login(applicant_user)
     listing = client.get(reverse("module_firmware:module_list"))
     assert listing.status_code == 200
-    assert m.uid in listing.content.decode()
+    listing_html = listing.content.decode()
+    assert m.uid in listing_html
+    assert "Fehler: dfu timeout" in listing_html  # pill / tooltip in the list
+    # API read: applicants read via session (their tokens are not accepted).
+    resp = session(applicant_user).get(reverse("api:module-detail", args=[m.pk]))
+    assert resp.status_code == 200
+    st = resp.json()["update_status"]
+    assert st["state"] == "failed"
+    assert st["reason_text"] == "Fehler: dfu timeout"
 
     # ...and cannot retry (GUI or API): no state change, no audit.
     resp = client.post(reverse("module_firmware:module_retry_update", args=[m.uid]))
