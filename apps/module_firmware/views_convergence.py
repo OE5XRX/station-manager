@@ -1,5 +1,7 @@
 """Firmware convergence overview + quarantine release + failed-update retry (GUI)."""
 
+from collections import defaultdict
+
 from django.contrib import messages
 from django.db.models import Count, Prefetch
 from django.http import HttpResponseRedirect
@@ -19,9 +21,10 @@ from .models import (
     Module,
     ModuleAssignmentHistory,
     ModuleFirmwareRelease,
+    ModuleFirmwareTarget,
     ModuleType,
 )
-from .reconciler import effective_target
+from .reconciler import effective_target, resolve_effective_target
 
 
 def is_int_param(value):
@@ -30,7 +33,7 @@ def is_int_param(value):
     return value.isascii() and value.isdecimal()
 
 
-def firmware_row(module, assignment, *, release_keys=None):
+def firmware_row(module, assignment, *, release_keys=None, type_targets=None):
     """Firmware facts for one module at its (open) ``assignment``.
 
     ``target``: effective ModuleFirmwareTarget (None without an assigned
@@ -41,10 +44,17 @@ def firmware_row(module, assignment, *, release_keys=None):
     None (``services.current_quarantine``). Uses a ``quarantined_states``
     prefetch (to_attr) on ``module`` when present, and a precomputed
     ``release_keys`` set of active (module_type_id, variant, version) tuples
-    instead of a per-row EXISTS query when given."""
+    instead of a per-row EXISTS query when given. ``type_targets`` (module_type_id
+    -> its ModuleFirmwareTargets, see ``targets_by_type``) replaces the per-row
+    target query when given."""
     target = None
     if assignment is not None and assignment.station is not None:
-        target = effective_target(assignment.station, module.module_type)
+        if type_targets is not None:
+            target = resolve_effective_target(
+                assignment.station, type_targets.get(module.module_type_id, ())
+            )
+        else:
+            target = effective_target(assignment.station, module.module_type)
     if target is None:
         has_release = False
     elif release_keys is not None:
@@ -61,6 +71,16 @@ def firmware_row(module, assignment, *, release_keys=None):
         module, states=getattr(module, "quarantined_states", None), target=target
     )
     return {"target": target, "has_release": has_release, "quarantine": quarantine}
+
+
+def targets_by_type(module_type_ids):
+    """module_type_id -> list of its ModuleFirmwareTargets, one query (same
+    default ordering as ``effective_target``)."""
+    grouped = defaultdict(list)
+    if module_type_ids:
+        for t in ModuleFirmwareTarget.objects.filter(module_type_id__in=module_type_ids):
+            grouped[t.module_type_id].append(t)
+    return grouped
 
 
 class ConvergenceOverviewView(AreaPermissionMixin, ListView):

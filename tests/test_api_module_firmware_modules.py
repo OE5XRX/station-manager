@@ -342,6 +342,7 @@ def test_api_retry_update_staff(api_topology, bearer, fm, role):
     assert body["retried_targets"] == [TARGET]
     assert body["module"]["uid"] == "Q1"
     assert body["module"]["firmware_convergence"] == Module.Convergence.UPDATING
+    assert body["module"]["update_status"]["state"] == "pending"
     cs.refresh_from_db()
     assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING
     assert cs.transient_failures == 0

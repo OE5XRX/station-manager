@@ -253,3 +253,120 @@ def test_module_list_page_size_capped_at_50(api_topology, bearer):
     r = bearer(api_topology["admin"]).get(reverse("api:module-list"), {"page_size": 200})
     assert r.status_code == 200
     assert len(r.json()["results"]) == 50
+
+
+# ------------------------------------------------------- update_status (T8)
+
+
+def _online(station):
+    station.last_seen = timezone.now()
+    station.agent_capabilities = {"module_ota": {"backends": ["dfu"]}}
+    station.save(update_fields=["last_seen", "agent_capabilities"])
+
+
+def test_module_read_has_update_status_and_boot_key(api_topology, bearer, fm):
+    station = api_topology["station_in"]
+    _online(station)
+    _release(fm)
+    ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    m = _module(fm, station)
+    Module.objects.filter(pk=m.pk).update(
+        last_reported_version="26.09.10-01", reported_boot_key="abcdef0123456789"
+    )
+    client = bearer(api_topology["station_user"])
+    data = client.get(reverse("api:module-detail", args=[m.id])).data
+    assert data["reported_boot_key"] == "abcdef0123456789"
+    status = data["update_status"]
+    assert set(status) == {"state", "phase", "reason_code", "reason_text", "since"}
+    assert status["state"] == "pending"
+    assert status["phase"] == "" and status["reason_code"] == ""
+    assert status["reason_text"] == "Update ausstehend"
+    # list carries the same shape/values (bulk path)
+    row = client.get(reverse("api:module-list")).data["results"][0]
+    assert row["update_status"] == status
+    assert row["reported_boot_key"] == "abcdef0123456789"
+
+
+def test_module_update_status_running_phase(api_topology, bearer, fm):
+    station = api_topology["station_in"]
+    _online(station)
+    rel = _release(fm)
+    ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    m = _module(fm, station)
+    ModuleFirmwareConvergenceState.objects.create(
+        module=m,
+        target_release=rel,
+        phase=ModuleFirmwareConvergenceState.Phase.VERIFYING,
+        phase_at=timezone.now(),
+    )
+    data = bearer(api_topology["admin"]).get(reverse("api:module-detail", args=[m.id])).data
+    assert data["update_status"]["state"] == "running"
+    assert data["update_status"]["phase"] == "verifying"
+    assert data["update_status"]["since"] is not None
+
+
+def test_module_without_assignment_update_status_no_target(api_topology, bearer, fm):
+    m = _module(fm, None)
+    data = bearer(api_topology["admin"]).get(reverse("api:module-detail", args=[m.id])).data
+    assert data["update_status"] == {
+        "state": "no_target",
+        "phase": "",
+        "reason_code": "",
+        "reason_text": "Kein Ziel",
+        "since": None,
+    }
+    assert data["reported_boot_key"] == ""
+
+
+def _populate(fm, station, n, start):
+    for i in range(start, start + n):
+        variant = "vhf" if i % 2 else "uhf"
+        rel = ModuleFirmwareRelease.objects.filter(module_type=fm, variant=variant).first()
+        if rel is None:
+            rel = _release(fm, variant=variant)
+        m = _module(fm, station, uid=f"N{i:02d}", variant=variant, slot=f"slot{i}")
+        if i % 3 == 0:
+            ModuleFirmwareConvergenceState.objects.create(module=m, target_release=rel)
+
+
+def test_module_list_update_status_no_n_plus_one(
+    api_topology, bearer, fm, django_assert_max_num_queries
+):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    station = api_topology["station_in"]
+    _online(station)
+    ModuleFirmwareTarget.objects.create(module_type=fm, version=TARGET)
+    client = bearer(api_topology["admin"])
+    url = reverse("api:module-list")
+    _populate(fm, station, 1, 0)
+    client.get(url)  # warm-up (token/session lookups)
+    with CaptureQueriesContext(connection) as one:
+        assert len(client.get(url).data["results"]) == 1
+    _populate(fm, station, 9, 1)
+    with django_assert_max_num_queries(len(one)):
+        results = client.get(url).data["results"]
+    assert len(results) == 10
+    assert {r["update_status"]["state"] for r in results} == {"pending"}
+
+
+@pytest.mark.parametrize("value", ["failed", "not_updatable"])
+def test_filter_firmware_convergence_failed_and_not_updatable(api_topology, bearer, fm, value):
+    hit = _module(fm, None, uid="HIT")
+    _module(fm, None, uid="MISS")
+    Module.objects.filter(pk=hit.pk).update(firmware_convergence=value)
+    resp = bearer(api_topology["admin"]).get(
+        reverse("api:module-list"), {"firmware_convergence": value}
+    )
+    assert resp.status_code == 200, resp.content
+    assert [r["uid"] for r in resp.data["results"]] == ["HIT"]
+
+
+def test_release_read_has_boot_key_hash(api_topology, bearer, fm):
+    rel = _release(fm, boot_key_hash="0123456789abcdef")
+    client = bearer(api_topology["admin"])
+    data = client.get(reverse("api:module-firmware-release-detail", args=[rel.id])).data
+    assert data["boot_key_hash"] == "0123456789abcdef"
+    row = client.get(reverse("api:module-firmware-release-list")).data["results"][0]
+    assert row["boot_key_hash"] == "0123456789abcdef"

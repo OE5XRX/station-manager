@@ -235,6 +235,13 @@ SPECTACULAR_SETTINGS = {
         "ImportJobStatusEnum": "apps.images.models.ImageImportJob.Status",
         "StationAssignmentRoleEnum": "apps.stations.models.StationAssignment.Role",
         "RegionAssignmentRoleEnum": "apps.stations.models.RegionAssignment.Role",
+        # Module update status (apps.api.module_firmware_serializers): stable,
+        # self-describing names instead of generic StateEnum/PhaseEnum/ReasonCodeEnum.
+        "ModuleUpdateStateEnum": "apps.module_firmware.update_status.UpdateState",
+        "ModuleUpdatePhaseEnum": (
+            "apps.module_firmware.models.ModuleFirmwareConvergenceState.Phase"
+        ),
+        "ModuleUpdateReasonEnum": "apps.module_firmware.update_status.REASON_CODES",
     },
 }
 
