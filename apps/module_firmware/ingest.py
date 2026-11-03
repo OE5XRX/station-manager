@@ -12,6 +12,7 @@ from django.db import transaction
 from apps.stations.models import StationAuditLog
 
 from .drain import DFU_STUCK_PREFIX
+from .mcuboot import normalize_boot_key
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState, ModuleType
 from .reconciler import reconcile_module
 
@@ -74,6 +75,12 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None, came_on
     )
     version = identity.get("version", "")
     variant = identity.get("variant", "") or ""
+    raw_boot_key = identity.get("boot_key")
+    boot_key = normalize_boot_key(raw_boot_key)
+    if raw_boot_key and not boot_key:
+        # Log only (no audit row): a malformed value would otherwise append one
+        # audit row per heartbeat.
+        logger.warning("ingest: malformed boot_key %r (uid=%s)", raw_boot_key, uid)
 
     module, created = Module.objects.get_or_create(
         uid=uid,
@@ -82,6 +89,7 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None, came_on
             "uid_source": uid_source,
             "last_reported_version": version,
             "variant": variant,
+            "reported_boot_key": boot_key,
             "first_seen": now,
             "last_seen": now,
         },
@@ -166,7 +174,11 @@ def ingest_module(station, slot, module_id, identity, *, now, user=None, came_on
         old_version = module.last_reported_version
         module.last_seen = now
         module.last_reported_version = version
-        module.save(update_fields=["last_seen", "last_reported_version", "updated_at"])
+        update_fields = ["last_seen", "last_reported_version", "updated_at"]
+        if module.reported_boot_key != boot_key:
+            module.reported_boot_key = boot_key
+            update_fields.append("reported_boot_key")
+        module.save(update_fields=update_fields)
         # Record firmware version transitions so the detail view has real history
         # (skip the no-op and the very first observed version).
         if version and old_version and version != old_version:
