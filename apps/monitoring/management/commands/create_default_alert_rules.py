@@ -9,9 +9,11 @@ rolling back the migration.
 
 Idempotent, defaults only apply on first creation:
 - event rules: get_or_create on ``alert_type`` (unique per event type);
-- threshold rules: get_or_create on ``(alert_type="threshold", metric_key,
-  operator, name)`` — the default name distinguishes e.g. the disk warning and
-  critical rules that share ``disk.*.used_pct gte``.
+- threshold rules: skipped if any rule matches ``(alert_type="threshold",
+  metric_key, operator)`` — the name is operator-editable, so it is not part of
+  the match. The disk warning and critical rules share ``disk.*.used_pct gte``
+  and are additionally told apart by ``severity``. ``.exists()`` instead of
+  get_or_create: several matching rules are fine, never MultipleObjectsReturned.
 If you change the defaults here, mirror them in the migrations.
 """
 
@@ -97,6 +99,10 @@ THRESHOLD_RULES = [
     },
 ]
 
+# Keys with more than one default rule per operator (warning + critical):
+# matched on severity too, so deleting one of them re-seeds only that one.
+SEVERITY_DISAMBIGUATED_KEYS = {"disk.*.used_pct"}
+
 
 class Command(BaseCommand):
     help = "Create default alert rules if they do not already exist."
@@ -114,9 +120,12 @@ class Command(BaseCommand):
                 "alert_type": AlertRule.AlertType.THRESHOLD,
                 "metric_key": rule_data["metric_key"],
                 "operator": rule_data["operator"],
-                "name": rule_data["name"],
             }
-            _, created = AlertRule.objects.get_or_create(**lookup, defaults=rule_data)
+            if rule_data["metric_key"] in SEVERITY_DISAMBIGUATED_KEYS:
+                lookup["severity"] = rule_data["severity"]
+            created = not AlertRule.objects.filter(**lookup).exists()
+            if created:
+                AlertRule.objects.create(alert_type=AlertRule.AlertType.THRESHOLD, **rule_data)
             label = f"{rule_data['name']} ({rule_data['metric_key']} {rule_data['operator']})"
             created_count += self._report(created, label, rule_data)
 

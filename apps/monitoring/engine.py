@@ -1,7 +1,7 @@
 """Alert engine: checks station health and creates/resolves alerts."""
 
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from django.db.models import Q
 from django.utils import timezone
@@ -353,13 +353,32 @@ def _threshold_message(defn, station, rule, value, elapsed_seconds):
     return msg + "."
 
 
+def _sample_is_current(sample, now) -> bool:
+    """True if the sample's ``ts`` (ISO string) is at most OFFLINE_THRESHOLD old.
+
+    Missing/unparseable ``ts`` counts as no current value. A naive ``ts`` is
+    read as UTC; a ``ts`` in the future (clock skew) counts as current.
+    """
+    ts = sample.get("ts")
+    if not isinstance(ts, str) or not ts:
+        return False
+    try:
+        parsed = datetime.fromisoformat(ts)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return now - parsed <= OFFLINE_THRESHOLD
+
+
 def _check_thresholds(now=None):
     """Evaluate generic threshold rules per (rule, station, concrete metric key).
 
     Duration + hysteresis (spec §5.2): a breach must hold ``duration_seconds``
     before an alert fires, and the value must stay OK for the same duration
-    before it auto-resolves. No current value (station offline or key absent)
-    freezes the state — neither fire nor resolve. State lives in
+    before it auto-resolves. No current value (station offline, key absent, or
+    the sample's ``ts`` missing/older than OFFLINE_THRESHOLD) freezes the
+    state — neither fire nor resolve. State lives in
     ``ThresholdState`` so a restart keeps the timers.
 
     Queries are bounded per run: rules, definitions, online telemetry and
@@ -397,12 +416,17 @@ def _check_thresholds(now=None):
     for tel in telemetry:
         station = tel.station
         metrics = tel.metrics if isinstance(tel.metrics, dict) else {}
+        # Stale samples (e.g. heartbeat bumped last_seen but the error-isolated
+        # metrics ingest failed) are no current value.
+        metrics = {
+            k: v for k, v in metrics.items() if isinstance(v, dict) and _sample_is_current(v, now)
+        }
         for rule in rules:
             for key, sample in metrics.items():
                 defn = definitions.get(key)
                 if defn is None or not key_matches_pattern(key, rule.metric_key):
                     continue
-                value = sample.get(rule.aggregate) if isinstance(sample, dict) else None
+                value = sample.get(rule.aggregate)
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     continue
 

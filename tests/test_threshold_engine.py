@@ -1,6 +1,6 @@
 """Generic threshold engine: duration, hysteresis, freezing, rule-change reset (Task 4)."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -22,8 +22,9 @@ from apps.stations.models import StationTelemetry
 # ---------------------------------------------------------------------------
 
 
-def _val(v):
-    return {"min": v, "max": v, "avg": v, "ts": "2026-11-03T00:00:00Z"}
+def _val(v, ts=None):
+    ts = ts or timezone.now()
+    return {"min": v, "max": v, "avg": v, "ts": ts.isoformat()}
 
 
 @pytest.fixture
@@ -55,8 +56,12 @@ def _rule(metric_key, threshold, op="gte", duration=0, severity="warning", aggre
 
 
 def _set_metrics(station, **metrics):
-    """Replace the station's metrics; kwargs use '__' for '.'."""
-    data = {k.replace("__", "."): _val(v) for k, v in metrics.items()}
+    """Replace the station's metrics; kwargs use '__' for '.'.
+
+    Samples are stamped with the station's last heartbeat (or now), like the
+    ingest does."""
+    ts = station.last_seen or timezone.now()
+    data = {k.replace("__", "."): _val(v, ts) for k, v in metrics.items()}
     StationTelemetry.objects.update_or_create(station=station, defaults={"metrics": data})
 
 
@@ -65,8 +70,16 @@ def _open_alerts(rule):
 
 
 def _touch(station, now):
+    """Simulate a heartbeat at ``now``: bump last_seen and re-stamp the samples."""
     station.last_seen = now
     station.save(update_fields=["last_seen"])
+    tel = StationTelemetry.objects.filter(station=station).first()
+    if tel is not None and isinstance(tel.metrics, dict):
+        tel.metrics = {
+            k: {**v, "ts": now.isoformat()} if isinstance(v, dict) else v
+            for k, v in tel.metrics.items()
+        }
+        tel.save(update_fields=["metrics"])
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +195,14 @@ class TestThresholdEngine:
         _rule("pwr.12v.voltage_v", 11.0, op="lt", aggregate="min")
         StationTelemetry.objects.create(
             station=online_station,
-            metrics={"pwr.12v.voltage_v": {"min": 10.2, "max": 12.4, "avg": 12.0, "ts": "x"}},
+            metrics={
+                "pwr.12v.voltage_v": {
+                    "min": 10.2,
+                    "max": 12.4,
+                    "avg": 12.0,
+                    "ts": timezone.now().isoformat(),
+                }
+            },
         )
         assert len(_check_thresholds()) == 1
 
@@ -326,6 +346,47 @@ class TestThresholdEngine:
         for s in (120, 240, 600):
             _touch(online_station, t0 + timedelta(seconds=s))
             assert _check_thresholds(now=t0 + timedelta(seconds=s)) == []
+        assert _open_alerts(rule).count() == 1
+        assert ThresholdState.objects.values().get(rule=rule) == before
+
+    def test_stale_sample_ts_frozen(self, isolated_rules, online_station):
+        """Station online (last_seen fresh) but the sample is old -> no current value."""
+        rule = _rule("cpu.temp_c", 80)
+        stale = timezone.now() - engine.OFFLINE_THRESHOLD - timedelta(minutes=1)
+        StationTelemetry.objects.create(
+            station=online_station, metrics={"cpu.temp_c": _val(85.0, stale)}
+        )
+        assert _check_thresholds() == []
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+    @pytest.mark.parametrize("ts", [None, "", "x", 12345])
+    def test_missing_or_bad_ts_frozen(self, isolated_rules, online_station, ts):
+        rule = _rule("cpu.temp_c", 80)
+        sample = {"min": 85.0, "max": 85.0, "avg": 85.0}
+        if ts is not None:
+            sample["ts"] = ts
+        StationTelemetry.objects.create(station=online_station, metrics={"cpu.temp_c": sample})
+        assert _check_thresholds() == []
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+    def test_naive_ts_treated_as_utc(self, isolated_rules, online_station):
+        _rule("cpu.temp_c", 80)
+        naive = datetime.now(UTC).replace(tzinfo=None).isoformat()
+        sample = {"min": 85.0, "max": 85.0, "avg": 85.0, "ts": naive}
+        StationTelemetry.objects.create(station=online_station, metrics={"cpu.temp_c": sample})
+        assert len(_check_thresholds()) == 1
+
+    def test_open_alert_not_resolved_by_stale_ok_value(self, isolated_rules, online_station):
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        assert len(_check_thresholds()) == 1
+        before = ThresholdState.objects.values().get(rule=rule)
+
+        stale = timezone.now() - engine.OFFLINE_THRESHOLD - timedelta(minutes=1)
+        StationTelemetry.objects.filter(station=online_station).update(
+            metrics={"cpu.temp_c": _val(70.0, stale)}
+        )
+        assert _check_thresholds() == []
         assert _open_alerts(rule).count() == 1
         assert ThresholdState.objects.values().get(rule=rule) == before
 

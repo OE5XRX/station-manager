@@ -28,6 +28,13 @@ class ThresholdRuleForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Captured before alert_type is forced below: the persisted state decides
+        # whether an unchanged metric key may skip re-validation.
+        self._persisted_threshold_key = (
+            self.instance.metric_key
+            if self.instance.pk and self.instance.alert_type == AlertRule.AlertType.THRESHOLD
+            else None
+        )
         # Forced, never from POST: the form only ever edits threshold rules
         # (set before validation so the event-type constraint check is exact).
         self.instance.alert_type = AlertRule.AlertType.THRESHOLD
@@ -39,6 +46,11 @@ class ThresholdRuleForm(forms.ModelForm):
 
     def clean_metric_key(self):
         value = (self.cleaned_data.get("metric_key") or "").strip()
+        # Mirror AlertRuleWriteSerializer: only (re)validate a changed key —
+        # seeded rules (e.g. the 12 V rule) may reference keys whose definition
+        # only appears once an agent describes it; editing them must not block.
+        if value and value == self._persisted_threshold_key:
+            return value
         validate_metric_key(value)
         return value
 

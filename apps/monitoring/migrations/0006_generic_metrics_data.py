@@ -16,9 +16,17 @@ Forward:
 
 Idempotent: every step matches on existing rows, so a re-run is a no-op.
 
-Reverse — noop (same rationale as 0002_seed_default_rules): mapping threshold
-rules back onto typed singletons would lose operator-created rules, and the
-legacy engine checks this would feed no longer exist.
+Reverse — explicit, so rolling back to ``monitoring 0004`` works (0004 has
+``alert_type`` unique and no ``threshold`` type):
+1. Delete all ``ThresholdState`` rows.
+2. Per legacy mapping convert the *first* (lowest pk) matching threshold rule
+   back in place — ``cpu.temp_c`` -> ``cpu_temperature``, ``mem.used_pct`` ->
+   ``ram_critical``; of the ``disk.*.used_pct`` rules the critical-severity one
+   (else the higher threshold) -> ``disk_critical``, the other ->
+   ``disk_warning``. Threshold / severity / is_active / description are kept;
+   ``metric_key`` / ``operator`` / ``name`` are cleared.
+3. Delete every remaining threshold rule (operator-created rules, the 12 V
+   rule). Their alerts survive: ``Alert.alert_rule`` is SET_NULL.
 """
 
 from django.db import migrations
@@ -92,11 +100,47 @@ def forwards(apps, schema_editor):
         AlertRule.objects.create(alert_type="threshold", is_active=True, **UNDERVOLTAGE_RULE)
 
 
+def _first(qs):
+    return qs.order_by("pk").first()
+
+
+def backwards(apps, schema_editor):
+    AlertRule = apps.get_model("monitoring", "AlertRule")
+    ThresholdState = apps.get_model("monitoring", "ThresholdState")
+
+    ThresholdState.objects.all().delete()
+
+    threshold = AlertRule.objects.filter(alert_type="threshold")
+    picks = {
+        "cpu_temperature": _first(threshold.filter(metric_key="cpu.temp_c")),
+        "ram_critical": _first(threshold.filter(metric_key="mem.used_pct")),
+    }
+    disk = list(threshold.filter(metric_key="disk.*.used_pct").order_by("pk"))
+    critical = next((r for r in disk if r.severity == "critical"), None)
+    if critical is None and len(disk) > 1:
+        critical = max(disk[:2], key=lambda r: r.threshold)
+    warning = next((r for r in disk if r is not critical), None)
+    picks["disk_critical"] = critical
+    picks["disk_warning"] = warning
+
+    for legacy_type, rule in picks.items():
+        if rule is None:
+            continue
+        rule.alert_type = legacy_type
+        rule.metric_key = ""
+        rule.operator = ""
+        rule.name = ""
+        rule.save()
+
+    # Queryset delete: Alert.alert_rule is SET_NULL, so alert history is kept.
+    AlertRule.objects.filter(alert_type="threshold").delete()
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("monitoring", "0005_generic_metrics_schema"),
     ]
 
     operations = [
-        migrations.RunPython(forwards, reverse_code=migrations.RunPython.noop),
+        migrations.RunPython(forwards, reverse_code=backwards),
     ]

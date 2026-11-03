@@ -96,3 +96,50 @@ def test_management_command_is_idempotent_and_restores_deleted():
     assert (
         AlertRule.objects.filter(alert_type="threshold", metric_key="disk.*.used_pct").count() == 2
     )
+
+
+@pytest.mark.django_db
+def test_management_command_does_not_duplicate_renamed_rule():
+    AlertRule.objects.filter(alert_type="threshold", metric_key="cpu.temp_c").update(
+        name="Mein CPU-Alarm"
+    )
+    AlertRule.objects.filter(
+        alert_type="threshold", metric_key="disk.*.used_pct", severity="critical"
+    ).update(name="Platte voll")
+    before = AlertRule.objects.count()
+    call_command("create_default_alert_rules")
+    assert AlertRule.objects.count() == before
+    assert AlertRule.objects.filter(alert_type="threshold", metric_key="cpu.temp_c").count() == 1
+
+
+@pytest.mark.django_db
+def test_management_command_tolerates_multiple_matching_rules():
+    for _ in range(2):
+        AlertRule.objects.create(
+            alert_type="threshold",
+            name="CPU temperature",
+            metric_key="cpu.temp_c",
+            operator="gte",
+            threshold=70.0,
+        )
+        AlertRule.objects.create(
+            alert_type="threshold",
+            name="Disk usage (warning)",
+            metric_key="disk.*.used_pct",
+            operator="gte",
+            threshold=80.0,
+            severity="warning",
+        )
+    before = AlertRule.objects.count()
+    call_command("create_default_alert_rules")
+    assert AlertRule.objects.count() == before
+
+
+@pytest.mark.django_db
+def test_management_command_restores_only_missing_disk_severity():
+    AlertRule.objects.filter(
+        alert_type="threshold", metric_key="disk.*.used_pct", severity="critical"
+    ).delete()
+    call_command("create_default_alert_rules")
+    disk = AlertRule.objects.filter(alert_type="threshold", metric_key="disk.*.used_pct")
+    assert sorted(disk.values_list("severity", flat=True)) == ["critical", "warning"]

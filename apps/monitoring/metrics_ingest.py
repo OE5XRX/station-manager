@@ -3,10 +3,12 @@
 Hot path (every station, every heartbeat): DB access is bounded and independent
 of the number of keys — one query loads the definitions for all incoming keys,
 descriptors are upserted via bulk_create/bulk_update, ``last_seen`` is bumped
-with a single UPDATE, and the telemetry row is written once.
+with a single UPDATE (throttled to once per LAST_SEEN_THROTTLE per definition),
+and the telemetry row is written once.
 """
 
 import logging
+from datetime import timedelta
 
 from django.core.cache import cache
 from django.utils import timezone
@@ -27,6 +29,11 @@ from station_agent.metrics_contract import (
 logger = logging.getLogger(__name__)
 
 CAP_WARNING_TTL = 3600
+CAP_WARNING_CACHE_KEY = "metrics:cap"
+CAP_WARNING_EXAMPLES = 5
+# last_seen only needs "recently seen" resolution; without the throttle every
+# heartbeat of every station rewrites the same definition rows.
+LAST_SEEN_THROTTLE = timedelta(minutes=5)
 _AGENT_FIELDS = [
     "label",
     "unit",
@@ -125,20 +132,26 @@ def _out_of_range(value: dict, lo, hi) -> bool:
     )
 
 
-def _warn_cap(key: str) -> None:
+def _warn_cap(dropped: list[str]) -> None:
+    """One rate-limited warning per hour (globally), not one per key."""
+    if not dropped:
+        return
     # cache.add is atomic and only succeeds when the key is absent -> once per hour.
-    if cache.add(f"metrics:cap:{key}", 1, CAP_WARNING_TTL):
+    if cache.add(CAP_WARNING_CACHE_KEY, 1, CAP_WARNING_TTL):
         logger.warning(
-            "MetricDefinition cap (%d) reached: key %r not registered, values dropped",
+            "MetricDefinition cap (%d) reached: %d key(s) not registered in this "
+            "heartbeat, values dropped (e.g. %s)",
             MAX_DEFINITIONS,
-            key,
+            len(dropped),
+            ", ".join(dropped[:CAP_WARNING_EXAMPLES]),
         )
 
 
-def _upsert_descriptors(cleaned, defs, *, agent_version, now, count_fn) -> None:
+def _upsert_descriptors(cleaned, defs, *, agent_version, now, count_fn) -> list[str]:
     """Update existing definitions (agent fields only) and create new ones under the cap.
 
     ``defs`` (key -> MetricDefinition) is updated in place with created rows.
+    Returns the keys that could not be registered because of the cap.
     """
     version = (agent_version or "")[:_SOURCE_VERSION_LEN]
     to_update, to_create = [], []
@@ -162,14 +175,14 @@ def _upsert_descriptors(cleaned, defs, *, agent_version, now, count_fn) -> None:
         MetricDefinition.objects.bulk_update(to_update, _AGENT_FIELDS)
     if to_create:
         room = max(0, MAX_DEFINITIONS - count_fn())
-        for obj in to_create[room:]:
-            _warn_cap(obj.key)
         allowed = to_create[:room]
         if allowed:
             # ignore_conflicts: a concurrent heartbeat may create the same key.
             MetricDefinition.objects.bulk_create(allowed, ignore_conflicts=True)
             for obj in allowed:
                 defs[obj.key] = obj
+        return [obj.key for obj in to_create[room:]]
+    return []
 
 
 def ingest_metrics(
@@ -185,9 +198,12 @@ def ingest_metrics(
     """Store the heartbeat metrics; return True if the agent must resend its descriptors."""
     now = timezone.now()
     list_sent = isinstance(descriptors, list)
-    cleaned = _clean_descriptors(descriptors) if list_sent else []
+    # Slice first: bound work on oversized input (the cap only applies after
+    # cleaning/deduping, which would otherwise touch every item).
+    cleaned = _clean_descriptors(descriptors[: 2 * MAX_KEYS]) if list_sent else []
 
     values = _collect_values(metrics)
+    agent_keys = set(values)
     for key, value in _legacy_values(inventory, telemetry).items():
         # MAX_KEYS bounds the merged set: an inventory with many disks must not
         # bypass the per-heartbeat cap via the legacy fallback.
@@ -211,8 +227,11 @@ def ingest_metrics(
         return _count
 
     descriptor_keys = set()
+    cap_dropped: list[str] = []
     if cleaned:
-        _upsert_descriptors(cleaned, defs, agent_version=agent_version, now=now, count_fn=count_fn)
+        cap_dropped = _upsert_descriptors(
+            cleaned, defs, agent_version=agent_version, now=now, count_fn=count_fn
+        )
         descriptor_keys = {d["key"] for d in cleaned}
         _count = None  # rows may have been created
 
@@ -224,9 +243,13 @@ def ingest_metrics(
         definition = defs.get(key)
         if definition is None:
             if count_fn() >= MAX_DEFINITIONS:
-                _warn_cap(key)
+                if key not in cap_dropped:
+                    cap_dropped.append(key)
                 continue
-            has_undefined = True
+            # Only the agent's own keys: server-derived legacy keys (old agents)
+            # can never be described by the agent, so asking would loop forever.
+            if key in agent_keys:
+                has_undefined = True
         else:
             if definition.is_blocked:
                 continue
@@ -242,8 +265,11 @@ def ingest_metrics(
                 seen_pks.append(definition.pk)
         stored[key] = {**value, "ts": ts}
 
+    _warn_cap(cap_dropped)
     if seen_pks:
-        MetricDefinition.objects.filter(pk__in=seen_pks).update(last_seen=now)
+        MetricDefinition.objects.filter(
+            pk__in=seen_pks, last_seen__lt=now - LAST_SEEN_THROTTLE
+        ).update(last_seen=now)
     if rejected:
         with_pk = [d for d in rejected if d.pk is not None]
         if with_pk:

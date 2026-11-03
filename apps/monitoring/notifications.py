@@ -94,7 +94,9 @@ def _send_webpush_notification(alert):
     logger.info("Alert web-push delivered to %d subscription(s).", count)
 
 
-_TELEGRAM_MD_SPECIALS = ("\\", "_", "*", "`", "[")
+# Legacy Markdown has no backslash escape: a lone backslash is literal, so it is
+# not escaped (escaping it would show a doubled backslash).
+_TELEGRAM_MD_SPECIALS = ("_", "*", "`", "[")
 
 
 def _telegram_md_escape(text) -> str:

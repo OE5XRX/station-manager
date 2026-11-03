@@ -15,6 +15,12 @@ def test_escape_specials():
     )
 
 
+def test_backslash_not_escaped():
+    """Legacy Markdown has no backslash escape: ``\\`` must pass through as-is."""
+    assert _telegram_md_escape("C:\\path") == "C:\\path"
+    assert _telegram_md_escape("a\\_b") == "a\\\\_b"
+
+
 @pytest.mark.django_db
 def test_telegram_message_escapes_metric_key_title(station, settings, monkeypatch):
     settings.TELEGRAM_BOT_TOKEN = "t"

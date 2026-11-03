@@ -1,11 +1,14 @@
 """ingest_metrics: value storage, descriptor upsert, legacy fallback, descriptors_required."""
 
 import math
+import time
+from datetime import timedelta
 
 import pytest
 from django.core.cache import cache
+from django.utils import timezone
 
-from apps.monitoring.metrics_ingest import ingest_metrics
+from apps.monitoring.metrics_ingest import LAST_SEEN_THROTTLE, ingest_metrics
 from apps.monitoring.models import MAX_DEFINITIONS, MetricDefinition
 from apps.stations.models import StationTelemetry
 from station_agent.metrics_contract import MAX_KEYS, clean_descriptor, descriptors_hash
@@ -147,11 +150,20 @@ def test_negative_current_kept_when_range_allows(station):
 
 
 def test_last_seen_updated_for_defined_keys(station):
-    d = _define("a.val")
-    old = d.last_seen
+    old = timezone.now() - LAST_SEEN_THROTTLE - timedelta(minutes=1)
+    d = _define("a.val", last_seen=old)
     _ingest(station, metrics={"a.val": 1})
     d.refresh_from_db()
     assert d.last_seen > old
+
+
+def test_last_seen_bump_throttled(station):
+    recent = timezone.now() - timedelta(minutes=1)
+    d = _define("a.val", last_seen=recent)
+    _ingest(station, metrics={"a.val": 1})
+    d.refresh_from_db()
+    assert d.last_seen == recent
+    assert _stored(station)["a.val"]["avg"] == 1
 
 
 def test_key_without_definition_stored_and_required(station):
@@ -233,11 +245,44 @@ def test_cap_prevents_new_definitions_and_drops_values(station, caplog):
     assert "over.cap" not in stored
     assert stored["fill.k00001"]["avg"] == 2
     assert required is False
-    assert "over.cap" in caplog.text
-    # Rate-limited: a second heartbeat does not log again for the same key.
+    cap_records = [r for r in caplog.records if "cap" in r.getMessage()]
+    assert len(cap_records) == 1
+    assert "over.cap" in cap_records[0].getMessage()
+    # Rate-limited globally: a second heartbeat (any key) does not log again.
     caplog.clear()
-    _ingest(station, metrics={"over.cap": 1})
-    assert "over.cap" not in caplog.text
+    _ingest(station, metrics={"over.cap": 1, "other.cap": 2})
+    assert "cap" not in caplog.text
+
+
+def test_cap_warning_single_with_count_and_examples(station, caplog):
+    existing = MetricDefinition.objects.count()
+    MetricDefinition.objects.bulk_create(
+        [MetricDefinition(key=f"fill.k{i:05d}") for i in range(MAX_DEFINITIONS - existing)]
+    )
+    metrics = {f"over.k{i:02d}": i for i in range(8)}
+    _ingest(station, metrics=metrics, descriptors=[_desc(k) for k in metrics])
+    records = [r for r in caplog.records if "MetricDefinition cap" in r.getMessage()]
+    assert len(records) == 1
+    msg = records[0].getMessage()
+    assert "8 key(s)" in msg
+    assert sum(1 for k in metrics if k in msg) == 5
+
+
+def test_oversized_descriptor_list_bounded(station):
+    descs = [_desc(f"big.k{i:05d}") for i in range(10_000)]
+    start = time.monotonic()
+    _ingest(station, descriptors=descs)
+    assert time.monotonic() - start < 5
+    assert MetricDefinition.objects.filter(key__startswith="big.").count() <= MAX_KEYS
+
+
+def test_legacy_key_without_definition_not_required(station):
+    """Server-derived legacy keys never make an old agent resend descriptors
+    (it has none to send)."""
+    MetricDefinition.objects.filter(key="cpu.temp_c").delete()
+    required = _ingest(station, inventory={"cpu": {"temperature_c": 55.0}})
+    assert _stored(station)["cpu.temp_c"]["avg"] == 55.0
+    assert required is False
 
 
 def test_cap_without_list_not_required(station):

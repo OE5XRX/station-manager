@@ -76,17 +76,23 @@ def _precision(value: object) -> int:
     return max(0, min(MAX_PRECISION, value))
 
 
+def _printable(value: object, max_len: int) -> str:
+    # Strip control/format chars (CR/LF/tab, NUL, ESC, zero-width...) before
+    # truncating: labels/units end up in logs, UI and alert messages.
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value if ch.isprintable())[:max_len]
+
+
 def clean_descriptor(d: object) -> dict | None:
     """Coerce an agent-sent descriptor into the canonical shape, or None if unusable."""
     if not isinstance(d, dict) or not is_valid_key(d.get("key")):
         return None
-    label = d.get("label")
-    unit = d.get("unit")
     group = d.get("group")
     return {
         "key": d["key"],
-        "label": (label if isinstance(label, str) else "")[:MAX_LABEL_LEN],
-        "unit": (unit if isinstance(unit, str) else "")[:MAX_UNIT_LEN],
+        "label": _printable(d.get("label"), MAX_LABEL_LEN),
+        "unit": _printable(d.get("unit"), MAX_UNIT_LEN),
         "group": group if group in GROUPS else "other",
         "precision": _precision(d.get("precision")),
         "min": _finite_number(d.get("min")),

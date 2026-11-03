@@ -171,3 +171,45 @@ def test_existing_definition_not_overwritten(migrator):
     mod.forwards(new.apps, None)
     d = MetricDefinition.objects.get(key="cpu.temp_c")
     assert (d.label, d.label_override) == ("Agent label", "X")
+
+
+def test_reverse_to_0004_restores_legacy_rules(migrator):
+    """Rolling 0006/0005 back must leave exactly one rule per legacy type
+    (0004 has alert_type unique) with tuned values kept."""
+    new = migrator.apply_initial_migration(TESTED)
+    AlertRule = new.apps.get_model("monitoring", "AlertRule")
+    Alert = new.apps.get_model("monitoring", "Alert")
+    ThresholdState = new.apps.get_model("monitoring", "ThresholdState")
+    Station = new.apps.get_model("stations", "Station")
+    station = Station.objects.create(name="rev-station")
+
+    cpu = AlertRule.objects.get(alert_type="threshold", metric_key="cpu.temp_c")
+    cpu.threshold = 77.0
+    cpu.save()
+    # Operator-created extra rules: a second CPU rule and a custom metric rule.
+    AlertRule.objects.create(
+        alert_type="threshold", metric_key="cpu.temp_c", operator="gte", threshold=60.0
+    )
+    custom = AlertRule.objects.create(
+        alert_type="threshold", metric_key="net.eth0.rx_kbps", operator="gt", threshold=1.0
+    )
+    alert = Alert.objects.create(
+        station=station, alert_rule=custom, severity="warning", title="t", message="m"
+    )
+    ThresholdState.objects.create(
+        rule=custom, station=station, metric_key="net.eth0.rx_kbps", alert=alert
+    )
+
+    old = migrator.apply_tested_migration(PRE)
+    AlertRule = old.apps.get_model("monitoring", "AlertRule")
+    Alert = old.apps.get_model("monitoring", "Alert")
+    for legacy in ("cpu_temperature", "disk_warning", "disk_critical", "ram_critical"):
+        assert AlertRule.objects.filter(alert_type=legacy).count() == 1
+    assert not AlertRule.objects.filter(alert_type="threshold").exists()
+    assert AlertRule.objects.get(alert_type="cpu_temperature").threshold == 77.0
+    assert AlertRule.objects.get(alert_type="disk_warning").threshold == 90.0
+    assert AlertRule.objects.get(alert_type="disk_critical").threshold == 95.0
+    assert AlertRule.objects.get(alert_type="disk_critical").severity == "critical"
+    # Alerts of deleted rules survive with the FK nulled.
+    kept = Alert.objects.get(pk=alert.pk)
+    assert kept.alert_rule_id is None

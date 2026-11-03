@@ -134,6 +134,42 @@ class TestUpdate:
         assert alert.is_resolved is True
         assert not ThresholdState.objects.filter(rule=rule).exists()
 
+    def test_update_seeded_rule_without_definition(self, client, admin_user, db):
+        """A seeded rule whose key has no MetricDefinition yet stays editable
+        (key unchanged -> not re-validated), mirroring the API serializer."""
+        MetricDefinition.objects.filter(key="pwr.12v.voltage_v").delete()
+        seeded = AlertRule.objects.create(
+            alert_type=THRESHOLD,
+            name="12 V rail undervoltage",
+            metric_key="pwr.12v.voltage_v",
+            operator="lt",
+            aggregate="avg",
+            threshold=11.0,
+            duration_seconds=60,
+            severity="warning",
+            is_active=True,
+        )
+        client.force_login(admin_user)
+        payload = _payload(
+            name=seeded.name, metric_key=seeded.metric_key, operator="lt", threshold="10.8"
+        )
+        del payload["is_active"]
+        resp = client.post(reverse("monitoring:threshold_rule_update", args=[seeded.pk]), payload)
+        assert resp.status_code == 302
+        seeded.refresh_from_db()
+        assert seeded.threshold == 10.8
+        assert seeded.is_active is False
+
+    def test_update_changed_key_still_validated(self, client, admin_user, rule):
+        client.force_login(admin_user)
+        resp = client.post(
+            reverse("monitoring:threshold_rule_update", args=[rule.pk]),
+            _payload(metric_key="no.such.key", operator="lt"),
+        )
+        assert resp.status_code == 400
+        rule.refresh_from_db()
+        assert rule.metric_key == "pwr.12v.voltage_v"
+
     def test_update_invalid_rerenders_400(self, client, admin_user, rule):
         client.force_login(admin_user)
         resp = client.post(

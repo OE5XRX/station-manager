@@ -186,3 +186,17 @@ def test_key_matches_pattern(key, pattern, ok):
 )
 def test_is_valid_pattern(pattern, ok):
     assert mc.is_valid_pattern(pattern) is ok
+
+
+def test_clean_descriptor_strips_non_printable():
+    raw = {"key": "x.y", "label": "12 V\r\nrail\tvolt\x00age\x1b", "unit": "V\n\u200b"}
+    out = mc.clean_descriptor(raw)
+    assert out["label"] == "12 Vrailvoltage"
+    assert out["unit"] == "V"
+
+
+def test_clean_descriptor_strips_before_truncating():
+    raw = {"key": "x.y", "label": "\n" * 70 + "Label", "unit": "\t" * 20 + "kV"}
+    out = mc.clean_descriptor(raw)
+    assert out["label"] == "Label"
+    assert out["unit"] == "kV"

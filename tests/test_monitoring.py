@@ -69,7 +69,12 @@ def _metrics_station(station, **metrics):
         station=station,
         defaults={
             "metrics": {
-                k.replace("__", "."): {"min": v, "max": v, "avg": v, "ts": "x"}
+                k.replace("__", "."): {
+                    "min": v,
+                    "max": v,
+                    "avg": v,
+                    "ts": station.last_seen.isoformat(),
+                }
                 for k, v in metrics.items()
             }
         },
