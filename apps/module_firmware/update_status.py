@@ -6,6 +6,11 @@ non-archived release for (type, variant, version) -> convergence row) and the
 gates of the reconcile check (``drain.executable_artifact``, ControlLock idle
 gate), so the status never disagrees with what ``check`` would hand out.
 
+It also mirrors the reconciler's *decisions* on the stored row fields (boot-key
+mismatch -> not updatable, key fixed -> retry, updating row at the transient cap
+-> failed), so the display never disagrees with what the next reconcile / check
+would do — even for an offline station that does not reconcile.
+
 Pure read: no ``reconcile_module`` call, no row locks, no writes.
 ``bulk_update_status`` issues a constant number of queries (at most five),
 independent of the number of modules.
@@ -26,8 +31,9 @@ from django.db.models import Q
 from apps.control.models import ControlLock
 
 from .drain import artifact_for, executable_artifact
-from .mcuboot import KEY_UNKNOWN_HINT, key_hint_applies, not_updatable_text
+from .mcuboot import KEY_UNKNOWN_HINT, boot_key_mismatch, key_hint_applies, not_updatable_text
 from .models import (
+    DRAIN_TRANSIENT_LIMIT,
     ModuleAssignmentHistory,
     ModuleFirmwareConvergenceState,
     ModuleFirmwareRelease,
@@ -69,31 +75,33 @@ REASON_CODES: tuple[str, ...] = (
     _MODE.ROLLED_BACK.value,
 )
 
-_LIVE = frozenset({UpdateState.RUNNING, UpdateState.WAITING, UpdateState.PENDING})
+_LIVE = frozenset(
+    {UpdateState.RUNNING.value, UpdateState.WAITING.value, UpdateState.PENDING.value}
+)
 
 _SHORT_LABELS = {
-    UpdateState.NO_TARGET: "Kein Ziel",
-    UpdateState.CURRENT: "Aktuell",
-    UpdateState.QUARANTINED: "Quarantäne",
-    UpdateState.NOT_UPDATABLE: "Nicht updatebar",
-    UpdateState.FAILED: "Fehler",
-    UpdateState.WAITING: "Wartet",
-    UpdateState.RUNNING: "Update läuft",
-    UpdateState.PENDING: "Update ausstehend",
+    UpdateState.NO_TARGET.value: "Kein Ziel",
+    UpdateState.CURRENT.value: "Aktuell",
+    UpdateState.QUARANTINED.value: "Quarantäne",
+    UpdateState.NOT_UPDATABLE.value: "Nicht updatebar",
+    UpdateState.FAILED.value: "Fehler",
+    UpdateState.WAITING.value: "Wartet",
+    UpdateState.RUNNING.value: "Update läuft",
+    UpdateState.PENDING.value: "Update ausstehend",
 }
 
 _PHASE_TEXT = {
-    CS.Phase.DOWNLOADING: "Download",
-    CS.Phase.FLASHING: "Flashen",
-    CS.Phase.VERIFYING: "Prüfen",
+    CS.Phase.DOWNLOADING.value: "Download",
+    CS.Phase.FLASHING.value: "Flashen",
+    CS.Phase.VERIFYING.value: "Prüfen",
 }
 
 _WAIT_TEXT = {
-    WaitReason.STATION_OFFLINE: "Wartet: Station offline",
-    WaitReason.AGENT_NO_MODULE_OTA: (
+    WaitReason.STATION_OFFLINE.value: "Wartet: Station offline",
+    WaitReason.AGENT_NO_MODULE_OTA.value: (
         "Wartet: Station-Agent kann keine Module flashen (Image zu alt)"
     ),
-    WaitReason.STATION_BUSY: "Wartet: Station belegt (Bedienung aktiv)",
+    WaitReason.STATION_BUSY.value: "Wartet: Station belegt (Bedienung aktiv)",
 }
 
 
@@ -104,6 +112,12 @@ class UpdateStatus:
     reason_code: str  # "" or one of REASON_CODES
     reason_text: str  # full German display line
     since: datetime | None
+
+    def __post_init__(self):
+        # Plain str values (not TextChoices members) for a stable API surface.
+        for name in ("state", "phase", "reason_code"):
+            value = getattr(self, name)
+            object.__setattr__(self, name, str(getattr(value, "value", value)))
 
     @property
     def is_live(self) -> bool:
@@ -120,7 +134,7 @@ _CURRENT = UpdateStatus(UpdateState.CURRENT, "", "", "Aktuell", None)
 
 
 def _waiting(reason: str, text: str | None = None) -> UpdateStatus:
-    return UpdateStatus(UpdateState.WAITING, "", reason, text or _WAIT_TEXT[reason], None)
+    return UpdateStatus(UpdateState.WAITING, "", reason, text or _WAIT_TEXT[str(reason)], None)
 
 
 def _quarantine_status(module, release, row) -> UpdateStatus:
@@ -143,26 +157,47 @@ def _decide(module, station, target, release, row, busy_station_ids) -> UpdateSt
     if (module.last_reported_version or "") == target.version:
         return _CURRENT
 
-    if row is not None:
-        if row.state == _ROW.QUARANTINED:
-            return _quarantine_status(module, release, row)
-        if row.state == _ROW.NOT_UPDATABLE:
-            return UpdateStatus(
-                UpdateState.NOT_UPDATABLE,
-                "",
-                CS.ReasonCode.BOOT_KEY_MISMATCH,
-                not_updatable_text(module),
-                row.updated_at,
-            )
-        if row.state == _ROW.FAILED:
-            message = row.last_error_message or "Update mehrfach fehlgeschlagen"
-            return UpdateStatus(
-                UpdateState.FAILED,
-                "",
-                CS.ReasonCode.TRANSIENT_LIMIT,
-                f"Fehler: {message}",
-                row.updated_at,
-            )
+    # Mirror reconciler._decide (§5.2/§5.3) on the row fields so the display
+    # never disagrees with what the next reconcile / check would decide — even
+    # for a station that is offline and therefore never reconciles.
+    since = row.updated_at if row is not None else None
+    if release is not None and boot_key_mismatch(module, release):
+        # Known, differing keys override updating/failed/quarantined.
+        return UpdateStatus(
+            UpdateState.NOT_UPDATABLE,
+            "",
+            CS.ReasonCode.BOOT_KEY_MISMATCH,
+            not_updatable_text(module),
+            since,
+        )
+
+    state = row.state if row is not None else None
+    released = (
+        state == _ROW.NOT_UPDATABLE
+        and bool(module.reported_boot_key)
+        and module.reported_boot_key == release.boot_key_hash
+    )
+    if released:
+        state = _ROW.UPDATING  # key fixed: the reconciler retries with fresh counters
+
+    if state == _ROW.QUARANTINED:
+        return _quarantine_status(module, release, row)
+    if state == _ROW.NOT_UPDATABLE:
+        return UpdateStatus(
+            UpdateState.NOT_UPDATABLE,
+            "",
+            CS.ReasonCode.BOOT_KEY_MISMATCH,
+            not_updatable_text(module),
+            since,
+        )
+    at_cap = (
+        state == _ROW.UPDATING and not released and row.transient_failures >= DRAIN_TRANSIENT_LIMIT
+    )
+    if state == _ROW.FAILED or at_cap:
+        message = row.last_error_message or "Update mehrfach fehlgeschlagen"
+        return UpdateStatus(
+            UpdateState.FAILED, "", CS.ReasonCode.TRANSIENT_LIMIT, f"Fehler: {message}", since
+        )
 
     if not station.is_online:
         return _waiting(WaitReason.STATION_OFFLINE)
@@ -289,11 +324,13 @@ def _resolve(modules: Sequence, station_override=None) -> dict[int, UpdateStatus
     }
 
 
-def bulk_update_status(modules: Sequence) -> dict[int, UpdateStatus]:
+def bulk_update_status(modules: Sequence, *, station=None) -> dict[int, UpdateStatus]:
     """Update status for many modules, keyed by module pk. Constant query count
     (≤ 5): open assignments + stations (skipped with an ``open_assignments``
-    prefetch), targets, releases, convergence rows, busy station ids."""
-    return _resolve(modules)
+    prefetch or when ``station`` is given), targets, releases, convergence rows,
+    busy station ids. ``station`` replaces every module's open-assignment station
+    (e.g. the station card, whose modules all sit on that station)."""
+    return _resolve(modules, station_override=station)
 
 
 def module_update_status(module, *, station=None) -> UpdateStatus:

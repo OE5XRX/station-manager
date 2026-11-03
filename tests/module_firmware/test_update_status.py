@@ -14,6 +14,7 @@ from apps.module_firmware.mcuboot import (
     NOT_UPDATABLE_DEV_TEXT,
 )
 from apps.module_firmware.models import (
+    DRAIN_TRANSIENT_LIMIT,
     Module,
     ModuleAssignmentHistory,
     ModuleFirmwareConvergenceState,
@@ -392,7 +393,7 @@ def test_bulk_query_count_constant(fm, station_factory, admin_user):
         bulk_update_status(one)
     with CaptureQueriesContext(connection) as q8:
         result = bulk_update_status(many)
-    assert len(q1) == len(q8) <= 5
+    assert len(q1) == len(q8) == 5
     assert {s.state for s in result.values()} >= {
         "pending",
         "current",
@@ -418,7 +419,7 @@ def test_bulk_respects_open_assignments_prefetch(fm, station_factory, admin_user
     modules = list(qs)
     with CaptureQueriesContext(connection) as q:
         prefetched = bulk_update_status(modules)
-    assert len(q) <= 4
+    assert len(q) == 4
     assert prefetched == bulk_update_status(_fresh(ms))
 
 
@@ -447,3 +448,100 @@ def test_status_is_read_only(base):
     assert cs.updated_at == before_updated
     assert Module.objects.get(pk=m.pk).firmware_convergence == before_rollup
     assert ModuleFirmwareConvergenceState.objects.count() == 1
+
+
+def test_updating_row_at_transient_cap_shows_failed(base):
+    station, rel, m = base
+    cs = _cs(
+        m, rel, transient_failures=DRAIN_TRANSIENT_LIMIT, last_error_message="dfu-util timeout"
+    )
+    s = module_update_status(m)
+    assert s.state == "failed" and s.reason_code == "transient_limit"
+    assert s.reason_text == "Fehler: dfu-util timeout" and s.since == cs.updated_at
+
+
+def test_at_cap_row_failed_even_when_offline(base):
+    station, rel, m = base
+    station.last_seen = timezone.now() - timedelta(days=3)
+    station.save(update_fields=["last_seen"])
+    _cs(m, rel, transient_failures=DRAIN_TRANSIENT_LIMIT)
+    s = module_update_status(m)
+    assert s.state == "failed"
+    assert s.reason_text == "Fehler: Update mehrfach fehlgeschlagen"
+
+
+def test_below_cap_is_not_failed(base):
+    station, rel, m = base
+    _cs(m, rel, transient_failures=DRAIN_TRANSIENT_LIMIT - 1)
+    assert module_update_status(m).state == "pending"
+
+
+def test_key_mismatch_without_row_is_not_updatable(base):
+    station, rel, m = base
+    rel.boot_key_hash = RELEASE_KEY
+    rel.save()
+    m.reported_boot_key = DEV_KEY_HASH_PREFIX
+    m.save()
+    s = module_update_status(m)
+    assert s.state == "not_updatable" and s.reason_code == "boot_key_mismatch"
+    assert s.reason_text == NOT_UPDATABLE_DEV_TEXT and s.since is None
+
+
+@pytest.mark.parametrize("row_state", [State.UPDATING, State.FAILED, State.QUARANTINED])
+def test_key_mismatch_overrides_row_states(base, row_state):
+    station, rel, m = base
+    rel.boot_key_hash = RELEASE_KEY
+    rel.save()
+    m.reported_boot_key = DEV_KEY_HASH_PREFIX
+    m.save()
+    cs = _cs(m, rel, state=row_state, attempts=3, last_error_mode="rolled_back")
+    s = module_update_status(m)
+    assert s.state == "not_updatable" and s.since == cs.updated_at
+
+
+def test_key_mismatch_loses_to_current(base):
+    station, rel, m = base
+    rel.boot_key_hash = RELEASE_KEY
+    rel.save()
+    m.reported_boot_key = DEV_KEY_HASH_PREFIX
+    m.last_reported_version = TARGET
+    m.save()
+    assert module_update_status(m).state == "current"
+
+
+def test_key_fixed_releases_not_updatable(base):
+    """Mirrors reconciler step 3: matching keys again -> retried (pending)."""
+    station, rel, m = base
+    rel.boot_key_hash = RELEASE_KEY
+    rel.save()
+    m.reported_boot_key = RELEASE_KEY
+    m.save()
+    _cs(m, rel, state=State.NOT_UPDATABLE, reason_code="boot_key_mismatch", transient_failures=9)
+    assert module_update_status(m).state == "pending"
+
+
+def test_status_fields_are_plain_str(base):
+    station, rel, m = base
+    cs = _cs(m, rel, phase="flashing", phase_at=timezone.now())
+    for s in (module_update_status(m), module_update_status(_module(m.module_type, None))):
+        assert type(s.state) is str and type(s.reason_code) is str and type(s.phase) is str
+    cs.phase = ""
+    cs.save()
+    station.agent_capabilities = {}
+    station.save(update_fields=["agent_capabilities"])
+    s = module_update_status(m)
+    assert type(s.reason_code) is str and s.reason_code == "agent_no_module_ota"
+
+
+def test_bulk_with_station_override(fm, station_factory, admin_user):
+    ms = _mixed_fleet(fm, station_factory, admin_user)
+    s1 = ModuleAssignmentHistory.objects.get(module=ms[0]).station
+    on_s1 = [m for m in _fresh(ms) if ModuleAssignmentHistory.objects.get(module=m).station == s1]
+    with CaptureQueriesContext(connection) as q_plain:
+        plain = bulk_update_status(on_s1)
+    with CaptureQueriesContext(connection) as q_override:
+        override = bulk_update_status(on_s1, station=s1)
+    assert override == plain
+    assert len(q_override) <= len(q_plain)
+    for m in on_s1:
+        assert override[m.pk] == module_update_status(m, station=s1)
