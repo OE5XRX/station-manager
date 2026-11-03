@@ -13,6 +13,7 @@ from apps.images.cosign import verify_blob_identity
 from apps.images.github_releases import fetch_release_by_tag
 
 from . import storage
+from .mcuboot import parse_boot_key_hash
 from .models import ModuleFirmwareImportJob, ModuleFirmwareRelease
 from .trust import is_trusted_repo, is_valid_tag, trusted_owners
 
@@ -153,6 +154,7 @@ class _StagedVariant:
     url: str
     blob: bytes
     bundle: bytes
+    boot_key_hash: str = ""
     sim: _StagedSim | None = None
 
 
@@ -262,6 +264,7 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                         url=_asset_url(repo, job.tag, va.signed_name),
                         blob=blob,
                         bundle=bundle,
+                        boot_key_hash=parse_boot_key_hash(blob),
                         sim=sim,
                     )
                 )
@@ -322,6 +325,7 @@ def import_release_tag(job: ModuleFirmwareImportJob) -> None:
                         "sha256": sv.sha256,
                         "size_bytes": sv.size,
                         "cosign_bundle_key": sv.bkey,
+                        "boot_key_hash": sv.boot_key_hash,
                         "source_repo": repo,
                         "source_tag": job.tag,
                         "source_github_url": sv.url,
