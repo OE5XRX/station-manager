@@ -195,3 +195,36 @@ def test_partial_retry_form_only_when_failed(client, staff_user, base):
     station, rel, m = base  # pending
     client.force_login(staff_user)
     assert RETRY not in client.get(_url(m)).content.decode()
+
+
+@pytest.mark.django_db
+def test_partial_root_is_block_for_detail_inline_for_compact_and_card(client, staff_user, base):
+    """The detail variant can carry block content (retry <div>/<form>), so its
+    root must be a <div> — a <span> root would be an invalid content model.
+    Compact (list) and card keep the inline <span> root. hx-swap="outerHTML"
+    stays on the root in every polling variant."""
+    station, rel, m = base
+    _cs(m, rel, state=State.FAILED, last_error_message="dfu-util timeout")
+    client.force_login(staff_user)
+    detail = client.get(_url(m)).content.decode().strip()
+    assert detail.startswith('<div class="fw-status"')
+    assert detail.endswith("</div>")
+    assert RETRY in detail
+    compact = client.get(_url(m, compact=True)).content.decode().strip()
+    assert compact.startswith('<span class="fw-status fw-status-compact"')
+    assert compact.endswith("</span>")
+    card_url = reverse("module_firmware:module_update_status", args=[m.uid]) + "?compact=1&card=1"
+    card = client.get(card_url).content.decode().strip()
+    assert card.startswith('<span class="fw-status fw-status-compact"')
+    assert card.endswith("</span>")
+    assert 'hx-swap="outerHTML"' in card
+
+
+@pytest.mark.django_db
+def test_partial_live_detail_root_is_div_and_swaps_outer(client, applicant_user, base):
+    station, rel, m = base  # pending -> live
+    client.force_login(applicant_user)
+    body = client.get(_url(m)).content.decode().strip()
+    assert body.startswith('<div class="fw-status"')
+    assert 'hx-swap="outerHTML"' in body
+    assert POLL in body

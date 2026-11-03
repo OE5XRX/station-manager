@@ -731,3 +731,41 @@ def test_reaching_version_from_other_states_writes_no_updatable_again(fm, statio
     cs.refresh_from_db()
     assert cs.state == State.OK
     assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 0
+
+
+# --- review round 4: decisions use the DB values, not a stale in-memory module -------
+
+
+@pytest.mark.django_db
+def test_stale_matching_key_in_memory_does_not_release_not_updatable(fm, station):
+    """An inventory recorded a mismatching key (row went not_updatable) after
+    this ``module`` object was read: the stale matching key in memory must not
+    release the row back to updating."""
+    m, _rel, cs = _setup(
+        fm,
+        station,
+        module_key=OTHER_KEY,
+        cs_kw={"state": State.NOT_UPDATABLE, "reason_code": Reason.BOOT_KEY_MISMATCH},
+    )
+    m.reported_boot_key = RELEASE_KEY  # stale in-memory value, never saved
+    out = reconcile_module(m)
+    cs.refresh_from_db()
+    assert out.state == State.NOT_UPDATABLE
+    assert cs.state == State.NOT_UPDATABLE
+    assert _count(m, Ev.MODULE_UPDATABLE_AGAIN) == 0
+
+
+@pytest.mark.django_db
+def test_stale_version_in_memory_uses_db_version(fm, station):
+    m, rel, cs = _setup(fm, station, cs_kw={"state": State.UPDATING})
+    Module.objects.filter(pk=m.pk).update(last_reported_version=rel.version)
+    out = reconcile_module(m)  # in-memory m still reports the old version
+    assert out.state == State.OK
+
+
+@pytest.mark.django_db
+def test_stale_uid_source_in_memory_uses_db_value(fm, station):
+    m, _rel, _cs = _setup(fm, station, module_key=OTHER_KEY, synthetic=True)
+    Module.objects.filter(pk=m.pk).update(uid_source=Module.UidSource.STM32_UID)
+    out = reconcile_module(m)  # in-memory m is still synthetic (skips key check)
+    assert out.state == State.NOT_UPDATABLE

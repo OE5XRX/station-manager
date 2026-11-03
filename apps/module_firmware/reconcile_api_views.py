@@ -159,7 +159,11 @@ class ReconcileCheckView(APIView):
         if chosen is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
         instruction, cs = chosen
-        self._mark_instructed(cs, instruction, station)
+        if not self._mark_instructed(cs, instruction, station):
+            # The row left UPDATING after reconcile_module returned (concurrent
+            # inventory -> not_updatable, terminal status -> failed): never hand
+            # out the stale instruction — the agent does not abort on a 409.
+            return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(ReconcileCheckResponseSerializer(instruction).data)
 
     @staticmethod
@@ -172,7 +176,11 @@ class ReconcileCheckView(APIView):
         check after a progress POST is a restarted attempt (agent crash/reboot
         mid-download) — it is audited again and the stale phase is cleared, so
         the next progress POST logs STARTED. ``state=UPDATING`` guards against a
-        heartbeat flipping the row between the reconcile and this mark."""
+        heartbeat flipping the row between the reconcile and this mark.
+
+        Returns False when the row is no longer UPDATING (the instruction is
+        stale and must not be handed out); True otherwise, including the plain
+        dedup case (still updating, already instructed, no phase)."""
         rows = (
             ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk, state=State.UPDATING)
             .filter(Q(instructed_at__isnull=True) | ~Q(phase=""))
@@ -186,6 +194,13 @@ class ReconcileCheckView(APIView):
                 f"{instruction['target_version']} ausgegeben ({instruction['artifact']}).",
                 station=station,
             )
+            return True
+        current = (
+            ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk)
+            .values_list("state", flat=True)
+            .first()
+        )
+        return current == State.UPDATING
 
     def _instruction(self, module, slot, cs, artifact):
         release = cs.target_release

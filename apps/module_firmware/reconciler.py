@@ -125,11 +125,14 @@ def reconcile_module(module):
     # pre-lock the module; ingestion already holds it (a same-transaction no-op).
     Module.objects.select_for_update().filter(pk=module.pk).first()
 
-    # The rollup decisions below compare against Module.firmware_convergence; a
-    # concurrent record_error/status transaction may have advanced it since this
-    # ``module`` object was read, so refresh the denormalized field from the DB
-    # to avoid a stale-value no-op that would leave the rollup out of sync.
-    module.refresh_from_db(fields=["firmware_convergence"])
+    # The decisions below read these fields; a concurrent record_error/status or
+    # inventory transaction may have advanced them since this ``module`` object
+    # was read. Refresh them under the lock: a stale rollup would no-op out of
+    # sync, and a stale matching boot key (inventory just recorded a mismatch)
+    # would release a fresh not_updatable row back to updating.
+    module.refresh_from_db(
+        fields=["firmware_convergence", "reported_boot_key", "last_reported_version", "uid_source"]
+    )
 
     # Resolve the effective target explicitly so we can distinguish "no intent"
     # (no assignment / no target) from "intent exists but no variant-matching

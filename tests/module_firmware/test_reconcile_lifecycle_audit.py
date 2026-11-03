@@ -344,3 +344,46 @@ def test_failure_status_audit_without_error_text_unchanged(client, drifted):
     _status(client, station, priv, cid, "failed")
     entry = StationAuditLog.objects.get(module=m, event_type=E.MODULE_FLASH_FAILED)
     assert entry.message == f"Module {m.uid} flash failed (target {TARGET})."
+
+
+# --- review round 4: no stale instruction once the row left UPDATING ---------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "new_state",
+    [
+        ModuleFirmwareConvergenceState.State.NOT_UPDATABLE,
+        ModuleFirmwareConvergenceState.State.FAILED,
+    ],
+)
+def test_check_returns_204_when_row_leaves_updating_before_mark(
+    client, drifted, monkeypatch, new_state
+):
+    """A concurrent inventory (not_updatable) or terminal status (failed) flips
+    the selected row after reconcile_module returned: check must not hand out
+    the stale instruction (the agent does not abort on 409 progress POSTs)."""
+    from apps.module_firmware import reconcile_api_views
+
+    station, priv, m = drifted
+    real = reconcile_api_views.reconcile_module
+
+    def racing_reconcile(module):
+        cs = real(module)
+        ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(state=new_state)
+        return cs
+
+    monkeypatch.setattr(reconcile_api_views, "reconcile_module", racing_reconcile)
+    resp = _check(client, station, priv)
+    assert resp.status_code == 204
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0
+
+
+@pytest.mark.django_db
+def test_dedup_check_still_returns_instruction_without_audit(client, drifted):
+    station, priv, m = drifted
+    first = _check(client, station, priv)
+    second = _check(client, station, priv)
+    assert first.status_code == second.status_code == 200
+    assert second.json() == first.json()
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 1
