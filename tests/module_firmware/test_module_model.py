@@ -37,4 +37,11 @@ def test_module_has_variant_and_convergence_defaults():
 
 @pytest.mark.django_db
 def test_module_convergence_choices_are_exhaustive():
-    assert set(Module.Convergence.values) == {"ok", "updating", "quarantined", "unknown"}
+    assert set(Module.Convergence.values) == {
+        "ok",
+        "updating",
+        "quarantined",
+        "failed",
+        "not_updatable",
+        "unknown",
+    }

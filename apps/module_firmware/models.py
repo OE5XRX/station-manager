@@ -4,10 +4,11 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 QUARANTINE_ATTEMPT_LIMIT = 3
-# Consecutive transient (``failed``) outcomes after which a convergence row stops
-# draining its station (Teilbereich D). No quarantine: the reconcile check keeps
-# offering the instruction, only the ControlLock lock-out ends so a station whose
-# update can never succeed is not locked forever. Reset by real progress
+# Consecutive transient (``failed``) outcomes after which a convergence row
+# becomes ``failed`` (reason_code ``transient_limit``): the check stops, no
+# instruction is offered any more and the ControlLock lock-out ends, so a station
+# whose update can never succeed is not locked forever. Only an explicit retry
+# or a new target continues. The counter is reset by real progress
 # (``verifying``), a successful commit or convergence (OK).
 DRAIN_TRANSIENT_LIMIT = 5
 
@@ -64,6 +65,8 @@ class Module(models.Model):
         OK = "ok", _("OK")
         UPDATING = "updating", _("Updating")
         QUARANTINED = "quarantined", _("Quarantined")
+        FAILED = "failed", _("Failed")
+        NOT_UPDATABLE = "not_updatable", _("Not updatable")
         UNKNOWN = "unknown", _("Unknown")
 
     # Lifecycle states that are operator-set and never auto-overridden by ingestion.
@@ -92,6 +95,9 @@ class Module(models.Model):
         max_length=16,
         choices=Convergence.choices,
         default=Convergence.UNKNOWN,
+    )
+    reported_boot_key = models.CharField(
+        _("reported boot key"), max_length=16, blank=True, default=""
     )
     first_seen = models.DateTimeField(_("first seen"), null=True, blank=True)
     last_seen = models.DateTimeField(_("last seen"), null=True, blank=True)
@@ -191,6 +197,7 @@ class ModuleFirmwareRelease(models.Model):
     sim_cosign_bundle_key = models.CharField(
         _("sim cosign bundle key"), max_length=512, blank=True, default=""
     )
+    boot_key_hash = models.CharField(_("boot key hash"), max_length=16, blank=True, default="")
     source_repo = models.CharField(_("source repo"), max_length=200)
     source_tag = models.CharField(_("source tag"), max_length=64)
     source_github_url = models.CharField(_("source URL"), max_length=512, blank=True)
@@ -441,6 +448,17 @@ class ModuleFirmwareConvergenceState(models.Model):
         OK = "ok", _("OK")
         UPDATING = "updating", _("Updating")
         QUARANTINED = "quarantined", _("Quarantined")
+        FAILED = "failed", _("Failed")
+        NOT_UPDATABLE = "not_updatable", _("Not updatable")
+
+    class Phase(models.TextChoices):
+        DOWNLOADING = "downloading", _("Downloading")
+        FLASHING = "flashing", _("Flashing")
+        VERIFYING = "verifying", _("Verifying")
+
+    class ReasonCode(models.TextChoices):
+        TRANSIENT_LIMIT = "transient_limit", _("Transient limit reached")
+        BOOT_KEY_MISMATCH = "boot_key_mismatch", _("Boot key mismatch")
 
     class ErrorMode(models.TextChoices):
         REJECTED = "rejected", _("Rejected")
@@ -469,6 +487,21 @@ class ModuleFirmwareConvergenceState(models.Model):
         help_text=_(
             "Consecutive 'failed' outcomes since the last real progress; at "
             "DRAIN_TRANSIENT_LIMIT the station stops draining for this row."
+        ),
+    )
+    phase = models.CharField(
+        _("phase"), max_length=16, choices=Phase.choices, blank=True, default=""
+    )
+    phase_at = models.DateTimeField(_("phase at"), null=True, blank=True)
+    reason_code = models.CharField(
+        _("reason code"), max_length=32, choices=ReasonCode.choices, blank=True, default=""
+    )
+    instructed_at = models.DateTimeField(
+        _("instructed at"),
+        null=True,
+        blank=True,
+        help_text=_(
+            "Set when an instruction is audited; cleared by a terminal status, commit and retry."
         ),
     )
     last_error_mode = models.CharField(
