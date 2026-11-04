@@ -8,7 +8,7 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from .models import AlertRule, MetricDefinition
-from .rules import inverted_override_field, validate_metric_key
+from .rules import inverted_override_field, persisted_threshold_key, validate_changed_metric_key
 
 
 class ThresholdRuleForm(forms.ModelForm):
@@ -30,11 +30,7 @@ class ThresholdRuleForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         # Captured before alert_type is forced below: the persisted state decides
         # whether an unchanged metric key may skip re-validation.
-        self._persisted_threshold_key = (
-            self.instance.metric_key
-            if self.instance.pk and self.instance.alert_type == AlertRule.AlertType.THRESHOLD
-            else None
-        )
+        self._persisted_threshold_key = persisted_threshold_key(self.instance)
         # Forced, never from POST: the form only ever edits threshold rules
         # (set before validation so the event-type constraint check is exact).
         self.instance.alert_type = AlertRule.AlertType.THRESHOLD
@@ -46,12 +42,8 @@ class ThresholdRuleForm(forms.ModelForm):
 
     def clean_metric_key(self):
         value = (self.cleaned_data.get("metric_key") or "").strip()
-        # Mirror AlertRuleWriteSerializer: only (re)validate a changed key —
-        # seeded rules (e.g. the 12 V rule) may reference keys whose definition
-        # only appears once an agent describes it; editing them must not block.
-        if value and value == self._persisted_threshold_key:
-            return value
-        validate_metric_key(value)
+        # Mirror AlertRuleWriteSerializer: only (re)validate a changed key.
+        validate_changed_metric_key(value, self._persisted_threshold_key)
         return value
 
 
@@ -78,4 +70,36 @@ class MetricDefinitionForm(forms.ModelForm):
                     code="range_inverted",
                 ),
             )
+        return cleaned
+
+
+class AlertRuleAdminForm(forms.ModelForm):
+    """Django-admin form: threshold rules get the same operator / metric-key
+    checks as the UI form and the API serializer; event rules are untouched."""
+
+    class Meta:
+        model = AlertRule
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Before construct_instance (in _post_clean) overwrites the instance.
+        self._persisted_threshold_key = persisted_threshold_key(self.instance)
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("alert_type") != AlertRule.AlertType.THRESHOLD:
+            return cleaned
+        if not cleaned.get("operator"):
+            self.add_error(
+                "operator",
+                forms.ValidationError(_("Threshold rules require an operator."), code="required"),
+            )
+        if "metric_key" in cleaned:
+            key = (cleaned.get("metric_key") or "").strip()
+            cleaned["metric_key"] = key
+            try:
+                validate_changed_metric_key(key, self._persisted_threshold_key)
+            except forms.ValidationError as exc:
+                self.add_error("metric_key", exc)
         return cleaned

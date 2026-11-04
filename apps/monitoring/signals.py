@@ -51,12 +51,16 @@ def resolve_threshold_alerts_on_delete(sender, instance, **kwargs):
 
 
 @receiver(pre_save, sender=MetricDefinition, dispatch_uid="monitoring_metricdef_detect_block")
-def detect_metric_block(sender, instance, raw=False, **kwargs):
+def detect_metric_block(sender, instance, raw=False, update_fields=None, **kwargs):
     # Detect the False→True flip against the persisted row here; reset only in
     # post_save, after the UPDATE, so an engine run cannot evaluate the still
     # unblocked metric between the reset and the write.
     instance._reset_metric_evaluation = False
     if raw or instance.pk is None or not instance.is_blocked:
+        return
+    if update_fields is not None and "is_blocked" not in update_fields:
+        # is_blocked is not written: a stale in-memory True (e.g. a label-only
+        # PATCH after a concurrent unblock) must not reset the evaluation.
         return
     was_blocked = (
         MetricDefinition.objects.filter(pk=instance.pk)

@@ -19,6 +19,7 @@ from apps.accounts.permissions import AreaPermissionMixin
 from apps.monitoring.forms import MetricDefinitionForm, ThresholdRuleForm
 from apps.monitoring.models import Alert, AlertRule, MetricDefinition
 from apps.monitoring.notifications import send_test_notification
+from apps.monitoring.rules import rule_snapshot, snapshot_changes
 from apps.stations.models import Station
 from station_agent.metrics_contract import GROUPS, key_matches_pattern
 
@@ -26,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 THRESHOLD = AlertRule.AlertType.THRESHOLD
 
-# Fields recorded in the audit diff of a threshold-rule / definition change.
-_RULE_AUDIT_FIELDS = tuple(ThresholdRuleForm.Meta.fields)
+# Fields recorded in the audit diff of a definition change (rules:
+# rules.RULE_AUDIT_FIELDS, shared with the API).
 _DEFINITION_AUDIT_FIELDS = tuple(MetricDefinitionForm.Meta.fields)
 
 
@@ -40,9 +41,7 @@ def _audit(request, *, obj, action, message, before=None, after=None):
     changes = {}
     details = {"object": obj, "action": action, "changes": changes}
     if before is not None and after is not None:
-        changes.update(
-            {f: {"old": before[f], "new": after[f]} for f in before if before[f] != after[f]}
-        )
+        changes.update(snapshot_changes(before, after))
     elif after is not None or before is not None:
         # Create/delete: record the full configuration, not an empty diff.
         details["config"] = after if after is not None else before
@@ -225,7 +224,7 @@ class ThresholdRuleCreateView(_ThresholdRuleMixin, View):
             obj="alert_rule",
             action="created",
             message=f"AlertRule {rule} created",
-            after=_snapshot(rule, _RULE_AUDIT_FIELDS),
+            after=rule_snapshot(rule),
         )
         messages.success(request, _("Threshold rule “%(rule)s” created.") % {"rule": rule})
         return self.done()
@@ -234,7 +233,7 @@ class ThresholdRuleCreateView(_ThresholdRuleMixin, View):
 class ThresholdRuleUpdateView(_ThresholdRuleMixin, View):
     def post(self, request, pk):
         rule = self.get_rule(pk)
-        before = _snapshot(rule, _RULE_AUDIT_FIELDS)
+        before = rule_snapshot(rule)
         form = ThresholdRuleForm(request.POST, instance=rule, auto_id=f"rule{pk}_%s")
         if not form.is_valid():
             return self.render_invalid(request, bound_forms={rule.pk: form})
@@ -249,7 +248,7 @@ class ThresholdRuleUpdateView(_ThresholdRuleMixin, View):
             action="updated",
             message=f"AlertRule {rule} updated",
             before=before,
-            after=_snapshot(rule, _RULE_AUDIT_FIELDS),
+            after=rule_snapshot(rule),
         )
         messages.success(request, _("Threshold rule “%(rule)s” saved.") % {"rule": rule})
         return self.done()
@@ -259,7 +258,7 @@ class ThresholdRuleDeleteView(_ThresholdRuleMixin, View):
     def post(self, request, pk):
         rule = self.get_rule(pk)
         label = str(rule)
-        before = _snapshot(rule, _RULE_AUDIT_FIELDS)
+        before = rule_snapshot(rule)
         with transaction.atomic():
             rule.delete()  # pre_delete signal resolves the rule's open alerts
         _audit(

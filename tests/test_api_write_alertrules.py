@@ -454,3 +454,51 @@ def test_patch_rolls_back_with_failed_reset(
         bearer(api_topology["admin"]).patch(url, {"threshold": before + 1}, format="json")
     cpu_temp_alert_rule.refresh_from_db()
     assert cpu_temp_alert_rule.threshold == before
+
+
+# ---------------------------------------------------------------------------
+# Audit parity with the UI: changes diff on update, config snapshot on create/delete
+# ---------------------------------------------------------------------------
+
+
+def _latest_api_audit():
+    from apps.accounts.models import AccountAuditLog
+
+    return AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        message__contains="via API token",
+    ).latest("created_at")
+
+
+def test_update_audit_records_changes(api_topology, bearer, cpu_temp_alert_rule):
+    url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
+    old = cpu_temp_alert_rule.threshold
+    resp = bearer(api_topology["admin"]).patch(
+        url, {"threshold": old + 3.0, "name": cpu_temp_alert_rule.name}, format="json"
+    )
+    assert resp.status_code == 200
+    log = _latest_api_audit()
+    assert log.details["action"] == "updated"
+    assert log.details["changes"] == {"threshold": {"old": old, "new": old + 3.0}}
+
+
+def test_create_audit_records_config(api_topology, bearer):
+    _ensure_no_rule(_CREATE_TYPE)
+    url = reverse("api:alert-rule-list")
+    resp = bearer(api_topology["admin"]).post(url, _CREATE_PAYLOAD, format="json")
+    assert resp.status_code == 201
+    log = _latest_api_audit()
+    assert log.details["action"] == "created"
+    assert log.details["config"]["alert_type"] == _CREATE_TYPE
+    assert log.details["config"]["severity"] == "critical"
+
+
+def test_delete_audit_records_config(api_topology, bearer):
+    rule = _create_rule()
+    url = reverse("api:alert-rule-detail", args=[rule.pk])
+    resp = bearer(api_topology["admin"]).delete(url)
+    assert resp.status_code == 204
+    log = _latest_api_audit()
+    assert log.details["action"] == "deleted"
+    assert log.details["config"]["alert_type"] == _CREATE_TYPE
+    assert log.details["config"]["description"] == "Temp rule for test"

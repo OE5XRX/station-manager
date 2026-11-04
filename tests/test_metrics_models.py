@@ -158,3 +158,36 @@ def test_threshold_state_admin_changelist_no_n_plus_one(admin_client, station_fa
     with CaptureQueriesContext(connection) as large:
         assert admin_client.get(url).status_code == 200
     assert len(large.captured_queries) == len(small.captured_queries)
+
+
+def test_label_only_save_does_not_reset_on_stale_block(monkeypatch):
+    """A stale in-memory is_blocked=True must not trigger a reset when the save
+    only writes other fields (update_fields without is_blocked)."""
+    from apps.monitoring import signals
+
+    calls = []
+    monkeypatch.setattr(signals, "reset_metric_evaluation", calls.append)
+    d = MetricDefinition.objects.create(key="stale.block_v", is_blocked=True)
+    MetricDefinition.objects.filter(pk=d.pk).update(is_blocked=False)
+    d.label_override = "Stale"
+    d.save(update_fields=["label_override"])
+    assert calls == []
+    d.save(update_fields=["is_blocked"])
+    assert calls == ["stale.block_v"]
+
+
+@pytest.mark.parametrize("value", ["12 V", "12 V", "1 kV", "Temp °C"])
+def test_validate_printable_accepts(value):
+    from apps.monitoring.models import validate_printable
+
+    validate_printable(value)
+
+
+@pytest.mark.parametrize("value", ["a\nb", "a\rb", "a\x00b", "a​b", "a b", "a b"])
+def test_validate_printable_rejects(value):
+    from django.core.exceptions import ValidationError
+
+    from apps.monitoring.models import validate_printable
+
+    with pytest.raises(ValidationError):
+        validate_printable(value)

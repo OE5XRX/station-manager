@@ -184,3 +184,10 @@ def test_agent_descriptor_hash_parity(station_with_key):
     resp = _post(station, key, metrics={"cpu.temp_c": 46.0}, metric_descriptors_hash=agent_hash)
     assert resp.status_code == 200
     assert "metric_descriptors_required" not in resp.json()
+
+
+@pytest.mark.django_db
+def test_null_metrics_and_descriptors_still_200(station_with_key):
+    station, key = station_with_key
+    resp = _post(station, key, metrics=None, metric_descriptors=None)
+    assert resp.status_code == 200, resp.content

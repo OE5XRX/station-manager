@@ -1,10 +1,12 @@
 from django.contrib import admin
 
+from .forms import AlertRuleAdminForm, MetricDefinitionForm
 from .models import Alert, AlertRule, MetricDefinition, ThresholdState
 
 
 @admin.register(AlertRule)
 class AlertRuleAdmin(admin.ModelAdmin):
+    form = AlertRuleAdminForm
     list_display = (
         "alert_type",
         "name",
@@ -24,6 +26,8 @@ class AlertRuleAdmin(admin.ModelAdmin):
 
 @admin.register(MetricDefinition)
 class MetricDefinitionAdmin(admin.ModelAdmin):
+    # Effective-range (inverted override) + printable-label validation, as in the UI.
+    form = MetricDefinitionForm
     list_display = (
         "key",
         "label",

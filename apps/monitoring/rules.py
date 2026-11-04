@@ -95,6 +95,24 @@ def validate_metric_key(value: str) -> None:
         )
 
 
+def persisted_threshold_key(rule):
+    """The rule's stored metric key if it is a persisted threshold rule, else None."""
+    if rule is not None and rule.pk and rule.alert_type == "threshold":
+        return rule.metric_key
+    return None
+
+
+def validate_changed_metric_key(value: str, persisted_key) -> None:
+    """``validate_metric_key`` for a new or changed key only.
+
+    Seeded rules (e.g. the 12 V rule) may reference keys whose definition only
+    appears once an agent describes it; editing them must not be blocked.
+    """
+    if value and value == persisted_key:
+        return
+    validate_metric_key(value)
+
+
 def _lock_rule(rule) -> None:
     """Take the AlertRule row lock (no-op on SQLite).
 
@@ -201,6 +219,31 @@ def inverted_override_field(min_override, max_override, min_value, max_value):
     if lo is None or hi is None or lo <= hi:
         return None
     return "min_override" if min_override is not None else "max_override"
+
+
+# AlertRule fields recorded in the CONFIG_CHANGED audit (UI + API).
+RULE_AUDIT_FIELDS = (
+    "alert_type",
+    "name",
+    "metric_key",
+    "operator",
+    "aggregate",
+    "threshold",
+    "duration_seconds",
+    "severity",
+    "is_active",
+    "description",
+)
+
+
+def rule_snapshot(rule) -> dict:
+    """Audit snapshot of a rule's configuration (JSON-serialisable values)."""
+    return {f: getattr(rule, f) for f in RULE_AUDIT_FIELDS}
+
+
+def snapshot_changes(before: dict, after: dict) -> dict:
+    """``{field: {old, new}}`` for every field that differs between two snapshots."""
+    return {f: {"old": before[f], "new": after[f]} for f in before if before[f] != after[f]}
 
 
 def evaluation_changed(old, new) -> bool:

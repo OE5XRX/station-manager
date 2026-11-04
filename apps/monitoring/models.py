@@ -6,17 +6,24 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.stations.models import Station
-from station_agent.metrics_contract import GROUPS, MAX_KEY_LEN, MAX_LABEL_LEN, MAX_UNIT_LEN
+from station_agent.metrics_contract import (
+    GROUPS,
+    MAX_KEY_LEN,
+    MAX_LABEL_LEN,
+    MAX_UNIT_LEN,
+    is_display_char,
+)
 
 # Flood guard (spec §3.1): no new MetricDefinition rows beyond this count.
 MAX_DEFINITIONS = 2000
 
 
 def validate_printable(value):
-    """Reject CR/LF/control characters: the label ends up in Alert.title and
-    from there in the e-mail subject, where a line break raises a header
-    error and the mail is lost."""
-    if any(not ch.isprintable() for ch in value):
+    """Reject CR/LF/control/format characters: the label ends up in Alert.title
+    and from there in the e-mail subject, where a line break raises a header
+    error and the mail is lost. NBSP-style spaces stay allowed (same predicate
+    as the agent-side descriptor cleaning)."""
+    if any(not is_display_char(ch) for ch in value):
         raise ValidationError(
             _("Control characters (e.g. line breaks) are not allowed."), code="not_printable"
         )

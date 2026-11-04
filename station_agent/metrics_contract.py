@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import re
+import unicodedata
 
 KEY_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+){1,3}$")
 MAX_KEY_LEN = 64
@@ -76,12 +77,24 @@ def _precision(value: object) -> int:
     return max(0, min(MAX_PRECISION, value))
 
 
+# Unicode categories that break headers/display: control (CR/LF/tab, NUL,
+# ESC), format (zero-width, bidi), line/paragraph separators. Spaces such as
+# NBSP (U+00A0) / U+202F stay allowed ("12 V"). Shared with the server's
+# validate_printable so both paths agree.
+_NON_DISPLAY_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def is_display_char(ch: str) -> bool:
+    """True unless ``ch`` is a control/format/line-/paragraph-separator char."""
+    return unicodedata.category(ch) not in _NON_DISPLAY_CATEGORIES
+
+
 def _printable(value: object, max_len: int) -> str:
-    # Strip control/format chars (CR/LF/tab, NUL, ESC, zero-width...) before
-    # truncating: labels/units end up in logs, UI and alert messages.
+    # Strip non-display chars before truncating: labels/units end up in logs,
+    # UI and alert messages (e-mail subject).
     if not isinstance(value, str):
         return ""
-    return "".join(ch for ch in value if ch.isprintable())[:max_len]
+    return "".join(ch for ch in value if is_display_char(ch))[:max_len]
 
 
 def clean_descriptor(d: object) -> dict | None:

@@ -130,6 +130,7 @@
     if (!target) return;
     e.preventDefault();
     target.click();
+    target.focus();
     target.scrollIntoView({ block: "nearest" });
   });
   if (location.hash) {

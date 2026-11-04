@@ -59,6 +59,7 @@ from apps.deployments.services import (
 )
 from apps.images import github_releases
 from apps.images.models import ImageImportJob, ImageRelease
+from apps.monitoring.rules import rule_snapshot, snapshot_changes
 from apps.provisioning.models import ProvisioningJob
 from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
 from apps.rollouts import services as rollout_services
@@ -681,21 +682,30 @@ class AlertRuleViewSet(
         audit_config_write(
             self.request,
             message=f"AlertRule {rule.alert_type} ({rule}) created",
+            details={"object": "alert_rule", "action": "created", "config": rule_snapshot(rule)},
         )
 
     def perform_update(self, serializer):
+        before = rule_snapshot(serializer.instance)
         # Atomic: the UPDATE and the post_save evaluation reset commit together.
         with transaction.atomic():
             rule = serializer.save()
+        changes = snapshot_changes(before, rule_snapshot(rule))
         audit_config_write(
             self.request,
             message=f"AlertRule {rule.alert_type} ({rule}) updated",
+            details={"object": "alert_rule", "action": "updated", "changes": changes},
         )
 
     def perform_destroy(self, instance):
         audit_config_write(
             self.request,
             message=f"AlertRule {instance.alert_type} ({instance}) deleted",
+            details={
+                "object": "alert_rule",
+                "action": "deleted",
+                "config": rule_snapshot(instance),
+            },
         )
         with transaction.atomic():
             instance.delete()

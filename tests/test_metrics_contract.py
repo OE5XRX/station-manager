@@ -209,3 +209,25 @@ def test_clean_descriptor_inverted_range_dropped():
     assert mc.clean_descriptor({"key": "a.b", "min": 5})["min"] == 5.0
     eq = mc.clean_descriptor({"key": "a.b", "min": 5, "max": 5})
     assert eq["min"] == 5.0 and eq["max"] == 5.0
+
+
+def test_clean_descriptor_keeps_nbsp_and_narrow_nbsp():
+    raw = {"key": "x.y", "label": "12 V rail", "unit": " kV​"}
+    out = mc.clean_descriptor(raw)
+    assert out["label"] == "12 Vrail"
+    assert out["unit"] == " kV"
+
+
+def test_printable_predicate_matches_server_validator():
+    from django.core.exceptions import ValidationError
+
+    from apps.monitoring.models import validate_printable
+
+    for ch in ["a", " ", " ", " ", "°", "\n", "\t", "\x1b", "​", " ", " "]:
+        kept = mc.clean_descriptor({"key": "x.y", "label": ch})["label"] == ch
+        try:
+            validate_printable(ch)
+            accepted = True
+        except ValidationError:
+            accepted = False
+        assert kept is accepted, repr(ch)

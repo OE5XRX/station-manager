@@ -14,6 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_FILES = [
     # Hidden-tab gate for data-poll-visible-only htmx polls (no eval'd filter).
     REPO_ROOT / "tests" / "js" / "app-poll-visibility.test.mjs",
+    # [data-tab-link] activates the target tab and moves focus to it.
+    REPO_ROOT / "tests" / "js" / "app-tab-link.test.mjs",
 ]
 
 
