@@ -258,6 +258,34 @@ _DEFAULT_BOOTLIMIT = 3
 _MAX_ARMABLE_BOOTLIMIT = 8
 
 
+def _read_env(bootloader: str) -> dict[str, str] | None:
+    """Whole bootloader env as a dict, or ``None`` if it can't be listed.
+
+    Unlike ``get_env`` this separates "key unset" (listing works, key absent)
+    from "read failed" (tool missing / error / timeout).
+    """
+    if bootloader == "grub":
+        cmd = [GRUB_ENV_TOOL, GRUB_ENV_PATH, "list"]
+    elif bootloader == "uboot":
+        cmd = [UBOOT_PRINT_TOOL]
+    else:
+        return None
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_ENV_TOOL_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.error("Failed to list bootloader env via %s: %s", cmd[0], exc)
+        return None
+    if result.returncode != 0:
+        logger.error("%s failed (rc=%d) listing the env", cmd[0], result.returncode)
+        return None
+    env: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            env[key] = value
+    return env
+
+
 def arm_trial_rollback(bootloader: str) -> bool:
     """Make the next boot take the bootloader's own trial-rollback branch.
 
@@ -271,20 +299,26 @@ def arm_trial_rollback(bootloader: str) -> bool:
       anything else -> 99; either way > bootlimit for 1..8.
 
     So one reboot swaps back to the previous slot with no rollback logic of
-    our own. Returns False (and writes nothing) when the bootlimit is not a
-    plain integer in 1..8 or no bootloader is configured.
+    our own. Returns False (and writes nothing) when the env can't be listed,
+    the bootlimit is not a plain integer in 1..8, or no bootloader is
+    configured.
     """
-    raw = get_env(bootloader, "bootlimit")
+    env = _read_env(bootloader)
+    if env is None:
+        # Can't tell "bootlimit unset" from a failed read: assuming the default
+        # could arm a count below the real limit and reboot into the same slot.
+        logger.error("Cannot arm trial rollback: bootloader env unreadable")
+        return False
+    raw = env.get("bootlimit")
     limit_str = str(_DEFAULT_BOOTLIMIT) if raw is None or raw == "" else raw.strip()
     if not limit_str.isdigit() or not 1 <= int(limit_str) <= _MAX_ARMABLE_BOOTLIMIT:
         logger.error("Cannot arm trial rollback: unsupported bootlimit %r", raw)
         return False
     limit = int(limit_str)
-    # Never lower bootcount: get_env() can't tell "bootlimit unset" from a
-    # failed read, so a defaulted limit below the real one must not reset an
-    # already-higher count (that could loop instead of rolling back).
-    current = get_env(bootloader, "bootcount")
-    if current is not None and current.strip().isdigit() and int(current) >= limit:
+    # Never lower an already-higher bootcount: the next boot exceeds the limit
+    # anyway, and lowering it could postpone the rollback.
+    current = (env.get("bootcount") or "").strip()
+    if current.isdigit() and int(current) >= limit:
         logger.info("bootcount=%s already >= bootlimit %d; rollback already armed", current, limit)
         return True
     logger.info("Arming trial rollback on %s bootloader: bootcount=%d", bootloader, limit)

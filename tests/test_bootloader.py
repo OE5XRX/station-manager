@@ -339,50 +339,57 @@ class TestArmTrialRollback:
         monkeypatch.setattr(bootloader, "_run", lambda cmd: calls.append(cmd) or True)
         return calls
 
+    @staticmethod
+    def _env(monkeypatch, env):
+        monkeypatch.setattr(bootloader, "_read_env", lambda bl: env)
+
     @pytest.mark.parametrize(("raw", "limit"), [(None, 3), ("", 3), ("3", 3), ("5", 5), ("8", 8)])
     def test_uboot_sets_bootcount_to_bootlimit(self, monkeypatch, calls, raw, limit):
-        monkeypatch.setattr(
-            bootloader, "get_env", lambda bl, key: raw if key == "bootlimit" else "1"
-        )
+        env = {"bootcount": "1"}
+        if raw is not None:
+            env["bootlimit"] = raw
+        self._env(monkeypatch, env)
         assert bootloader.arm_trial_rollback("uboot") is True
         assert calls == [["fw_setenv", "bootcount", str(limit)]]
 
     def test_grub_sets_bootcount_to_bootlimit(self, monkeypatch, calls):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: {"bootlimit": "3"}.get(key))
+        self._env(monkeypatch, {"bootlimit": "3", "bootcount": "1"})
         assert bootloader.arm_trial_rollback("grub") is True
         assert calls == [["grub-editenv", bootloader.GRUB_ENV_PATH, "set", "bootcount=3"]]
 
     @pytest.mark.parametrize("raw", ["0", "9", "10", "x", "-1", "3a", " "])
     def test_unsupported_bootlimit_writes_nothing(self, monkeypatch, calls, raw):
-        monkeypatch.setattr(
-            bootloader, "get_env", lambda bl, key: raw if key == "bootlimit" else "1"
-        )
+        self._env(monkeypatch, {"bootlimit": raw})
+        assert bootloader.arm_trial_rollback("uboot") is False
+        assert calls == []
+
+    def test_unreadable_env_refuses_to_arm(self, monkeypatch, calls):
+        # e.g. a fw_printenv timeout must not be mistaken for "bootlimit unset".
+        self._env(monkeypatch, None)
         assert bootloader.arm_trial_rollback("uboot") is False
         assert calls == []
 
     @pytest.mark.parametrize("current", ["3", "5", "99"])
     def test_never_lowers_bootcount(self, monkeypatch, calls, current):
-        # bootlimit unreadable -> default 3, but bootcount is already >= 3:
-        # the next boot rolls back anyway, so write nothing.
-        env = {"bootlimit": None, "bootcount": current}
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: env[key])
+        self._env(monkeypatch, {"bootcount": current})
         assert bootloader.arm_trial_rollback("uboot") is True
         assert calls == []
 
     @pytest.mark.parametrize("current", [None, "", "0", "2", "a"])
     def test_lower_or_unknown_bootcount_is_raised(self, monkeypatch, calls, current):
-        env = {"bootlimit": "3", "bootcount": current}
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: env[key])
+        env = {"bootlimit": "3"}
+        if current is not None:
+            env["bootcount"] = current
+        self._env(monkeypatch, env)
         assert bootloader.arm_trial_rollback("uboot") is True
         assert calls == [["fw_setenv", "bootcount", "3"]]
 
-    def test_no_bootloader_cannot_arm(self, monkeypatch, calls):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: None)
+    def test_no_bootloader_cannot_arm(self, calls):
         assert bootloader.arm_trial_rollback("none") is False
         assert calls == []
 
     def test_env_write_failure_propagates(self, monkeypatch):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: {"bootlimit": "3"}.get(key))
+        self._env(monkeypatch, {"bootlimit": "3", "bootcount": "1"})
         monkeypatch.setattr(bootloader, "_run", lambda cmd: False)
         assert bootloader.arm_trial_rollback("uboot") is False
 
@@ -395,3 +402,44 @@ class TestArmTrialRollback:
     def test_hex_increment_is_why_bootlimit_is_capped(self):
         # 9 + 1 = 0xa -> "a" -> decimal 0: u-boot would NOT roll back.
         assert not _uboot_next_boot(9, 9)
+
+
+class TestReadEnv:
+    @pytest.mark.parametrize(
+        ("bl", "cmd"),
+        [
+            ("uboot", ["fw_printenv"]),
+            ("grub", ["grub-editenv", bootloader.GRUB_ENV_PATH, "list"]),
+        ],
+    )
+    def test_lists_whole_env(self, monkeypatch, bl, cmd):
+        seen = []
+
+        def fake(c, **kw):
+            seen.append(c)
+            return subprocess.CompletedProcess(c, 0, "bootcount=2\nboot_part=a\nnoise\n", "")
+
+        monkeypatch.setattr(bootloader.subprocess, "run", fake)
+        assert bootloader._read_env(bl) == {"bootcount": "2", "boot_part": "a"}
+        assert seen == [cmd]
+
+    def test_nonzero_rc_is_unreadable(self, monkeypatch):
+        monkeypatch.setattr(
+            bootloader.subprocess,
+            "run",
+            lambda c, **kw: subprocess.CompletedProcess(c, 1, "", "err"),
+        )
+        assert bootloader._read_env("uboot") is None
+
+    @pytest.mark.parametrize(
+        "exc", [subprocess.TimeoutExpired("fw_printenv", 10), FileNotFoundError("fw_printenv")]
+    )
+    def test_tool_failure_is_unreadable(self, monkeypatch, exc):
+        def boom(c, **kw):
+            raise exc
+
+        monkeypatch.setattr(bootloader.subprocess, "run", boom)
+        assert bootloader._read_env("uboot") is None
+
+    def test_no_bootloader(self):
+        assert bootloader._read_env("none") is None
