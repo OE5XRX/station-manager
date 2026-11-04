@@ -280,6 +280,13 @@ def arm_trial_rollback(bootloader: str) -> bool:
         logger.error("Cannot arm trial rollback: unsupported bootlimit %r", raw)
         return False
     limit = int(limit_str)
+    # Never lower bootcount: get_env() can't tell "bootlimit unset" from a
+    # failed read, so a defaulted limit below the real one must not reset an
+    # already-higher count (that could loop instead of rolling back).
+    current = get_env(bootloader, "bootcount")
+    if current is not None and current.strip().isdigit() and int(current) >= limit:
+        logger.info("bootcount=%s already >= bootlimit %d; rollback already armed", current, limit)
+        return True
     logger.info("Arming trial rollback on %s bootloader: bootcount=%d", bootloader, limit)
 
     if bootloader == "grub":

@@ -216,10 +216,19 @@ def _read(path: str) -> BootMarkers:
 def check_boot_markers(path: str | None = None) -> tuple[bool, str]:
     """Pre-commit health check: ``(passed, message)`` in the health_check style.
 
-    A failing message contains ``FAIL`` so the caller's rolled_back reason
-    carries it.
+    A failing message starts with ``FAIL_PREFIX`` so the caller's rolled_back
+    reason carries it and the agent arms the active rollback. An unexpected
+    error (parser bug) fails closed the same way: it repeats on every boot of
+    this slot, so passively waiting would strand the station on it.
     """
-    path = path or CMDLINE_PATH
+    try:
+        return _check(path or CMDLINE_PATH)
+    except Exception as exc:  # noqa: BLE001 - fail closed, never crash the gate
+        logger.exception("Boot-marker check failed unexpectedly")
+        return False, f"{FAIL_PREFIX}: unexpected error: {type(exc).__name__}"
+
+
+def _check(path: str) -> tuple[bool, str]:
     try:
         markers = _read(path)
     except FileNotFoundError:

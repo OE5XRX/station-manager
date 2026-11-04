@@ -341,20 +341,40 @@ class TestArmTrialRollback:
 
     @pytest.mark.parametrize(("raw", "limit"), [(None, 3), ("", 3), ("3", 3), ("5", 5), ("8", 8)])
     def test_uboot_sets_bootcount_to_bootlimit(self, monkeypatch, calls, raw, limit):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: raw)
+        monkeypatch.setattr(
+            bootloader, "get_env", lambda bl, key: raw if key == "bootlimit" else "1"
+        )
         assert bootloader.arm_trial_rollback("uboot") is True
         assert calls == [["fw_setenv", "bootcount", str(limit)]]
 
     def test_grub_sets_bootcount_to_bootlimit(self, monkeypatch, calls):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: "3")
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: {"bootlimit": "3"}.get(key))
         assert bootloader.arm_trial_rollback("grub") is True
         assert calls == [["grub-editenv", bootloader.GRUB_ENV_PATH, "set", "bootcount=3"]]
 
     @pytest.mark.parametrize("raw", ["0", "9", "10", "x", "-1", "3a", " "])
     def test_unsupported_bootlimit_writes_nothing(self, monkeypatch, calls, raw):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: raw)
+        monkeypatch.setattr(
+            bootloader, "get_env", lambda bl, key: raw if key == "bootlimit" else "1"
+        )
         assert bootloader.arm_trial_rollback("uboot") is False
         assert calls == []
+
+    @pytest.mark.parametrize("current", ["3", "5", "99"])
+    def test_never_lowers_bootcount(self, monkeypatch, calls, current):
+        # bootlimit unreadable -> default 3, but bootcount is already >= 3:
+        # the next boot rolls back anyway, so write nothing.
+        env = {"bootlimit": None, "bootcount": current}
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: env[key])
+        assert bootloader.arm_trial_rollback("uboot") is True
+        assert calls == []
+
+    @pytest.mark.parametrize("current", [None, "", "0", "2", "a"])
+    def test_lower_or_unknown_bootcount_is_raised(self, monkeypatch, calls, current):
+        env = {"bootlimit": "3", "bootcount": current}
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: env[key])
+        assert bootloader.arm_trial_rollback("uboot") is True
+        assert calls == [["fw_setenv", "bootcount", "3"]]
 
     def test_no_bootloader_cannot_arm(self, monkeypatch, calls):
         monkeypatch.setattr(bootloader, "get_env", lambda bl, key: None)
@@ -362,7 +382,7 @@ class TestArmTrialRollback:
         assert calls == []
 
     def test_env_write_failure_propagates(self, monkeypatch):
-        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: "3")
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: {"bootlimit": "3"}.get(key))
         monkeypatch.setattr(bootloader, "_run", lambda cmd: False)
         assert bootloader.arm_trial_rollback("uboot") is False
 

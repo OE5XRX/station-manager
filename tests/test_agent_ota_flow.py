@@ -209,6 +209,7 @@ class TestVerifyAndCommitBootMarkerGate:
 
         monkeypatch.setattr("station_agent.agent.subprocess.run", fake_run)
         self.shutdown_waits = []
+        self.shutdown_result = True
 
         def run(cmdline_text, upgrade_available, bootcount):
             cmdline.write_text(cmdline_text + "\n")
@@ -223,7 +224,9 @@ class TestVerifyAndCommitBootMarkerGate:
             cfg = _FakeConfig()
             cfg.state_dir = str(tmp_path)
             agent = StationAgent()
-            agent._shutdown.wait = lambda timeout=None: self.shutdown_waits.append(timeout) or True
+            agent._shutdown.wait = lambda timeout=None: (
+                self.shutdown_waits.append(timeout) or self.shutdown_result
+            )
             agent._verify_and_commit(cfg, client, result_pk=9, version="v2")
             statuses = [u["json_data"] for u in client.status_updates]
             return statuses, commits, written
@@ -343,6 +346,35 @@ class TestVerifyAndCommitBootMarkerGate:
         assert commits == []
         assert statuses[-1]["status"] == "rolled_back"
         assert "cannot read" in statuses[-1]["error_message"]
+        assert self.armed == ["uboot"]
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_hidden_cmdline_with_procfs_rolls_back(self, env, monkeypatch, tmp_path):
+        probe = tmp_path / "stat"
+        probe.write_text("1\n")
+        monkeypatch.setattr("station_agent.boot_markers.CMDLINE_PATH", str(tmp_path / "gone"))
+        monkeypatch.setattr("station_agent.boot_markers.PROCFS_PROBE", str(probe))
+        statuses, commits, _ = env(_LEGACY, "1", "1")
+        assert commits == []
+        assert "hidden" in statuses[-1]["error_message"]
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_unexpected_gate_error_fails_closed_and_rolls_back(self, env, monkeypatch):
+        def boom(_text):
+            raise RuntimeError("parser bug")
+
+        monkeypatch.setattr("station_agent.boot_markers.parse_boot_markers", boom)
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=ok", "1", "1")
+        assert commits == []
+        assert "unexpected error: RuntimeError" in statuses[-1]["error_message"]
+        assert self.armed == ["uboot"]
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_shutdown_never_arriving_does_not_raise(self, env):
+        self.shutdown_result = False
+        statuses, _, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.shutdown_waits == [300]
 
     def test_missing_cmdline_without_procfs_does_not_block(self, env, monkeypatch, tmp_path):
         monkeypatch.setattr(
