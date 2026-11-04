@@ -175,3 +175,54 @@ def test_check_requires_device_auth(client, fm):
         content_type="application/json",
     )
     assert resp.status_code in (401, 403)
+
+
+# --- Task 5: given-up rows are never instructed ---------------------------------------
+
+
+def _check(client, station, priv):
+    return client.post(
+        reverse("module_firmware_api:reconcile_check"),
+        data="{}",
+        content_type="application/json",
+        **device_auth_headers(priv, station.pk, b"{}"),
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", ["failed", "not_updatable"])
+def test_check_skips_given_up_rows(client, station_with_key, fm, state):
+    from apps.stations.models import StationAuditLog
+
+    station, priv = station_with_key
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
+    )
+    rel = _release(fm)
+    m = _drifted_module(fm, station)
+    ModuleFirmwareConvergenceState.objects.create(module=m, target_release=rel, state=state)
+    assert _check(client, station, priv).status_code == 204
+    assert not StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_INSTRUCTED
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_check_204_on_dev_key_mismatch_and_no_drain(client, station_with_key, fm):
+    from apps.module_firmware.drain import pending_updates
+    from apps.module_firmware.mcuboot import DEV_KEY_HASH_PREFIX
+
+    station, priv = station_with_key
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
+    )
+    rel = _release(fm)
+    rel.boot_key_hash = "0123456789abcdef"
+    rel.save(update_fields=["boot_key_hash"])
+    m = _drifted_module(fm, station)
+    m.reported_boot_key = DEV_KEY_HASH_PREFIX
+    m.save(update_fields=["reported_boot_key"])
+    assert _check(client, station, priv).status_code == 204
+    cs = ModuleFirmwareConvergenceState.objects.get(module=m)
+    assert cs.state == ModuleFirmwareConvergenceState.State.NOT_UPDATABLE
+    assert pending_updates(station) == []

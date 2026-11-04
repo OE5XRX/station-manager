@@ -58,3 +58,41 @@ def test_quarantine_emits_audit_once(fm, station_factory):
         ).count()
         == 1
     )
+
+
+def test_update_state_event_types_exist():
+    for name in ["MODULE_FLASH_GAVE_UP", "MODULE_NOT_UPDATABLE", "MODULE_UPDATABLE_AGAIN"]:
+        assert hasattr(StationAuditLog.EventType, name)
+
+
+@pytest.mark.django_db
+def test_rolled_back_quarantine_without_keys_carries_hint(fm, station_factory):
+    from apps.module_firmware.mcuboot import KEY_UNKNOWN_HINT
+    from apps.module_firmware.models import QUARANTINE_ATTEMPT_LIMIT
+
+    st = station_factory()
+    m = Module.objects.create(
+        uid="Q2", module_type=fm, variant="vhf", last_reported_version="26.09.10-01"
+    )
+    ModuleAssignmentHistory.objects.create(module=m, station=st, slot="slot0")
+    ModuleFirmwareTarget.objects.create(
+        module_type=fm, scope=ModuleFirmwareTarget.Scope.FLEET, version="26.09.15-01"
+    )
+    ModuleFirmwareRelease.objects.create(
+        module_type=fm,
+        variant="vhf",
+        version="26.09.15-01",
+        storage_key="k",
+        sha256="a" * 64,
+        size_bytes=1,
+        source_repo="r",
+        source_tag="t",
+    )
+    cs = reconcile_module(m)
+    for _ in range(QUARANTINE_ATTEMPT_LIMIT):
+        record_error(cs, ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK)
+    log = StationAuditLog.objects.get(
+        module=m, event_type=StationAuditLog.EventType.MODULE_QUARANTINED
+    )
+    assert log.message.endswith(" " + KEY_UNKNOWN_HINT)
+    assert log.station_id == st.pk

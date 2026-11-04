@@ -288,6 +288,27 @@ class ModuleViewSet(AreaReadOnlyViewSet):
         versions = services.release_quarantine(module, **self._service_kwargs())
         return Response({"released_targets": versions, "module": self._read_data(module)})
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: inline_serializer(
+                "ModuleUpdateRetry",
+                fields={
+                    "retried_targets": rf_serializers.ListField(child=rf_serializers.CharField()),
+                    "module": ModuleSerializer(),
+                },
+            )
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="retry-update", verb="manage")
+    def retry_update(self, request, pk=None):
+        """Retry a failed update ("Erneut versuchen"). ``retried_targets`` is
+        empty (and nothing is audited) unless the module's current update row is
+        failed — quarantine has its own release, not-updatable no retry."""
+        module = self.get_object()
+        versions = services.retry_failed(module, **self._service_kwargs())
+        return Response({"retried_targets": versions, "module": self._read_data(module)})
+
 
 class ModuleFirmwareReleaseViewSet(AreaReadOnlyViewSet):
     area = "modules"

@@ -40,6 +40,9 @@ htmlcov/
 # OIDC signing keys (managed by setup_oidc_keys, never commit)
 oidc_keys/
 *.pem
+# MCUboot test fixtures: public MCUboot dev key + throwaway test key (not secrets)
+!tests/fixtures/mcuboot/root-ec-p256.pem
+!tests/fixtures/mcuboot/other-key.pem
 
 # Git worktrees (parallel agent workspaces)
 .worktrees/

@@ -454,3 +454,12 @@ def test_synthetic_uid_shape_flows_through_apply_inventory(fm, station_factory):
     assert module.uid_source == Module.UidSource.SYNTHETIC
     sm = StationModule.objects.get(station=station, slot="1", module_id="fm")
     assert sm.tracked_module_id == module.id
+
+
+@pytest.mark.django_db
+def test_inventory_boot_key_reaches_module(fm, station_factory):
+    station = station_factory()
+    frame = slot_frame(1, uid="BK-E2E")
+    frame["modules"][0]["identity"]["boot_key"] = "E30466F6B8470C1F"
+    apply_inventory(station, [frame])
+    assert Module.objects.get(uid="BK-E2E").reported_boot_key == "e30466f6b8470c1f"

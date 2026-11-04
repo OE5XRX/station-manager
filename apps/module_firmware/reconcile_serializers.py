@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+ERROR_MESSAGE_MAX_LEN = 500
+
 
 class ReconcileCheckRequestSerializer(serializers.Serializer):
     """Optional ist-report for crash recovery. No required fields."""
@@ -30,6 +32,13 @@ class ReconcileStatusSerializer(serializers.Serializer):
         ]
     )
     error_message = serializers.CharField(required=False, default="", allow_blank=True)
+
+    def validate_error_message(self, value):
+        # Agent-supplied and stored verbatim (row, audits, reason_text): bound it.
+        # Truncate, never reject — a 400 would lose the outcome report itself.
+        if len(value) > ERROR_MESSAGE_MAX_LEN:
+            return value[: ERROR_MESSAGE_MAX_LEN - 1] + "…"
+        return value
 
 
 class ReconcileCommitSerializer(serializers.Serializer):

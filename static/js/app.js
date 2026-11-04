@@ -403,6 +403,19 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Hidden-tab poll gate: cancel htmx requests of [data-poll-visible-only]
+  // elements while the tab is hidden, so a background tab never keeps the
+  // rolling session alive. The `every` timer keeps ticking and resumes on its
+  // own once visible. Replaces `[!document.hidden]` trigger filters, which htmx
+  // evals via Function() and which fail open under a CSP without unsafe-eval.
+  // ---------------------------------------------------------------------------
+  document.addEventListener("htmx:beforeRequest", function (ev) {
+    if (!document.hidden) return;
+    var elt = (ev.detail && ev.detail.elt) || ev.target;
+    if (elt && elt.hasAttribute && elt.hasAttribute("data-poll-visible-only")) ev.preventDefault();
+  });
+
+  // ---------------------------------------------------------------------------
   // Confirm prompt on forms/buttons with data-confirm
   // ---------------------------------------------------------------------------
   document.addEventListener("submit", function (e) {

@@ -10,6 +10,7 @@ EXPECTED_OPS = {
     "/api/v1/modules/{id}/": {"get", "patch"},
     "/api/v1/modules/{id}/confirm-registration/": {"post"},
     "/api/v1/modules/{id}/release-quarantine/": {"post"},
+    "/api/v1/modules/{id}/retry-update/": {"post"},
     "/api/v1/module-firmware-releases/{id}/archive/": {"post"},
     "/api/v1/module-firmware-releases/{id}/restore/": {"post"},
     "/api/v1/module-firmware-releases/available/": {"get"},
@@ -88,3 +89,39 @@ def test_schema_generation_warning_count_does_not_grow():
     warnings, errors = list(stats._warn_cache), list(stats._error_cache)
     assert len(warnings) <= WARNING_BASELINE, "\n".join(warnings)
     assert len(errors) <= ERROR_BASELINE, "\n".join(errors)
+
+
+def _enum_values(schemas, name):
+    return set(schemas[name]["enum"])
+
+
+@pytest.mark.django_db
+def test_schema_documents_update_status_enums():
+    schemas = _generate()["components"]["schemas"]
+    status = schemas["ModuleUpdateStatus"]["properties"]
+    for field, enum in (
+        ("state", "ModuleUpdateStateEnum"),
+        ("phase", "ModuleUpdatePhaseEnum"),
+        ("reason_code", "ModuleUpdateReasonEnum"),
+    ):
+        assert enum in str(status[field]), (field, status[field])
+    assert {"not_updatable", "running", "waiting", "failed", "pending"} <= _enum_values(
+        schemas, "ModuleUpdateStateEnum"
+    )
+    assert {"downloading", "flashing", "verifying"} <= _enum_values(
+        schemas, "ModuleUpdatePhaseEnum"
+    )
+    assert {"boot_key_mismatch", "agent_no_module_ota", "transient_limit"} <= _enum_values(
+        schemas, "ModuleUpdateReasonEnum"
+    )
+    module = schemas["Module"]["properties"]
+    assert "ModuleUpdateStatus" in str(module["update_status"])
+    assert module["reported_boot_key"]["type"] == "string"
+    assert "boot_key_hash" in schemas["ModuleFirmwareRelease"]["properties"]
+
+
+@pytest.mark.django_db
+def test_schema_has_retry_update_path():
+    paths = _generate()["paths"]
+    op = paths["/api/v1/modules/{id}/retry-update/"]["post"]
+    assert "ModuleUpdateRetry" in str(op["responses"]["200"])
