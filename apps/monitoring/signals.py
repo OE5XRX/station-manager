@@ -5,7 +5,7 @@ covered. Not fired by ``QuerySet.update()`` or by data migrations (historical
 models) — both intentional.
 """
 
-from django.db.models.signals import pre_delete, pre_save
+from django.db.models.signals import post_save, pre_delete, pre_save
 from django.dispatch import receiver
 
 from .models import AlertRule, MetricDefinition
@@ -17,8 +17,12 @@ from .rules import (
 )
 
 
-@receiver(pre_save, sender=AlertRule, dispatch_uid="monitoring_alertrule_reset_on_change")
-def reset_threshold_rule_on_change(sender, instance, raw=False, **kwargs):
+@receiver(pre_save, sender=AlertRule, dispatch_uid="monitoring_alertrule_detect_change")
+def detect_threshold_rule_change(sender, instance, raw=False, **kwargs):
+    # Detect against the persisted row here; reset only in post_save, after the
+    # UPDATE, so an engine run cannot re-evaluate the old values between the
+    # reset and the write and leave a stale alert open.
+    instance._reset_threshold_evaluation = False
     if raw or instance.pk is None:
         return
     old = AlertRule.objects.filter(pk=instance.pk).first()
@@ -27,8 +31,15 @@ def reset_threshold_rule_on_change(sender, instance, raw=False, **kwargs):
     threshold = AlertRule.AlertType.THRESHOLD
     if threshold not in (old.alert_type, instance.alert_type):
         return
-    if evaluation_changed(old, instance):
-        reset_rule_evaluation(instance)
+    instance._reset_threshold_evaluation = evaluation_changed(old, instance)
+
+
+@receiver(post_save, sender=AlertRule, dispatch_uid="monitoring_alertrule_reset_on_change")
+def reset_threshold_rule_on_change(sender, instance, created=False, raw=False, **kwargs):
+    if raw or created or not getattr(instance, "_reset_threshold_evaluation", False):
+        return
+    instance._reset_threshold_evaluation = False
+    reset_rule_evaluation(instance)
 
 
 @receiver(pre_delete, sender=AlertRule, dispatch_uid="monitoring_alertrule_resolve_on_delete")
