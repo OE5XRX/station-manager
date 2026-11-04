@@ -231,3 +231,10 @@ def test_printable_predicate_matches_server_validator():
         except ValidationError:
             accepted = False
         assert kept is accepted, repr(ch)
+
+
+def test_lone_surrogate_is_not_display_char():
+    # A lone surrogate can't be UTF-8 encoded; letting it through turned an
+    # API label_override PATCH into a 500 instead of a 400.
+    assert not mc.is_display_char("\ud800")
+    assert mc.clean_descriptor({"key": "x.y", "label": "a\ud800b"})["label"] == "ab"

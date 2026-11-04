@@ -81,7 +81,7 @@ def _precision(value: object) -> int:
 # ESC), format (zero-width, bidi), line/paragraph separators. Spaces such as
 # NBSP (U+00A0) / U+202F stay allowed ("12 V"). Shared with the server's
 # validate_printable so both paths agree.
-_NON_DISPLAY_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_NON_DISPLAY_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
 
 
 def is_display_char(ch: str) -> bool:
