@@ -81,7 +81,10 @@ class BootMarkers:
             else:
                 reasons.append(f"{STAGE2_KEY} has unknown value {_quote(self.stage2)}")
         if self.overlays == "failed":
-            reasons.append(f"{OVERLAYS_KEY}=failed:{','.join(self.failed_overlays)}")
+            names = ",".join(self.failed_overlays)
+            if len(names) > _QUOTE_MAX:
+                names = names[:_QUOTE_MAX] + f"... ({len(self.failed_overlays)} overlays)"
+            reasons.append(f"{OVERLAYS_KEY}=failed:{names}")
         elif self.overlays == "malformed":
             reasons.append(f"{OVERLAYS_KEY} is malformed: {_quote(self.overlays_raw)}")
         return reasons
@@ -102,61 +105,80 @@ class BootMarkers:
         return out
 
 
-def _kernel_args(cmdline: str):
-    """Yield ``(key, value)`` like the kernel's ``next_arg()``.
+# Kernel isspace() on the cmdline bytes (lib/ctype.c: \t\n\v\f\r, space, 0xa0).
+_KERNEL_SPACE = frozenset(" \t\n\v\f\r\xa0")
 
-    Whitespace inside double quotes does not split; a leading quote on the
-    token and on the value plus a trailing quote are stripped
-    (``"k=v"`` / ``k="v"`` -> ``k``, ``v``). An unquoted bare ``--`` ends the
-    kernel args (the rest belongs to init).
+
+def _kernel_args(cmdline: str):
+    """Yield ``(param, value)`` exactly like the kernel's ``next_arg()``.
+
+    Port of ``kernel/params.c``: a leading ``"`` opens a quote, every ``"``
+    toggles it, whitespace only splits outside quotes, the first ``=`` splits
+    param/value (``value`` is ``None`` without one). A value's leading quote is
+    dropped, and the token's trailing quote only when the value or the whole
+    token started with one. ``cmdline`` must be decoded byte-for-byte (latin-1).
     """
-    tokens: list[tuple[str, bool]] = []  # (raw token, contained a quote)
-    buf: list[str] = []
-    in_quote = quoted = False
-    for ch in cmdline:
-        if ch == '"':
-            in_quote = not in_quote
-            quoted = True
-        if ch.isspace() and not in_quote:
-            if buf:
-                tokens.append(("".join(buf), quoted))
-            buf, quoted = [], False
-            continue
-        buf.append(ch)
-    if buf:
-        tokens.append(("".join(buf), quoted))
-    for token, had_quote in tokens:
-        if token == "--" and not had_quote:
-            return
-        if token.startswith('"'):
-            token = token[1:]
-        key, _, value = token.partition("=")
-        if value.startswith('"'):
-            value = value[1:]
-        if token.endswith('"'):
-            # The closing quote ends whichever part is last.
-            if value:
-                value = value[:-1]
-            elif key.endswith('"'):
-                key = key[:-1]
-        yield key, value
+    n = len(cmdline)
+    i = 0
+    while i < n and cmdline[i] in _KERNEL_SPACE:
+        i += 1
+    while i < n:
+        quoted = in_quote = cmdline[i] == '"'
+        if quoted:
+            i += 1
+        start = i
+        equals = None
+        while i < n:
+            ch = cmdline[i]
+            if ch in _KERNEL_SPACE and not in_quote:
+                break
+            if equals is None and ch == "=":
+                equals = i
+            if ch == '"':
+                in_quote = not in_quote
+            i += 1
+        end = i
+        if equals is None:
+            param_end = end
+            value = None
+        else:
+            param_end = equals
+            v_start, v_end = equals + 1, end
+            if v_start < end and cmdline[v_start] == '"':
+                v_start += 1
+                if cmdline[end - 1] == '"':
+                    v_end = end - 1
+            if quoted and end > start and cmdline[end - 1] == '"':
+                v_end = min(v_end, end - 1)
+            value = cmdline[v_start : max(v_start, v_end)]
+        if equals is None and quoted and end > start and cmdline[end - 1] == '"':
+            param_end = end - 1
+        yield cmdline[start:param_end], value
+        while i < n and cmdline[i] in _KERNEL_SPACE:
+            i += 1
 
 
 def parse_boot_markers(cmdline: str) -> BootMarkers:
     """Parse the markers out of a kernel cmdline string.
 
-    Tokenised like the kernel (double quotes group, see ``_kernel_args``); if a
-    marker occurs more than once the last occurrence wins (kernel semantics —
-    stage 2 appends after stage 1). Args after a bare ``--`` belong to init,
-    not the kernel, and are ignored.
+    Tokenised like the kernel (see ``_kernel_args``); if a marker occurs more
+    than once the last occurrence wins (kernel semantics — stage 2 appends
+    after stage 1). Args after a bare ``--`` flag belong to init: a marker
+    there never overrides a kernel-side one, but still counts when it is the
+    only occurrence (its presence proves the new boot path, so it must not
+    read as "legacy" and fail open).
     """
-    stage2: str | None = None
-    overlays_raw: str | None = None
-    for key, value in _kernel_args(cmdline):
-        if key == STAGE2_KEY:
-            stage2 = value
-        elif key == OVERLAYS_KEY:
-            overlays_raw = value
+    kernel: dict[str, str] = {}
+    init: dict[str, str] = {}
+    side = kernel
+    for param, value in _kernel_args(cmdline):
+        if param == "--" and value is None and side is kernel:
+            side = init
+        elif param in (STAGE2_KEY, OVERLAYS_KEY):
+            side[param] = "" if value is None else value
+    found = {**init, **kernel}
+    stage2 = found.get(STAGE2_KEY)
+    overlays_raw = found.get(OVERLAYS_KEY)
     if overlays_raw is None:
         return BootMarkers(stage2=stage2)
     state, names = _parse_overlays(overlays_raw)
@@ -178,7 +200,8 @@ def read_boot_markers(path: str | None = None) -> BootMarkers | None:
 
 
 def _read(path: str) -> BootMarkers:
-    with open(path, encoding="utf-8", errors="replace") as fh:
+    # latin-1 = one char per byte, so _kernel_args sees what the kernel parsed.
+    with open(path, encoding="latin-1") as fh:
         return parse_boot_markers(fh.read())
 
 

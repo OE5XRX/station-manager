@@ -85,10 +85,16 @@ class TestParse:
         assert m.overlays == "ok"
         assert m.commit_blockers() == []
 
-    def test_init_args_after_double_dash_are_ignored(self):
+    def test_init_side_marker_never_overrides_kernel_side(self):
         m = bm.parse_boot_markers("root=x oe5xrx.stage2=ok -- oe5xrx.stage2=failed")
         assert m.stage2 == "ok"
-        assert bm.parse_boot_markers("root=x -- oe5xrx.overlays=failed:a").legacy
+        m = bm.parse_boot_markers("root=x oe5xrx.stage2=failed -- oe5xrx.stage2=ok")
+        assert m.stage2 == "failed"
+
+    def test_marker_only_after_double_dash_still_gates(self):
+        m = bm.parse_boot_markers("root=x -- oe5xrx.overlays=failed:a")
+        assert not m.legacy
+        assert m.commit_blockers()
 
     @pytest.mark.parametrize(
         ("cmdline", "stage2"),
@@ -110,9 +116,29 @@ class TestParse:
     def test_kernel_quote_handling(self, cmdline, stage2):
         assert bm.parse_boot_markers(cmdline).stage2 == stage2
 
-    def test_quoted_double_dash_does_not_end_args(self):
-        m = bm.parse_boot_markers('"--" oe5xrx.overlays=failed:a')
-        assert m.overlays == "failed"
+    def test_quoted_double_dash_ends_kernel_args_like_the_kernel(self):
+        # parse_args() compares the param after next_arg() stripped the quotes.
+        m = bm.parse_boot_markers('oe5xrx.stage2=failed "--" oe5xrx.stage2=ok')
+        assert m.stage2 == "failed"
+
+    def test_trailing_quote_without_opening_quote_is_kept(self):
+        m = bm.parse_boot_markers('oe5xrx.stage2=ok"')
+        assert m.stage2 == 'ok"'
+        assert m.commit_blockers()
+
+    def test_only_kernel_whitespace_splits(self):
+        m = bm.parse_boot_markers("oe5xrx.stage2=failed\x1coe5xrx.stage2=ok")
+        assert m.stage2 == "failed\x1coe5xrx.stage2=ok"
+        assert m.commit_blockers()
+        m = bm.parse_boot_markers("root=x\xa0oe5xrx.stage2=ok\x0boe5xrx.overlays=ok:a")
+        assert m.stage2 == "ok"
+        assert m.overlay_names == ("a",)
+
+    def test_long_failed_overlay_list_is_clipped_in_blocker(self):
+        names = ",".join(f"overlay{i:02d}-" + "x" * 50 for i in range(30))
+        (blocker,) = bm.parse_boot_markers(f"oe5xrx.overlays=failed:{names}").commit_blockers()
+        assert len(blocker) < 150
+        assert "(30 overlays)" in blocker
 
     def test_unterminated_quote_swallows_rest(self):
         # Kernel semantics: an open quote runs to the end of the cmdline.
@@ -177,7 +203,7 @@ class TestRead:
 
     def test_undecodable_bytes_do_not_raise(self, tmp_path):
         p = tmp_path / "cmdline"
-        p.write_bytes(b"root=\xff\xfe oe5xrx.stage2=ok\n")
+        p.write_bytes(b"root=\xff\xfe\xa0oe5xrx.stage2=ok\n")
         m = bm.read_boot_markers(str(p))
         assert m is not None and m.stage2 == "ok"
 
