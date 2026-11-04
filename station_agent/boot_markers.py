@@ -102,19 +102,57 @@ class BootMarkers:
         return out
 
 
+def _kernel_args(cmdline: str):
+    """Yield ``(key, value)`` like the kernel's ``next_arg()``.
+
+    Whitespace inside double quotes does not split; a leading quote on the
+    token and on the value plus a trailing quote are stripped
+    (``"k=v"`` / ``k="v"`` -> ``k``, ``v``). An unquoted bare ``--`` ends the
+    kernel args (the rest belongs to init).
+    """
+    tokens: list[tuple[str, bool]] = []  # (raw token, contained a quote)
+    buf: list[str] = []
+    in_quote = quoted = False
+    for ch in cmdline:
+        if ch == '"':
+            in_quote = not in_quote
+            quoted = True
+        if ch.isspace() and not in_quote:
+            if buf:
+                tokens.append(("".join(buf), quoted))
+            buf, quoted = [], False
+            continue
+        buf.append(ch)
+    if buf:
+        tokens.append(("".join(buf), quoted))
+    for token, had_quote in tokens:
+        if token == "--" and not had_quote:
+            return
+        if token.startswith('"'):
+            token = token[1:]
+        key, _, value = token.partition("=")
+        if value.startswith('"'):
+            value = value[1:]
+        if token.endswith('"'):
+            # The closing quote ends whichever part is last.
+            if value:
+                value = value[:-1]
+            elif key.endswith('"'):
+                key = key[:-1]
+        yield key, value
+
+
 def parse_boot_markers(cmdline: str) -> BootMarkers:
     """Parse the markers out of a kernel cmdline string.
 
-    Tokens are whitespace-separated; if a marker occurs more than once the last
-    occurrence wins (kernel semantics — stage 2 appends after stage 1). Tokens
-    after a bare ``--`` belong to init, not the kernel, and are ignored.
+    Tokenised like the kernel (double quotes group, see ``_kernel_args``); if a
+    marker occurs more than once the last occurrence wins (kernel semantics —
+    stage 2 appends after stage 1). Args after a bare ``--`` belong to init,
+    not the kernel, and are ignored.
     """
     stage2: str | None = None
     overlays_raw: str | None = None
-    for token in cmdline.split():
-        if token == "--":
-            break
-        key, _, value = token.partition("=")
+    for key, value in _kernel_args(cmdline):
         if key == STAGE2_KEY:
             stage2 = value
         elif key == OVERLAYS_KEY:

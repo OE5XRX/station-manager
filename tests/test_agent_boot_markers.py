@@ -90,6 +90,35 @@ class TestParse:
         assert m.stage2 == "ok"
         assert bm.parse_boot_markers("root=x -- oe5xrx.overlays=failed:a").legacy
 
+    @pytest.mark.parametrize(
+        ("cmdline", "stage2"),
+        [
+            ('dyndbg="a -- b" oe5xrx.stage2=failed', "failed"),
+            ('"oe5xrx.stage2=failed"', "failed"),
+            ('oe5xrx.stage2="failed"', "failed"),
+            ('foo="x oe5xrx.stage2=ok" oe5xrx.stage2=failed', "failed"),
+            ('oe5xrx.stage2=ok foo="oe5xrx.stage2=failed y"', "ok"),
+        ],
+        ids=[
+            "quoted-dashes",
+            "fully-quoted",
+            "quoted-value",
+            "marker-in-quoted-a",
+            "marker-in-quoted-b",
+        ],
+    )
+    def test_kernel_quote_handling(self, cmdline, stage2):
+        assert bm.parse_boot_markers(cmdline).stage2 == stage2
+
+    def test_quoted_double_dash_does_not_end_args(self):
+        m = bm.parse_boot_markers('"--" oe5xrx.overlays=failed:a')
+        assert m.overlays == "failed"
+
+    def test_unterminated_quote_swallows_rest(self):
+        # Kernel semantics: an open quote runs to the end of the cmdline.
+        m = bm.parse_boot_markers('oe5xrx.stage2=ok foo="x oe5xrx.stage2=failed')
+        assert m.stage2 == "ok"
+
     def test_multiple_failed_overlays(self):
         m = bm.parse_boot_markers("oe5xrx.stage2=ok oe5xrx.overlays=failed:a,b")
         assert m.failed_overlays == ("a", "b")

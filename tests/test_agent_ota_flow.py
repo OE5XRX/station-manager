@@ -270,7 +270,15 @@ class TestVerifyAndCommitBootMarkerGate:
         assert "upgrade_available" in statuses[-1]["error_message"]
         assert "oe5xrx" not in statuses[-1]["error_message"]
 
-    def test_unreadable_cmdline_does_not_block(self, env, monkeypatch, tmp_path):
+    def test_unreadable_existing_cmdline_rolls_back(self, env, monkeypatch, tmp_path):
+        # A directory exists but can't be read as a file -> fail closed.
+        monkeypatch.setattr("station_agent.boot_markers.CMDLINE_PATH", str(tmp_path))
+        statuses, commits, _ = env(_LEGACY, "1", "1")
+        assert commits == []
+        assert statuses[-1]["status"] == "rolled_back"
+        assert "cannot read" in statuses[-1]["error_message"]
+
+    def test_missing_cmdline_does_not_block(self, env, monkeypatch, tmp_path):
         monkeypatch.setattr(
             "station_agent.boot_markers.CMDLINE_PATH", str(tmp_path / "does-not-exist")
         )
