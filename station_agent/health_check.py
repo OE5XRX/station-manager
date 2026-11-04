@@ -10,6 +10,8 @@ import subprocess
 
 import requests
 
+from .boot_markers import check_boot_markers
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,11 +75,15 @@ def _check_systemd_service() -> tuple[bool, str]:
         return False, f"Systemd FAIL: {exc}"
 
 
-def run_health_checks(server_url: str = "") -> tuple[bool, list[str]]:
+def run_health_checks(server_url: str = "", boot_gate: bool = False) -> tuple[bool, list[str]]:
     """Run all pre-commit health checks.
 
     Args:
         server_url: Base URL of the Station Manager server for network check.
+        boot_gate: Also check the boot-path markers on the kernel cmdline
+            (slot-boot-stage2 spec §5). Only meaningful during an OTA trial
+            (``upgrade_available=1``) — after a local commit there is nothing
+            left to roll back.
 
     Returns:
         Tuple of (all_passed, list_of_messages).
@@ -93,6 +99,8 @@ def run_health_checks(server_url: str = "") -> tuple[bool, list[str]]:
     # Only run network check if a server URL is provided
     if server_url:
         checks.insert(0, ("network", lambda: _check_network(server_url)))
+    if boot_gate:
+        checks.append(("boot", lambda: check_boot_markers()))
 
     for name, check_fn in checks:
         try:
@@ -105,7 +113,8 @@ def run_health_checks(server_url: str = "") -> tuple[bool, list[str]]:
                 logger.info("Health check '%s' passed: %s", name, msg)
         except Exception as exc:
             all_passed = False
-            msg = f"{name} ERROR: unexpected exception: {exc}"
+            # "FAIL" so the caller's rolled_back reason (filters on it) is not empty.
+            msg = f"{name} FAIL: unexpected exception: {type(exc).__name__}: {str(exc)[:200]}"
             messages.append(msg)
             logger.error("Health check '%s' raised exception: %s", name, exc)
 

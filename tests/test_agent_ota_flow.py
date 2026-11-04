@@ -10,6 +10,8 @@ upgrade_available guard must enforce rolled_back there.
 
 from __future__ import annotations
 
+import pytest
+
 from station_agent.agent import StationAgent
 
 
@@ -152,6 +154,237 @@ class TestVerifyAndCommitTrialGuard:
         status_sequence = [u["json_data"]["status"] for u in client.status_updates]
         assert "rolled_back" not in status_sequence
         assert commit_boot_called == [True]
+
+
+_LEGACY = "console=ttyS0 root=PARTLABEL=root_b rootwait"
+
+
+class TestVerifyAndCommitBootMarkerGate:
+    """Commit gate on the stage-2/overlay boot markers (slot-boot-stage2 §5).
+
+    Uses the real run_health_checks (only network/disk/systemd stubbed) so the
+    marker failure travels the same rolled_back path as any failed check.
+    """
+
+    client_factory = _FakeHttpClient
+
+    @pytest.fixture
+    def env(self, monkeypatch, tmp_path):
+        cmdline = tmp_path / "cmdline"
+        monkeypatch.setattr("station_agent.boot_markers.CMDLINE_PATH", str(cmdline))
+        for name, msg in (
+            ("_check_network", "Network OK"),
+            ("_check_disk", "Disk OK"),
+            ("_check_systemd_service", "Systemd OK"),
+        ):
+            monkeypatch.setattr(
+                f"station_agent.health_check.{name}", lambda *a, _m=msg: (True, _m)
+            )
+        monkeypatch.setattr("station_agent.agent.get_current_version", lambda: "v2")
+        monkeypatch.setattr("station_agent.agent.get_bootloader", lambda _cfg: "uboot")
+        commits = []
+        monkeypatch.setattr(
+            "station_agent.agent.commit_boot",
+            lambda *a, **kw: commits.append(True) or True,
+        )
+        written = []
+        monkeypatch.setattr(
+            "station_agent.agent.write_last_ota_result",
+            lambda _dir, outcome, **kw: written.append((outcome, kw.get("detail", ""))),
+        )
+        # Active rollback (spec §7 HW 3/4): never touch the real env / systemd.
+        self.armed = []
+        self.arm_ok = True
+        monkeypatch.setattr(
+            "station_agent.agent.arm_trial_rollback",
+            lambda bl: self.armed.append(bl) or self.arm_ok,
+        )
+        self.reboots = []
+        self.reboot_exc = None
+
+        def fake_run(cmd, **kw):
+            self.reboots.append(cmd)
+            if self.reboot_exc is not None:
+                raise self.reboot_exc
+
+        monkeypatch.setattr("station_agent.agent.subprocess.run", fake_run)
+        self.shutdown_waits = []
+        self.shutdown_result = True
+
+        def run(cmdline_text, upgrade_available, bootcount):
+            cmdline.write_text(cmdline_text + "\n")
+            monkeypatch.setattr(
+                "station_agent.agent.get_env",
+                lambda _bl, key: {
+                    "upgrade_available": upgrade_available,
+                    "bootcount": bootcount,
+                }.get(key),
+            )
+            client = self.client_factory()
+            cfg = _FakeConfig()
+            cfg.state_dir = str(tmp_path)
+            agent = StationAgent()
+            agent._shutdown.wait = lambda timeout=None: (
+                self.shutdown_waits.append(timeout) or self.shutdown_result
+            )
+            agent._verify_and_commit(cfg, client, result_pk=9, version="v2")
+            statuses = [u["json_data"] for u in client.status_updates]
+            return statuses, commits, written
+
+        return run
+
+    @pytest.mark.parametrize(
+        "markers",
+        [
+            _LEGACY,
+            f"{_LEGACY} oe5xrx.stage2=ok",
+            f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=ok:oe5xrx-ina226",
+            f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=ok:",
+        ],
+        ids=["legacy-no-marker", "stage2-ok", "all-ok", "ok-no-overlays"],
+    )
+    def test_trial_commits_when_markers_ok_or_absent(self, env, markers):
+        statuses, commits, written = env(markers, "1", "1")
+        assert commits == [True]
+        assert "rolled_back" not in [s["status"] for s in statuses]
+        assert written[-1][0] == "success"
+        assert self.armed == [] and self.reboots == []
+
+    @pytest.mark.parametrize(
+        ("markers", "reason"),
+        [
+            (f"{_LEGACY} oe5xrx.stage2=missing", "oe5xrx.stage2=missing"),
+            (f"{_LEGACY} oe5xrx.stage2=failed", "oe5xrx.stage2=failed"),
+            (
+                f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=failed:oe5xrx-ina226",
+                "oe5xrx.overlays=failed:oe5xrx-ina226",
+            ),
+            (f"{_LEGACY} oe5xrx.stage2=garbage", "unknown value"),
+            (f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=bogus", "malformed"),
+        ],
+        ids=["stage2-missing", "stage2-failed", "overlay-failed", "stage2-junk", "overlays-junk"],
+    )
+    def test_trial_rolls_back_on_bad_markers(self, env, markers, reason):
+        statuses, commits, written = env(markers, "1", "2")
+        assert commits == []
+        last = statuses[-1]
+        assert last["status"] == "rolled_back"
+        assert last["error_message"].startswith("Health checks failed:")
+        assert reason in last["error_message"]
+        assert written[-1][0] == "rolled_back"
+        assert reason in written[-1][1]
+        # Active rollback: arm the bootloader's own trial rollback, reboot once,
+        # then block on the shutdown event.
+        assert self.armed == ["uboot"]
+        assert self.reboots == [["systemctl", "reboot"]]
+        assert self.shutdown_waits == [300]
+
+    def test_rollback_not_armed_means_no_reboot(self, env):
+        self.arm_ok = False
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert commits == []
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.armed == ["uboot"]
+        assert self.reboots == []
+
+    def test_reboot_failure_does_not_raise(self, env):
+        import subprocess
+
+        self.reboot_exc = subprocess.CalledProcessError(1, "systemctl")
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.reboots == [["systemctl", "reboot"]]
+        assert self.shutdown_waits == []
+
+    def test_reboot_happens_even_if_status_report_fails(self, env):
+        class _DownClient(_FakeHttpClient):
+            def request(self, method, path, **kwargs):
+                super().request(method, path, **kwargs)
+                return None  # server unreachable
+
+        self.client_factory = _DownClient
+        _, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert commits == []
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_other_health_failures_keep_passive_path(self, env, monkeypatch):
+        monkeypatch.setattr(
+            "station_agent.health_check._check_disk", lambda: (False, "Disk FAIL: full")
+        )
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=ok", "1", "2")
+        assert commits == []
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.armed == [] and self.reboots == []
+
+    @pytest.mark.parametrize(
+        "markers",
+        [
+            f"{_LEGACY} oe5xrx.stage2=failed",
+            f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=failed:x",
+        ],
+    )
+    def test_locally_committed_retry_ignores_markers(self, env, markers):
+        """(0, 0) = already committed locally; the gate must not turn the
+        server-commit retry into a rolled_back that never actually rolls back."""
+        statuses, commits, _ = env(markers, "0", "0")
+        assert commits == [True]
+        assert "rolled_back" not in [s["status"] for s in statuses]
+        assert self.reboots == []
+
+    def test_bootloader_rollback_reason_unchanged_by_markers(self, env):
+        """(0, N>0) keeps the existing env-based rolled_back reason."""
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "0", "1")
+        assert commits == []
+        assert "upgrade_available" in statuses[-1]["error_message"]
+        assert "oe5xrx" not in statuses[-1]["error_message"]
+        assert self.reboots == []
+
+    def test_unreadable_existing_cmdline_rolls_back(self, env, monkeypatch, tmp_path):
+        # A directory exists but can't be read as a file -> fail closed.
+        monkeypatch.setattr("station_agent.boot_markers.CMDLINE_PATH", str(tmp_path))
+        statuses, commits, _ = env(_LEGACY, "1", "1")
+        assert commits == []
+        assert statuses[-1]["status"] == "rolled_back"
+        assert "cannot read" in statuses[-1]["error_message"]
+        assert self.armed == ["uboot"]
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_hidden_cmdline_with_procfs_rolls_back(self, env, monkeypatch, tmp_path):
+        probe = tmp_path / "stat"
+        probe.write_text("1\n")
+        monkeypatch.setattr("station_agent.boot_markers.CMDLINE_PATH", str(tmp_path / "gone"))
+        monkeypatch.setattr("station_agent.boot_markers.PROCFS_PROBE", str(probe))
+        statuses, commits, _ = env(_LEGACY, "1", "1")
+        assert commits == []
+        assert "hidden" in statuses[-1]["error_message"]
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_unexpected_gate_error_fails_closed_and_rolls_back(self, env, monkeypatch):
+        def boom(_text):
+            raise RuntimeError("parser bug")
+
+        monkeypatch.setattr("station_agent.boot_markers.parse_boot_markers", boom)
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=ok", "1", "1")
+        assert commits == []
+        assert "unexpected error: RuntimeError" in statuses[-1]["error_message"]
+        assert self.armed == ["uboot"]
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_shutdown_never_arriving_does_not_raise(self, env):
+        self.shutdown_result = False
+        statuses, _, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.shutdown_waits == [300]
+
+    def test_missing_cmdline_without_procfs_does_not_block(self, env, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "station_agent.boot_markers.CMDLINE_PATH", str(tmp_path / "does-not-exist")
+        )
+        monkeypatch.setattr("station_agent.boot_markers.PROCFS_PROBE", str(tmp_path / "no-proc"))
+        # env() writes the patched-away file; the gate reads the missing one.
+        statuses, commits, _ = env("oe5xrx.stage2=failed", "1", "1")
+        assert commits == [True]
+        assert "rolled_back" not in [s["status"] for s in statuses]
 
 
 class TestHandleOtaRebootTransition:

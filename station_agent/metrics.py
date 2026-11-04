@@ -15,6 +15,7 @@ import os
 import threading
 import time
 
+from station_agent.boot_markers import read_boot_markers
 from station_agent.metrics_contract import (
     MAX_KEYS,
     clean_descriptor,
@@ -70,6 +71,8 @@ _DESCRIPTORS = (
     ("pwr.5v.voltage_v", "5 V rail voltage", "V", "power", 2, 0, 30),
     ("pwr.5v.current_a", "5 V rail current", "A", "power", 3, -10, 10),
     ("pwr.5v.power_w", "5 V rail power", "W", "power", 2, -300, 300),
+    ("boot.stage2_ok", "Boot stage 2 OK", "", "system", 0, 0, 1),
+    ("boot.overlays_failed", "Failed DT overlays", "", "system", 0, 0, None),
 )
 
 
@@ -145,6 +148,8 @@ class MetricsCollector:
         self._sampler_sources = [self._sample_cpu, self._sample_power]
 
         self._prev_net: tuple[float, dict[str, tuple[int, ...]]] | None = None
+        # The kernel cmdline is fixed for the whole boot: read once, then cache.
+        self._boot_values: dict[str, float] | None = None
 
         self._logged: set[str] = set()
         self._stop = threading.Event()
@@ -188,6 +193,7 @@ class MetricsCollector:
             ("uptime", self._read_uptime),
             ("meminfo", self._read_meminfo),
             ("disk", self._read_disks),
+            ("boot", self._read_boot_markers),
         ):
             values.update(self._safe(label, fn) or {})
         with self._snap_lock:
@@ -365,6 +371,15 @@ class MetricsCollector:
             free = st.f_bavail * st.f_frsize
             out[f"disk.{mount_to_instance(mount)}.used_pct"] = round((1 - free / total) * 100.0, 2)
         return out
+
+    def _read_boot_markers(self) -> dict:
+        """``boot.*`` from the stage-2/overlay cmdline markers (slot-boot-stage2 §5)."""
+        if self._boot_values is None:
+            markers = read_boot_markers(self._path("proc", "cmdline"))
+            if markers is None:
+                return {}  # unreadable: retry next snapshot
+            self._boot_values = markers.metric_values()
+        return dict(self._boot_values)
 
     def _read_net(self) -> dict:
         """Per-interval rates/deltas from /proc/net/dev (caller holds _snap_lock)."""

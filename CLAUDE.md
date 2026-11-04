@@ -78,6 +78,28 @@ Opener, den selbst der Broker-Lock nicht erreichte — deshalb der prozessweite 
 unsichtbar (pty + schnelles native_sim-Timing, kein paralleler Poll im Test) — siehe
 Ehrlichkeits-Regel unten.
 
+### Boot-Marker-Commit-Gate (`station_agent/boot_markers.py`)
+CM4-Boot-Stufe 1/2 (linux-image, Spec `2026-11-04-slot-boot-stage2-overlays-design.md` §5) schreiben
+`oe5xrx.stage2=ok|missing|failed` und `oe5xrx.overlays=ok:<a,b>|failed:<name>` in die cmdline.
+Während eines OTA-Trials (`upgrade_available=1`) läuft das als zusätzlicher Pre-Commit-Check
+(`run_health_checks(boot_gate=True)`) → gleicher `rolled_back`-Pfad wie jeder Health-Check, **plus aktiver
+Rollback** (Koordinator-Entscheidung 2026-11-04, Spec §7 HW 3/4): `bootloader.arm_trial_rollback` setzt
+`bootcount=bootlimit` (nur 1–8, u-boot-`setexpr` rechnet hex; sonst kein Reboot) und der Agent rebootet
+einmal → der **bestehende** Bootloader-Rollback-Zweig (`upgrade_available=1 && bootcount>bootlimit`, GRUB
+und u-boot gleich) wechselt den Slot. Keine eigene Slot-Logik im Agent. Andere Health-Check-Fehler bleiben
+passiv (PM-Inbox #34).
+
+- **Kein Marker = alter Bootpfad = kein Blocker** (sonst rollt jede noch nicht neu geflashte Station
+  jedes Update zurück). Kein procfs (Container/Sim) blockiert nicht; procfs da, aber cmdline
+  unlesbar oder versteckt (`ProcSubset=pid` ⇒ ENOENT) = fail closed.
+- **Vorhandener, aber unverständlicher Marker = fail closed.** Mehrfach-Vorkommen: das letzte gewinnt.
+  Tokenizer = Port von Kernel `next_arg()`/`parse_args()`. Marker nach `--` (init-Args) überschreiben
+  nie einen Kernel-seitigen; steht einer nur dort, zählt er trotzdem (kein Legacy/fail-open).
+- Im `(0, 0)`-Retry-Fall (lokal schon committet) kein Gate. Hardware-Zustände (PowerBoard fehlt)
+  sind nie ein Blocker — nur die Marker.
+- Metriken `boot.stage2_ok` / `boot.overlays_failed` kommen aus demselben Parser (nur bei vorhandenem Marker;
+  ein unparsebarer Overlays-Marker zählt als 1).
+
 ### Serial-Boundary Ehrlichkeits-Regel
 Ein Bug am Serial-/Modul-Boundary (Modul nicht gefunden/lesbar, Control-Knopf fehlt)
 gilt erst als gefixt, wenn `python -m station_agent selftest serial` auf **echtem CM4**
