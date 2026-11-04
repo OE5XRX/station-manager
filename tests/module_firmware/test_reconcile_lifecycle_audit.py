@@ -310,10 +310,26 @@ def test_mark_instructed_skips_row_no_longer_updating(drifted):
         state=ModuleFirmwareConvergenceState.State.NOT_UPDATABLE
     )
     instruction = {"module_uid": m.uid, "target_version": TARGET, "artifact": "dfu"}
-    ReconcileCheckView._mark_instructed(cs, instruction, station)
+    assert ReconcileCheckView._mark_instructed(cs, instruction, station) is False
     cs.refresh_from_db()
     assert cs.instructed_at is None
     assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0
+
+
+@pytest.mark.django_db
+def test_mark_instructed_return_contract(drifted):
+    """True on the first mark (audited) and on the plain dedup case (still
+    updating, already instructed, no phase — no second audit); the check view
+    branches on this, so a dedup must never read as 'stale'."""
+    from apps.module_firmware.reconcile_api_views import ReconcileCheckView
+    from apps.module_firmware.reconciler import reconcile_module
+
+    station, _priv, m = drifted
+    cs = reconcile_module(m)
+    instruction = {"module_uid": m.uid, "target_version": TARGET, "artifact": "dfu"}
+    assert ReconcileCheckView._mark_instructed(cs, instruction, station) is True
+    assert ReconcileCheckView._mark_instructed(cs, instruction, station) is True
+    assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 1
 
 
 @pytest.mark.django_db
