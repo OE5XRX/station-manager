@@ -95,6 +95,7 @@ class BootMarkers:
             if self.overlays == "failed":
                 out["boot.overlays_failed"] = float(len(self.failed_overlays))
             elif self.overlays == "malformed":
+                # Unparseable marker: at least one overlay state is unknown -> count 1.
                 out["boot.overlays_failed"] = 1.0
             else:
                 out["boot.overlays_failed"] = 0.0
@@ -105,11 +106,14 @@ def parse_boot_markers(cmdline: str) -> BootMarkers:
     """Parse the markers out of a kernel cmdline string.
 
     Tokens are whitespace-separated; if a marker occurs more than once the last
-    occurrence wins (kernel semantics — stage 2 appends after stage 1).
+    occurrence wins (kernel semantics — stage 2 appends after stage 1). Tokens
+    after a bare ``--`` belong to init, not the kernel, and are ignored.
     """
     stage2: str | None = None
     overlays_raw: str | None = None
     for token in cmdline.split():
+        if token == "--":
+            break
         key, _, value = token.partition("=")
         if key == STAGE2_KEY:
             stage2 = value
@@ -129,12 +133,15 @@ def parse_boot_markers(cmdline: str) -> BootMarkers:
 
 def read_boot_markers(path: str | None = None) -> BootMarkers | None:
     """Read and parse ``path`` (default ``/proc/cmdline``); ``None`` if unreadable."""
-    path = path or CMDLINE_PATH
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            return parse_boot_markers(fh.read())
+        return _read(path or CMDLINE_PATH)
     except OSError:
         return None
+
+
+def _read(path: str) -> BootMarkers:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return parse_boot_markers(fh.read())
 
 
 def check_boot_markers(path: str | None = None) -> tuple[bool, str]:
@@ -144,12 +151,17 @@ def check_boot_markers(path: str | None = None) -> tuple[bool, str]:
     carries it.
     """
     path = path or CMDLINE_PATH
-    markers = read_boot_markers(path)
-    if markers is None:
-        logger.warning("Cannot read %s for boot markers; not gating the commit", path)
-        # Indistinguishable from the legacy path; rolling back over an agent-side
-        # read error would be worse than committing.
-        return True, f"Boot SKIP: cannot read {path}, boot markers unknown"
+    try:
+        markers = _read(path)
+    except FileNotFoundError:
+        # No procfs cmdline at all (container/sim): indistinguishable from the
+        # legacy path, so don't gate.
+        logger.warning("%s not found; not gating the commit on boot markers", path)
+        return True, f"Boot SKIP: {path} not found, boot markers unknown"
+    except OSError as exc:
+        # The file exists but can't be read (e.g. a hardened unit hiding /proc):
+        # fail closed rather than silently switching the gate off.
+        return False, f"Boot FAIL: cannot read {path}: {type(exc).__name__}"
     if markers.legacy:
         return True, "Boot OK: no boot markers (legacy boot path)"
     blockers = markers.commit_blockers()

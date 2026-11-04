@@ -85,11 +85,14 @@ Während eines OTA-Trials (`upgrade_available=1`) läuft das als zusätzlicher P
 (`run_health_checks(boot_gate=True)`) → gleicher `rolled_back`-Pfad wie jeder Health-Check.
 
 - **Kein Marker = alter Bootpfad = kein Blocker** (sonst rollt jede noch nicht neu geflashte Station
-  jedes Update zurück). Unlesbare cmdline blockiert ebenfalls nicht.
-- **Vorhandener, aber unverständlicher Marker = fail closed.** Mehrfach-Vorkommen: das letzte gewinnt.
+  jedes Update zurück). Fehlende cmdline (`FileNotFoundError`) blockiert nicht; existierende, aber
+  unlesbare cmdline (z.B. gehärtete Unit) = fail closed.
+- **Vorhandener, aber unverständlicher Marker = fail closed.** Mehrfach-Vorkommen: das letzte gewinnt;
+  Tokens nach `--` (init-Args) werden ignoriert.
 - Im `(0, 0)`-Retry-Fall (lokal schon committet) kein Gate. Hardware-Zustände (PowerBoard fehlt)
   sind nie ein Blocker — nur die Marker.
-- Metriken `boot.stage2_ok` / `boot.overlays_failed` kommen aus demselben Parser (nur bei vorhandenem Marker).
+- Metriken `boot.stage2_ok` / `boot.overlays_failed` kommen aus demselben Parser (nur bei vorhandenem Marker;
+  ein unparsebarer Overlays-Marker zählt als 1).
 
 ### Serial-Boundary Ehrlichkeits-Regel
 Ein Bug am Serial-/Modul-Boundary (Modul nicht gefunden/lesbar, Control-Knopf fehlt)

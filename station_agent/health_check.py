@@ -113,7 +113,8 @@ def run_health_checks(server_url: str = "", boot_gate: bool = False) -> tuple[bo
                 logger.info("Health check '%s' passed: %s", name, msg)
         except Exception as exc:
             all_passed = False
-            msg = f"{name} ERROR: unexpected exception: {exc}"
+            # "FAIL" so the caller's rolled_back reason (filters on it) is not empty.
+            msg = f"{name} FAIL: unexpected exception: {type(exc).__name__}: {str(exc)[:200]}"
             messages.append(msg)
             logger.error("Health check '%s' raised exception: %s", name, exc)
 

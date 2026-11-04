@@ -80,6 +80,21 @@ class TestParse:
         m = bm.parse_boot_markers("oe5xrx.stage2=ok oe5xrx.stage2=failed")
         assert m.stage2 == "failed"
 
+    def test_overlays_last_occurrence_wins(self):
+        m = bm.parse_boot_markers("oe5xrx.overlays=failed:a oe5xrx.overlays=ok:a")
+        assert m.overlays == "ok"
+        assert m.commit_blockers() == []
+
+    def test_init_args_after_double_dash_are_ignored(self):
+        m = bm.parse_boot_markers("root=x oe5xrx.stage2=ok -- oe5xrx.stage2=failed")
+        assert m.stage2 == "ok"
+        assert bm.parse_boot_markers("root=x -- oe5xrx.overlays=failed:a").legacy
+
+    def test_multiple_failed_overlays(self):
+        m = bm.parse_boot_markers("oe5xrx.stage2=ok oe5xrx.overlays=failed:a,b")
+        assert m.failed_overlays == ("a", "b")
+        assert "failed:a,b" in m.commit_blockers()[0]
+
     def test_similar_prefixes_are_ignored(self):
         m = bm.parse_boot_markers("xoe5xrx.stage2=failed oe5xrx.stage2x=failed oe5xrx.other=1")
         assert m.legacy
@@ -111,6 +126,10 @@ class TestMetricValues:
     def test_overlay_failed(self):
         m = bm.parse_boot_markers("oe5xrx.stage2=ok oe5xrx.overlays=failed:a")
         assert m.metric_values() == {"boot.stage2_ok": 1.0, "boot.overlays_failed": 1.0}
+
+    def test_multiple_failed_overlays_are_counted(self):
+        m = bm.parse_boot_markers("oe5xrx.overlays=failed:a,b")
+        assert m.metric_values() == {"boot.overlays_failed": 2.0}
 
     def test_overlays_malformed_counts_as_one_failure(self):
         m = bm.parse_boot_markers("oe5xrx.overlays=bogus")
@@ -160,7 +179,54 @@ class TestGateCheck:
         assert "FAIL" in msg
         assert "oe5xrx-ina226" in msg
 
-    def test_unreadable_cmdline_does_not_block(self, tmp_path):
+    def test_missing_cmdline_does_not_block(self, tmp_path):
         ok, msg = bm.check_boot_markers(str(tmp_path / "missing"))
         assert ok
         assert "FAIL" not in msg
+
+    def test_unreadable_existing_cmdline_fails_closed(self, tmp_path):
+        # A directory raises IsADirectoryError: exists, but cannot be read.
+        ok, msg = bm.check_boot_markers(str(tmp_path))
+        assert not ok
+        assert "FAIL" in msg
+
+    def test_permission_error_fails_closed(self, tmp_path, monkeypatch):
+        def deny(*a, **kw):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr("builtins.open", deny)
+        ok, msg = bm.check_boot_markers(str(tmp_path / "cmdline"))
+        assert not ok
+        assert "PermissionError" in msg
+
+
+class TestRunHealthChecksWiring:
+    @pytest.fixture(autouse=True)
+    def _stub_checks(self, monkeypatch):
+        from station_agent import health_check as hc
+
+        monkeypatch.setattr(hc, "_check_disk", lambda: (True, "Disk OK"))
+        monkeypatch.setattr(hc, "_check_systemd_service", lambda: (True, "Systemd OK"))
+        self.hc = hc
+
+    def test_boot_gate_is_off_by_default(self, monkeypatch, tmp_path):
+        cmdline = tmp_path / "cmdline"
+        cmdline.write_text("oe5xrx.stage2=failed\n")
+        monkeypatch.setattr(bm, "CMDLINE_PATH", str(cmdline))
+        passed, messages = self.hc.run_health_checks()
+        assert passed
+        assert not any(m.startswith("Boot") for m in messages)
+        passed, messages = self.hc.run_health_checks(boot_gate=True)
+        assert not passed
+        assert any("oe5xrx.stage2=failed" in m for m in messages)
+
+    def test_raising_check_yields_non_empty_fail_reason(self, monkeypatch):
+        def boom():
+            raise RuntimeError("x" * 1000)
+
+        monkeypatch.setattr(self.hc, "check_boot_markers", boom)
+        passed, messages = self.hc.run_health_checks(boot_gate=True)
+        assert not passed
+        (fail,) = [m for m in messages if "FAIL" in m]
+        assert fail.startswith("boot FAIL: unexpected exception: RuntimeError")
+        assert len(fail) < 300
