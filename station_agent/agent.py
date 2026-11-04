@@ -605,7 +605,11 @@ class StationAgent:
             )
             return
 
-        passed, messages = run_health_checks(server_url=config.server_url)
+        # Boot-marker gate (slot-boot-stage2 §5) only while the trial is
+        # still open; the (0, 0) retry path has already committed locally.
+        passed, messages = run_health_checks(
+            server_url=config.server_url, boot_gate=upgrade_available == "1"
+        )
         for msg in messages:
             logger.info("Health: %s", msg)
 

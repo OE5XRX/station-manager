@@ -10,6 +10,8 @@ upgrade_available guard must enforce rolled_back there.
 
 from __future__ import annotations
 
+import pytest
+
 from station_agent.agent import StationAgent
 
 
@@ -152,6 +154,130 @@ class TestVerifyAndCommitTrialGuard:
         status_sequence = [u["json_data"]["status"] for u in client.status_updates]
         assert "rolled_back" not in status_sequence
         assert commit_boot_called == [True]
+
+
+_LEGACY = "console=ttyS0 root=PARTLABEL=root_b rootwait"
+
+
+class TestVerifyAndCommitBootMarkerGate:
+    """Commit gate on the stage-2/overlay boot markers (slot-boot-stage2 §5).
+
+    Uses the real run_health_checks (only network/disk/systemd stubbed) so the
+    marker failure travels the same rolled_back path as any failed check.
+    """
+
+    @pytest.fixture
+    def env(self, monkeypatch, tmp_path):
+        cmdline = tmp_path / "cmdline"
+        monkeypatch.setattr("station_agent.boot_markers.CMDLINE_PATH", str(cmdline))
+        for name, msg in (
+            ("_check_network", "Network OK"),
+            ("_check_disk", "Disk OK"),
+            ("_check_systemd_service", "Systemd OK"),
+        ):
+            monkeypatch.setattr(
+                f"station_agent.health_check.{name}", lambda *a, _m=msg: (True, _m)
+            )
+        monkeypatch.setattr("station_agent.agent.get_current_version", lambda: "v2")
+        monkeypatch.setattr("station_agent.agent.get_bootloader", lambda _cfg: "uboot")
+        commits = []
+        monkeypatch.setattr(
+            "station_agent.agent.commit_boot",
+            lambda *a, **kw: commits.append(True) or True,
+        )
+        written = []
+        monkeypatch.setattr(
+            "station_agent.agent.write_last_ota_result",
+            lambda _dir, outcome, **kw: written.append((outcome, kw.get("detail", ""))),
+        )
+
+        def run(cmdline_text, upgrade_available, bootcount):
+            cmdline.write_text(cmdline_text + "\n")
+            monkeypatch.setattr(
+                "station_agent.agent.get_env",
+                lambda _bl, key: {
+                    "upgrade_available": upgrade_available,
+                    "bootcount": bootcount,
+                }.get(key),
+            )
+            client = _FakeHttpClient()
+            cfg = _FakeConfig()
+            cfg.state_dir = str(tmp_path)
+            StationAgent()._verify_and_commit(cfg, client, result_pk=9, version="v2")
+            statuses = [u["json_data"] for u in client.status_updates]
+            return statuses, commits, written
+
+        return run
+
+    @pytest.mark.parametrize(
+        "markers",
+        [
+            _LEGACY,
+            f"{_LEGACY} oe5xrx.stage2=ok",
+            f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=ok:oe5xrx-ina226",
+            f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=ok:",
+        ],
+        ids=["legacy-no-marker", "stage2-ok", "all-ok", "ok-no-overlays"],
+    )
+    def test_trial_commits_when_markers_ok_or_absent(self, env, markers):
+        statuses, commits, written = env(markers, "1", "1")
+        assert commits == [True]
+        assert "rolled_back" not in [s["status"] for s in statuses]
+        assert written[-1][0] == "success"
+
+    @pytest.mark.parametrize(
+        ("markers", "reason"),
+        [
+            (f"{_LEGACY} oe5xrx.stage2=missing", "oe5xrx.stage2=missing"),
+            (f"{_LEGACY} oe5xrx.stage2=failed", "oe5xrx.stage2=failed"),
+            (
+                f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=failed:oe5xrx-ina226",
+                "oe5xrx.overlays=failed:oe5xrx-ina226",
+            ),
+            (f"{_LEGACY} oe5xrx.stage2=garbage", "unknown value"),
+            (f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=bogus", "malformed"),
+        ],
+        ids=["stage2-missing", "stage2-failed", "overlay-failed", "stage2-junk", "overlays-junk"],
+    )
+    def test_trial_rolls_back_on_bad_markers(self, env, markers, reason):
+        statuses, commits, written = env(markers, "1", "2")
+        assert commits == []
+        last = statuses[-1]
+        assert last["status"] == "rolled_back"
+        assert last["error_message"].startswith("Health checks failed:")
+        assert reason in last["error_message"]
+        assert written[-1][0] == "rolled_back"
+        assert reason in written[-1][1]
+
+    @pytest.mark.parametrize(
+        "markers",
+        [
+            f"{_LEGACY} oe5xrx.stage2=failed",
+            f"{_LEGACY} oe5xrx.stage2=ok oe5xrx.overlays=failed:x",
+        ],
+    )
+    def test_locally_committed_retry_ignores_markers(self, env, markers):
+        """(0, 0) = already committed locally; the gate must not turn the
+        server-commit retry into a rolled_back that never actually rolls back."""
+        statuses, commits, _ = env(markers, "0", "0")
+        assert commits == [True]
+        assert "rolled_back" not in [s["status"] for s in statuses]
+
+    def test_bootloader_rollback_reason_unchanged_by_markers(self, env):
+        """(0, N>0) keeps the existing env-based rolled_back reason."""
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "0", "1")
+        assert commits == []
+        assert "upgrade_available" in statuses[-1]["error_message"]
+        assert "oe5xrx" not in statuses[-1]["error_message"]
+
+    def test_unreadable_cmdline_does_not_block(self, env, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "station_agent.boot_markers.CMDLINE_PATH", str(tmp_path / "does-not-exist")
+        )
+        # env() writes the patched-away file; the gate reads the missing one.
+        statuses, commits, _ = env("oe5xrx.stage2=failed", "1", "1")
+        assert commits == [True]
+        assert "rolled_back" not in [s["status"] for s in statuses]
 
 
 class TestHandleOtaRebootTransition:

@@ -545,3 +545,63 @@ def test_non_finite_source_values_omitted(tmp_path, value):
     values, _ = c.snapshot()
     assert "sys.load1" not in values
     assert values["sys.load5"] == 0.1
+
+
+# ---------------------------------------------------------------------------
+# Boot markers (slot-boot-stage2 spec §5)
+# ---------------------------------------------------------------------------
+
+
+def _boot_values(tmp_path, cmdline):
+    if cmdline is not None:
+        _write(tmp_path / "proc" / "cmdline", cmdline + "\n")
+    values, descs = MetricsCollector(root=str(tmp_path), disk_mounts=()).snapshot()
+    boot = {k: v for k, v in values.items() if k.startswith("boot.")}
+    return boot, {d["key"]: d for d in descs if d["key"].startswith("boot.")}
+
+
+@pytest.mark.parametrize(
+    ("cmdline", "expected"),
+    [
+        (None, {}),
+        ("root=PARTLABEL=root_a", {}),
+        (
+            "root=x oe5xrx.stage2=ok oe5xrx.overlays=ok:oe5xrx-ina226",
+            {"boot.stage2_ok": 1.0, "boot.overlays_failed": 0.0},
+        ),
+        ("root=x oe5xrx.stage2=missing", {"boot.stage2_ok": 0.0}),
+        (
+            "oe5xrx.stage2=ok oe5xrx.overlays=failed:oe5xrx-ina226",
+            {"boot.stage2_ok": 1.0, "boot.overlays_failed": 1.0},
+        ),
+    ],
+    ids=["no-cmdline", "legacy", "ok", "stage2-missing", "overlay-failed"],
+)
+def test_boot_marker_metrics(tmp_path, cmdline, expected):
+    boot, descs = _boot_values(tmp_path, cmdline)
+    assert boot == expected
+    assert set(descs) == set(expected)
+
+
+def test_boot_marker_descriptors(tmp_path):
+    _, descs = _boot_values(tmp_path, "oe5xrx.stage2=ok oe5xrx.overlays=ok:a")
+    assert [clean_descriptor(d) for d in descs.values()] == list(descs.values())
+    ok = descs["boot.stage2_ok"]
+    assert (ok["group"], ok["min"], ok["max"], ok["precision"]) == ("system", 0.0, 1.0, 0)
+    failed = descs["boot.overlays_failed"]
+    assert (failed["group"], failed["min"], failed["max"]) == ("system", 0.0, None)
+
+
+def test_boot_marker_cmdline_is_read_once(tmp_path):
+    _write(tmp_path / "proc" / "cmdline", "oe5xrx.stage2=ok\n")
+    c = MetricsCollector(root=str(tmp_path), disk_mounts=())
+    assert c.snapshot()[0]["boot.stage2_ok"] == 1.0
+    _write(tmp_path / "proc" / "cmdline", "oe5xrx.stage2=failed\n")
+    assert c.snapshot()[0]["boot.stage2_ok"] == 1.0
+
+
+def test_boot_marker_unreadable_cmdline_retries(tmp_path):
+    c = MetricsCollector(root=str(tmp_path), disk_mounts=())
+    assert "boot.stage2_ok" not in c.snapshot()[0]
+    _write(tmp_path / "proc" / "cmdline", "oe5xrx.stage2=failed\n")
+    assert c.snapshot()[0]["boot.stage2_ok"] == 0.0

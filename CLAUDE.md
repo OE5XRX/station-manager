@@ -78,6 +78,19 @@ Opener, den selbst der Broker-Lock nicht erreichte — deshalb der prozessweite 
 unsichtbar (pty + schnelles native_sim-Timing, kein paralleler Poll im Test) — siehe
 Ehrlichkeits-Regel unten.
 
+### Boot-Marker-Commit-Gate (`station_agent/boot_markers.py`)
+CM4-Boot-Stufe 1/2 (linux-image, Spec `2026-11-04-slot-boot-stage2-overlays-design.md` §5) schreiben
+`oe5xrx.stage2=ok|missing|failed` und `oe5xrx.overlays=ok:<a,b>|failed:<name>` in die cmdline.
+Während eines OTA-Trials (`upgrade_available=1`) läuft das als zusätzlicher Pre-Commit-Check
+(`run_health_checks(boot_gate=True)`) → gleicher `rolled_back`-Pfad wie jeder Health-Check.
+
+- **Kein Marker = alter Bootpfad = kein Blocker** (sonst rollt jede noch nicht neu geflashte Station
+  jedes Update zurück). Unlesbare cmdline blockiert ebenfalls nicht.
+- **Vorhandener, aber unverständlicher Marker = fail closed.** Mehrfach-Vorkommen: das letzte gewinnt.
+- Im `(0, 0)`-Retry-Fall (lokal schon committet) kein Gate. Hardware-Zustände (PowerBoard fehlt)
+  sind nie ein Blocker — nur die Marker.
+- Metriken `boot.stage2_ok` / `boot.overlays_failed` kommen aus demselben Parser (nur bei vorhandenem Marker).
+
 ### Serial-Boundary Ehrlichkeits-Regel
 Ein Bug am Serial-/Modul-Boundary (Modul nicht gefunden/lesbar, Control-Knopf fehlt)
 gilt erst als gefixt, wenn `python -m station_agent selftest serial` auf **echtem CM4**
