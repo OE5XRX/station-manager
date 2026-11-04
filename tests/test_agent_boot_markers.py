@@ -234,10 +234,20 @@ class TestGateCheck:
         assert "FAIL" in msg
         assert "oe5xrx-ina226" in msg
 
-    def test_missing_cmdline_does_not_block(self, tmp_path):
+    def test_missing_cmdline_without_procfs_does_not_block(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bm, "PROCFS_PROBE", str(tmp_path / "no-proc"))
         ok, msg = bm.check_boot_markers(str(tmp_path / "missing"))
         assert ok
         assert "FAIL" not in msg
+
+    def test_hidden_cmdline_with_procfs_fails_closed(self, tmp_path, monkeypatch):
+        # ProcSubset=pid: /proc/self/stat exists, /proc/cmdline gives ENOENT.
+        probe = tmp_path / "stat"
+        probe.write_text("1 (init)\n")
+        monkeypatch.setattr(bm, "PROCFS_PROBE", str(probe))
+        ok, msg = bm.check_boot_markers(str(tmp_path / "missing"))
+        assert not ok
+        assert "FAIL" in msg
 
     def test_unreadable_existing_cmdline_fails_closed(self, tmp_path):
         # A directory raises IsADirectoryError: exists, but cannot be read.

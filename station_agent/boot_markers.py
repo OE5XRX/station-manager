@@ -18,12 +18,16 @@ metrics both use this module.
 """
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 CMDLINE_PATH = "/proc/cmdline"
+# Exists whenever procfs is mounted, including systemd ProcSubset=pid (which
+# hides /proc/cmdline with ENOENT). Used to tell "no procfs" from "hidden".
+PROCFS_PROBE = "/proc/self/stat"
 
 STAGE2_KEY = "oe5xrx.stage2"
 OVERLAYS_KEY = "oe5xrx.overlays"
@@ -215,13 +219,17 @@ def check_boot_markers(path: str | None = None) -> tuple[bool, str]:
     try:
         markers = _read(path)
     except FileNotFoundError:
-        # No procfs cmdline at all (container/sim): indistinguishable from the
-        # legacy path, so don't gate.
-        logger.warning("%s not found; not gating the commit on boot markers", path)
+        if os.path.exists(PROCFS_PROBE):
+            # procfs is mounted but the cmdline is hidden (e.g. ProcSubset=pid
+            # answers ENOENT): fail closed rather than switch the gate off.
+            return False, f"Boot FAIL: cannot read {path}: hidden (procfs mounted)"
+        # No procfs at all (container/sim): indistinguishable from the legacy
+        # path, so don't gate.
+        logger.warning("%s not found and no procfs; not gating the commit", path)
         return True, f"Boot SKIP: {path} not found, boot markers unknown"
     except OSError as exc:
-        # The file exists but can't be read (e.g. a hardened unit hiding /proc):
-        # fail closed rather than silently switching the gate off.
+        # The file exists but can't be read: fail closed rather than silently
+        # switching the gate off.
         return False, f"Boot FAIL: cannot read {path}: {type(exc).__name__}"
     if markers.legacy:
         return True, "Boot OK: no boot markers (legacy boot path)"

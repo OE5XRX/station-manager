@@ -85,10 +85,11 @@ Während eines OTA-Trials (`upgrade_available=1`) läuft das als zusätzlicher P
 (`run_health_checks(boot_gate=True)`) → gleicher `rolled_back`-Pfad wie jeder Health-Check.
 
 - **Kein Marker = alter Bootpfad = kein Blocker** (sonst rollt jede noch nicht neu geflashte Station
-  jedes Update zurück). Fehlende cmdline (`FileNotFoundError`) blockiert nicht; existierende, aber
-  unlesbare cmdline (z.B. gehärtete Unit) = fail closed.
-- **Vorhandener, aber unverständlicher Marker = fail closed.** Mehrfach-Vorkommen: das letzte gewinnt;
-  Tokens nach `--` (init-Args) werden ignoriert.
+  jedes Update zurück). Kein procfs (Container/Sim) blockiert nicht; procfs da, aber cmdline
+  unlesbar oder versteckt (`ProcSubset=pid` ⇒ ENOENT) = fail closed.
+- **Vorhandener, aber unverständlicher Marker = fail closed.** Mehrfach-Vorkommen: das letzte gewinnt.
+  Tokenizer = Port von Kernel `next_arg()`/`parse_args()`. Marker nach `--` (init-Args) überschreiben
+  nie einen Kernel-seitigen; steht einer nur dort, zählt er trotzdem (kein Legacy/fail-open).
 - Im `(0, 0)`-Retry-Fall (lokal schon committet) kein Gate. Hardware-Zustände (PowerBoard fehlt)
   sind nie ein Blocker — nur die Marker.
 - Metriken `boot.stage2_ok` / `boot.overlays_failed` kommen aus demselben Parser (nur bei vorhandenem Marker;

@@ -20,9 +20,11 @@ Kernel-cmdline (`/proc/cmdline`), gesetzt von Stufe 1/2:
 - **Unbekannter / leerer Wert bei vorhandenem Marker** = fail closed (blockiert den Commit):
   ein vorhandener Marker beweist den neuen Bootpfad, ein unverständlicher Wert ist kein „ok".
   `oe5xrx.overlays=ok` / `ok:` (ohne Namen) gilt als ok (leere Overlay-Liste).
-- **Marker fehlt ganz** ⇒ alter Bootpfad ⇒ kein Blocker. `/proc/cmdline` unlesbar ⇒ ebenfalls
-  kein Blocker (Warn-Log), weil nicht von „alter Bootpfad" unterscheidbar und ein Rollback wegen
-  eines Agent-Lesefehlers schlimmer wäre.
+- **Marker fehlt ganz** ⇒ alter Bootpfad ⇒ kein Blocker. Kein procfs (Container/Sim) ⇒ ebenfalls
+  kein Blocker. procfs da, aber `/proc/cmdline` unlesbar oder versteckt (z.B. `ProcSubset=pid`
+  ⇒ ENOENT) ⇒ fail closed — sonst schaltet eine Härtung das Gate still ab.
+- **Marker nach `--`** (init-Args) überschreiben nie einen Kernel-seitigen; steht einer nur dort,
+  zählt er trotzdem (kein Legacy/fail-open). Tokenizer = Port von `next_arg()`/`parse_args()`.
 - **Gate nur im Trial** (`upgrade_available == "1"`): `run_health_checks(..., boot_gate=True)`.
   Im `(0, 0)`-Retry-Fall ist lokal schon committet — dort kein Gate. Fehlerpfad = bestehender
   Health-Check-Fehlerpfad (`rolled_back` + Grund mit „FAIL" in der Message). Commit-Protokoll

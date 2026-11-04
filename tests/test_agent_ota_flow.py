@@ -278,10 +278,11 @@ class TestVerifyAndCommitBootMarkerGate:
         assert statuses[-1]["status"] == "rolled_back"
         assert "cannot read" in statuses[-1]["error_message"]
 
-    def test_missing_cmdline_does_not_block(self, env, monkeypatch, tmp_path):
+    def test_missing_cmdline_without_procfs_does_not_block(self, env, monkeypatch, tmp_path):
         monkeypatch.setattr(
             "station_agent.boot_markers.CMDLINE_PATH", str(tmp_path / "does-not-exist")
         )
+        monkeypatch.setattr("station_agent.boot_markers.PROCFS_PROBE", str(tmp_path / "no-proc"))
         # env() writes the patched-away file; the gate reads the missing one.
         statuses, commits, _ = env("oe5xrx.stage2=failed", "1", "1")
         assert commits == [True]
