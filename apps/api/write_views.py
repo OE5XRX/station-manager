@@ -712,13 +712,20 @@ class MetricDefinitionViewSet(UpdateModelMixin, read_views.MetricDefinitionViewS
     http_method_names = ["get", "put", "patch", "head", "options"]
 
     def perform_update(self, serializer):
-        changed = sorted(serializer.validated_data)
+        fields = serializer.instance.OPERATOR_FIELDS
+        before = {f: getattr(serializer.instance, f) for f in fields}
         # Atomic: a block's post_save reset commits with the UPDATE.
         with transaction.atomic():
             definition = serializer.save()
+        changes = {
+            f: {"old": before[f], "new": getattr(definition, f)}
+            for f in fields
+            if getattr(definition, f) != before[f]
+        }
         audit_config_write(
             self.request,
-            message=f"MetricDefinition {definition.key} updated ({', '.join(changed) or '-'})",
+            message=f"MetricDefinition {definition.key} updated ({', '.join(changes) or '-'})",
+            details={"object": "metric_definition", "action": "updated", "changes": changes},
         )
 
 

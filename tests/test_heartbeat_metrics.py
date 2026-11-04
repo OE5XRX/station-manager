@@ -151,3 +151,36 @@ def test_malformed_descriptors_hash_still_200(station_with_key, bad_hash):
     assert (
         StationTelemetry.objects.get(station=station).metrics["pwr.12v.voltage_v"]["avg"] == 12.1
     )
+
+
+# review round 5: server/agent hash parity on real agent descriptors
+@pytest.mark.django_db
+def test_agent_descriptor_hash_parity(station_with_key):
+    from station_agent.metrics import describe
+
+    keys = [
+        "cpu.temp_c",
+        "pwr.12v.voltage_v",
+        "net.eth0.rx_kbps",
+        "disk.root.used_pct",
+        "mem.used_pct",
+    ]
+    descs = [describe(k) for k in keys]
+    assert all(descs), descs
+    agent_hash = descriptors_hash(descs)
+    station, key = station_with_key
+    resp = _post(
+        station,
+        key,
+        metrics={"cpu.temp_c": 45.0},
+        metric_descriptors_hash=agent_hash,
+        metric_descriptors=descs,
+    )
+    assert resp.status_code == 200
+    assert "metric_descriptors_required" not in resp.json()
+    assert StationTelemetry.objects.get(station=station).metric_descriptors_hash == agent_hash
+
+    cache.clear()  # throttle
+    resp = _post(station, key, metrics={"cpu.temp_c": 46.0}, metric_descriptors_hash=agent_hash)
+    assert resp.status_code == 200
+    assert "metric_descriptors_required" not in resp.json()

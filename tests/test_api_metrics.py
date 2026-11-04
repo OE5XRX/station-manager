@@ -323,3 +323,31 @@ def test_override_on_inverted_agent_range_still_checked(api_topology, bearer, in
     )
     assert resp.status_code == 400
     assert "min_override" in resp.data
+
+
+# review round 5: control characters in label_override; audit diff
+@pytest.mark.parametrize("bad", ["a\nb", "a\rb", "a\x00b", "a\tb"])
+def test_label_override_control_chars_rejected(api_topology, bearer, metric_defs, bad):
+    d = metric_defs["visible"]
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(d.pk), {"label_override": bad}, format="json"
+    )
+    assert resp.status_code == 400
+    assert "label_override" in resp.data
+    d.refresh_from_db()
+    assert d.label_override == ""
+
+
+def test_patch_audit_records_changed_fields_only(api_topology, bearer, metric_defs):
+    from apps.accounts.models import AccountAuditLog
+
+    d = metric_defs["visible"]
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(d.pk), {"is_blocked": True, "is_hidden": False}, format="json"
+    )
+    assert resp.status_code == 200, resp.content
+    log = AccountAuditLog.objects.filter(
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        message__contains="cpu.temp_c",
+    ).latest("created_at")
+    assert log.details["changes"] == {"is_blocked": {"old": False, "new": True}}

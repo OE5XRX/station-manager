@@ -51,6 +51,8 @@ def _send_email_notification(alert, recipients_qs=None):
         return
 
     subject = f"[OE5XRX] {alert.get_severity_display()}: {alert.title}"
+    # A CR/LF in the subject raises a header error and the mail is lost.
+    subject = " ".join(subject.splitlines())
     body = (
         f"Station: {alert.station.name}\n"
         f"Severity: {alert.get_severity_display()}\n"

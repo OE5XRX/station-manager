@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -9,6 +10,16 @@ from station_agent.metrics_contract import GROUPS, MAX_KEY_LEN, MAX_LABEL_LEN, M
 
 # Flood guard (spec §3.1): no new MetricDefinition rows beyond this count.
 MAX_DEFINITIONS = 2000
+
+
+def validate_printable(value):
+    """Reject CR/LF/control characters: the label ends up in Alert.title and
+    from there in the e-mail subject, where a line break raises a header
+    error and the mail is lost."""
+    if any(not ch.isprintable() for ch in value):
+        raise ValidationError(
+            _("Control characters (e.g. line breaks) are not allowed."), code="not_printable"
+        )
 
 
 class AlertRule(models.Model):
@@ -174,7 +185,12 @@ class MetricDefinition(models.Model):
     first_seen = models.DateTimeField(_("first seen"), auto_now_add=True)
     last_seen = models.DateTimeField(_("last seen"), default=timezone.now)
     # Operator-managed
-    label_override = models.CharField(_("label override"), max_length=MAX_LABEL_LEN, blank=True)
+    label_override = models.CharField(
+        _("label override"),
+        max_length=MAX_LABEL_LEN,
+        blank=True,
+        validators=[validate_printable],
+    )
     min_override = models.FloatField(_("minimum override"), null=True, blank=True)
     max_override = models.FloatField(_("maximum override"), null=True, blank=True)
     is_hidden = models.BooleanField(_("hidden"), default=False)

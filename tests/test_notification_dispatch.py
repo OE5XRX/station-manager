@@ -94,3 +94,26 @@ def test_no_recipients_logs_warning_and_does_not_send(settings, caplog):
 
     assert len(mail.outbox) == 0
     assert any("no recipients" in rec.message.lower() for rec in caplog.records)
+
+
+@pytest.mark.django_db
+def test_alert_email_subject_collapses_line_breaks(settings):
+    """review round 5: a CR/LF in the title must not raise BadHeaderError
+    (mail lost) -- it is collapsed into a single-line subject."""
+    settings.ALERT_EMAIL_ENABLED = True
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    mail.outbox = []
+
+    _user(User.MembershipLevel.ADMIN, "admin@x", "admin")
+    s = Station.objects.create(name="OE5A", callsign="OE5A")
+    rule = AlertRule.objects.get(alert_type=AlertRule.AlertType.STATION_OFFLINE)
+    alert = Alert.objects.create(
+        station=s, alert_rule=rule, severity="critical", title="a\r\nb\nc", message="m"
+    )
+
+    send_alert_notifications(alert)
+
+    assert len(mail.outbox) == 1
+    subject = mail.outbox[0].subject
+    assert "\n" not in subject and "\r" not in subject
+    assert subject.endswith("a b c")

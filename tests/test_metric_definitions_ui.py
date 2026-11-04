@@ -190,6 +190,20 @@ class TestMetricDefinitionReviewRound2:
         assert not form.is_valid()
         assert "min_override" in form.errors
 
+    def test_label_override_control_chars_rejected(self, client, admin_user, mdef):
+        from apps.monitoring.forms import MetricDefinitionForm
+
+        form = MetricDefinitionForm(_post(label_override="a\nb"), instance=mdef)
+        assert not form.is_valid()
+        assert "label_override" in form.errors
+        client.force_login(admin_user)
+        client.post(
+            reverse("monitoring:metric_definition_update", args=[mdef.pk]),
+            _post(label_override="a\rb"),
+        )
+        mdef.refresh_from_db()
+        assert mdef.label_override == ""
+
     def test_update_writes_only_operator_fields(self, client, admin_user, mdef, monkeypatch):
         from apps.monitoring import views
 
