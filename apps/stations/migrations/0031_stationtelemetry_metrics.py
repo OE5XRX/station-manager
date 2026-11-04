@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("stations", "0029_alter_station_rollout_group"),
+        ("stations", "0030_module_flash_events"),
     ]
 
     operations = [

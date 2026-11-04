@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('monitoring', '0004_seed_telemetry_alert_rules'),
-        ('stations', '0030_stationtelemetry_metrics'),
+        ('stations', '0031_stationtelemetry_metrics'),
     ]
 
     operations = [

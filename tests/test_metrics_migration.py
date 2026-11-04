@@ -15,7 +15,7 @@ PRE = [
 ]
 TESTED = [
     ("monitoring", "0006_generic_metrics_data"),
-    ("stations", "0030_stationtelemetry_metrics"),
+    ("stations", "0031_stationtelemetry_metrics"),
 ]
 
 LEGACY = {
