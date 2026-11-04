@@ -69,6 +69,14 @@ class TestCreate:
             event_type=AccountAuditLog.EventType.CONFIG_CHANGED, details__object="alert_rule"
         ).exists()
 
+    def test_create_audit_records_config(self, client, admin_user, defs):
+        client.force_login(admin_user)
+        client.post(reverse("monitoring:threshold_rule_create"), _payload())
+        row = AccountAuditLog.objects.get(details__object="alert_rule", details__action="created")
+        assert row.details["config"]["metric_key"] == "cpu.temp_c"
+        assert row.details["config"]["threshold"] == 72.5
+        assert row.details["changes"] == {}
+
     def test_pattern_key_accepted(self, client, admin_user, defs):
         client.force_login(admin_user)
         resp = client.post(
@@ -224,6 +232,13 @@ class TestDelete:
         assert not AlertRule.objects.filter(pk=rule.pk).exists()
         alert.refresh_from_db()
         assert alert.is_resolved is True
+
+    def test_delete_audit_records_config(self, client, admin_user, rule):
+        client.force_login(admin_user)
+        client.post(reverse("monitoring:threshold_rule_delete", args=[rule.pk]))
+        row = AccountAuditLog.objects.get(details__object="alert_rule", details__action="deleted")
+        assert row.details["config"]["metric_key"] == "pwr.12v.voltage_v"
+        assert row.details["config"]["threshold"] == 11.0
 
     def test_viewer_cannot_delete(self, client, staff_user, rule):
         client.force_login(staff_user)

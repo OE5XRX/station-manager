@@ -200,3 +200,12 @@ def test_clean_descriptor_strips_before_truncating():
     out = mc.clean_descriptor(raw)
     assert out["label"] == "Label"
     assert out["unit"] == "kV"
+
+
+def test_clean_descriptor_inverted_range_dropped():
+    out = mc.clean_descriptor({"key": "a.b", "min": 30, "max": 0})
+    assert out["min"] is None and out["max"] is None
+    # one-sided and equal bounds survive
+    assert mc.clean_descriptor({"key": "a.b", "min": 5})["min"] == 5.0
+    eq = mc.clean_descriptor({"key": "a.b", "min": 5, "max": 5})
+    assert eq["min"] == 5.0 and eq["max"] == 5.0

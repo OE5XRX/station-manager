@@ -89,14 +89,19 @@ def clean_descriptor(d: object) -> dict | None:
     if not isinstance(d, dict) or not is_valid_key(d.get("key")):
         return None
     group = d.get("group")
+    lo = _finite_number(d.get("min"))
+    hi = _finite_number(d.get("max"))
+    if lo is not None and hi is not None and lo > hi:
+        # An inverted range would reject every value — treat it as unbounded.
+        lo = hi = None
     return {
         "key": d["key"],
         "label": _printable(d.get("label"), MAX_LABEL_LEN),
         "unit": _printable(d.get("unit"), MAX_UNIT_LEN),
         "group": group if group in GROUPS else "other",
         "precision": _precision(d.get("precision")),
-        "min": _finite_number(d.get("min")),
-        "max": _finite_number(d.get("max")),
+        "min": lo,
+        "max": hi,
     }
 
 

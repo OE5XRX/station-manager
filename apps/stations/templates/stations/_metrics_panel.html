@@ -10,7 +10,7 @@
     <div class="panel-title">
       <span class="dot" style="background:var(--cyan)"></span>{% trans "Metrics" %}
       {% if metric_breached_count %}
-      <span class="pill pill-offline"><span class="dot"></span>{% blocktrans count n=metric_breached_count %}{{ n }} rule breached{% plural %}{{ n }} rules breached{% endblocktrans %}</span>
+      <span class="pill pill-offline"><span class="dot"></span>{% blocktrans count n=metric_breached_count %}{{ n }} metric breached{% plural %}{{ n }} metrics breached{% endblocktrans %}</span>
       {% endif %}
     </div>
     <div class="row-gap-8">

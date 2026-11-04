@@ -31,9 +31,9 @@ class HeartbeatSerializer(serializers.Serializer):
     # malformed block drops keys instead of failing the heartbeat.
     metrics = _AnyJSONField(required=False)
     metric_descriptors = _AnyJSONField(required=False)
-    metric_descriptors_hash = serializers.CharField(
-        max_length=64, required=False, allow_blank=True
-    )
+    # Coerced in the view (str <= 64 chars, else "") — a malformed hash must
+    # not 400 the heartbeat either.
+    metric_descriptors_hash = _AnyJSONField(required=False, allow_null=True)
 
     def validate_capabilities(self, value):
         if len(json.dumps(value, separators=(",", ":"))) > MAX_CAPABILITIES_BYTES:

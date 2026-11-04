@@ -112,7 +112,10 @@ def test_breached_metric_highlighted(client, admin_user):
     rows = {r["key"]: r for _, rs in resp.context["metric_groups"] for r in rs}
     assert rows["pwr.12v.voltage_v"]["breached"] == "critical"
     assert not rows["cpu.temp_c"]["breached"]
-    assert "is-breached" in resp.content.decode()
+    content = resp.content.decode()
+    assert "is-breached" in content
+    assert "1 metric breached" in content
+    assert "rule breached" not in content
 
 
 @pytest.mark.django_db

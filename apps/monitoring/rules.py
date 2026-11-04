@@ -191,7 +191,11 @@ def inverted_override_field(min_override, max_override, min_value, max_value):
     The effective bound is the override if set, otherwise the agent value —
     so a one-sided override is checked against the agent's other bound
     (agent 0–30 + ``min_override=40`` alone rejects every value).
+    Without any override nothing is checked: a legacy inverted agent range is
+    not the operator's to fix, so flag/label edits on such a row still save.
     """
+    if min_override is None and max_override is None:
+        return None
     lo = min_override if min_override is not None else min_value
     hi = max_override if max_override is not None else max_value
     if lo is None or hi is None or lo <= hi:

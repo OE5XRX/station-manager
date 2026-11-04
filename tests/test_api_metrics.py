@@ -294,3 +294,32 @@ def test_serializer_update_writes_only_operator_fields(ranged_def):
     assert ranged_def.label_override == "Rail"
     assert ranged_def.label == "new agent label"
     assert ranged_def.unit == "mV"
+
+
+# review round 4: a legacy inverted agent range must not block non-range edits
+@pytest.fixture
+def inverted_def(db):
+    from apps.monitoring.models import MetricDefinition
+
+    obj, _ = MetricDefinition.objects.update_or_create(
+        key="pwr.12v.voltage_v",
+        defaults={"label": "12V", "unit": "V", "min_value": 30.0, "max_value": 0.0},
+    )
+    return obj
+
+
+def test_non_range_patch_on_inverted_agent_range_ok(api_topology, bearer, inverted_def):
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(inverted_def.pk), {"is_blocked": True, "label_override": "R"}, format="json"
+    )
+    assert resp.status_code == 200, resp.content
+    inverted_def.refresh_from_db()
+    assert inverted_def.is_blocked is True
+
+
+def test_override_on_inverted_agent_range_still_checked(api_topology, bearer, inverted_def):
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(inverted_def.pk), {"min_override": 20.0}, format="json"
+    )
+    assert resp.status_code == 400
+    assert "min_override" in resp.data

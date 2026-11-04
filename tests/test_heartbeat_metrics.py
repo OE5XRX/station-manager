@@ -136,3 +136,18 @@ def test_legacy_agent_inventory_fallback(station_with_key):
     assert "metric_descriptors_required" not in resp.json()
     stored = StationTelemetry.objects.get(station=station).metrics
     assert set(stored) == {"cpu.temp_c", "mem.used_pct", "disk.root.used_pct"}
+
+
+# review round 4: a malformed hash never 400s the heartbeat
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad_hash", [None, 123, "a" * 65, ["x"]])
+def test_malformed_descriptors_hash_still_200(station_with_key, bad_hash):
+    station, key = station_with_key
+    resp = _post(
+        station, key, metrics={"pwr.12v.voltage_v": 12.1}, metric_descriptors_hash=bad_hash
+    )
+    assert resp.status_code == 200, resp.content
+    # treated as "no hash": the value is still stored
+    assert (
+        StationTelemetry.objects.get(station=station).metrics["pwr.12v.voltage_v"]["avg"] == 12.1
+    )

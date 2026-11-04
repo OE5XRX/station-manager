@@ -111,6 +111,28 @@ class TestMetricDefinitionUpdate:
         assert mdef.min_override is None
         assert mdef.max_override is None
 
+    def test_flag_change_on_inverted_agent_range_saves(self, client, admin_user, mdef):
+        MetricDefinition.objects.filter(pk=mdef.pk).update(min_value=30.0, max_value=0.0)
+        client.force_login(admin_user)
+        resp = client.post(
+            reverse("monitoring:metric_definition_update", args=[mdef.pk]),
+            _post(is_blocked="on", label_override="Rail"),
+        )
+        assert resp.status_code == 302
+        mdef.refresh_from_db()
+        assert mdef.is_blocked is True
+        assert mdef.label_override == "Rail"
+
+    def test_override_on_inverted_agent_range_still_checked(self, client, admin_user, mdef):
+        MetricDefinition.objects.filter(pk=mdef.pk).update(min_value=30.0, max_value=0.0)
+        client.force_login(admin_user)
+        client.post(
+            reverse("monitoring:metric_definition_update", args=[mdef.pk]),
+            _post(min_override="20"),
+        )
+        mdef.refresh_from_db()
+        assert mdef.min_override is None
+
     def test_agent_fields_not_writable(self, client, admin_user, mdef):
         client.force_login(admin_user)
         client.post(

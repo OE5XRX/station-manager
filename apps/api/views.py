@@ -133,6 +133,8 @@ class HeartbeatView(APIView):
                 logger.exception("telemetry ingest failed for station %s", station.pk)
 
         descriptors_required = False
+        raw_hash = data.get("metric_descriptors_hash")
+        descriptors_hash = raw_hash if isinstance(raw_hash, str) and len(raw_hash) <= 64 else ""
         try:
             from apps.monitoring.metrics_ingest import ingest_metrics
 
@@ -140,7 +142,7 @@ class HeartbeatView(APIView):
                 station,
                 metrics=data.get("metrics"),
                 descriptors=data.get("metric_descriptors"),
-                descriptors_hash=data.get("metric_descriptors_hash") or "",
+                descriptors_hash=descriptors_hash,
                 agent_version=data.get("agent_version", ""),
                 inventory=inventory_data,
                 telemetry=telemetry if isinstance(telemetry, dict) else None,

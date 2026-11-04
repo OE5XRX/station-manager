@@ -38,15 +38,21 @@ def _snapshot(obj, fields):
 def _audit(request, *, obj, action, message, before=None, after=None):
     """Best-effort CONFIG_CHANGED row; an audit failure never undoes the write."""
     changes = {}
+    details = {"object": obj, "action": action, "changes": changes}
     if before is not None and after is not None:
-        changes = {f: {"old": before[f], "new": after[f]} for f in before if before[f] != after[f]}
+        changes.update(
+            {f: {"old": before[f], "new": after[f]} for f in before if before[f] != after[f]}
+        )
+    elif after is not None or before is not None:
+        # Create/delete: record the full configuration, not an empty diff.
+        details["config"] = after if after is not None else before
     try:
         AccountAuditLog.log(
             event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
             actor=request.user,
             ip_address=client_ip(request),
             message=message,
-            details={"object": obj, "action": action, "changes": changes},
+            details=details,
         )
     except Exception:
         logger.warning("monitoring audit write failed", exc_info=True)
