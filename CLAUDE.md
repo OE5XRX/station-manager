@@ -82,7 +82,12 @@ Ehrlichkeits-Regel unten.
 CM4-Boot-Stufe 1/2 (linux-image, Spec `2026-11-04-slot-boot-stage2-overlays-design.md` §5) schreiben
 `oe5xrx.stage2=ok|missing|failed` und `oe5xrx.overlays=ok:<a,b>|failed:<name>` in die cmdline.
 Während eines OTA-Trials (`upgrade_available=1`) läuft das als zusätzlicher Pre-Commit-Check
-(`run_health_checks(boot_gate=True)`) → gleicher `rolled_back`-Pfad wie jeder Health-Check.
+(`run_health_checks(boot_gate=True)`) → gleicher `rolled_back`-Pfad wie jeder Health-Check, **plus aktiver
+Rollback** (Koordinator-Entscheidung 2026-11-04, Spec §7 HW 3/4): `bootloader.arm_trial_rollback` setzt
+`bootcount=bootlimit` (nur 1–8, u-boot-`setexpr` rechnet hex; sonst kein Reboot) und der Agent rebootet
+einmal → der **bestehende** Bootloader-Rollback-Zweig (`upgrade_available=1 && bootcount>bootlimit`, GRUB
+und u-boot gleich) wechselt den Slot. Keine eigene Slot-Logik im Agent. Andere Health-Check-Fehler bleiben
+passiv (PM-Inbox #34).
 
 - **Kein Marker = alter Bootpfad = kein Blocker** (sonst rollt jede noch nicht neu geflashte Station
   jedes Update zurück). Kein procfs (Container/Sim) blockiert nicht; procfs da, aber cmdline

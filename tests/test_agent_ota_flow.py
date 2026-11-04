@@ -166,6 +166,8 @@ class TestVerifyAndCommitBootMarkerGate:
     marker failure travels the same rolled_back path as any failed check.
     """
 
+    client_factory = _FakeHttpClient
+
     @pytest.fixture
     def env(self, monkeypatch, tmp_path):
         cmdline = tmp_path / "cmdline"
@@ -190,6 +192,23 @@ class TestVerifyAndCommitBootMarkerGate:
             "station_agent.agent.write_last_ota_result",
             lambda _dir, outcome, **kw: written.append((outcome, kw.get("detail", ""))),
         )
+        # Active rollback (spec §7 HW 3/4): never touch the real env / systemd.
+        self.armed = []
+        self.arm_ok = True
+        monkeypatch.setattr(
+            "station_agent.agent.arm_trial_rollback",
+            lambda bl: self.armed.append(bl) or self.arm_ok,
+        )
+        self.reboots = []
+        self.reboot_exc = None
+
+        def fake_run(cmd, **kw):
+            self.reboots.append(cmd)
+            if self.reboot_exc is not None:
+                raise self.reboot_exc
+
+        monkeypatch.setattr("station_agent.agent.subprocess.run", fake_run)
+        self.shutdown_waits = []
 
         def run(cmdline_text, upgrade_available, bootcount):
             cmdline.write_text(cmdline_text + "\n")
@@ -200,10 +219,12 @@ class TestVerifyAndCommitBootMarkerGate:
                     "bootcount": bootcount,
                 }.get(key),
             )
-            client = _FakeHttpClient()
+            client = self.client_factory()
             cfg = _FakeConfig()
             cfg.state_dir = str(tmp_path)
-            StationAgent()._verify_and_commit(cfg, client, result_pk=9, version="v2")
+            agent = StationAgent()
+            agent._shutdown.wait = lambda timeout=None: self.shutdown_waits.append(timeout) or True
+            agent._verify_and_commit(cfg, client, result_pk=9, version="v2")
             statuses = [u["json_data"] for u in client.status_updates]
             return statuses, commits, written
 
@@ -224,6 +245,7 @@ class TestVerifyAndCommitBootMarkerGate:
         assert commits == [True]
         assert "rolled_back" not in [s["status"] for s in statuses]
         assert written[-1][0] == "success"
+        assert self.armed == [] and self.reboots == []
 
     @pytest.mark.parametrize(
         ("markers", "reason"),
@@ -248,6 +270,48 @@ class TestVerifyAndCommitBootMarkerGate:
         assert reason in last["error_message"]
         assert written[-1][0] == "rolled_back"
         assert reason in written[-1][1]
+        # Active rollback: arm the bootloader's own trial rollback, reboot once,
+        # then block on the shutdown event.
+        assert self.armed == ["uboot"]
+        assert self.reboots == [["systemctl", "reboot"]]
+        assert self.shutdown_waits == [300]
+
+    def test_rollback_not_armed_means_no_reboot(self, env):
+        self.arm_ok = False
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert commits == []
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.armed == ["uboot"]
+        assert self.reboots == []
+
+    def test_reboot_failure_does_not_raise(self, env):
+        import subprocess
+
+        self.reboot_exc = subprocess.CalledProcessError(1, "systemctl")
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.reboots == [["systemctl", "reboot"]]
+        assert self.shutdown_waits == []
+
+    def test_reboot_happens_even_if_status_report_fails(self, env):
+        class _DownClient(_FakeHttpClient):
+            def request(self, method, path, **kwargs):
+                super().request(method, path, **kwargs)
+                return None  # server unreachable
+
+        self.client_factory = _DownClient
+        _, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=failed", "1", "2")
+        assert commits == []
+        assert self.reboots == [["systemctl", "reboot"]]
+
+    def test_other_health_failures_keep_passive_path(self, env, monkeypatch):
+        monkeypatch.setattr(
+            "station_agent.health_check._check_disk", lambda: (False, "Disk FAIL: full")
+        )
+        statuses, commits, _ = env(f"{_LEGACY} oe5xrx.stage2=ok", "1", "2")
+        assert commits == []
+        assert statuses[-1]["status"] == "rolled_back"
+        assert self.armed == [] and self.reboots == []
 
     @pytest.mark.parametrize(
         "markers",
@@ -262,6 +326,7 @@ class TestVerifyAndCommitBootMarkerGate:
         statuses, commits, _ = env(markers, "0", "0")
         assert commits == [True]
         assert "rolled_back" not in [s["status"] for s in statuses]
+        assert self.reboots == []
 
     def test_bootloader_rollback_reason_unchanged_by_markers(self, env):
         """(0, N>0) keeps the existing env-based rolled_back reason."""
@@ -269,6 +334,7 @@ class TestVerifyAndCommitBootMarkerGate:
         assert commits == []
         assert "upgrade_available" in statuses[-1]["error_message"]
         assert "oe5xrx" not in statuses[-1]["error_message"]
+        assert self.reboots == []
 
     def test_unreadable_existing_cmdline_rolls_back(self, env, monkeypatch, tmp_path):
         # A directory exists but can't be read as a file -> fail closed.

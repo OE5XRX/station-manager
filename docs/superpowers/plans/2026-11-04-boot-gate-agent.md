@@ -29,6 +29,11 @@ Kernel-cmdline (`/proc/cmdline`), gesetzt von Stufe 1/2:
   Im `(0, 0)`-Retry-Fall ist lokal schon committet — dort kein Gate. Fehlerpfad = bestehender
   Health-Check-Fehlerpfad (`rolled_back` + Grund mit „FAIL" in der Message). Commit-Protokoll
   `(upgrade_available, bootcount)` bleibt unverändert.
+- **Aktiver Rollback (Koordinator-Entscheidung „A", Review-Runde 4):** §5 „gleicher Fehlerpfad"
+  allein rollt nie zurück (kein Reboot; Bootloader wechselt erst bei `bootcount > bootlimit`),
+  §7 HW 3/4 verlangt aber den alten Slot. Daher nur beim Boot-Gate-Fehler: nach `rolled_back`
+  `bootcount=bootlimit` setzen (`arm_trial_rollback`, bootlimit 1–8, sonst fail-safe kein Reboot),
+  `systemctl reboot` + `_shutdown.wait` → bestehender Bootloader-Rollback-Zweig.
 - **Metriken:** `boot.stage2_ok` (1/0, nur wenn Stage2-Marker da), `boot.overlays_failed`
   (Anzahl Namen in `failed:`, 0 bei `ok`, nur wenn Overlays-Marker da). Gruppe `system` (kein
   neuer `GROUPS`-Eintrag ⇒ kein Server-Code). cmdline ändert sich zur Laufzeit nicht ⇒ einmal

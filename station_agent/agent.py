@@ -10,8 +10,9 @@ import sys
 import threading
 import time
 
+from .boot_markers import FAIL_PREFIX as BOOT_FAIL_PREFIX
 from .bootinfo import write_last_ota_result
-from .bootloader import get_bootloader, get_env
+from .bootloader import arm_trial_rollback, get_bootloader, get_env
 from .config import load_config
 from .health_check import run_health_checks
 from .heartbeat import send_heartbeat
@@ -650,6 +651,41 @@ class StationAgent:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("write_last_ota_result failed: %s", exc)
             logger.warning("Update rolled back due to failed health checks")
+            # A failed boot marker repeats on every boot of this slot, so
+            # waiting for bootcount to run out would leave the station on the
+            # broken slot indefinitely (spec §7 HW cases 3/4). Other health
+            # checks keep the passive path (PM inbox #34).
+            if any(m.startswith(BOOT_FAIL_PREFIX) for m in messages):
+                self._reboot_into_previous_slot(bl)
+
+    def _reboot_into_previous_slot(self, bl):
+        """Arm the bootloader's own trial rollback and reboot once.
+
+        Only called while the trial is still open (``upgrade_available=1``),
+        after rolled_back was already reported. Fail-safe: if the rollback
+        can't be armed, don't reboot (that would just retry the broken slot).
+        """
+        if not arm_trial_rollback(bl):
+            logger.error("Boot-gate rollback not armed — staying on this slot, not rebooting")
+            return
+        logger.warning("Boot gate failed: rebooting so the bootloader returns to the old slot")
+        try:
+            subprocess.run(
+                ["systemctl", "reboot"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            # The rollback stays armed: the next reboot, whenever it comes,
+            # returns to the previous slot.
+            logger.error("Boot-gate rollback reboot failed: %s", exc)
+            return
+        # systemctl reboot returns before we're killed; block until systemd's
+        # SIGTERM sets the shutdown event (same pattern as the OTA reboot).
+        if not self._shutdown.wait(timeout=300):
+            logger.error("Boot-gate rollback reboot queued but shutdown signal never came")
 
     def run(self):
         """Load config, set up logging, and run the heartbeat loop."""

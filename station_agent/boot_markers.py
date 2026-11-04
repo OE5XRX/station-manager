@@ -29,6 +29,10 @@ CMDLINE_PATH = "/proc/cmdline"
 # hides /proc/cmdline with ENOENT). Used to tell "no procfs" from "hidden".
 PROCFS_PROBE = "/proc/self/stat"
 
+# Prefix of every failing check_boot_markers() message; the agent keys the
+# active rollback on it.
+FAIL_PREFIX = "Boot FAIL"
+
 STAGE2_KEY = "oe5xrx.stage2"
 OVERLAYS_KEY = "oe5xrx.overlays"
 
@@ -222,7 +226,7 @@ def check_boot_markers(path: str | None = None) -> tuple[bool, str]:
         if os.path.exists(PROCFS_PROBE):
             # procfs is mounted but the cmdline is hidden (e.g. ProcSubset=pid
             # answers ENOENT): fail closed rather than switch the gate off.
-            return False, f"Boot FAIL: cannot read {path}: hidden (procfs mounted)"
+            return False, f"{FAIL_PREFIX}: cannot read {path}: hidden (procfs mounted)"
         # No procfs at all (container/sim): indistinguishable from the legacy
         # path, so don't gate.
         logger.warning("%s not found and no procfs; not gating the commit", path)
@@ -230,12 +234,12 @@ def check_boot_markers(path: str | None = None) -> tuple[bool, str]:
     except OSError as exc:
         # The file exists but can't be read: fail closed rather than silently
         # switching the gate off.
-        return False, f"Boot FAIL: cannot read {path}: {type(exc).__name__}"
+        return False, f"{FAIL_PREFIX}: cannot read {path}: {type(exc).__name__}"
     if markers.legacy:
         return True, "Boot OK: no boot markers (legacy boot path)"
     blockers = markers.commit_blockers()
     if blockers:
-        return False, "Boot FAIL: " + "; ".join(blockers)
+        return False, f"{FAIL_PREFIX}: " + "; ".join(blockers)
     return True, "Boot OK: " + ", ".join(
         f"{k}={v}"
         for k, v in (

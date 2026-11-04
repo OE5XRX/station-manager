@@ -312,3 +312,66 @@ class TestEnvWritesAreAtomic:
         assert (len(cmd) - 1) % 2 == 0, f"uboot cmd has odd arg count: {cmd}"
         pairs = dict(zip(cmd[1::2], cmd[2::2]))
         assert pairs == {"bootcount": "0", "upgrade_available": "0"}
+
+
+def _uboot_next_boot(bootcount: int, bootlimit: int) -> bool:
+    """boot.cmd: ``setexpr bootcount ${bootcount} + 1`` prints hex (no 0x);
+    ``test ${bootcount} -gt ${bootlimit}`` parses decimal (leading digits)."""
+    text = format(bootcount + 1, "x")
+    digits = ""
+    for ch in text:
+        if not ch.isdigit():
+            break
+        digits += ch
+    return int(digits or "0") > bootlimit
+
+
+def _grub_next_boot(bootcount: int, bootlimit: int) -> bool:
+    """oe5xrx-grub.cfg / grub-ab grub.cfg: if/elif chain 0..4 -> +1, else 99."""
+    nxt = bootcount + 1 if bootcount in (0, 1, 2, 3, 4) else 99
+    return nxt > bootlimit
+
+
+class TestArmTrialRollback:
+    @pytest.fixture
+    def calls(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(bootloader, "_run", lambda cmd: calls.append(cmd) or True)
+        return calls
+
+    @pytest.mark.parametrize(("raw", "limit"), [(None, 3), ("", 3), ("3", 3), ("5", 5), ("8", 8)])
+    def test_uboot_sets_bootcount_to_bootlimit(self, monkeypatch, calls, raw, limit):
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: raw)
+        assert bootloader.arm_trial_rollback("uboot") is True
+        assert calls == [["fw_setenv", "bootcount", str(limit)]]
+
+    def test_grub_sets_bootcount_to_bootlimit(self, monkeypatch, calls):
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: "3")
+        assert bootloader.arm_trial_rollback("grub") is True
+        assert calls == [["grub-editenv", bootloader.GRUB_ENV_PATH, "set", "bootcount=3"]]
+
+    @pytest.mark.parametrize("raw", ["0", "9", "10", "x", "-1", "3a", " "])
+    def test_unsupported_bootlimit_writes_nothing(self, monkeypatch, calls, raw):
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: raw)
+        assert bootloader.arm_trial_rollback("uboot") is False
+        assert calls == []
+
+    def test_no_bootloader_cannot_arm(self, monkeypatch, calls):
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: None)
+        assert bootloader.arm_trial_rollback("none") is False
+        assert calls == []
+
+    def test_env_write_failure_propagates(self, monkeypatch):
+        monkeypatch.setattr(bootloader, "get_env", lambda bl, key: "3")
+        monkeypatch.setattr(bootloader, "_run", lambda cmd: False)
+        assert bootloader.arm_trial_rollback("uboot") is False
+
+    @pytest.mark.parametrize("limit", range(1, bootloader._MAX_ARMABLE_BOOTLIMIT + 1))
+    def test_both_boot_scripts_roll_back_on_the_next_boot(self, limit):
+        # bootcount = bootlimit -> after the scripts' increment it exceeds the limit.
+        assert _uboot_next_boot(limit, limit)
+        assert _grub_next_boot(limit, limit)
+
+    def test_hex_increment_is_why_bootlimit_is_capped(self):
+        # 9 + 1 = 0xa -> "a" -> decimal 0: u-boot would NOT roll back.
+        assert not _uboot_next_boot(9, 9)

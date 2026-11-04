@@ -250,6 +250,46 @@ def set_upgrade_pending(bootloader: str, target_slot: str) -> bool:
         return True
 
 
+# Default the boot scripts use when ``bootlimit`` is unset.
+_DEFAULT_BOOTLIMIT = 3
+# Highest bootlimit arm_trial_rollback accepts: boot.cmd increments with
+# ``setexpr`` (hex output), so bootlimit + 1 must stay a single digit to read
+# the same in the decimal ``test -gt``.
+_MAX_ARMABLE_BOOTLIMIT = 8
+
+
+def arm_trial_rollback(bootloader: str) -> bool:
+    """Make the next boot take the bootloader's own trial-rollback branch.
+
+    Sets ``bootcount = bootlimit`` (``upgrade_available`` stays 1). Both boot
+    scripts increment bootcount before deciding and roll back when
+    ``upgrade_available=1 && bootcount > bootlimit``:
+
+    - ``boot.cmd`` (u-boot): ``setexpr bootcount ${bootcount} + 1`` ->
+      bootlimit + 1 (<= 9, so the hex output is a plain digit).
+    - ``oe5xrx-grub.cfg`` / grub-ab ``grub.cfg``: if/elif chain 0..4 -> +1,
+      anything else -> 99; either way > bootlimit for 1..8.
+
+    So one reboot swaps back to the previous slot with no rollback logic of
+    our own. Returns False (and writes nothing) when the bootlimit is not a
+    plain integer in 1..8 or no bootloader is configured.
+    """
+    raw = get_env(bootloader, "bootlimit")
+    limit_str = str(_DEFAULT_BOOTLIMIT) if raw is None or raw == "" else raw.strip()
+    if not limit_str.isdigit() or not 1 <= int(limit_str) <= _MAX_ARMABLE_BOOTLIMIT:
+        logger.error("Cannot arm trial rollback: unsupported bootlimit %r", raw)
+        return False
+    limit = int(limit_str)
+    logger.info("Arming trial rollback on %s bootloader: bootcount=%d", bootloader, limit)
+
+    if bootloader == "grub":
+        return _run([GRUB_ENV_TOOL, GRUB_ENV_PATH, "set", f"bootcount={limit}"])
+    if bootloader == "uboot":
+        return _run([UBOOT_ENV_TOOL, "bootcount", str(limit)])
+    logger.warning("No bootloader configured — cannot arm trial rollback")
+    return False
+
+
 def get_bootloader(config) -> str:
     """Resolve the bootloader backend from config or auto-detect."""
     bl = getattr(config, "bootloader", "auto")
