@@ -1,8 +1,10 @@
 from django.contrib import messages
+from django.contrib.auth.decorators import login_not_required
 from django.db.models import Prefetch, Q
-from django.http import HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils.decorators import method_decorator
 from django.utils.translation import gettext as _
 from django.views import View
 from django.views.generic import DetailView, ListView
@@ -12,6 +14,7 @@ from apps.images import github_releases
 from apps.stations.models import Station
 
 from . import ops, services
+from .mcuboot import is_dev_key
 from .models import (
     Module,
     ModuleAssignmentHistory,
@@ -20,6 +23,7 @@ from .models import (
     ModuleType,
 )
 from .trust import import_blockers
+from .update_status import bulk_update_status, module_update_status
 from .views_convergence import firmware_row, is_int_param
 
 # ---------------------------------------------------------------------------
@@ -104,6 +108,13 @@ class ModuleListView(AreaPermissionMixin, ListView):
             .distinct()
             .order_by("name")
         )
+        # Firmware column: one bulk status pass over the page (constant queries;
+        # reuses the open_assignments prefetch).
+        page = list(ctx["modules"])
+        statuses = bulk_update_status(page)
+        for module in page:
+            module.update_status = statuses[module.pk]
+        ctx["modules"] = ctx["object_list"] = page
         ctx["total_count"] = Module.objects.count()
         ctx["unregistered_count"] = Module.objects.filter(
             registration_status=Module.Registration.UNREGISTERED
@@ -136,6 +147,9 @@ class ModuleDetailView(AreaPermissionMixin, DetailView):
             m.assignments.filter(to_ts__isnull=True).select_related("station").first()
         )
         ctx["firmware"] = firmware_row(m, ctx["current_assignment"])
+        station = ctx["current_assignment"].station if ctx["current_assignment"] else None
+        ctx["update_status"] = module_update_status(m, station=station)
+        ctx["boot_key_is_dev"] = is_dev_key(m.reported_boot_key)
         ctx["audit_logs"] = m.audit_logs.select_related("station", "user").all()[:200]
         # Don't offer `ready` while an assignment is open — it's assignment-derived
         # and set_lifecycle rejects it in that state.
@@ -143,6 +157,42 @@ class ModuleDetailView(AreaPermissionMixin, DetailView):
             has_open_assignment=bool(ctx["current_assignment"])
         )
         return ctx
+
+
+HTMX_STOP_POLLING = 286
+
+
+# The global login gate would redirect before our dispatch runs; we take the
+# anonymous case over ourselves (HTMX -> 286, else AreaPermissionMixin's
+# login redirect), so the view is never reachable without a login.
+@method_decorator(login_not_required, name="dispatch")
+class ModuleUpdateStatusPartialView(AreaPermissionMixin, View):
+    """HTMX partial: the update status pill of one module. Re-polls itself
+    (every 5 s) only while the state is live; ``?compact=1`` keeps the short
+    list/card shape."""
+
+    area = "modules"
+
+    def dispatch(self, request, *args, **kwargs):
+        # Session expired mid-poll: 286 tells htmx to stop polling. A redirect
+        # would be followed and the login page swapped into the pill.
+        if not request.user.is_authenticated and request.headers.get("HX-Request") == "true":
+            return HttpResponse(status=HTMX_STOP_POLLING)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, uid):
+        module = get_object_or_404(Module, uid=uid)
+        compact = request.GET.get("compact") == "1"
+        return render(
+            request,
+            "module_firmware/_update_status_pill.html",
+            {
+                "module": module,
+                "status": module_update_status(module),
+                "compact": compact,
+                "card": compact and request.GET.get("card") == "1",
+            },
+        )
 
 
 class _ModuleActionMixin:

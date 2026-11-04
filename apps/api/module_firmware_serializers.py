@@ -12,13 +12,20 @@ from apps.module_firmware.forms import ModuleFirmwareTargetForm, ModuleTypeForm,
 from apps.module_firmware.models import (
     Module,
     ModuleAssignmentHistory,
+    ModuleFirmwareConvergenceState,
     ModuleFirmwareImportJob,
     ModuleFirmwareRelease,
     ModuleFirmwareTarget,
     ModuleType,
 )
 from apps.module_firmware.trust import import_blockers
-from apps.module_firmware.views_convergence import firmware_row
+from apps.module_firmware.update_status import (
+    REASON_CODES,
+    UpdateState,
+    bulk_update_status,
+    module_update_status,
+)
+from apps.module_firmware.views_convergence import firmware_row, targets_by_type
 
 
 def _username_field():
@@ -109,6 +116,19 @@ class _QuarantineSerializer(serializers.Serializer):
     updated_at = serializers.DateTimeField()
 
 
+class ModuleUpdateStatusSerializer(serializers.Serializer):
+    """``update_status.UpdateStatus`` — the central display state (spec §4).
+    Enum component names are pinned in ``ENUM_NAME_OVERRIDES``."""
+
+    state = serializers.ChoiceField(choices=UpdateState.choices)
+    phase = serializers.ChoiceField(
+        choices=ModuleFirmwareConvergenceState.Phase.choices, allow_blank=True
+    )
+    reason_code = serializers.ChoiceField(choices=REASON_CODES, allow_blank=True)
+    reason_text = serializers.CharField()
+    since = serializers.DateTimeField(allow_null=True)
+
+
 class _Row:
     """Read-only view of ``obj`` plus computed attributes, so declared (typed)
     serializer fields can read API-only facts without mutating the instance
@@ -123,13 +143,22 @@ class _Row:
 
 
 class ModuleListSerializer(serializers.ListSerializer):
-    """Computes the page's active release keys once (one query) instead of an
-    EXISTS per row — same optimisation as the GUI convergence overview."""
+    """Computes the page's active release keys and update statuses once
+    (constant queries) instead of per row — same optimisation as the GUI
+    convergence overview."""
 
     def to_representation(self, data):
         items = list(data.all() if hasattr(data, "all") else data)
-        keys = ops.active_release_keys({m.module_type_id for m in items})
-        return [self.child.to_representation(m, release_keys=keys) for m in items]
+        type_ids = {m.module_type_id for m in items}
+        keys = ops.active_release_keys(type_ids)
+        targets = targets_by_type(type_ids)
+        statuses = bulk_update_status(items)
+        return [
+            self.child.to_representation(
+                m, release_keys=keys, type_targets=targets, statuses=statuses
+            )
+            for m in items
+        ]
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -143,6 +172,7 @@ class ModuleSerializer(serializers.ModelSerializer):
     target_version = serializers.CharField(read_only=True, allow_null=True)
     has_release = serializers.BooleanField(read_only=True)
     quarantine = _QuarantineSerializer(read_only=True, allow_null=True)
+    update_status = ModuleUpdateStatusSerializer(read_only=True)
 
     class Meta:
         model = Module
@@ -165,11 +195,14 @@ class ModuleSerializer(serializers.ModelSerializer):
             "target_version",
             "has_release",
             "quarantine",
+            "update_status",
+            "reported_boot_key",
         ]
 
-    def to_representation(self, instance, release_keys=None):
-        """``release_keys``: page-level set from ModuleListSerializer; None →
-        firmware_row's per-object EXISTS (retrieve)."""
+    def to_representation(self, instance, release_keys=None, type_targets=None, statuses=None):
+        """``release_keys`` / ``type_targets`` / ``statuses``: page-level results
+        from ModuleListSerializer; None → firmware_row's per-object queries and
+        ``module_update_status`` (retrieve)."""
         open_rows = getattr(instance, "open_assignments", None)
         if open_rows is None:
             open_rows = list(
@@ -178,7 +211,9 @@ class ModuleSerializer(serializers.ModelSerializer):
                 ).select_related("station")
             )
         assignment = open_rows[0] if open_rows else None
-        facts = firmware_row(instance, assignment, release_keys=release_keys)
+        facts = firmware_row(
+            instance, assignment, release_keys=release_keys, type_targets=type_targets
+        )
         target = facts["target"]
         row = _Row(
             instance,
@@ -186,6 +221,9 @@ class ModuleSerializer(serializers.ModelSerializer):
             target_version=target.version if target is not None else None,
             has_release=facts["has_release"],
             quarantine=facts["quarantine"],
+            update_status=(
+                statuses[instance.pk] if statuses is not None else module_update_status(instance)
+            ),
         )
         return super().to_representation(row)
 
@@ -228,6 +266,7 @@ class ModuleFirmwareReleaseSerializer(serializers.ModelSerializer):
             "imported_at",
             "imported_by",
             "archived_at",
+            "boot_key_hash",
         ]
         # excludes storage_key, cosign_bundle_key (infra storage)
 

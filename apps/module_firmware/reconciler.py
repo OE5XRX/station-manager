@@ -6,11 +6,14 @@ reported version, never from local flags."""
 import logging
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.stations.models import StationAuditLog
 
+from .mcuboot import KEY_UNKNOWN_HINT, boot_key_mismatch, key_hint_applies, not_updatable_text
 from .models import (
+    DRAIN_TRANSIENT_LIMIT,
     QUARANTINE_ATTEMPT_LIMIT,
     Module,
     ModuleAssignmentHistory,
@@ -21,6 +24,8 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+State = ModuleFirmwareConvergenceState.State
+
 
 def _audit(module, event_type, message, *, station=None):
     """Best-effort dual-subject audit write — never break the state change."""
@@ -30,29 +35,28 @@ def _audit(module, event_type, message, *, station=None):
         logger.warning("reconciler: audit write failed (%s)", event_type, exc_info=True)
 
 
-def effective_target(station, module_type):
-    """Resolve the effective ModuleFirmwareTarget for (station, module_type)
-    with precedence station > group > fleet, honouring the canary gate.
+def resolve_effective_target(station, targets):
+    """Pure: pick the effective target for ``station`` out of ``targets`` (all of
+    one module type) with precedence station > group > fleet, honouring the
+    canary gate. No queries — usable for bulk resolution over prefetched rows.
 
     Returns None when nothing applies (incl. a fleet target whose canary_group
     excludes this station)."""
-    station_t = ModuleFirmwareTarget.objects.filter(
-        module_type=module_type, scope=ModuleFirmwareTarget.Scope.STATION, station=station
-    ).first()
+    group_id = station.rollout_group_id
+    station_t = group_t = fleet_t = None
+    for t in targets:
+        if t.scope == ModuleFirmwareTarget.Scope.STATION:
+            if station_t is None and t.station_id == station.pk:
+                station_t = t
+        elif t.scope == ModuleFirmwareTarget.Scope.GROUP:
+            if group_t is None and group_id is not None and t.group_id == group_id:
+                group_t = t
+        elif t.scope == ModuleFirmwareTarget.Scope.FLEET and fleet_t is None:
+            fleet_t = t
     if station_t is not None:
         return station_t
-
-    group_id = station.rollout_group_id
-    if group_id is not None:
-        group_t = ModuleFirmwareTarget.objects.filter(
-            module_type=module_type, scope=ModuleFirmwareTarget.Scope.GROUP, group_id=group_id
-        ).first()
-        if group_t is not None:
-            return group_t
-
-    fleet_t = ModuleFirmwareTarget.objects.filter(
-        module_type=module_type, scope=ModuleFirmwareTarget.Scope.FLEET
-    ).first()
+    if group_t is not None:
+        return group_t
     if fleet_t is None:
         return None
     # Canary gate: while canary_group is set, a fleet target applies only to
@@ -60,6 +64,20 @@ def effective_target(station, module_type):
     if fleet_t.canary_group_id is not None and fleet_t.canary_group_id != group_id:
         return None
     return fleet_t
+
+
+def effective_target(station, module_type):
+    """Resolve the effective ModuleFirmwareTarget for (station, module_type) —
+    one query + :func:`resolve_effective_target`. Hot path (per heartbeat
+    reconcile and drain): only the targets that can apply to this station are
+    loaded — fleet, its own station target and its own group target."""
+    scope = ModuleFirmwareTarget.Scope
+    applicable = Q(scope=scope.FLEET) | Q(scope=scope.STATION, station=station)
+    if station.rollout_group_id is not None:
+        applicable |= Q(scope=scope.GROUP, group_id=station.rollout_group_id)
+    return resolve_effective_target(
+        station, ModuleFirmwareTarget.objects.filter(applicable, module_type=module_type)
+    )
 
 
 def desired_release_for_module(module):
@@ -107,11 +125,14 @@ def reconcile_module(module):
     # pre-lock the module; ingestion already holds it (a same-transaction no-op).
     Module.objects.select_for_update().filter(pk=module.pk).first()
 
-    # The rollup decisions below compare against Module.firmware_convergence; a
-    # concurrent record_error/status transaction may have advanced it since this
-    # ``module`` object was read, so refresh the denormalized field from the DB
-    # to avoid a stale-value no-op that would leave the rollup out of sync.
-    module.refresh_from_db(fields=["firmware_convergence"])
+    # The decisions below read these fields; a concurrent record_error/status or
+    # inventory transaction may have advanced them since this ``module`` object
+    # was read. Refresh them under the lock: a stale rollup would no-op out of
+    # sync, and a stale matching boot key (inventory just recorded a mismatch)
+    # would release a fresh not_updatable row back to updating.
+    module.refresh_from_db(
+        fields=["firmware_convergence", "reported_boot_key", "last_reported_version", "uid_source"]
+    )
 
     # Resolve the effective target explicitly so we can distinguish "no intent"
     # (no assignment / no target) from "intent exists but no variant-matching
@@ -165,67 +186,283 @@ def reconcile_module(module):
     # resurrect the quarantined instruction by saving its stale state.
     cs = ModuleFirmwareConvergenceState.objects.select_for_update().get(pk=cs.pk)
 
-    # A quarantined row for the still-current target stays quarantined — never
-    # auto-reactivated. A fix is a NEW target release => a different row.
-    if cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
-        _set_convergence_rollup(module, Module.Convergence.QUARANTINED)
+    return _decide(cs, module, desired, station=assignment.station)
+
+
+_STICKY_ROLLUP = {
+    State.QUARANTINED: Module.Convergence.QUARANTINED,
+    State.NOT_UPDATABLE: Module.Convergence.NOT_UPDATABLE,
+    State.FAILED: Module.Convergence.FAILED,
+}
+
+
+def _decide(cs, module, desired, *, station):
+    """State decision for a locked row of the current target (spec §5.2/§5.3).
+    Order matters: reached version > key mismatch > key fixed > sticky >
+    transient cap > updating."""
+    reported = module.last_reported_version or ""
+
+    # The sticky state a not_updatable detour stands in for (§5.2: quarantine
+    # and failed are never released automatically, not even via a key detour).
+    sticky = cs.state_before_not_updatable if cs.state == State.NOT_UPDATABLE else cs.state
+
+    # 1) Reached the desired version: always OK — except quarantine, which is
+    #    only ever released explicitly (unchanged behaviour). Leaving
+    #    not_updatable this way (e.g. bench SWD reflash) closes the
+    #    not_updatable/updatable-again audit pair (§6). Leaving plain failed is
+    #    not audited: no existing event fits (it is no flash success).
+    if reported == desired.version and sticky != State.QUARANTINED:
+        if cs.state == State.NOT_UPDATABLE:
+            _audit(
+                module,
+                StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
+                f"Modul {module.uid}: Zielversion {desired.version} erreicht.",
+                station=station,
+            )
+        cs.state = State.OK
+        cs.transient_failures = 0
+        cs.reason_code = ""
+        cs.state_before_not_updatable = ""
+        cs.phase = ""
+        cs.phase_at = None
+        cs.instructed_at = None
+        cs.save(
+            update_fields=[
+                "state",
+                "transient_failures",
+                "reason_code",
+                "state_before_not_updatable",
+                "phase",
+                "phase_at",
+                "instructed_at",
+                "updated_at",
+            ]
+        )
+        _set_convergence_rollup(module, Module.Convergence.OK)
         return cs
 
-    reported = module.last_reported_version or ""
-    if reported == desired.version:
-        cs.state = ModuleFirmwareConvergenceState.State.OK
+    # 2) Both keys known and different: no flash can ever succeed. The precise
+    #    diagnosis overrides updating, failed and quarantined. Audit on transition.
+    #    Only while a flash is still needed: a (quarantined) module already on the
+    #    desired version — e.g. a same-version bench build — is not "not updatable".
+    #    Ends the open instruction, so after UPDATABLE_AGAIN the next one is audited.
+    if reported != desired.version and boot_key_mismatch(module, desired):
+        if cs.state != State.NOT_UPDATABLE:
+            # Remember an overridden quarantine/failed so the key fix restores it.
+            cs.state_before_not_updatable = (
+                cs.state if cs.state in (State.QUARANTINED, State.FAILED) else ""
+            )
+            cs.state = State.NOT_UPDATABLE
+            cs.reason_code = ModuleFirmwareConvergenceState.ReasonCode.BOOT_KEY_MISMATCH
+            cs.phase = ""
+            cs.phase_at = None
+            cs.instructed_at = None
+            cs.save(
+                update_fields=[
+                    "state",
+                    "state_before_not_updatable",
+                    "reason_code",
+                    "phase",
+                    "phase_at",
+                    "instructed_at",
+                    "updated_at",
+                ]
+            )
+            _audit(
+                module,
+                StationAuditLog.EventType.MODULE_NOT_UPDATABLE,
+                not_updatable_text(module),
+                station=station,
+            )
+        _set_convergence_rollup(module, Module.Convergence.NOT_UPDATABLE)
+        return cs
+
+    # 3) Keys known and equal again (e.g. after a bench reflash): release ONLY
+    #    not_updatable, with fresh counters. Falls through to the updating branch.
+    #    A detour from quarantined/failed restores that sticky state instead
+    #    (counters and last_error_* untouched) — never an automatic release.
+    #    A quarantine detour that already reached the desired version (step 1
+    #    skipped it) is restored the same way.
+    released = False
+    keys_match = bool(module.reported_boot_key) and (
+        module.reported_boot_key == desired.boot_key_hash
+    )
+    if (
+        cs.state == State.NOT_UPDATABLE
+        and cs.state_before_not_updatable
+        and (keys_match or reported == desired.version)
+    ):
+        cs.state = cs.state_before_not_updatable
+        cs.state_before_not_updatable = ""
+        cs.reason_code = (
+            ModuleFirmwareConvergenceState.ReasonCode.TRANSIENT_LIMIT
+            if cs.state == State.FAILED
+            else ""
+        )
+        cs.save(update_fields=["state", "state_before_not_updatable", "reason_code", "updated_at"])
+        from .update_status import state_label  # local: update_status imports reconciler
+
+        trigger = (
+            f"Bootloader-Schlüssel passt wieder zur Release (Ziel {desired.version})"
+            if keys_match
+            else f"Zielversion {desired.version} erreicht"
+        )
+        _audit(
+            module,
+            StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
+            f"Modul {module.uid}: {trigger} – Zustand {state_label(cs.state)} bleibt bestehen.",
+            station=station,
+        )
+    elif cs.state == State.NOT_UPDATABLE and keys_match:
+        cs.state = State.UPDATING
+        cs.attempts = 0
         cs.transient_failures = 0
-        cs.save(update_fields=["state", "transient_failures", "updated_at"])
-        _set_convergence_rollup(module, Module.Convergence.OK)
-    else:
-        cs.state = ModuleFirmwareConvergenceState.State.UPDATING
-        cs.save(update_fields=["state", "updated_at"])
-        _set_convergence_rollup(module, Module.Convergence.UPDATING)
+        cs.reason_code = ""
+        released = True
+        _audit(
+            module,
+            StationAuditLog.EventType.MODULE_UPDATABLE_AGAIN,
+            f"Modul {module.uid}: Bootloader-Schlüssel passt wieder zur Release "
+            f"(Ziel {desired.version}) – Update wird wieder versucht.",
+            station=station,
+        )
+
+    # 4) Sticky states: a heartbeat never resets them.
+    if cs.state in _STICKY_ROLLUP:
+        _set_convergence_rollup(module, _STICKY_ROLLUP[cs.state])
+        return cs
+
+    # 5) An updating row already at the transient cap (e.g. migrated, or counted
+    #    before this rule existed) gives up now instead of being re-offered.
+    if cs.transient_failures >= DRAIN_TRANSIENT_LIMIT:
+        _give_up(cs, module, station=station)
+        return cs
+
+    # 6) Drift: keep trying.
+    cs.state = State.UPDATING
+    fields = ["state", "updated_at"]
+    if released:
+        fields += ["attempts", "transient_failures", "reason_code"]
+    cs.save(update_fields=fields)
+    _set_convergence_rollup(module, Module.Convergence.UPDATING)
     return cs
 
 
+def _give_up(cs, module, *, station=None):
+    """updating -> failed at the transient cap; audits MODULE_FLASH_GAVE_UP once
+    (callers only reach this from a non-failed row). Ends any in-flight attempt."""
+    cs.state = State.FAILED
+    cs.reason_code = ModuleFirmwareConvergenceState.ReasonCode.TRANSIENT_LIMIT
+    cs.phase = ""
+    cs.phase_at = None
+    cs.instructed_at = None
+    cs.save(
+        update_fields=["state", "reason_code", "phase", "phase_at", "instructed_at", "updated_at"]
+    )
+    _set_convergence_rollup(module, Module.Convergence.FAILED)
+    message = (
+        f"Modul {module.uid}: Update nach {cs.transient_failures} Fehlversuchen in Folge "
+        f"abgebrochen (Ziel {cs.target_release.version})."
+    )
+    if cs.last_error_message:
+        message += f" Letzte Meldung: {cs.last_error_message}"
+    _audit(module, StationAuditLog.EventType.MODULE_FLASH_GAVE_UP, message, station=station)
+
+
+def _open_assignment_station(module):
+    """Best-effort station of the module's open assignment (audit subject), or None."""
+    try:
+        a = (
+            ModuleAssignmentHistory.objects.filter(module=module, to_ts__isnull=True)
+            .select_related("station")
+            .first()
+        )
+    except Exception:
+        logger.warning("reconciler: open-assignment lookup failed", exc_info=True)
+        return None
+    return a.station if a is not None else None
+
+
 @transaction.atomic
-def record_error(convergence, error_mode, error_message=""):
+def record_error(convergence, error_mode, error_message="", *, station=None):
     """Apply a reported failure to a ConvergenceState per the quarantine rules:
 
     - rejected  -> immediate quarantine, attempts unchanged (retry never helps);
     - rolled_back -> attempts++, quarantine once attempts >= N;
-    - transient -> no attempts++, stays updating; transient_failures++ (the
-      drain cap, see DRAIN_TRANSIENT_LIMIT — never quarantines).
+    - transient -> no attempts++; transient_failures++ and, at
+      DRAIN_TRANSIENT_LIMIT consecutive failures, ``failed``
+      (reason transient_limit, audit MODULE_FLASH_GAVE_UP).
 
-    Stamps last_attempt_at/last_error_mode and maintains the rollup."""
+    Every mode ends the in-flight attempt: phase, phase_at and instructed_at are
+    cleared. Stamps last_attempt_at/last_error_mode and maintains the rollup.
+
+    The caller must hold the module and convergence row locks (lock order module
+    → assignment → convergence): the "GAVE_UP / QUARANTINED audited once"
+    guarantee relies on ``convergence.state`` and the rollup being current.
+
+    ``station`` is the audit subject; when None (direct callers) it falls back to
+    the module's open-assignment station, if any."""
     convergence.last_error_mode = error_mode
     convergence.last_error_message = error_message
     convergence.last_attempt_at = timezone.now()
-    fields = ["last_error_mode", "last_error_message", "last_attempt_at", "updated_at"]
+    convergence.phase = ""
+    convergence.phase_at = None
+    convergence.instructed_at = None
+    fields = [
+        "last_error_mode",
+        "last_error_message",
+        "last_attempt_at",
+        "phase",
+        "phase_at",
+        "instructed_at",
+        "updated_at",
+    ]
+    give_up = False
 
     if error_mode == ModuleFirmwareConvergenceState.ErrorMode.REJECTED:
-        convergence.state = ModuleFirmwareConvergenceState.State.QUARANTINED
+        convergence.state = State.QUARANTINED
         fields.append("state")
     elif error_mode == ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK:
         convergence.attempts += 1
         fields.append("attempts")
         if convergence.attempts >= QUARANTINE_ATTEMPT_LIMIT:
-            convergence.state = ModuleFirmwareConvergenceState.State.QUARANTINED
+            convergence.state = State.QUARANTINED
             fields.append("state")
     else:
-        # transient: no attempts change, state stays updating. Count it toward the
-        # drain cap so a never-converging station is not locked out forever.
+        # transient: no attempts change. N consecutive transients -> failed (the
+        # verifying/commit resets of transient_failures keep this "in a row").
         convergence.transient_failures += 1
         fields.append("transient_failures")
+        give_up = (
+            convergence.state == State.UPDATING
+            and convergence.transient_failures >= DRAIN_TRANSIENT_LIMIT
+        )
 
     convergence.save(update_fields=fields)
+    module = convergence.module
 
-    if convergence.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
-        was_quarantined = convergence.module.firmware_convergence == Module.Convergence.QUARANTINED
-        _set_convergence_rollup(convergence.module, Module.Convergence.QUARANTINED)
+    needs_audit = give_up or (
+        convergence.state == State.QUARANTINED
+        and module.firmware_convergence != Module.Convergence.QUARANTINED
+    )
+    if needs_audit and station is None:
+        station = _open_assignment_station(module)
+
+    if give_up:
+        _give_up(convergence, module, station=station)
+    elif convergence.state == State.QUARANTINED:
+        was_quarantined = module.firmware_convergence == Module.Convergence.QUARANTINED
+        _set_convergence_rollup(module, Module.Convergence.QUARANTINED)
         if not was_quarantined:
-            _audit(
-                convergence.module,
-                StationAuditLog.EventType.MODULE_QUARANTINED,
-                f"Module {convergence.module.uid} quarantined for target "
-                f"{convergence.target_release.version} ({error_mode}).",
+            message = (
+                f"Module {module.uid} quarantined for target "
+                f"{convergence.target_release.version} ({error_mode})."
             )
+            if key_hint_applies(module, convergence.target_release, error_mode):
+                message += f" {KEY_UNKNOWN_HINT}"
+            _audit(module, StationAuditLog.EventType.MODULE_QUARANTINED, message, station=station)
+    elif convergence.state in _STICKY_ROLLUP:
+        _set_convergence_rollup(module, _STICKY_ROLLUP[convergence.state])
     else:
-        _set_convergence_rollup(convergence.module, Module.Convergence.UPDATING)
+        _set_convergence_rollup(module, Module.Convergence.UPDATING)
     return convergence

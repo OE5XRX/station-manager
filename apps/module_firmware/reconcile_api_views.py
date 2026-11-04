@@ -2,6 +2,7 @@ import logging
 
 from django.contrib.auth.decorators import login_not_required
 from django.db import transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -15,6 +16,7 @@ from apps.control.models import ControlLock
 from apps.stations.models import StationAuditLog
 
 from .drain import ARTIFACT_SIM, DFU_STUCK_PREFIX, executable_artifact
+from .mcuboot import KEY_UNKNOWN_HINT, key_hint_applies
 from .models import Module, ModuleAssignmentHistory, ModuleFirmwareConvergenceState
 from .reconcile_serializers import (
     ReconcileCheckRequestSerializer,
@@ -23,8 +25,68 @@ from .reconcile_serializers import (
     ReconcileStatusSerializer,
 )
 from .reconciler import _audit, reconcile_module, record_error
+from .update_status import state_label
 
 logger = logging.getLogger(__name__)
+
+State = ModuleFirmwareConvergenceState.State
+
+# Rows the reconciler has given up on: no callback may mutate them (a late
+# rolled_back/rejected would otherwise re-run record_error and turn a FAILED /
+# NOT_UPDATABLE row into QUARANTINED). Each rejected call is audited as CONFLICT.
+_GIVEN_UP = (State.QUARANTINED, State.FAILED, State.NOT_UPDATABLE)
+
+
+def _conflict(cs, what, station):
+    _audit(
+        cs.module,
+        StationAuditLog.EventType.MODULE_FLASH_CONFLICT,
+        f"Modul {cs.module.uid}: {what} abgelehnt – Zustand {state_label(cs.state)}.",
+        station=station,
+    )
+    return Response(
+        {"detail": f"Convergence is {cs.state}; no updates accepted."},
+        status=status.HTTP_409_CONFLICT,
+    )
+
+
+_E = StationAuditLog.EventType
+# Flash-lifecycle events that bound an attempt for the commit dedupe below.
+_FLASH_LIFECYCLE = (
+    _E.MODULE_FLASH_INSTRUCTED,
+    _E.MODULE_FLASH_STARTED,
+    _E.MODULE_FLASH_PHASE,
+    _E.MODULE_FLASH_SUCCESS,
+    _E.MODULE_FLASH_FAILED,
+    _E.MODULE_FLASH_ROLLED_BACK,
+    _E.MODULE_FLASH_REJECTED,
+    _E.MODULE_FLASH_GAVE_UP,
+    _E.MODULE_FLASH_RETRY,
+    _E.MODULE_FLASH_CONFLICT,
+)
+
+
+def _is_repeated_commit(module, success_message):
+    """True if the module's newest flash-lifecycle audit entry is already the
+    SUCCESS for this very version (spec §11.2: a re-sent identical commit, e.g.
+    from the agent's marker recovery, logs no second SUCCESS). Row state cannot
+    tell first from repeated commit — a heartbeat may have reconciled the row to
+    OK before the first commit lands — so the audit trail is the attempt
+    boundary: any new INSTRUCTED/STARTED/... entry in between means a new
+    attempt, whose commit is logged again. One query (module FK index)."""
+    newest = (
+        StationAuditLog.objects.filter(module=module, event_type__in=_FLASH_LIFECYCLE)
+        .order_by("-created_at", "-pk")
+        .values_list("event_type", "message")
+        .first()
+    )
+    return newest == (_E.MODULE_FLASH_SUCCESS, success_message)
+
+
+def _with_key_hint(message, cs, error_mode):
+    if key_hint_applies(cs.module, cs.target_release, error_mode):
+        return f"{message} {KEY_UNKNOWN_HINT}"
+    return message
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -89,14 +151,56 @@ class ReconcileCheckView(APIView):
             # for EVERY drifted module, so an existence check would mark all of
             # them "pre-existing" and degenerate the preference to slot order.
             if cs.last_attempt_at is not None:
-                resume = resume or instruction
+                resume = resume or (instruction, cs)
             else:
-                first_drift = first_drift or instruction
+                first_drift = first_drift or (instruction, cs)
 
         chosen = resume or first_drift
         if chosen is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
-        return Response(ReconcileCheckResponseSerializer(chosen).data)
+        instruction, cs = chosen
+        if not self._mark_instructed(cs, instruction, station):
+            # The row left UPDATING after reconcile_module returned (concurrent
+            # inventory -> not_updatable, terminal status -> failed): never hand
+            # out the stale instruction — the agent does not abort on a 409.
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(ReconcileCheckResponseSerializer(instruction).data)
+
+    @staticmethod
+    def _mark_instructed(cs, instruction, station):
+        """Audit INSTRUCTED once per attempt (spec §5.4: once since the last
+        status POST / commit). One conditional UPDATE decides, so concurrent polls
+        cannot both win. It matches when no instruction is open (``instructed_at``
+        NULL — cleared by a terminal status, commit, retry or not_updatable) OR a
+        phase is set: the agent only polls check with no flash in flight, so a
+        check after a progress POST is a restarted attempt (agent crash/reboot
+        mid-download) — it is audited again and the stale phase is cleared, so
+        the next progress POST logs STARTED. ``state=UPDATING`` guards against a
+        heartbeat flipping the row between the reconcile and this mark.
+
+        Returns False when the row is no longer UPDATING (the instruction is
+        stale and must not be handed out); True otherwise, including the plain
+        dedup case (still updating, already instructed, no phase)."""
+        rows = (
+            ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk, state=State.UPDATING)
+            .filter(Q(instructed_at__isnull=True) | ~Q(phase=""))
+            .update(instructed_at=timezone.now(), phase="", phase_at=None)
+        )
+        if rows == 1:
+            _audit(
+                cs.module,
+                StationAuditLog.EventType.MODULE_FLASH_INSTRUCTED,
+                f"Modul {instruction['module_uid']}: Update-Anweisung auf "
+                f"{instruction['target_version']} ausgegeben ({instruction['artifact']}).",
+                station=station,
+            )
+            return True
+        current = (
+            ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk)
+            .values_list("state", flat=True)
+            .first()
+        )
+        return current == State.UPDATING
 
     def _instruction(self, module, slot, cs, artifact):
         release = cs.target_release
@@ -193,13 +297,14 @@ class ReconcileStatusUpdateView(APIView):
                 .get(pk=convergence_id)
             )
 
-            # Terminal rows accept no further callbacks: a quarantined row must
-            # never be reactivated, and after a successful commit sets OK a
-            # delayed rejected/rolled_back/progress callback must not alter it.
-            if cs.state in (
-                ModuleFirmwareConvergenceState.State.QUARANTINED,
-                ModuleFirmwareConvergenceState.State.OK,
-            ):
+            # Terminal rows accept no further callbacks: a given-up row
+            # (quarantined / failed / not_updatable) must never be reactivated or
+            # re-judged (audited as CONFLICT), and after a successful commit sets
+            # OK a delayed rejected/rolled_back/progress callback must not alter
+            # it (a benign late callback, not audited).
+            if cs.state in _GIVEN_UP:
+                return _conflict(cs, f"Status '{new_status}'", station)
+            if cs.state == State.OK:
                 return Response(
                     {"detail": "Convergence is terminal; no updates accepted."},
                     status=status.HTTP_409_CONFLICT,
@@ -207,14 +312,24 @@ class ReconcileStatusUpdateView(APIView):
 
             error_mode = _STATUS_TO_ERROR.get(new_status)
             if error_mode is not None:
-                record_error(cs, error_mode, error_message=error_message)
+                # Cause before consequence: the outcome audit precedes the
+                # GAVE_UP / QUARANTINED audit that record_error may write.
+                # Spec §5.4/§6: logged with the (serializer-truncated) error text,
+                # so different failures stay distinguishable in the trail.
+                message = (
+                    f"Module {cs.module.uid} flash {new_status} "
+                    f"(target {cs.target_release.version})."
+                )
+                if error_message:
+                    message += f" Error: {error_message}"
                 _audit(
                     cs.module,
                     _STATUS_TO_AUDIT[new_status],
-                    f"Module {cs.module.uid} flash {new_status} "
-                    f"(target {cs.target_release.version}).",
+                    _with_key_hint(message, cs, error_mode),
                     station=station,
                 )
+                # record_error also ends the attempt (clears phase, instructed_at).
+                record_error(cs, error_mode, error_message=error_message, station=station)
             else:
                 # progress (downloading/flashing/verifying). ``verifying`` means the
                 # image was written: real progress, so the drain's transient cap
@@ -227,16 +342,35 @@ class ReconcileStatusUpdateView(APIView):
                 if cs.last_error_message.startswith(DFU_STUCK_PREFIX):
                     cs.last_error_message = ""
                     cs.save(update_fields=["last_error_message", "updated_at"])
-                if cs.last_attempt_at is None:
-                    _audit(
-                        cs.module,
-                        StationAuditLog.EventType.MODULE_FLASH_STARTED,
-                        f"Module {cs.module.uid} flash started "
-                        f"(target {cs.target_release.version}).",
-                        station=station,
-                    )
-                    cs.last_attempt_at = timezone.now()
-                    cs.save(update_fields=["last_attempt_at", "updated_at"])
+                # Phase tracking: audit per phase CHANGE only. The first phase of
+                # an attempt (phase still "") is the attempt start (STARTED); later
+                # changes are PHASE. A repeated phase writes and logs nothing.
+                old_phase = cs.phase
+                if new_status != old_phase:
+                    now = timezone.now()
+                    cs.phase = new_status
+                    cs.phase_at = now
+                    fields = ["phase", "phase_at", "updated_at"]
+                    if old_phase == "":
+                        _audit(
+                            cs.module,
+                            StationAuditLog.EventType.MODULE_FLASH_STARTED,
+                            f"Module {cs.module.uid} flash started "
+                            f"(target {cs.target_release.version}).",
+                            station=station,
+                        )
+                        # last_attempt_at marks the row as "resume" for check.
+                        if cs.last_attempt_at is None:
+                            cs.last_attempt_at = now
+                            fields.append("last_attempt_at")
+                    else:
+                        _audit(
+                            cs.module,
+                            StationAuditLog.EventType.MODULE_FLASH_PHASE,
+                            f"Modul {cs.module.uid}: Phase {old_phase} → {new_status}.",
+                            station=station,
+                        )
+                    cs.save(update_fields=fields)
 
         return Response({"status": "ok"})
 
@@ -302,36 +436,41 @@ class ReconcileCommitView(APIView):
                 .get(pk=convergence_id)
             )
 
-            # A QUARANTINED row has been GIVEN UP — a delayed commit against it must
-            # not be reported as success (the real bug: the API would otherwise emit
-            # MODULE_FLASH_SUCCESS for a rejected instruction). Only quarantine is
-            # guarded here. Unlike the STATUS endpoint (which also rejects OK, since
+            # A given-up row (quarantined / failed / not_updatable) — a delayed
+            # commit against it must not be reported as success (the real bug: the
+            # API would otherwise emit MODULE_FLASH_SUCCESS for a rejected
+            # instruction) nor re-judged as rolled_back; each rejected call is
+            # audited as CONFLICT. Only given-up states are guarded here. Unlike
+            # the STATUS endpoint (which also rejects OK, since
             # a late rejected/rolled_back callback must not mutate a converged row),
             # an OK row at commit time means the module already converged (e.g. a
             # heartbeat reported the target version before the agent's commit
             # landed). The commit is then a legitimate idempotent confirmation and
             # must proceed to 200 — conflating "already succeeded" with "given up"
             # would make a successful flash look rejected to the agent / Teilbereich D.
-            if cs.state == ModuleFirmwareConvergenceState.State.QUARANTINED:
-                return Response(
-                    {"detail": "Convergence is quarantined; no updates accepted."},
-                    status=status.HTTP_409_CONFLICT,
-                )
+            if cs.state in _GIVEN_UP:
+                return _conflict(cs, f"Commit '{version}'", station)
 
             expected = cs.target_release.version
             if version != expected:
                 # Bootloader rollback / version mismatch: treat as rolled_back,
-                # deterministic, no retry (same policy as record_error).
+                # deterministic, no retry (same policy as record_error). Audit the
+                # cause before record_error's possible QUARANTINED audit.
+                _audit(
+                    cs.module,
+                    StationAuditLog.EventType.MODULE_FLASH_ROLLED_BACK,
+                    _with_key_hint(
+                        f"Module {cs.module.uid} commit rejected: reports {version!r}, "
+                        f"target {expected!r}.",
+                        cs,
+                        ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
+                    ),
+                    station=station,
+                )
                 record_error(
                     cs,
                     ModuleFirmwareConvergenceState.ErrorMode.ROLLED_BACK,
                     error_message=(f"Commit version {version!r} != target {expected!r}."),
-                )
-                _audit(
-                    cs.module,
-                    StationAuditLog.EventType.MODULE_FLASH_ROLLED_BACK,
-                    f"Module {cs.module.uid} commit rejected: reports {version!r}, "
-                    f"target {expected!r}.",
                     station=station,
                 )
                 return Response(
@@ -345,15 +484,29 @@ class ReconcileCommitView(APIView):
             # heartbeat has caught up, reconcile_module lands OK; otherwise it
             # stays updating and the next check re-offers it. reconcile_module
             # maintains both the row state and the Module rollup itself.
-            _audit(
-                cs.module,
-                StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
-                f"Module {cs.module.uid} committed version {version}.",
-                station=station,
+            success_message = f"Module {cs.module.uid} committed version {version}."
+            if not _is_repeated_commit(cs.module, success_message):
+                _audit(
+                    cs.module,
+                    StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
+                    success_message,
+                    station=station,
+                )
+            # The attempt is over: reset the drain cap and the in-flight
+            # bookkeeping (phase / instruction marker) before deriving the state.
+            cs.transient_failures = 0
+            cs.phase = ""
+            cs.phase_at = None
+            cs.instructed_at = None
+            cs.save(
+                update_fields=[
+                    "transient_failures",
+                    "phase",
+                    "phase_at",
+                    "instructed_at",
+                    "updated_at",
+                ]
             )
-            if cs.transient_failures:
-                cs.transient_failures = 0
-                cs.save(update_fields=["transient_failures", "updated_at"])
             reconcile_module(cs.module)
 
         return Response({"status": "ok"})

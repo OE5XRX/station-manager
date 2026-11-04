@@ -159,20 +159,22 @@ def test_check_204_without_capabilities(client, station_with_key, fm):
 
 
 @pytest.mark.django_db
-def test_check_still_offers_instruction_past_transient_cap(client, station_with_key, fm):
-    """The drain cap only ends the lock-out; the agent keeps getting the instruction."""
+def test_check_stops_past_transient_cap(client, station_with_key, fm):
+    """Spec §5.3 (variant a): a row at the transient cap becomes FAILED and the
+    check stops handing out the instruction (no silent opportunistic retry)."""
     from apps.module_firmware.models import DRAIN_TRANSIENT_LIMIT, ModuleFirmwareConvergenceState
 
     station, priv = station_with_key
     _caps(station)
     rel = _release(fm)
     m = _module(fm, station)
-    ModuleFirmwareConvergenceState.objects.create(
+    cs = ModuleFirmwareConvergenceState.objects.create(
         module=m, target_release=rel, transient_failures=DRAIN_TRANSIENT_LIMIT
     )
     resp = _check(client, station, priv)
-    assert resp.status_code == 200
-    assert resp.json()["module_uid"] == "U1"
+    assert resp.status_code == 204
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.FAILED
 
 
 def test_executable_artifact_predicate_shared():

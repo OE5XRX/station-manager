@@ -60,7 +60,7 @@
   <section class="panel mb-24">
     <div class="panel-head">
       <div class="panel-title"><span class="dot"></span>{% trans "Firmware" %}</div>
-      {% include "module_firmware/_convergence_pill.html" with module=module %}
+      {% include "module_firmware/_update_status_pill.html" with module=module status=update_status can=can csrf_token=csrf_token only %}
     </div>
     <div class="panel-body">
       <div class="fw-detail-grid">
@@ -76,6 +76,13 @@
           <div class="summary-key mb-8">{% trans "Target" %}</div>
           {% include "module_firmware/_target_cell.html" with fw=firmware module=module %}
           <a href="{% url 'module_firmware:target_list' %}" class="fw-hint">{% trans "Manage firmware targets" %}</a>
+        </div>
+        <div>
+          <div class="summary-key mb-8">Bootloader-Schlüssel</div>
+          <span class="fw-target">
+            <span class="t-mono">{{ module.reported_boot_key|default:"—" }}</span>
+            {% if boot_key_is_dev %}<span class="pill pill-warn" title="Der Bootloader nutzt den öffentlich bekannten Entwicklungs-Schlüssel">Dev-Key</span>{% endif %}
+          </span>
         </div>
       </div>
       {% if firmware.quarantine %}

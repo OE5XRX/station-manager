@@ -108,6 +108,21 @@ def _teardown(master_fd, slave_fd, stop, t):
 # --- probe_slot -----------------------------------------------------------
 
 
+def test_probe_slot_passes_identity_boot_key_through(tmp_path):
+    spec = {
+        **FM_DESCRIBE,
+        "identity": {**FM_DESCRIBE["identity"], "boot_key": "e30466f6b8470c1f"},
+    }
+    master_fd, slave_fd, stop, t = _pty_with_firmware({"fm": spec})
+    try:
+        link = tmp_path / "control"
+        link.symlink_to(os.ttyname(slave_fd))
+        modules = slot_discovery.probe_slot(str(link), timeout=3.0)
+    finally:
+        _teardown(master_fd, slave_fd, stop, t)
+    assert modules[0]["identity"]["boot_key"] == "e30466f6b8470c1f"
+
+
 def test_probe_slot_lists_and_describes(tmp_path):
     master_fd, slave_fd, stop, t = _pty_with_firmware({"fm": FM_DESCRIBE})
     try:

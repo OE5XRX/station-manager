@@ -24,6 +24,16 @@
   // Agent events that toggle a module's firmware-updating state (Teilbereich D).
   var FW_STARTED = "firmware_update_started";
   var FW_FINISHED = "firmware_update_finished";
+  // Dispatched on <body> when a module leaves the updating state; the card's
+  // server-side update pill (HTMX) re-fetches on it instead of waiting for its
+  // next poll, so it never shows a pre-flash state after the strip disappears.
+  var FW_STATUS_REFRESH = "fw-status-refresh";
+
+  function notifyFwSettled() {
+    if (typeof document === "undefined" || !document.body) return;
+    if (typeof CustomEvent !== "function") return;
+    document.body.dispatchEvent(new CustomEvent(FW_STATUS_REFRESH));
+  }
 
   function controlPanel() {
     return {
@@ -142,6 +152,7 @@
         this._caps = {};
         this._capNames = {};
         this.online = {};
+        var wasUpdating = this.updating;
         this.updating = {};
         this._boundsCache = {};
         for (var i = 0; i < slots.length; i++) {
@@ -178,6 +189,14 @@
               }
             }
             if (this.ptt[mkey] === undefined) this.ptt[mkey] = "armed";
+          }
+        }
+        // A module that was updating and no longer is (finished, or gone from
+        // the inventory) -> let the card update pills re-fetch the server state.
+        for (var wkey2 in wasUpdating) {
+          if (wasUpdating[wkey2] && !this.updating[wkey2]) {
+            notifyFwSettled();
+            break;
           }
         }
         this._publishControlStore();
@@ -445,7 +464,9 @@
             this._unkeyModule(mkey, false);
             break;
           case FW_FINISHED:
+            var settled = !!this.updating[mkey];
             delete this.updating[mkey];
+            if (settled) notifyFwSettled();
             if (msg.detail && msg.detail.result === "success") delete this.errors[mkey];
             break;
           default:

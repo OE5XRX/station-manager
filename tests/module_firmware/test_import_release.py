@@ -1,4 +1,5 @@
 import hashlib
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -7,6 +8,7 @@ from django.utils import timezone
 from apps.images.cosign import CosignVerificationError
 from apps.images.github_releases import GitHubRelease
 from apps.module_firmware import releases, storage
+from apps.module_firmware.mcuboot import DEV_KEY_HASH_PREFIX
 from apps.module_firmware.models import ModuleFirmwareImportJob, ModuleFirmwareRelease, ModuleType
 
 
@@ -387,3 +389,52 @@ def test_untrusted_source_repo_fails_before_download(fm):
     fetch.assert_not_called()
     dl.assert_not_called()
     vbi.assert_not_called()
+
+
+_DEV_BLOB = (Path(__file__).parent.parent / "fixtures" / "mcuboot" / "dev-signed.bin").read_bytes()
+
+
+def _import_vhf(fm, blob):
+    job = ModuleFirmwareImportJob.objects.create(
+        module_type=fm, source_repo=fm.firmware_repo, tag="26.07.04-01"
+    )
+    gh = GitHubRelease(
+        tag="26.07.04-01",
+        html_url="",
+        is_latest=True,
+        asset_names=frozenset(
+            {"fm-sa818-vhf.signed.bin", "fm-sa818-vhf.signed.bin.bundle", "SHA256SUMS"}
+        ),
+    )
+
+    def dl(url):
+        name = url.rsplit("/", 1)[-1]
+        if name == "SHA256SUMS":
+            return f"{hashlib.sha256(blob).hexdigest()}  fm-sa818-vhf.signed.bin\n".encode()
+        if name.endswith(".signed.bin"):
+            return blob
+        return b"bundle"
+
+    with (
+        mock.patch("apps.module_firmware.releases.fetch_release_by_tag", return_value=gh),
+        mock.patch("apps.module_firmware.releases._download", side_effect=dl),
+        mock.patch("apps.module_firmware.releases.verify_blob_identity"),
+        mock.patch("apps.module_firmware.releases.storage.upload_bytes"),
+    ):
+        releases.import_release_tag(job)
+    job.refresh_from_db()
+    return job
+
+
+@pytest.mark.django_db
+def test_import_stores_boot_key_hash(fm):
+    job = _import_vhf(fm, _DEV_BLOB)
+    assert job.status == ModuleFirmwareImportJob.Status.READY
+    assert job.release.boot_key_hash == DEV_KEY_HASH_PREFIX
+
+
+@pytest.mark.django_db
+def test_import_non_mcuboot_blob_leaves_hash_empty(fm):
+    job = _import_vhf(fm, b"signed-vhf")
+    assert job.status == ModuleFirmwareImportJob.Status.READY
+    assert job.release.boot_key_hash == ""

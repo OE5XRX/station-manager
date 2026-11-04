@@ -1,0 +1,51 @@
+{% comment %}
+Firmware update status of one module (update_status.UpdateStatus).
+Expects `module` and `status`. Optional flags:
+- `compact`: short label, full reason as tooltip (module list, station card).
+  Without it (module detail) the full reason line sits next to the pill.
+- `nopoll`: never poll (module list: a reload is enough).
+- `card`: station card. Always polls: every 5 s while live, otherwise every
+  30 s, plus right away on the `fw-status-refresh` body event that
+  control-panel.js fires when a module leaves the live flash state. A card on
+  an open control panel must never freeze on a pre-flash or settled state.
+- `can`, `csrf_token`: the detail variant (neither compact nor card) renders
+  the "Erneut versuchen" form for a failed module to modules.manage users, so
+  a poll that lands on "Fehler" brings the button along without a reload.
+
+Root element: <span> for compact/card (inline contexts), <div> for the detail
+variant, which may carry the block-level retry form (a <span> root would be an
+invalid content model). .fw-status is inline-flex, so the layout is the same.
+
+Outside the card, the root element re-fetches itself every 5 s only while the
+state can still change on its own (status.is_live); a settled state renders
+without hx-* attributes, so the polling stops by itself.
+
+Every polling pill carries data-poll-visible-only: app.js cancels its requests
+while the tab is hidden, so a background tab (WAITING can last days) never
+keeps the rolling session alive. No htmx trigger filter: htmx evals those via
+Function(), which fails open under a CSP without unsafe-eval.
+{% endcomment %}
+{% with s=status.state %}
+<{% if compact or card %}span{% else %}div{% endif %} class="fw-status{% if compact %} fw-status-compact{% endif %}"
+      {% if card %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}?compact=1&amp;card=1"
+      hx-trigger="{% if status.is_live %}every 5s{% else %}every 30s{% endif %}, fw-status-refresh from:body"
+      hx-swap="outerHTML" data-poll-visible-only{% elif status.is_live and not nopoll %}hx-get="{% url 'module_firmware:module_update_status' module.uid %}{% if compact %}?compact=1{% endif %}"
+      hx-trigger="every 5s"
+      hx-swap="outerHTML" data-poll-visible-only{% endif %}
+      {% if compact %}title="{{ status.reason_text }}"{% endif %}>
+  <span class="pill {% if s == 'current' %}pill-online{% elif s == 'running' or s == 'pending' %}pill-updating{% elif s == 'failed' or s == 'quarantined' %}pill-error{% elif s == 'not_updatable' %}pill-warn{% else %}pill-muted{% endif %}{% if s == 'running' %} fw-status-running{% endif %}">{% if s != 'no_target' %}<span class="dot"></span>{% endif %}{% if compact and s == 'running' %}{{ status.reason_text }}{% else %}{{ status.short_label }}{% endif %}</span>
+  {% if not compact and status.reason_text != status.short_label %}<span class="fw-status-reason">{{ status.reason_text }}</span>{% endif %}
+  {% if not compact and not card and s == "failed" and can.modules.manage %}
+    <div class="fw-retry">
+      <div class="fw-retry-msg">Automatische Versuche sind ausgesetzt.</div>
+      <form method="post"
+            action="{% url 'module_firmware:module_retry_update' module.uid %}"
+            class="fw-quarantine-form"
+            data-confirm="Update für {{ module.uid }} erneut versuchen?">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm">Erneut versuchen</button>
+      </form>
+    </div>
+  {% endif %}
+</{% if compact or card %}span{% else %}div{% endif %}>
+{% endwith %}

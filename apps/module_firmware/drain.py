@@ -73,10 +73,12 @@ def pending_updates(station) -> list[ModuleFirmwareConvergenceState]:
     A row counts only if its module is open-assigned to the station, its target
     is still the module's desired release (a stale row for a superseded target
     is ignored), the module's artifact kind is among the agent's reported
-    backends and the desired release carries that artifact. Quarantined / OK
-    rows never count, nor rows that hit ``DRAIN_TRANSIENT_LIMIT`` consecutive
-    transient failures (convergence evidently not possible right now; the check
-    still offers the instruction, only the lock-out ends).
+    backends and the desired release carries that artifact. Only UPDATING rows
+    count: quarantined, failed, not_updatable and OK rows never do. A row that
+    hits ``DRAIN_TRANSIENT_LIMIT`` consecutive transient failures becomes
+    ``failed`` in the reconciler (and the check stops offering it); the
+    ``transient_failures`` filter here is only a harmless guard for a row that
+    has not been reconciled since reaching the cap.
     """
     backends = station.module_ota_backends()
     if not backends:
@@ -159,8 +161,9 @@ def draining_stations() -> list[tuple[object, DrainStatus]]:
     """Online stations whose drain is active, longest waiting first.
 
     Cheap by construction: only stations with an open assignment of a module that
-    has an UPDATING convergence row below the transient limit are candidates (one
-    query); the full ``drain_status`` runs only for those.
+    has an UPDATING convergence row are candidates (one query; the transient-limit
+    filter is a guard — rows at the cap become ``failed`` in the reconciler); the
+    full ``drain_status`` runs only for those.
     """
     from apps.stations.models import Station
 

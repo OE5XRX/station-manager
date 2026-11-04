@@ -1,6 +1,7 @@
 import pytest
 
 from apps.module_firmware.models import (
+    DRAIN_TRANSIENT_LIMIT,
     QUARANTINE_ATTEMPT_LIMIT,
     Module,
     ModuleAssignmentHistory,
@@ -147,7 +148,8 @@ def test_transient_does_not_count(fm, station_factory):
     st = station_factory()
     m = _module_with_target(fm, st, version="26.09.10-01")
     cs = reconcile_module(m)
-    for _ in range(5):
+    # Below the transient cap: at DRAIN_TRANSIENT_LIMIT the row becomes FAILED (Task 4).
+    for _ in range(DRAIN_TRANSIENT_LIMIT - 1):
         cs = record_error(cs, ModuleFirmwareConvergenceState.ErrorMode.TRANSIENT)
     assert cs.attempts == 0
     assert cs.state == ModuleFirmwareConvergenceState.State.UPDATING

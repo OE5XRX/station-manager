@@ -409,6 +409,13 @@ class StationAuditLog(models.Model):
         MODULE_QUARANTINED = "module_quarantined", _("Module Quarantined")
         FIRMWARE_TARGET_REMOVED = "firmware_target_removed", _("Firmware Target Removed")
         MODULE_QUARANTINE_RELEASED = "module_quarantine_released", _("Module Quarantine Released")
+        MODULE_FLASH_INSTRUCTED = "module_flash_instructed", _("Module Flash Instructed")
+        MODULE_FLASH_PHASE = "module_flash_phase", _("Module Flash Phase")
+        MODULE_FLASH_CONFLICT = "module_flash_conflict", _("Module Flash Conflict")
+        MODULE_FLASH_GAVE_UP = "module_flash_gave_up", _("Module Flash Gave Up")
+        MODULE_NOT_UPDATABLE = "module_not_updatable", _("Module Not Updatable")
+        MODULE_UPDATABLE_AGAIN = "module_updatable_again", _("Module Updatable Again")
+        MODULE_FLASH_RETRY = "module_flash_retry", _("Module Flash Retry")
         REBOOT = "reboot", _("Reboot")
         ROLLOUT_GROUP_CHANGED = "rollout_group_changed", _("Rollout Group Changed")
 

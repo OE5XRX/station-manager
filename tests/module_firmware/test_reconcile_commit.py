@@ -160,3 +160,119 @@ def test_commit_success_resets_transient_failures(client, station_with_key, fm):
     assert resp.status_code == 200
     cs.refresh_from_db()
     assert cs.transient_failures == 0
+
+
+# --- Task 5: 409 + CONFLICT on given-up rows ------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("state", ["failed", "not_updatable", "quarantined"])
+def test_commit_409_on_given_up_row_logs_conflict(client, station_with_key, fm, state):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    ModuleFirmwareConvergenceState.objects.filter(pk=cs.pk).update(state=state)
+    for version in ("26.09.15-01", "26.09.99-99"):
+        resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": version})
+        assert resp.status_code == 409
+    cs.refresh_from_db()
+    assert cs.state == state
+    assert cs.last_error_mode == ""
+    conflicts = StationAuditLog.objects.filter(
+        module=m, event_type=StationAuditLog.EventType.MODULE_FLASH_CONFLICT
+    )
+    assert conflicts.count() == 2
+    assert all(c.station == station for c in conflicts)
+    label = {"failed": "Fehler", "not_updatable": "Nicht updatebar", "quarantined": "Quarantäne"}
+    assert conflicts.order_by("pk")[0].message == (
+        f"Modul U1: Commit '26.09.15-01' abgelehnt – Zustand {label[state]}."
+    )
+    assert not StationAuditLog.objects.filter(
+        module=m,
+        event_type__in=[
+            StationAuditLog.EventType.MODULE_FLASH_SUCCESS,
+            StationAuditLog.EventType.MODULE_FLASH_ROLLED_BACK,
+        ],
+    ).exists()
+
+
+# ------------------------------------------- SUCCESS dedupe (spec §11.2, Task 10)
+
+SUCCESS = StationAuditLog.EventType.MODULE_FLASH_SUCCESS
+TARGET = "26.09.15-01"
+
+
+def _successes(m):
+    return StationAuditLog.objects.filter(module=m, event_type=SUCCESS).count()
+
+
+def _commit(client, priv, station, cs):
+    resp = _post(client, priv, station.pk, {"convergence_id": cs.pk, "version": TARGET})
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def _reported_target(m):
+    m.last_reported_version = TARGET
+    m.save(update_fields=["last_reported_version"])
+
+
+@pytest.mark.django_db
+def test_repeated_commit_logs_success_once(client, station_with_key, fm):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    _reported_target(m)
+    _commit(client, priv, station, cs)
+    _commit(client, priv, station, cs)  # re-sent (agent marker recovery)
+    assert _successes(m) == 1
+    cs.refresh_from_db()
+    assert cs.state == ModuleFirmwareConvergenceState.State.OK
+
+
+@pytest.mark.django_db
+def test_first_commit_on_row_already_ok_logs_success(client, station_with_key, fm):
+    # The post-flash heartbeat reconciled the row to OK before the commit landed:
+    # the first commit is still the attempt's one SUCCESS; a repeat adds none.
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    _reported_target(m)
+    cs.state = ModuleFirmwareConvergenceState.State.OK
+    cs.save(update_fields=["state"])
+    _commit(client, priv, station, cs)
+    assert _successes(m) == 1
+    _commit(client, priv, station, cs)
+    assert _successes(m) == 1
+
+
+@pytest.mark.django_db
+def test_commit_after_new_instruction_logs_success_again(client, station_with_key, fm):
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    _reported_target(m)
+    _commit(client, priv, station, cs)
+    # A new attempt (fresh INSTRUCTED) is an attempt boundary.
+    StationAuditLog.log(
+        station=station,
+        module=m,
+        event_type=StationAuditLog.EventType.MODULE_FLASH_INSTRUCTED,
+        message=f"Modul {m.uid}: Update-Anweisung auf {TARGET} ausgegeben (dfu).",
+    )
+    _commit(client, priv, station, cs)
+    assert _successes(m) == 2
+
+
+@pytest.mark.django_db
+def test_commit_dedupe_ignores_non_lifecycle_entries(client, station_with_key, fm):
+    # Unrelated module events (e.g. discovery) between two identical commits do
+    # not open a new attempt.
+    station, priv = station_with_key
+    m, cs = _setup(fm, station)
+    _reported_target(m)
+    _commit(client, priv, station, cs)
+    StationAuditLog.log(
+        station=station,
+        module=m,
+        event_type=StationAuditLog.EventType.MODULE_DISCOVERED,
+        message="discovered",
+    )
+    _commit(client, priv, station, cs)
+    assert _successes(m) == 1
