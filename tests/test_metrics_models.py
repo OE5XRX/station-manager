@@ -133,3 +133,28 @@ def test_station_telemetry_metrics_fields(station):
     tel.save()
     tel.refresh_from_db()
     assert tel.metrics["cpu.temp_c"]["avg"] == 1.0
+
+
+def test_threshold_state_admin_changelist_no_n_plus_one(admin_client, station_factory):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from django.urls import reverse
+
+    rule = _threshold_rule()
+    url = reverse("admin:monitoring_thresholdstate_changelist")
+
+    def add_states(n):
+        for _ in range(n):
+            st = station_factory()
+            alert = Alert.objects.create(
+                station=st, alert_rule=rule, severity="warning", title="t", message="m"
+            )
+            ThresholdState.objects.create(rule=rule, station=st, metric_key="k.v", alert=alert)
+
+    add_states(2)
+    with CaptureQueriesContext(connection) as small:
+        assert admin_client.get(url).status_code == 200
+    add_states(4)
+    with CaptureQueriesContext(connection) as large:
+        assert admin_client.get(url).status_code == 200
+    assert len(large.captured_queries) == len(small.captured_queries)

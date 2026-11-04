@@ -145,3 +145,42 @@ class TestMetricDefinitionUpdate:
             _post(next=reverse("monitoring:metric_definitions") + "?group=power"),
         )
         assert "?group=power" in resp["Location"]
+
+
+@pytest.mark.django_db
+class TestMetricDefinitionReviewRound2:
+    def test_min_override_alone_above_agent_max_rejected(self, client, admin_user, mdef):
+        client.force_login(admin_user)
+        client.post(
+            reverse("monitoring:metric_definition_update", args=[mdef.pk]),
+            _post(min_override="40"),
+        )
+        mdef.refresh_from_db()
+        assert mdef.min_override is None
+
+    def test_form_error_on_set_override_field(self, mdef):
+        from apps.monitoring.forms import MetricDefinitionForm
+
+        form = MetricDefinitionForm(_post(max_override="-1"), instance=mdef)
+        assert not form.is_valid()
+        assert "max_override" in form.errors
+        form = MetricDefinitionForm(_post(min_override="40"), instance=mdef)
+        assert not form.is_valid()
+        assert "min_override" in form.errors
+
+    def test_update_writes_only_operator_fields(self, client, admin_user, mdef, monkeypatch):
+        from apps.monitoring import views
+
+        stale = MetricDefinition.objects.get(pk=mdef.pk)
+        # A heartbeat updated the agent fields after the view fetched the row.
+        MetricDefinition.objects.filter(pk=mdef.pk).update(label="new agent label", unit="mV")
+        monkeypatch.setattr(views, "get_object_or_404", lambda *a, **kw: stale)
+        client.force_login(admin_user)
+        client.post(
+            reverse("monitoring:metric_definition_update", args=[mdef.pk]),
+            _post(label_override="Rail"),
+        )
+        mdef.refresh_from_db()
+        assert mdef.label_override == "Rail"
+        assert mdef.label == "new agent label"
+        assert mdef.unit == "mV"

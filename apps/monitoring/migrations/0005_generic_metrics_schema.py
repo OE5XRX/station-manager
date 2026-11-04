@@ -48,6 +48,7 @@ class Migration(migrations.Migration):
                 ('metric_key', models.CharField(max_length=64, verbose_name='metric key')),
                 ('breach_since', models.DateTimeField(blank=True, null=True, verbose_name='breach since')),
                 ('ok_since', models.DateTimeField(blank=True, null=True, verbose_name='ok since')),
+                ('last_evaluated_at', models.DateTimeField(blank=True, null=True, verbose_name='last evaluated at')),
             ],
             options={
                 'verbose_name': 'threshold state',

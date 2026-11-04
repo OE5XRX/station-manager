@@ -7,6 +7,7 @@ import logging
 import operator as _op
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
@@ -94,8 +95,19 @@ def validate_metric_key(value: str) -> None:
         )
 
 
-def resolve_open_alerts(rule) -> int:
-    """Resolve all open alerts of ``rule``; returns the resolved count."""
+def _lock_rule(rule) -> None:
+    """Take the AlertRule row lock (no-op on SQLite).
+
+    The engine evaluates each threshold rule under the same lock, so this
+    waits for an in-flight evaluation — and then also sees the alert/state it
+    created. Must be called inside ``transaction.atomic()``.
+    """
+    from .models import AlertRule
+
+    AlertRule.objects.select_for_update().filter(pk=rule.pk).exists()
+
+
+def _resolve_open_alerts_locked(rule) -> int:
     from .models import Alert
 
     count = Alert.objects.filter(alert_rule_id=rule.pk, is_resolved=False).update(
@@ -106,6 +118,13 @@ def resolve_open_alerts(rule) -> int:
     return count
 
 
+def resolve_open_alerts(rule) -> int:
+    """Resolve all open alerts of ``rule``; returns the resolved count."""
+    with transaction.atomic():
+        _lock_rule(rule)
+        return _resolve_open_alerts_locked(rule)
+
+
 def reset_rule_evaluation(rule) -> int:
     """Resolve the rule's open alerts and drop its threshold state.
 
@@ -114,9 +133,47 @@ def reset_rule_evaluation(rule) -> int:
     """
     from .models import ThresholdState
 
-    count = resolve_open_alerts(rule)
-    ThresholdState.objects.filter(rule_id=rule.pk).delete()
+    with transaction.atomic():
+        _lock_rule(rule)
+        count = _resolve_open_alerts_locked(rule)
+        ThresholdState.objects.filter(rule_id=rule.pk).delete()
     return count
+
+
+def reset_metric_evaluation(metric_key: str) -> int:
+    """Resolve open threshold alerts of ``metric_key`` and drop their states.
+
+    Used when a metric gets blocked: its values are discarded from now on, so
+    alerts on it could otherwise never resolve. Returns the resolved count.
+    """
+    from .models import Alert, ThresholdState
+
+    with transaction.atomic():
+        states = ThresholdState.objects.filter(metric_key=metric_key)
+        alert_ids = [pk for pk in states.values_list("alert_id", flat=True) if pk is not None]
+        count = 0
+        if alert_ids:
+            count = Alert.objects.filter(pk__in=alert_ids, is_resolved=False).update(
+                is_resolved=True, resolved_at=timezone.now()
+            )
+        states.delete()
+    if count:
+        logger.info("Metric %s blocked: auto-resolved %d alert(s).", metric_key, count)
+    return count
+
+
+def inverted_override_field(min_override, max_override, min_value, max_value):
+    """Field to blame if the *effective* plausible range is inverted, else None.
+
+    The effective bound is the override if set, otherwise the agent value —
+    so a one-sided override is checked against the agent's other bound
+    (agent 0–30 + ``min_override=40`` alone rejects every value).
+    """
+    lo = min_override if min_override is not None else min_value
+    hi = max_override if max_override is not None else max_value
+    if lo is None or hi is None or lo <= hi:
+        return None
+    return "min_override" if min_override is not None else "max_override"
 
 
 def evaluation_changed(old, new) -> bool:

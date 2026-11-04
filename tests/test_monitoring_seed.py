@@ -143,3 +143,36 @@ def test_management_command_restores_only_missing_disk_severity():
     call_command("create_default_alert_rules")
     disk = AlertRule.objects.filter(alert_type="threshold", metric_key="disk.*.used_pct")
     assert sorted(disk.values_list("severity", flat=True)) == ["critical", "warning"]
+
+
+@pytest.mark.django_db
+def test_management_command_no_extra_disk_rule_after_severity_change():
+    AlertRule.objects.filter(
+        alert_type="threshold", metric_key="disk.*.used_pct", severity="warning"
+    ).update(severity="critical")
+    before = AlertRule.objects.count()
+    call_command("create_default_alert_rules")
+    assert AlertRule.objects.count() == before
+    assert (
+        AlertRule.objects.filter(alert_type="threshold", metric_key="disk.*.used_pct").count() == 2
+    )
+
+
+@pytest.mark.django_db
+def test_management_command_no_extra_cpu_rule_after_operator_change():
+    AlertRule.objects.filter(alert_type="threshold", metric_key="cpu.temp_c").update(operator="gt")
+    before = AlertRule.objects.count()
+    call_command("create_default_alert_rules")
+    assert AlertRule.objects.count() == before
+    assert AlertRule.objects.filter(alert_type="threshold", metric_key="cpu.temp_c").count() == 1
+
+
+@pytest.mark.django_db
+def test_management_command_one_disk_left_with_changed_severity_restores_one():
+    disk = AlertRule.objects.filter(alert_type="threshold", metric_key="disk.*.used_pct")
+    disk.filter(severity="critical").delete()
+    disk.update(operator="gt")
+    call_command("create_default_alert_rules")
+    # One rule exists for a group of two and matches neither default: at most
+    # one default is created, never both.
+    assert disk.count() == 2

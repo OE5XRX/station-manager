@@ -14,6 +14,7 @@ from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.monitoring.models import Alert, AlertRule, MetricDefinition
+from apps.monitoring.rules import inverted_override_field
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts.models import RolloutSequence, RolloutSequenceEntry
 from apps.stations.inventory import inventory_for_viewer
@@ -383,12 +384,27 @@ class MetricDefinitionSerializer(serializers.ModelSerializer):
                 return attrs[field]
             return getattr(self.instance, field, None) if self.instance is not None else None
 
-        lo, hi = current("min_override"), current("max_override")
-        if lo is not None and hi is not None and lo > hi:
+        field = inverted_override_field(
+            current("min_override"),
+            current("max_override"),
+            current("min_value"),
+            current("max_value"),
+        )
+        if field is not None:
             raise serializers.ValidationError(
-                {"min_override": "Minimum override must not exceed maximum override."}
+                {field: "The effective minimum must not exceed the effective maximum."}
             )
         return attrs
+
+    def update(self, instance, validated_data):
+        # Only the operator fields, so a concurrent heartbeat's agent-field
+        # update (label/unit/range/last_seen) is never overwritten.
+        fields = [f for f in self.WRITABLE_FIELDS if f in validated_data]
+        for f in fields:
+            setattr(instance, f, validated_data[f])
+        if fields:
+            instance.save(update_fields=fields)
+        return instance
 
 
 class AlertSerializer(serializers.ModelSerializer):

@@ -409,3 +409,83 @@ def test_query_count_bounded(station, django_assert_max_num_queries):
         )
     with django_assert_max_num_queries(5):
         _ingest(station, metrics={f"a.k{i:03d}": i for i in range(50)}, descriptors_hash="x")
+
+
+# --- review round 2 -----------------------------------------------------------
+
+
+def test_rejection_write_and_log_throttled(station, caplog):
+    recent = timezone.now() - timedelta(minutes=1)
+    _define("a.val", max_value=10, last_rejected_at=recent, last_rejected_value={"avg": 99})
+    with caplog.at_level("INFO", logger="apps.monitoring.metrics_ingest"):
+        _ingest(station, metrics={"a.val": 50})
+    d = MetricDefinition.objects.get(key="a.val")
+    assert d.last_rejected_at == recent
+    assert d.last_rejected_value == {"avg": 99}
+    assert "outside plausible range" not in caplog.text
+    assert "a.val" not in _stored_or_empty(station)
+
+
+def test_rejection_recorded_again_after_throttle(station, caplog):
+    old = timezone.now() - LAST_SEEN_THROTTLE - timedelta(minutes=1)
+    _define("a.val", max_value=10, last_rejected_at=old, last_rejected_value={"avg": 99})
+    with caplog.at_level("INFO", logger="apps.monitoring.metrics_ingest"):
+        _ingest(station, metrics={"a.val": 50})
+    d = MetricDefinition.objects.get(key="a.val")
+    assert d.last_rejected_at > old
+    assert d.last_rejected_value["avg"] == 50
+    assert "outside plausible range" in caplog.text
+
+
+def test_concurrently_created_definition_uses_db_state(station, monkeypatch):
+    """A row created by a concurrent heartbeat between lookup and insert:
+    defs carry the persisted row (pk, operator overrides), agent fields
+    are re-applied (last writer wins)."""
+    from apps.monitoring import metrics_ingest
+
+    real_bulk_create = MetricDefinition.objects.bulk_create
+
+    def racing_bulk_create(objs, **kwargs):
+        MetricDefinition.objects.create(
+            key="pwr.12v.voltage_v",
+            label="old label",
+            min_value=0,
+            max_value=30,
+            max_override=40,
+        )
+        return real_bulk_create(objs, **kwargs)
+
+    monkeypatch.setattr(metrics_ingest.MetricDefinition.objects, "bulk_create", racing_bulk_create)
+    descs = [_desc("pwr.12v.voltage_v", label="12 V rail voltage", min=0, max=30)]
+    _ingest(station, metrics={"pwr.12v.voltage_v": 35}, descriptors=descs)
+
+    # max_override=40 from the DB row is honoured -> 35 is kept.
+    assert _stored(station)["pwr.12v.voltage_v"]["avg"] == 35
+    d = MetricDefinition.objects.get(key="pwr.12v.voltage_v")
+    assert d.label == "12 V rail voltage"
+    assert d.max_override == 40
+    assert d.last_rejected_at is None
+
+
+def test_concurrently_created_definition_rejection_has_pk(station, monkeypatch):
+    from apps.monitoring import metrics_ingest
+
+    real_bulk_create = MetricDefinition.objects.bulk_create
+
+    def racing_bulk_create(objs, **kwargs):
+        MetricDefinition.objects.create(key="a.val", label="a", max_value=10)
+        return real_bulk_create(objs, **kwargs)
+
+    monkeypatch.setattr(metrics_ingest.MetricDefinition.objects, "bulk_create", racing_bulk_create)
+    _ingest(station, metrics={"a.val": 50}, descriptors=[_desc("a.val", min=0, max=10)])
+    assert MetricDefinition.objects.get(key="a.val").last_rejected_at is not None
+
+
+def test_telemetry_updated_at_advances(station):
+    _ingest(station, metrics={"a.val": 1})
+    tel = StationTelemetry.objects.get(station=station)
+    first = tel.updated_at
+    time.sleep(0.01)
+    _ingest(station, metrics={"a.val": 2})
+    tel.refresh_from_db()
+    assert tel.updated_at > first

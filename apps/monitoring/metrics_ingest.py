@@ -179,10 +179,31 @@ def _upsert_descriptors(cleaned, defs, *, agent_version, now, count_fn) -> list[
         if allowed:
             # ignore_conflicts: a concurrent heartbeat may create the same key.
             MetricDefinition.objects.bulk_create(allowed, ignore_conflicts=True)
-            for obj in allowed:
-                defs[obj.key] = obj
+            _adopt_persisted(allowed, defs)
         return [obj.key for obj in to_create[room:]]
     return []
+
+
+def _adopt_persisted(attempted, defs) -> None:
+    """Replace the attempted (pk-less) objects in ``defs`` by the persisted rows.
+
+    ignore_conflicts sets no pk and silently keeps a row a concurrent
+    heartbeat inserted first — with its own agent fields and possibly
+    operator overrides/blocked flag. Value validation must use the DB state;
+    agent fields still follow last-writer-wins.
+    """
+    wanted = {obj.key: obj for obj in attempted}
+    persisted = list(MetricDefinition.objects.filter(key__in=wanted))
+    stale = []
+    for row in persisted:
+        mine = wanted[row.key]
+        if any(getattr(row, f) != getattr(mine, f) for f in _AGENT_FIELDS if f != "last_seen"):
+            for f in _AGENT_FIELDS:
+                setattr(row, f, getattr(mine, f))
+            stale.append(row)
+        defs[row.key] = row
+    if stale:
+        MetricDefinition.objects.bulk_update(stale, _AGENT_FIELDS)
 
 
 def ingest_metrics(
@@ -254,12 +275,19 @@ def ingest_metrics(
             if definition.is_blocked:
                 continue
             if _out_of_range(value, definition.range_min, definition.range_max):
-                logger.info(
-                    "metrics: %s=%s outside plausible range for station %s", key, value, station.pk
-                )
-                definition.last_rejected_at = now
-                definition.last_rejected_value = value
-                rejected.append(definition)
+                # Throttled like last_seen: a permanently implausible value
+                # must not rewrite the row (and log) on every heartbeat.
+                last = definition.last_rejected_at
+                if last is None or last < now - LAST_SEEN_THROTTLE:
+                    logger.info(
+                        "metrics: %s=%s outside plausible range for station %s",
+                        key,
+                        value,
+                        station.pk,
+                    )
+                    definition.last_rejected_at = now
+                    definition.last_rejected_value = value
+                    rejected.append(definition)
                 continue
             if key not in descriptor_keys and definition.pk is not None:
                 seen_pks.append(definition.pk)
@@ -276,7 +304,7 @@ def ingest_metrics(
             MetricDefinition.objects.bulk_update(
                 with_pk, ["last_rejected_at", "last_rejected_value"]
             )
-        # Rows created in this heartbeat via ignore_conflicts carry no pk; rare path.
+        # Defensive: every definition should carry a pk (_adopt_persisted).
         for d in rejected:
             if d.pk is None:
                 MetricDefinition.objects.filter(key=d.key).update(
@@ -294,7 +322,7 @@ def ingest_metrics(
         if tel.pk is None:
             tel.save()
         else:
-            tel.save(update_fields=["metrics", "metric_descriptors_hash"])
+            tel.save(update_fields=["metrics", "metric_descriptors_hash", "updated_at"])
 
     if list_sent:
         return False

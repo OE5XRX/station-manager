@@ -308,7 +308,9 @@ class MetricDefinitionUpdateView(AreaPermissionMixin, View):
         before = _snapshot(definition, _DEFINITION_AUDIT_FIELDS)
         form = MetricDefinitionForm(request.POST, instance=definition)
         if form.is_valid():
-            form.save()
+            # Only the operator fields: a concurrent heartbeat may have updated
+            # the agent fields since the row was fetched.
+            form.save(commit=False).save(update_fields=list(form._meta.fields))
             _audit(
                 request,
                 obj="metric_definition",

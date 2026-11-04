@@ -9,11 +9,13 @@ rolling back the migration.
 
 Idempotent, defaults only apply on first creation:
 - event rules: get_or_create on ``alert_type`` (unique per event type);
-- threshold rules: skipped if any rule matches ``(alert_type="threshold",
-  metric_key, operator)`` — the name is operator-editable, so it is not part of
-  the match. The disk warning and critical rules share ``disk.*.used_pct gte``
-  and are additionally told apart by ``severity``. ``.exists()`` instead of
-  get_or_create: several matching rules are fine, never MultipleObjectsReturned.
+- threshold rules: grouped by ``metric_key``. If at least as many threshold
+  rules exist for the key as there are defaults, nothing is created for it —
+  an operator may have edited operator/severity/name of a seeded rule, which
+  must not re-seed a duplicate. Otherwise the defaults without an exact match
+  (``operator``, plus ``severity`` for keys with a warning + critical pair such
+  as ``disk.*.used_pct``) are created, but never more than
+  ``group size - existing`` (the name is operator-editable, never matched).
 If you change the defaults here, mirror them in the migrations.
 """
 
@@ -115,19 +117,24 @@ class Command(BaseCommand):
                 defaults=rule_data,
             )
             created_count += self._report(created, rule_data["alert_type"], rule_data)
+        groups: dict[str, list[dict]] = {}
         for rule_data in THRESHOLD_RULES:
-            lookup = {
-                "alert_type": AlertRule.AlertType.THRESHOLD,
-                "metric_key": rule_data["metric_key"],
-                "operator": rule_data["operator"],
-            }
-            if rule_data["metric_key"] in SEVERITY_DISAMBIGUATED_KEYS:
-                lookup["severity"] = rule_data["severity"]
-            created = not AlertRule.objects.filter(**lookup).exists()
-            if created:
-                AlertRule.objects.create(alert_type=AlertRule.AlertType.THRESHOLD, **rule_data)
-            label = f"{rule_data['name']} ({rule_data['metric_key']} {rule_data['operator']})"
-            created_count += self._report(created, label, rule_data)
+            groups.setdefault(rule_data["metric_key"], []).append(rule_data)
+        for metric_key, defaults in groups.items():
+            existing = AlertRule.objects.filter(
+                alert_type=AlertRule.AlertType.THRESHOLD, metric_key=metric_key
+            )
+            room = len(defaults) - existing.count()
+            for rule_data in defaults:
+                lookup = {"operator": rule_data["operator"]}
+                if metric_key in SEVERITY_DISAMBIGUATED_KEYS:
+                    lookup["severity"] = rule_data["severity"]
+                created = room > 0 and not existing.filter(**lookup).exists()
+                if created:
+                    AlertRule.objects.create(alert_type=AlertRule.AlertType.THRESHOLD, **rule_data)
+                    room -= 1
+                label = f"{rule_data['name']} ({metric_key} {rule_data['operator']})"
+                created_count += self._report(created, label, rule_data)
 
         self.stdout.write(f"Done. Created {created_count} new rule(s).")
 

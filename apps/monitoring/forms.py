@@ -8,7 +8,7 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from .models import AlertRule, MetricDefinition
-from .rules import validate_metric_key
+from .rules import inverted_override_field, validate_metric_key
 
 
 class ThresholdRuleForm(forms.ModelForm):
@@ -62,10 +62,20 @@ class MetricDefinitionForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        lo, hi = cleaned.get("min_override"), cleaned.get("max_override")
-        if lo is not None and hi is not None and lo > hi:
-            raise forms.ValidationError(
-                _("Minimum override must not be greater than the maximum override."),
-                code="range_inverted",
+        # self.instance still holds the persisted agent range here
+        # (construct_instance runs in _post_clean, after clean()).
+        field = inverted_override_field(
+            cleaned.get("min_override"),
+            cleaned.get("max_override"),
+            self.instance.min_value,
+            self.instance.max_value,
+        )
+        if field is not None:
+            self.add_error(
+                field,
+                forms.ValidationError(
+                    _("The effective minimum must not be greater than the effective maximum."),
+                    code="range_inverted",
+                ),
             )
         return cleaned

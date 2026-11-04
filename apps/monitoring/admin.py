@@ -48,8 +48,17 @@ class MetricDefinitionAdmin(admin.ModelAdmin):
 
 @admin.register(ThresholdState)
 class ThresholdStateAdmin(admin.ModelAdmin):
-    list_display = ("rule", "station", "metric_key", "breach_since", "ok_since", "alert")
+    list_display = (
+        "rule",
+        "station",
+        "metric_key",
+        "breach_since",
+        "ok_since",
+        "last_evaluated_at",
+        "alert",
+    )
     list_filter = ("rule",)
+    list_select_related = ("rule", "station", "alert__station")
     search_fields = ("metric_key", "station__name")
     raw_id_fields = ("rule", "station", "alert")
 

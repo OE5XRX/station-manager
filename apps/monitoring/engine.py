@@ -3,6 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -11,7 +12,7 @@ from apps.stations.models import Station
 from station_agent.metrics_contract import key_matches_pattern
 
 from .models import Alert, AlertRule, MetricDefinition, ThresholdState
-from .rules import ABOVE_OPERATORS, compare, format_duration, format_value
+from .rules import ABOVE_OPERATORS, compare, evaluation_changed, format_duration, format_value
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +372,100 @@ def _sample_is_current(sample, now) -> bool:
     return now - parsed <= OFFLINE_THRESHOLD
 
 
+def _threshold_candidates(current, definitions, pattern):
+    """(station, key, sample, definition) for every current sample matching ``pattern``."""
+    return [
+        (station, key, sample, definitions[key])
+        for station, metrics in current
+        for key, sample in metrics.items()
+        if key in definitions and key_matches_pattern(key, pattern)
+    ]
+
+
+def _evaluate_threshold_rule(rule, candidates, states, now):
+    """Evaluate one (locked) rule over its candidates and persist the changed states.
+
+    ``states`` maps ``(station_id, metric_key)`` to the rule's ThresholdState rows.
+    Returns the newly created alerts.
+    """
+    new_alerts, to_create, to_update = [], [], []
+    duration = timedelta(seconds=rule.duration_seconds)
+    for station, key, sample, defn in candidates:
+        value = sample.get(rule.aggregate)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+
+        state = states.get((station.pk, key))
+        is_new = state is None
+        if is_new:
+            state = ThresholdState(rule=rule, station=station, metric_key=key)
+        before = (state.breach_since, state.ok_since, state.alert_id, state.last_evaluated_at)
+        open_alert = state.alert if state.alert and not state.alert.is_resolved else None
+
+        # A gap without current values (offline / key missing / stale ts)
+        # froze the state; it must not count toward the duration.
+        if (
+            state.last_evaluated_at is not None
+            and now - state.last_evaluated_at > OFFLINE_THRESHOLD
+        ):
+            if state.breach_since is not None and open_alert is None:
+                state.breach_since = now
+            if state.ok_since is not None:
+                state.ok_since = now
+
+        if compare(rule.operator, float(value), rule.threshold):
+            state.ok_since = None
+            state.breach_since = state.breach_since or now
+            if open_alert is None and now - state.breach_since >= duration:
+                elapsed = int((now - state.breach_since).total_seconds())
+                alert = _create_alert(
+                    station=station,
+                    rule=rule,
+                    title=f"{defn.display_label}: {station.name}",
+                    message=_threshold_message(defn, station, rule, value, elapsed),
+                )
+                state.alert = alert
+                open_alert = alert
+                new_alerts.append(alert)
+        else:
+            state.breach_since = None
+            if open_alert is not None:
+                state.ok_since = state.ok_since or now
+                if now - state.ok_since >= duration:
+                    Alert.objects.filter(pk=open_alert.pk, is_resolved=False).update(
+                        is_resolved=True, resolved_at=now
+                    )
+                    logger.info("Auto-resolved threshold alert %s", open_alert.pk)
+                    state.ok_since = None
+                    state.alert = None
+                    open_alert = None
+            else:
+                state.ok_since = None
+                state.alert = None
+
+        pending = state.ok_since is not None or (
+            state.breach_since is not None and open_alert is None
+        )
+        if pending:
+            state.last_evaluated_at = now
+
+        if (state.breach_since, state.ok_since, state.alert_id, state.last_evaluated_at) == before:
+            continue
+        if is_new:
+            to_create.append(state)
+            states[(station.pk, key)] = state
+        else:
+            to_update.append(state)
+
+    if to_create:
+        ThresholdState.objects.bulk_create(to_create)
+    if to_update:
+        ThresholdState.objects.bulk_update(
+            to_update, ["breach_since", "ok_since", "alert", "last_evaluated_at"]
+        )
+    return new_alerts
+
+
 def _check_thresholds(now=None):
     """Evaluate generic threshold rules per (rule, station, concrete metric key).
 
@@ -378,12 +473,21 @@ def _check_thresholds(now=None):
     before an alert fires, and the value must stay OK for the same duration
     before it auto-resolves. No current value (station offline, key absent, or
     the sample's ``ts`` missing/older than OFFLINE_THRESHOLD) freezes the
-    state — neither fire nor resolve. State lives in
-    ``ThresholdState`` so a restart keeps the timers.
+    state — neither fire nor resolve — and a pending timer restarts after
+    such a gap (``last_evaluated_at``), so the gap never counts toward the
+    duration. State lives in ``ThresholdState`` so a restart keeps the timers.
+
+    Each rule is evaluated and persisted inside a transaction holding the
+    AlertRule row lock (``select_for_update``); the rule-change/delete reset
+    takes the same lock, so a stale evaluation can never create an alert
+    after the rule was reset or disabled. The locked, fresh row's fields are
+    used; a rule that is gone/inactive by then is skipped.
 
     Queries are bounded per run: rules, definitions, online telemetry and
-    existing states are each loaded once; writes happen only for alerts that
-    fire/resolve and state rows that actually changed.
+    existing states are each loaded once; per rule with matching samples a
+    constant number of lock/savepoint queries follows, plus writes only for
+    alerts that fire/resolve and state rows that changed (or have a pending
+    timer).
     """
     from apps.stations.models import StationTelemetry
 
@@ -405,79 +509,48 @@ def _check_thresholds(now=None):
             station__last_seen__gte=now - OFFLINE_THRESHOLD
         )
     )
-    states = {
-        (st.rule_id, st.station_id, st.metric_key): st
-        for st in ThresholdState.objects.filter(rule__in=rules).select_related("alert")
-    }
-
-    new_alerts = []
-    to_create = []
-    to_update = []
+    current = []
     for tel in telemetry:
-        station = tel.station
         metrics = tel.metrics if isinstance(tel.metrics, dict) else {}
         # Stale samples (e.g. heartbeat bumped last_seen but the error-isolated
         # metrics ingest failed) are no current value.
-        metrics = {
-            k: v for k, v in metrics.items() if isinstance(v, dict) and _sample_is_current(v, now)
-        }
-        for rule in rules:
-            for key, sample in metrics.items():
-                defn = definitions.get(key)
-                if defn is None or not key_matches_pattern(key, rule.metric_key):
-                    continue
-                value = sample.get(rule.aggregate)
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    continue
+        current.append(
+            (
+                tel.station,
+                {
+                    k: v
+                    for k, v in metrics.items()
+                    if isinstance(v, dict) and _sample_is_current(v, now)
+                },
+            )
+        )
+    states_by_rule = {}
+    for st in ThresholdState.objects.filter(rule__in=rules).select_related("alert"):
+        states_by_rule.setdefault(st.rule_id, {})[(st.station_id, st.metric_key)] = st
 
-                state = states.get((rule.pk, station.pk, key))
-                is_new = state is None
-                if is_new:
-                    state = ThresholdState(rule=rule, station=station, metric_key=key)
-                before = (state.breach_since, state.ok_since, state.alert_id)
-                open_alert = state.alert if state.alert and not state.alert.is_resolved else None
-                duration = timedelta(seconds=rule.duration_seconds)
-
-                if compare(rule.operator, float(value), rule.threshold):
-                    state.ok_since = None
-                    state.breach_since = state.breach_since or now
-                    if open_alert is None and now - state.breach_since >= duration:
-                        elapsed = int((now - state.breach_since).total_seconds())
-                        alert = _create_alert(
-                            station=station,
-                            rule=rule,
-                            title=f"{defn.display_label}: {station.name}",
-                            message=_threshold_message(defn, station, rule, value, elapsed),
-                        )
-                        state.alert = alert
-                        new_alerts.append(alert)
-                else:
-                    state.breach_since = None
-                    if open_alert is not None:
-                        state.ok_since = state.ok_since or now
-                        if now - state.ok_since >= duration:
-                            Alert.objects.filter(pk=open_alert.pk, is_resolved=False).update(
-                                is_resolved=True, resolved_at=now
-                            )
-                            logger.info("Auto-resolved threshold alert %s", open_alert.pk)
-                            state.ok_since = None
-                            state.alert = None
-                    else:
-                        state.ok_since = None
-                        state.alert = None
-
-                if (state.breach_since, state.ok_since, state.alert_id) == before:
-                    continue
-                if is_new:
-                    to_create.append(state)
-                    states[(rule.pk, station.pk, key)] = state
-                else:
-                    to_update.append(state)
-
-    if to_create:
-        ThresholdState.objects.bulk_create(to_create)
-    if to_update:
-        ThresholdState.objects.bulk_update(to_update, ["breach_since", "ok_since", "alert"])
+    new_alerts = []
+    for rule in rules:
+        if not _threshold_candidates(current, definitions, rule.metric_key):
+            continue
+        with transaction.atomic():
+            locked = (
+                AlertRule.objects.select_for_update()
+                .filter(pk=rule.pk, alert_type=AlertRule.AlertType.THRESHOLD, is_active=True)
+                .first()
+            )
+            if locked is None:  # deleted / disabled since the load
+                continue
+            if evaluation_changed(rule, locked):
+                # Changed since the load: the reset signal dropped the state we
+                # loaded — evaluate the fresh rule against the DB state.
+                states = {
+                    (st.station_id, st.metric_key): st
+                    for st in ThresholdState.objects.filter(rule=locked).select_related("alert")
+                }
+            else:
+                states = states_by_rule.get(rule.pk, {})
+            candidates = _threshold_candidates(current, definitions, locked.metric_key)
+            new_alerts.extend(_evaluate_threshold_rule(locked, candidates, states, now))
     return new_alerts
 
 

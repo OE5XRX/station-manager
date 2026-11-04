@@ -469,15 +469,18 @@ class TestThresholdEngine:
     def test_query_count_bounded(
         self, isolated_rules, station_factory, django_assert_max_num_queries
     ):
-        """Loads are per run, not per station × rule (no N+1)."""
+        """Loads are per run, not per station × rule (no N+1).
+
+        4 loads (rules, definitions, telemetry, states) + per rule a constant
+        savepoint / row lock / release — independent of the station count."""
         now = timezone.now()
-        for _ in range(5):
-            st = station_factory(last_seen=now)
-            _set_metrics(st, cpu__temp_c=50.0, mem__used_pct=10.0, disk__root__used_pct=10.0)
-        for key in ("cpu.temp_c", "mem.used_pct", "disk.*.used_pct"):
-            _rule(key, 99)
-        with django_assert_max_num_queries(4):
-            assert _check_thresholds(now=now) == []
+        rules = [_rule(key, 99) for key in ("cpu.temp_c", "mem.used_pct", "disk.*.used_pct")]
+        for n_stations in (5, 10):
+            while len(StationTelemetry.objects.all()) < n_stations:
+                st = station_factory(last_seen=now)
+                _set_metrics(st, cpu__temp_c=50.0, mem__used_pct=10.0, disk__root__used_pct=10.0)
+            with django_assert_max_num_queries(4 + 3 * len(rules)):
+                assert _check_thresholds(now=now) == []
 
 
 # ---------------------------------------------------------------------------
@@ -567,3 +570,164 @@ class TestRuleChangeReset:
         _rule("cpu.temp_c", 90)
         alert.refresh_from_db()
         assert not alert.is_resolved
+
+
+# ---------------------------------------------------------------------------
+# review round 2: gaps restart pending timers (A), blocking resets (B),
+# engine/rule-mutation race (F)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestGapRestartsPendingTimers:
+    def test_pending_breach_restarts_after_gap(self, isolated_rules, online_station):
+        rule = _rule("cpu.temp_c", 80, duration=60)
+        t0 = timezone.now()
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        assert _check_thresholds(now=t0) == []
+        state = ThresholdState.objects.get(rule=rule)
+        assert state.breach_since == t0 and state.last_evaluated_at == t0
+
+        # 20 min silence, then a breached sample: the gap must not count.
+        later = t0 + timedelta(minutes=20)
+        _touch(online_station, later)
+        assert _check_thresholds(now=later) == []
+        state.refresh_from_db()
+        assert state.breach_since == later
+        assert state.last_evaluated_at == later
+
+        _touch(online_station, later + timedelta(seconds=30))
+        assert _check_thresholds(now=later + timedelta(seconds=30)) == []
+        _touch(online_station, later + timedelta(seconds=60))
+        assert len(_check_thresholds(now=later + timedelta(seconds=60))) == 1
+
+    def test_pending_resolve_restarts_after_gap(self, isolated_rules, online_station):
+        rule = _rule("cpu.temp_c", 80, duration=60)
+        t0 = timezone.now()
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        _check_thresholds(now=t0)
+        _touch(online_station, t0 + timedelta(seconds=60))
+        assert len(_check_thresholds(now=t0 + timedelta(seconds=60))) == 1
+
+        _set_metrics(online_station, cpu__temp_c=70.0)
+        t1 = t0 + timedelta(seconds=90)
+        _touch(online_station, t1)
+        _check_thresholds(now=t1)
+        assert ThresholdState.objects.get(rule=rule).ok_since == t1
+
+        later = t1 + timedelta(minutes=20)
+        _touch(online_station, later)
+        _check_thresholds(now=later)
+        assert _open_alerts(rule).count() == 1
+        assert ThresholdState.objects.get(rule=rule).ok_since == later
+
+        _touch(online_station, later + timedelta(seconds=60))
+        _check_thresholds(now=later + timedelta(seconds=60))
+        assert _open_alerts(rule).count() == 0
+
+    def test_short_interval_is_not_a_gap(self, isolated_rules, online_station):
+        rule = _rule("cpu.temp_c", 80, duration=600)
+        t0 = timezone.now()
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        _check_thresholds(now=t0)
+        for minutes in (4, 8):
+            _touch(online_station, t0 + timedelta(minutes=minutes))
+            _check_thresholds(now=t0 + timedelta(minutes=minutes))
+        assert ThresholdState.objects.get(rule=rule).breach_since == t0
+        _touch(online_station, t0 + timedelta(minutes=10))
+        assert len(_check_thresholds(now=t0 + timedelta(minutes=10))) == 1
+
+
+@pytest.mark.django_db
+class TestBlockingMetricResets:
+    def test_block_resolves_alerts_and_deletes_states(self, isolated_rules, online_station):
+        rule = _rule("disk.*.used_pct", 90)
+        _set_metrics(online_station, disk__root__used_pct=95.0, disk__boot__used_pct=95.0)
+        assert len(_check_thresholds()) == 2
+
+        d = MetricDefinition.objects.get(key="disk.boot.used_pct")
+        d.is_blocked = True
+        d.save()
+
+        open_titles = list(_open_alerts(rule).values_list("title", flat=True))
+        assert len(open_titles) == 1 and "/boot" not in open_titles[0]
+        keys = set(ThresholdState.objects.filter(rule=rule).values_list("metric_key", flat=True))
+        assert keys == {"disk.root.used_pct"}
+
+    def test_unrelated_save_keeps_alert(self, isolated_rules, online_station):
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        assert len(_check_thresholds()) == 1
+        d = MetricDefinition.objects.get(key="cpu.temp_c")
+        d.label_override = "CPU"
+        d.save()
+        assert _open_alerts(rule).count() == 1
+        assert ThresholdState.objects.filter(rule=rule).exists()
+
+
+@pytest.mark.django_db
+class TestRuleLockRace:
+    def test_rule_deactivated_after_load_is_skipped(
+        self, isolated_rules, online_station, monkeypatch
+    ):
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        real = engine.MetricDefinition.objects.filter
+
+        def deactivate_then_filter(*args, **kwargs):
+            # Runs after the rules were loaded: a concurrent disable.
+            AlertRule.objects.filter(pk=rule.pk).update(is_active=False)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(engine.MetricDefinition.objects, "filter", deactivate_then_filter)
+        assert _check_thresholds() == []
+        assert not Alert.objects.filter(alert_rule=rule).exists()
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+    def test_engine_uses_fresh_rule_fields(self, isolated_rules, online_station, monkeypatch):
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        real = engine.MetricDefinition.objects.filter
+
+        def raise_threshold_then_filter(*args, **kwargs):
+            AlertRule.objects.filter(pk=rule.pk).update(threshold=90)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(engine.MetricDefinition.objects, "filter", raise_threshold_then_filter)
+        assert _check_thresholds() == []
+        assert not Alert.objects.filter(alert_rule=rule).exists()
+
+    def test_reset_resolves_alert_created_right_before(self, isolated_rules, online_station):
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        alert = _check_thresholds()[0]
+        rule.is_active = False
+        rule.save()
+        alert.refresh_from_db()
+        assert alert.is_resolved
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+    @pytest.mark.parametrize("fn", ["reset", "resolve"])
+    def test_reset_takes_rule_row_lock_first(
+        self, isolated_rules, online_station, fn, monkeypatch
+    ):
+        from apps.monitoring import rules as rules_mod
+
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        alert = _check_thresholds()[0]
+        calls = []
+        real = AlertRule.objects.select_for_update
+
+        def spy(*args, **kwargs):
+            # The alert must still be open when the lock is requested.
+            alert.refresh_from_db()
+            calls.append(alert.is_resolved)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(AlertRule.objects, "select_for_update", spy)
+        target = (
+            rules_mod.reset_rule_evaluation if fn == "reset" else rules_mod.resolve_open_alerts
+        )
+        assert target(rule) == 1
+        assert calls == [False]

@@ -237,3 +237,60 @@ def test_schema_contains_metric_fields(api_topology, bearer):
     if "$ref" in items:
         items = schemas[items["$ref"].rsplit("/", 1)[-1]]
     assert {"key", "label", "unit", "avg", "ts"} <= set(items["properties"])
+
+
+# ---------------------------------------------------------------------------
+# review round 2: effective range (G), operator-only writes (K)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ranged_def(db):
+    from apps.monitoring.models import MetricDefinition
+
+    obj, _ = MetricDefinition.objects.update_or_create(
+        key="pwr.12v.voltage_v",
+        defaults={"label": "12V", "unit": "V", "min_value": 0.0, "max_value": 30.0},
+    )
+    return obj
+
+
+def test_min_override_alone_above_agent_max_rejected(api_topology, bearer, ranged_def):
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(ranged_def.pk), {"min_override": 40.0}, format="json"
+    )
+    assert resp.status_code == 400
+    assert "min_override" in resp.data
+    ranged_def.refresh_from_db()
+    assert ranged_def.min_override is None
+
+
+def test_max_override_alone_below_agent_min_rejected(api_topology, bearer, ranged_def):
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(ranged_def.pk), {"max_override": -5.0}, format="json"
+    )
+    assert resp.status_code == 400
+    assert "max_override" in resp.data
+
+
+def test_one_sided_override_within_agent_range_ok(api_topology, bearer, ranged_def):
+    resp = bearer(api_topology["admin"]).patch(
+        _detail_url(ranged_def.pk), {"min_override": 9.5}, format="json"
+    )
+    assert resp.status_code == 200, resp.content
+
+
+def test_serializer_update_writes_only_operator_fields(ranged_def):
+    from apps.api.read_serializers import MetricDefinitionSerializer
+    from apps.monitoring.models import MetricDefinition
+
+    instance = MetricDefinition.objects.get(pk=ranged_def.pk)
+    # A heartbeat updates the agent fields after the instance was fetched.
+    MetricDefinition.objects.filter(pk=ranged_def.pk).update(label="new agent label", unit="mV")
+    ser = MetricDefinitionSerializer(instance, data={"label_override": "Rail"}, partial=True)
+    assert ser.is_valid(), ser.errors
+    ser.save()
+    ranged_def.refresh_from_db()
+    assert ranged_def.label_override == "Rail"
+    assert ranged_def.label == "new agent label"
+    assert ranged_def.unit == "mV"

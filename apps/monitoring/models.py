@@ -218,6 +218,10 @@ class ThresholdState(models.Model):
     metric_key = models.CharField(_("metric key"), max_length=MAX_KEY_LEN)
     breach_since = models.DateTimeField(_("breach since"), null=True, blank=True)
     ok_since = models.DateTimeField(_("ok since"), null=True, blank=True)
+    # Last run that saw a current value while a timer was pending; a longer
+    # gap than OFFLINE_THRESHOLD restarts the pending timer (gaps never count
+    # toward duration_seconds).
+    last_evaluated_at = models.DateTimeField(_("last evaluated at"), null=True, blank=True)
     alert = models.ForeignKey(
         Alert,
         on_delete=models.SET_NULL,
