@@ -37,13 +37,33 @@ class MetricDefinitionAdmin(admin.ModelAdmin):
     list_filter = ("group", "is_hidden", "is_blocked")
     list_editable = ("is_hidden", "is_blocked")
     search_fields = ("key", "label", "label_override")
+    # Agent fields belong to the heartbeat ingest (last writer wins); the
+    # admin only edits the operator fields.
     readonly_fields = (
+        "key",
+        "label",
+        "unit",
+        "group",
+        "precision",
+        "min_value",
+        "max_value",
+        "source_agent_version",
         "first_seen",
         "last_seen",
         "last_rejected_at",
         "last_rejected_value",
-        "source_agent_version",
     )
+
+    def has_add_permission(self, request):
+        return False  # rows are created by the heartbeat ingest only
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            # Only the operator fields, so a concurrent heartbeat's agent-field
+            # update is never overwritten. A normal save → signals still fire.
+            obj.save(update_fields=list(MetricDefinition.OPERATOR_FIELDS))
+        else:
+            super().save_model(request, obj, form, change)
 
 
 @admin.register(ThresholdState)

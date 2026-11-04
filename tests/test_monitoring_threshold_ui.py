@@ -278,3 +278,42 @@ class TestSettingsPage:
         assert "Undervoltage test" in content
         assert reverse("monitoring:threshold_rule_create") not in content
         assert reverse("monitoring:threshold_rule_delete", args=[rule.pk]) not in content
+
+
+@pytest.mark.django_db
+class TestSaveAndResetAtomicReviewRound3:
+    """The rule UPDATE and its post_save reset commit together (or not at all)."""
+
+    def _failing_reset(self, monkeypatch):
+        from apps.monitoring import signals
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("reset failed")
+
+        monkeypatch.setattr(signals, "reset_rule_evaluation", boom)
+        monkeypatch.setattr(signals, "reset_metric_evaluation", boom)
+
+    def test_ui_update_rolls_back_with_failed_reset(self, client, admin_user, rule, monkeypatch):
+        self._failing_reset(monkeypatch)
+        client.force_login(admin_user)
+        with pytest.raises(RuntimeError):
+            client.post(
+                reverse("monitoring:threshold_rule_update", args=[rule.pk]),
+                _payload(name=rule.name, metric_key=rule.metric_key, operator="lt", threshold="9"),
+            )
+        rule.refresh_from_db()
+        assert rule.threshold == 11.0
+
+    def test_ui_metric_block_rolls_back_with_failed_reset(
+        self, client, admin_user, defs, monkeypatch
+    ):
+        self._failing_reset(monkeypatch)
+        d = MetricDefinition.objects.get(key="cpu.temp_c")
+        client.force_login(admin_user)
+        with pytest.raises(RuntimeError):
+            client.post(
+                reverse("monitoring:metric_definition_update", args=[d.pk]),
+                {"label_override": "", "min_override": "", "max_override": "", "is_blocked": "on"},
+            )
+        d.refresh_from_db()
+        assert d.is_blocked is False

@@ -145,10 +145,33 @@ def reset_metric_evaluation(metric_key: str) -> int:
 
     Used when a metric gets blocked: its values are discarded from now on, so
     alerts on it could otherwise never resolve. Returns the resolved count.
+
+    Takes the row locks of every threshold rule that can evaluate the key
+    (pattern match) or still holds a state for it — ordered by pk, so two
+    concurrent resets cannot deadlock — before the states are read. An
+    in-flight engine evaluation of such a rule finishes first (its new
+    alert/state is then reset here); a later one sees the block.
     """
-    from .models import Alert, ThresholdState
+    from .models import Alert, AlertRule, ThresholdState
 
     with transaction.atomic():
+        rule_ids = {
+            pk
+            for pk, pattern in AlertRule.objects.filter(
+                alert_type=AlertRule.AlertType.THRESHOLD
+            ).values_list("pk", "metric_key")
+            if key_matches_pattern(metric_key, pattern)
+        }
+        rule_ids.update(
+            ThresholdState.objects.filter(metric_key=metric_key).values_list("rule_id", flat=True)
+        )
+        if rule_ids:
+            list(
+                AlertRule.objects.select_for_update()
+                .filter(pk__in=rule_ids)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
         states = ThresholdState.objects.filter(metric_key=metric_key)
         alert_ids = [pk for pk in states.values_list("alert_id", flat=True) if pk is not None]
         count = 0

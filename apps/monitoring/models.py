@@ -158,6 +158,10 @@ class MetricDefinition(models.Model):
 
     GROUP_CHOICES = [(g, g) for g in GROUPS]
 
+    # Fields an operator may write (UI / API / admin); everything else is
+    # owned by the heartbeat ingest and must never be overwritten by them.
+    OPERATOR_FIELDS = ("label_override", "min_override", "max_override", "is_hidden", "is_blocked")
+
     # Agent-provided
     key = models.CharField(_("key"), max_length=MAX_KEY_LEN, unique=True)
     label = models.CharField(_("label"), max_length=MAX_LABEL_LEN, blank=True)

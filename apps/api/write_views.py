@@ -676,14 +676,17 @@ class AlertRuleViewSet(
     write_serializer_class = AlertRuleWriteSerializer
 
     def perform_create(self, serializer):
-        rule = serializer.save()
+        with transaction.atomic():
+            rule = serializer.save()
         audit_config_write(
             self.request,
             message=f"AlertRule {rule.alert_type} ({rule}) created",
         )
 
     def perform_update(self, serializer):
-        rule = serializer.save()
+        # Atomic: the UPDATE and the post_save evaluation reset commit together.
+        with transaction.atomic():
+            rule = serializer.save()
         audit_config_write(
             self.request,
             message=f"AlertRule {rule.alert_type} ({rule}) updated",
@@ -694,7 +697,8 @@ class AlertRuleViewSet(
             self.request,
             message=f"AlertRule {instance.alert_type} ({instance}) deleted",
         )
-        instance.delete()
+        with transaction.atomic():
+            instance.delete()
 
 
 class MetricDefinitionViewSet(UpdateModelMixin, read_views.MetricDefinitionViewSet):
@@ -709,7 +713,9 @@ class MetricDefinitionViewSet(UpdateModelMixin, read_views.MetricDefinitionViewS
 
     def perform_update(self, serializer):
         changed = sorted(serializer.validated_data)
-        definition = serializer.save()
+        # Atomic: a block's post_save reset commits with the UPDATE.
+        with transaction.atomic():
+            definition = serializer.save()
         audit_config_write(
             self.request,
             message=f"MetricDefinition {definition.key} updated ({', '.join(changed) or '-'})",

@@ -9,10 +9,10 @@ from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
 from apps.stations.models import Station
-from station_agent.metrics_contract import key_matches_pattern
+from station_agent.metrics_contract import pattern_matcher
 
 from .models import Alert, AlertRule, MetricDefinition, ThresholdState
-from .rules import ABOVE_OPERATORS, compare, evaluation_changed, format_duration, format_value
+from .rules import ABOVE_OPERATORS, compare, format_duration, format_value
 
 logger = logging.getLogger(__name__)
 
@@ -374,11 +374,12 @@ def _sample_is_current(sample, now) -> bool:
 
 def _threshold_candidates(current, definitions, pattern):
     """(station, key, sample, definition) for every current sample matching ``pattern``."""
+    matches = pattern_matcher(pattern)  # validated/split once, not per sample
     return [
         (station, key, sample, definitions[key])
         for station, metrics in current
         for key, sample in metrics.items()
-        if key in definitions and key_matches_pattern(key, pattern)
+        if key in definitions and matches(key)
     ]
 
 
@@ -481,13 +482,17 @@ def _check_thresholds(now=None):
     AlertRule row lock (``select_for_update``); the rule-change/delete reset
     takes the same lock, so a stale evaluation can never create an alert
     after the rule was reset or disabled. The locked, fresh row's fields are
-    used; a rule that is gone/inactive by then is skipped.
+    used; a rule that is gone/inactive by then is skipped. Under the lock
+    the rule's ThresholdState rows are always re-read and the candidate keys
+    re-checked for a block — a reset (rule edit, also A→B→A, or metric
+    block) that landed after the run's loads must not be overwritten with a
+    stale state (orphan open alert).
 
-    Queries are bounded per run: rules, definitions, online telemetry and
-    existing states are each loaded once; per rule with matching samples a
-    constant number of lock/savepoint queries follows, plus writes only for
-    alerts that fire/resolve and state rows that changed (or have a pending
-    timer).
+    Queries are bounded per run: rules, definitions and online telemetry are
+    each loaded once; per rule with matching samples a constant number of
+    queries follows (savepoint, row lock, states, blocked keys, release),
+    plus writes only for alerts that fire/resolve and state rows that
+    changed (or have a pending timer).
     """
     from apps.stations.models import StationTelemetry
 
@@ -524,10 +529,6 @@ def _check_thresholds(now=None):
                 },
             )
         )
-    states_by_rule = {}
-    for st in ThresholdState.objects.filter(rule__in=rules).select_related("alert"):
-        states_by_rule.setdefault(st.rule_id, {})[(st.station_id, st.metric_key)] = st
-
     new_alerts = []
     for rule in rules:
         if not _threshold_candidates(current, definitions, rule.metric_key):
@@ -540,16 +541,20 @@ def _check_thresholds(now=None):
             )
             if locked is None:  # deleted / disabled since the load
                 continue
-            if evaluation_changed(rule, locked):
-                # Changed since the load: the reset signal dropped the state we
-                # loaded — evaluate the fresh rule against the DB state.
-                states = {
-                    (st.station_id, st.metric_key): st
-                    for st in ThresholdState.objects.filter(rule=locked).select_related("alert")
-                }
-            else:
-                states = states_by_rule.get(rule.pk, {})
             candidates = _threshold_candidates(current, definitions, locked.metric_key)
+            if not candidates:
+                continue
+            blocked = set(
+                MetricDefinition.objects.filter(
+                    key__in={key for _, key, _, _ in candidates}, is_blocked=True
+                ).values_list("key", flat=True)
+            )
+            if blocked:  # blocked since the definitions load
+                candidates = [c for c in candidates if c[1] not in blocked]
+            states = {
+                (st.station_id, st.metric_key): st
+                for st in ThresholdState.objects.filter(rule=locked).select_related("alert")
+            }
             new_alerts.extend(_evaluate_threshold_rule(locked, candidates, states, now))
     return new_alerts
 

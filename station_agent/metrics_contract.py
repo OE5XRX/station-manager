@@ -126,14 +126,29 @@ def is_valid_pattern(pattern: str) -> bool:
     return is_valid_key(probe) and len(pattern) <= MAX_KEY_LEN
 
 
+def pattern_matcher(pattern: str):
+    """Validate/split ``pattern`` once; return a ``key -> bool`` matcher.
+
+    Same semantics as :func:`key_matches_pattern`, for matching many keys
+    against one pattern without re-validating it per key.
+    """
+    if not is_valid_pattern(pattern):
+        return lambda key: False
+    pattern_segments = pattern.split(".")
+    if _WILDCARD not in pattern_segments:
+        return lambda key: key == pattern
+
+    def match(key: str) -> bool:
+        key_segments = key.split(".")
+        if len(key_segments) != len(pattern_segments):
+            return False
+        return all(
+            p in (_WILDCARD, k) for k, p in zip(key_segments, pattern_segments, strict=True)
+        )
+
+    return match
+
+
 def key_matches_pattern(key: str, pattern: str) -> bool:
     """Match ``key`` against ``pattern``; a ``*`` segment matches exactly one segment."""
-    if not is_valid_pattern(pattern):
-        return False
-    if _WILDCARD not in pattern.split("."):
-        return key == pattern
-    key_segments = key.split(".")
-    pattern_segments = pattern.split(".")
-    if len(key_segments) != len(pattern_segments):
-        return False
-    return all(p in (_WILDCARD, k) for k, p in zip(key_segments, pattern_segments, strict=True))
+    return pattern_matcher(pattern)(key)

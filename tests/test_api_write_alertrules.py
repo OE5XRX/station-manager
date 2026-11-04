@@ -436,3 +436,21 @@ def test_patch_rule_with_undescribed_key_threshold_only(api_topology, bearer):
     url = reverse("api:alert-rule-detail", args=[rule.pk])
     resp = bearer(api_topology["admin"]).patch(url, {"threshold": 10.5}, format="json")
     assert resp.status_code == 200, resp.content
+
+
+def test_patch_rolls_back_with_failed_reset(
+    api_topology, bearer, cpu_temp_alert_rule, monkeypatch
+):
+    """Review round 3: the UPDATE and the post_save reset commit together."""
+    from apps.monitoring import signals
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("reset failed")
+
+    monkeypatch.setattr(signals, "reset_rule_evaluation", boom)
+    before = cpu_temp_alert_rule.threshold
+    url = reverse("api:alert-rule-detail", args=[cpu_temp_alert_rule.pk])
+    with pytest.raises(RuntimeError):
+        bearer(api_topology["admin"]).patch(url, {"threshold": before + 1}, format="json")
+    cpu_temp_alert_rule.refresh_from_db()
+    assert cpu_temp_alert_rule.threshold == before

@@ -184,3 +184,57 @@ class TestMetricDefinitionReviewRound2:
         assert mdef.label_override == "Rail"
         assert mdef.label == "new agent label"
         assert mdef.unit == "mV"
+
+
+@pytest.mark.django_db
+class TestMetricDefinitionAdminReviewRound3:
+    def _admin(self):
+        from django.contrib import admin
+
+        return admin.site._registry[MetricDefinition]
+
+    def test_agent_fields_read_only(self, rf, admin_user, mdef):
+        ma = self._admin()
+        request = rf.get("/")
+        request.user = admin_user
+        readonly = set(ma.get_readonly_fields(request, mdef))
+        agent = {
+            f.name
+            for f in MetricDefinition._meta.concrete_fields
+            if f.name not in MetricDefinition.OPERATOR_FIELDS and f.name != "id"
+        }
+        assert agent <= readonly
+        assert not readonly & set(MetricDefinition.OPERATOR_FIELDS)
+        assert not ma.has_add_permission(request)
+
+    def test_save_model_writes_only_operator_fields(self, rf, admin_user, mdef):
+        ma = self._admin()
+        request = rf.post("/")
+        request.user = admin_user
+        stale = MetricDefinition.objects.get(pk=mdef.pk)
+        MetricDefinition.objects.filter(pk=mdef.pk).update(label="new agent label", unit="mV")
+        stale.is_hidden = True
+        ma.save_model(request, stale, None, True)
+        mdef.refresh_from_db()
+        assert mdef.is_hidden is True
+        assert mdef.label == "new agent label"
+        assert mdef.unit == "mV"
+
+    def test_admin_change_view_keeps_agent_fields(self, client, admin_user, mdef):
+        client.force_login(admin_user)
+        url = reverse("admin:monitoring_metricdefinition_change", args=[mdef.pk])
+        resp = client.post(
+            url,
+            {
+                "label": "hacked",
+                "unit": "X",
+                "label_override": "Rail",
+                "min_override": "",
+                "max_override": "",
+                "is_blocked": "on",
+            },
+        )
+        assert resp.status_code == 302
+        mdef.refresh_from_db()
+        assert mdef.label == "12 V rail voltage" and mdef.unit == "V"
+        assert mdef.label_override == "Rail" and mdef.is_blocked is True

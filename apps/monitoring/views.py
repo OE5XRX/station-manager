@@ -2,6 +2,7 @@ import json
 import logging
 
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -211,7 +212,8 @@ class ThresholdRuleCreateView(_ThresholdRuleMixin, View):
         form = ThresholdRuleForm(request.POST, auto_id="rulenew_%s")
         if not form.is_valid():
             return self.render_invalid(request, create_form=form)
-        rule = form.save()
+        with transaction.atomic():
+            rule = form.save()
         _audit(
             request,
             obj="alert_rule",
@@ -230,8 +232,11 @@ class ThresholdRuleUpdateView(_ThresholdRuleMixin, View):
         form = ThresholdRuleForm(request.POST, instance=rule, auto_id=f"rule{pk}_%s")
         if not form.is_valid():
             return self.render_invalid(request, bound_forms={rule.pk: form})
-        # pre_save signal resolves open alerts + drops state on evaluation changes.
-        rule = form.save()
+        # Signals: pre_save detects an evaluation change, post_save (after the
+        # UPDATE, under the rule row lock) resolves open alerts + drops the
+        # state. One transaction, so the UPDATE and the reset commit together.
+        with transaction.atomic():
+            rule = form.save()
         _audit(
             request,
             obj="alert_rule",
@@ -249,7 +254,8 @@ class ThresholdRuleDeleteView(_ThresholdRuleMixin, View):
         rule = self.get_rule(pk)
         label = str(rule)
         before = _snapshot(rule, _RULE_AUDIT_FIELDS)
-        rule.delete()  # pre_delete signal resolves the rule's open alerts
+        with transaction.atomic():
+            rule.delete()  # pre_delete signal resolves the rule's open alerts
         _audit(
             request,
             obj="alert_rule",
@@ -310,7 +316,9 @@ class MetricDefinitionUpdateView(AreaPermissionMixin, View):
         if form.is_valid():
             # Only the operator fields: a concurrent heartbeat may have updated
             # the agent fields since the row was fetched.
-            form.save(commit=False).save(update_fields=list(form._meta.fields))
+            # Atomic: a block's post_save reset commits with the UPDATE.
+            with transaction.atomic():
+                form.save(commit=False).save(update_fields=list(form._meta.fields))
             _audit(
                 request,
                 obj="metric_definition",

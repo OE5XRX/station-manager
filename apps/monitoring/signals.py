@@ -50,10 +50,12 @@ def resolve_threshold_alerts_on_delete(sender, instance, **kwargs):
         resolve_open_alerts(instance)
 
 
-@receiver(pre_save, sender=MetricDefinition, dispatch_uid="monitoring_metricdef_reset_on_block")
-def reset_threshold_states_on_block(sender, instance, raw=False, **kwargs):
-    # A blocked metric's values are discarded, so its open threshold alerts
-    # could never auto-resolve: resolve them and drop the states now.
+@receiver(pre_save, sender=MetricDefinition, dispatch_uid="monitoring_metricdef_detect_block")
+def detect_metric_block(sender, instance, raw=False, **kwargs):
+    # Detect the False→True flip against the persisted row here; reset only in
+    # post_save, after the UPDATE, so an engine run cannot evaluate the still
+    # unblocked metric between the reset and the write.
+    instance._reset_metric_evaluation = False
     if raw or instance.pk is None or not instance.is_blocked:
         return
     was_blocked = (
@@ -61,5 +63,14 @@ def reset_threshold_states_on_block(sender, instance, raw=False, **kwargs):
         .values_list("is_blocked", flat=True)
         .first()
     )
-    if was_blocked is False:
-        reset_metric_evaluation(instance.key)
+    instance._reset_metric_evaluation = was_blocked is False
+
+
+@receiver(post_save, sender=MetricDefinition, dispatch_uid="monitoring_metricdef_reset_on_block")
+def reset_threshold_states_on_block(sender, instance, created=False, raw=False, **kwargs):
+    # A blocked metric's values are discarded, so its open threshold alerts
+    # could never auto-resolve: resolve them and drop the states now.
+    if raw or created or not getattr(instance, "_reset_metric_evaluation", False):
+        return
+    instance._reset_metric_evaluation = False
+    reset_metric_evaluation(instance.key)

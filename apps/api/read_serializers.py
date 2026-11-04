@@ -335,7 +335,7 @@ class MetricDefinitionSerializer(serializers.ModelSerializer):
     range_min = serializers.FloatField(read_only=True, allow_null=True)
     range_max = serializers.FloatField(read_only=True, allow_null=True)
 
-    WRITABLE_FIELDS = ("label_override", "min_override", "max_override", "is_hidden", "is_blocked")
+    WRITABLE_FIELDS = MetricDefinition.OPERATOR_FIELDS
 
     class Meta:
         model = MetricDefinition

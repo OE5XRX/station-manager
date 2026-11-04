@@ -471,15 +471,16 @@ class TestThresholdEngine:
     ):
         """Loads are per run, not per station × rule (no N+1).
 
-        4 loads (rules, definitions, telemetry, states) + per rule a constant
-        savepoint / row lock / release — independent of the station count."""
+        3 loads (rules, definitions, telemetry) + per rule a constant
+        savepoint / row lock / states / blocked keys / release —
+        independent of the station count."""
         now = timezone.now()
         rules = [_rule(key, 99) for key in ("cpu.temp_c", "mem.used_pct", "disk.*.used_pct")]
         for n_stations in (5, 10):
             while len(StationTelemetry.objects.all()) < n_stations:
                 st = station_factory(last_seen=now)
                 _set_metrics(st, cpu__temp_c=50.0, mem__used_pct=10.0, disk__root__used_pct=10.0)
-            with django_assert_max_num_queries(4 + 3 * len(rules)):
+            with django_assert_max_num_queries(3 + 5 * len(rules)):
                 assert _check_thresholds(now=now) == []
 
 
@@ -731,3 +732,153 @@ class TestRuleLockRace:
         )
         assert target(rule) == 1
         assert calls == [False]
+
+
+# ---------------------------------------------------------------------------
+# review round 3: states/blocks are re-read under the rule lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStateReloadUnderLock:
+    def _hook_first_candidates(self, monkeypatch, action):
+        """Run ``action`` once, after the engine loaded rules/definitions."""
+        real = engine._threshold_candidates
+        fired = {"done": False}
+
+        def hook(*args, **kwargs):
+            if not fired["done"]:
+                fired["done"] = True
+                action()
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(engine, "_threshold_candidates", hook)
+        return real
+
+    def test_block_during_run_leaves_no_orphan_alert(
+        self, isolated_rules, online_station, monkeypatch
+    ):
+        rule = _rule("cpu.temp_c", 80, duration=60)
+        t0 = timezone.now()
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        _check_thresholds(now=t0)
+        assert ThresholdState.objects.filter(rule=rule).exists()
+        t1 = t0 + timedelta(seconds=60)
+        _touch(online_station, t1)
+
+        def block():
+            d = MetricDefinition.objects.get(key="cpu.temp_c")
+            d.is_blocked = True
+            d.save()
+
+        real = self._hook_first_candidates(monkeypatch, block)
+        assert _check_thresholds(now=t1) == []
+        assert not _open_alerts(rule).exists()
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+        # Unblock + recover: nothing may stay open.
+        d = MetricDefinition.objects.get(key="cpu.temp_c")
+        d.is_blocked = False
+        d.save()
+        monkeypatch.setattr(engine, "_threshold_candidates", real)
+        _set_metrics(online_station, cpu__temp_c=20.0)
+        t = t1
+        for _ in range(6):
+            t += timedelta(seconds=30)
+            _touch(online_station, t)
+            _check_thresholds(now=t)
+        assert _open_alerts(rule).count() == 0
+
+    def test_aba_rule_edit_during_run_leaves_no_orphan_alert(
+        self, isolated_rules, online_station, monkeypatch
+    ):
+        rule = _rule("cpu.temp_c", 80, duration=60)
+        t0 = timezone.now()
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        _check_thresholds(now=t0)
+        t1 = t0 + timedelta(seconds=60)
+        _touch(online_station, t1)
+
+        def edit_a_b_a():
+            r = AlertRule.objects.get(pk=rule.pk)
+            r.threshold = 90
+            r.save()  # reset: pending state dropped
+            r.threshold = 80
+            r.save()  # back to the loaded values
+
+        self._hook_first_candidates(monkeypatch, edit_a_b_a)
+        # The pending timer was reset, so the breach starts over at t1.
+        assert _check_thresholds(now=t1) == []
+        assert not _open_alerts(rule).exists()
+        state = ThresholdState.objects.get(rule=rule)
+        assert state.breach_since == t1 and state.alert_id is None
+
+
+@pytest.mark.django_db
+class TestBlockResetUnderRuleLock:
+    def test_block_reset_runs_after_update(self, isolated_rules, online_station, monkeypatch):
+        """The reset runs in post_save (row already blocked), not pre_save."""
+        from apps.monitoring import signals
+
+        rule = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, cpu__temp_c=85.0)
+        assert len(_check_thresholds()) == 1
+        seen = []
+        real = signals.reset_metric_evaluation
+
+        def spy(key):
+            seen.append(MetricDefinition.objects.get(key=key).is_blocked)
+            return real(key)
+
+        monkeypatch.setattr(signals, "reset_metric_evaluation", spy)
+        d = MetricDefinition.objects.get(key="cpu.temp_c")
+        d.is_blocked = True
+        d.save()
+        assert seen == [True]
+        assert not _open_alerts(rule).exists()
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+        # Already blocked: no second reset.
+        d.label_override = "CPU"
+        d.save()
+        assert seen == [True]
+
+    def test_reset_locks_matching_rules_before_reading_states(
+        self, isolated_rules, online_station, monkeypatch
+    ):
+        from apps.monitoring.rules import reset_metric_evaluation
+
+        rule = _rule("disk.*.used_pct", 90)
+        other = _rule("cpu.temp_c", 80)
+        _set_metrics(online_station, disk__root__used_pct=95.0, cpu__temp_c=85.0)
+        assert len(_check_thresholds()) == 2
+        locked = []
+        real = AlertRule.objects.select_for_update
+
+        def spy(*args, **kwargs):
+            qs = real(*args, **kwargs)
+            locked.append(qs)
+            return qs
+
+        monkeypatch.setattr(AlertRule.objects, "select_for_update", spy)
+        assert reset_metric_evaluation("disk.root.used_pct") == 1
+        assert len(locked) == 1
+        assert _open_alerts(other).count() == 1
+        assert not ThresholdState.objects.filter(rule=rule).exists()
+
+    def test_reset_lock_set_covers_pattern_and_state_rules(self, isolated_rules, online_station):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.monitoring.rules import reset_metric_evaluation
+
+        rule = _rule("disk.*.used_pct", 90)
+        exact = _rule("disk.root.used_pct", 90)
+        unrelated = _rule("cpu.temp_c", 80)
+        with CaptureQueriesContext(connection) as ctx:
+            reset_metric_evaluation("disk.root.used_pct")
+        lock_sql = [q["sql"] for q in ctx.captured_queries if "monitoring_alertrule" in q["sql"]]
+        lock = next(q for q in lock_sql if "IN (" in q)
+        ids = {int(x) for x in lock.split("IN (")[1].split(")")[0].split(",")}
+        assert {rule.pk, exact.pk} <= ids and unrelated.pk not in ids
+        assert "ORDER BY" in lock  # deterministic lock order (no deadlock)
