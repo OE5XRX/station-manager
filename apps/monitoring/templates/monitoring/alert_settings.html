@@ -16,13 +16,17 @@
     <h1 class="page-title">{% trans "Alert rules" %}</h1>
     <p class="page-sub">{% trans "Thresholds and toggles for automatic alerts." %}</p>
   </div>
-  {% if not can.alert_rules.manage %}
-  <div class="page-head-actions">{% include "includes/readonly_badge.html" %}</div>
-  {% endif %}
+  <div class="page-head-actions">
+    {% if not can.alert_rules.manage %}{% include "includes/readonly_badge.html" %}{% endif %}
+    <a href="{% url 'monitoring:metric_definitions' %}" class="btn btn-ghost">{% trans "Metrics" %}</a>
+  </div>
 </div>
 
-<section class="panel">
-  <div class="panel-head"><div class="panel-title"><span class="dot"></span>{% trans "Rules" %}</div></div>
+<section class="panel" id="event-rules">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot"></span>{% trans "Event rules" %}</div>
+    <span class="t-label">{% trans "One per event type" %}</span>
+  </div>
   <div class="panel-body flush">
     <table class="t-table">
       <thead>
@@ -35,7 +39,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for rule in alert_rules %}
+        {% for rule in event_rules %}
         <tr>
           <td>
             <div class="stack-gap-2">
@@ -53,7 +57,7 @@
             {% else %}
             <form hx-post="{% url 'monitoring:alert_rule_update' rule.pk %}" class="row-gap-8">
               {% csrf_token %}
-              <input type="number" step="0.1" name="threshold" value="{{ rule.threshold|unlocalize }}" style="width:120px;">
+              <input type="number" step="any" lang="en" inputmode="decimal" name="threshold" value="{{ rule.threshold|unlocalize }}" style="width:120px;" aria-label="{% trans 'Threshold' %}">
               <button type="submit" class="btn btn-sm">{% trans "Save" %}</button>
             </form>
             {% endif %}
@@ -82,7 +86,7 @@
                 {% trans "No alert rules configured." %}
               </span>
               <span class="t-muted">
-                {% blocktrans %}The 6 default rules are created by a data migration on the first deploy. If this message persists after a successful deploy, check the init container logs — the seed migration did not run or was rolled back.{% endblocktrans %}
+                {% blocktrans %}The default rules are created by a data migration on the first deploy. If this message persists after a successful deploy, check the init container logs — the seed migration did not run or was rolled back.{% endblocktrans %}
               </span>
             </div>
           </td>
@@ -90,6 +94,85 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
+</section>
+
+<section class="panel mt-20" id="threshold-rules">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--cyan)"></span>{% trans "Threshold rules" %}
+      <span class="t-mono-sm t-muted">{{ threshold_rows|length }}</span>
+    </div>
+    <span class="t-label">{% trans "Value must hold for the duration to fire — and to resolve" %}</span>
+  </div>
+  <div class="panel-body flush">
+    {% if can.alert_rules.manage %}
+    <datalist id="metric-key-list">
+      {% for pattern in metric_key_patterns %}<option value="{{ pattern }}">{% trans "pattern — all instances" %}</option>{% endfor %}
+      {% for key, label in metric_key_choices %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+    </datalist>
+    {% endif %}
+    <ol class="tr-list">
+      {% for row in threshold_rows %}
+      {% with rule=row.rule f=row.form %}
+      <li id="rule-{{ rule.pk }}" class="tr-row is-{{ rule.severity }}{% if not rule.is_active %} is-inactive{% endif %}{% if f.errors %} has-errors{% endif %}">
+        {% if can.alert_rules.manage %}
+        <form method="post" action="{% url 'monitoring:threshold_rule_update' rule.pk %}">
+          {% csrf_token %}
+          {% url 'monitoring:threshold_rule_delete' rule.pk as delete_url %}
+          {% include "monitoring/_threshold_rule_fields.html" with f=f unit=row.unit delete_url=delete_url %}
+        </form>
+        {% else %}
+        <div class="tr-ident">
+          <span class="tr-name">{{ rule.name|default:rule.metric_key }}</span>
+          {% if rule.description %}<span class="t-muted">{{ rule.description }}</span>{% endif %}
+        </div>
+        <div class="tr-expr">
+          <span class="tr-kw">{% trans "When" %}</span>
+          <span>{{ rule.aggregate|upper }}<span class="tr-paren">(</span><span class="tr-key">{{ rule.metric_key }}</span><span class="tr-paren">)</span></span>
+          <span class="tr-op">{{ rule.get_operator_display }}</span>
+          <span class="tr-val">{{ rule.threshold|unlocalize }}</span><span class="tr-unit">{{ row.unit }}</span>
+          <span class="tr-kw">{% trans "for" %}</span>
+          <span class="tr-val">{{ rule.duration_seconds }}</span><span class="tr-unit">s</span>
+          <span class="tr-spacer"></span>
+          {% if rule.severity == "critical" %}<span class="pill pill-offline">{% trans "CRITICAL" %}</span>
+          {% else %}<span class="pill pill-warn">{% trans "WARNING" %}</span>{% endif %}
+          {% if rule.is_active %}<span class="pill pill-online">{% trans "Enabled" %}</span>
+          {% else %}<span class="pill pill-muted">{% trans "Disabled" %}</span>{% endif %}
+        </div>
+        {% endif %}
+        {% if rule.open_alert_count %}
+        <div class="mt-10">
+          <a class="pill pill-offline" href="{% url 'monitoring:alert_list' %}?is_resolved=false">
+            <span class="dot"></span>{% blocktrans count n=rule.open_alert_count %}{{ n }} open alert{% plural %}{{ n }} open alerts{% endblocktrans %}
+          </a>
+          {% if can.alert_rules.manage %}<span class="t-mono-sm t-muted">{% trans "Changing the rule resolves them; evaluation restarts." %}</span>{% endif %}
+        </div>
+        {% endif %}
+      </li>
+      {% endwith %}
+      {% empty %}
+      <li class="empty">
+        <div class="empty-title">{% trans "No threshold rules yet" %}</div>
+        <div>{% trans "Threshold rules compare a reported metric against a limit." %}</div>
+      </li>
+      {% endfor %}
+    </ol>
+    {% if can.alert_rules.manage %}
+    <details class="tr-new"{% if create_form.errors %} open{% endif %}>
+      <summary>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        {% trans "Add threshold rule" %}
+      </summary>
+      <div class="tr-row is-warning{% if create_form.errors %} has-errors{% endif %}">
+        <form method="post" action="{% url 'monitoring:threshold_rule_create' %}">
+          {% csrf_token %}
+          {% include "monitoring/_threshold_rule_fields.html" with f=create_form unit="" delete_url="" %}
+        </form>
+        <p class="form-help">{% blocktrans %}Use a concrete key or a pattern with one <span class="t-mono-sm">*</span> segment (e.g. <span class="t-mono-sm">disk.*.used_pct</span>) — patterns also cover instances that appear later. Durations shorter than one heartbeat interval behave like 0.{% endblocktrans %}</p>
+      </div>
+    </details>
+    {% endif %}
   </div>
 </section>
 

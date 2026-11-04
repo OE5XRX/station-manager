@@ -13,6 +13,23 @@ Repo-spezifische Architekturnotizen. Übergeordnete Projektstrategie, Arbeitspro
 - **VAPID-Keys** werden einmalig per `manage.py generate_vapid_keys` erzeugt und als Env-Variablen / Secrets hinterlegt (nie in DB oder Repo). Ohne Keys ist `ALERT_WEBPUSH_ENABLED = False` und der Kanal wird still deaktiviert — kein Fehler.
 - **Subscription-Lebenszyklus:** Abgelaufene oder gesperrte Subscriptions (HTTP 404/410 vom Push-Dienst) werden beim nächsten Send automatisch aus der DB entfernt. Fehler einer Subscription isolieren die anderen.
 
+### Generische Metriken + Schwellwert-Alarme (`apps/monitoring`)
+Spec: `docs/superpowers/specs/2026-11-03-generic-metrics-design.md`. Messwerte laufen über einen
+generischen, vom Agent selbst beschriebenen `metrics`-Block im Heartbeat — **ein neuer Messwert ist
+nur eine Agent-Änderung** (Key + Descriptor in `station_agent/metrics.py`), kein Server-Code, keine Migration.
+
+- **Ein gemeinsamer Kontrakt:** `station_agent/metrics_contract.py` (Key-Regex, `mount_to_instance`,
+  `normalize_value`, `clean_descriptor`, `descriptors_hash`, Muster-Matching) wird von Agent **und**
+  Server importiert. Nie eine zweite Implementierung bauen — Hash/Keys würden auseinanderlaufen.
+- **Keys sind stabil** (Einheit im Namen, `_v`/`_pct`); die spätere Historie baut darauf. Einheit ändern = neuer Key.
+- `MetricDefinition` (global, DB): Agent-Felder „letzter Schreiber gewinnt", Operator-Overrides gewinnen immer;
+  `is_blocked` verwirft Werte, Plausibilitätsbereich verwirft + setzt `last_rejected_*`. Cap 2000 Zeilen.
+- Ingest (`metrics_ingest.py`) ist fehlerisoliert im Heartbeat-View; `metric_descriptors_required` nur, wenn
+  der Agent die Liste in diesem Heartbeat **nicht** mitgeschickt hat (sonst Endlos-Resend).
+- Schwellwert-Regeln = `AlertRule(alert_type="threshold")` mit Dauer + Hysterese; Zustand in `ThresholdState`.
+  Regeländerung/-löschung resettet offene Alarme per Signal (gilt auch für Admin). Ereignis-Alarme
+  (offline, OTA, Reboot, Power, Storage) bleiben typisiert.
+
 ## station-agent
 
 ### Control-Device Single-Owner-Invariante

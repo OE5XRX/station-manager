@@ -2,6 +2,7 @@
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
@@ -26,6 +27,7 @@ from apps.api.read_serializers import (
     DeploymentSerializer,
     ImageImportJobSerializer,
     ImageReleaseSerializer,
+    MetricDefinitionSerializer,
     ProvisioningJobSerializer,
     RegionAssignmentSerializer,
     RegionSerializer,
@@ -93,6 +95,7 @@ class StationViewSet(AreaReadOnlyViewSet):
     def get_queryset(self):
         return Station.objects.all().order_by("name")
 
+    @extend_schema(responses=StationTelemetrySerializer)
     @action(detail=True, url_path="telemetry")
     def telemetry(self, request, pk=None):
         from apps.stations.models import StationTelemetry
@@ -297,6 +300,21 @@ class AlertRuleViewSet(AreaReadOnlyViewSet):
         from apps.monitoring.models import AlertRule
 
         return AlertRule.objects.all().order_by("alert_type")
+
+
+class MetricDefinitionViewSet(AreaReadOnlyViewSet):
+    """Agent-described metric definitions (read: ``alert_rules.view``)."""
+
+    area = "alert_rules"
+    serializer_class = MetricDefinitionSerializer
+    filterset_fields = ["group", "is_hidden", "is_blocked"]
+    search_fields = ["key", "label", "label_override"]
+    ordering_fields = ["key", "group", "last_seen"]
+
+    def get_queryset(self):
+        from apps.monitoring.models import MetricDefinition
+
+        return MetricDefinition.objects.all().order_by("group", "key")
 
 
 class AlertViewSet(AreaReadOnlyViewSet):

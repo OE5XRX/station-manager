@@ -17,6 +17,7 @@ from .health_check import run_health_checks
 from .heartbeat import send_heartbeat
 from .http_client import HttpClient
 from .inventory import get_current_version
+from .metrics import MetricsCollector
 from .module_ota import NUDGE_MIN_INTERVAL_S, ModuleOta
 from .ota import (
     apply_update,
@@ -42,6 +43,7 @@ class StationAgent:
         self._nudge_pending = False
         self._config = None
         self._tx_settings = None
+        self._metrics = None
         self._clock = time.monotonic
 
     def _handle_signal(self, signum, frame):
@@ -79,6 +81,7 @@ class StationAgent:
                         config=config,
                         tx_settings=self._tx_settings,
                         module_ota_backends=self._module_ota_backends(),
+                        metrics=self._metrics,
                     )
                 except Exception:  # noqa: BLE001 — a failed heartbeat must not end the keepalive
                     logger.exception("module_ota keepalive heartbeat failed")
@@ -90,6 +93,20 @@ class StationAgent:
         finally:
             stop.set()
             thread.join(timeout=5)
+
+    def _start_metrics(self):
+        """Start the metrics collector; a failure only drops the metrics block."""
+        collector = None
+        try:
+            collector = MetricsCollector()
+            collector.start()
+        except Exception:  # noqa: BLE001 — metrics must never keep the agent down
+            logger.exception("metrics collector failed to start; heartbeats without metrics")
+            if collector is not None:
+                with contextlib.suppress(Exception):
+                    collector.stop(timeout=1.0)
+            return None
+        return collector
 
     def _module_ota_backends(self) -> list[str]:
         """Backends the heartbeat advertises: what the running ModuleOta can execute.
@@ -656,6 +673,9 @@ class StationAgent:
         # Set up authenticated HTTP client
         http_client = HttpClient(config)
 
+        # Generic metrics (1 Hz sampler), shared by the main and keepalive heartbeats.
+        self._metrics = self._start_metrics()
+
         # Register signal handlers
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -759,6 +779,7 @@ class StationAgent:
                 config=config,
                 tx_settings=tx_settings,
                 module_ota_backends=self._module_ota_backends(),
+                metrics=self._metrics,
             )
             heartbeat_count += 1
 
@@ -789,6 +810,13 @@ class StationAgent:
             audio_client.stop()
         if audio_thread is not None:
             audio_thread.join(timeout=5)
+
+        # Stop the metrics sampler
+        if self._metrics is not None:
+            try:
+                self._metrics.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("metrics collector stop failed")
 
         # Write clean-shutdown marker so the next boot can classify the
         # reboot reason as "clean" rather than "unknown".

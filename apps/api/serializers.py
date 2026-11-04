@@ -27,6 +27,13 @@ class HeartbeatSerializer(serializers.Serializer):
     inventory = serializers.DictField(required=False, default=dict)
     telemetry = _AnyJSONField(required=False)
     capabilities = serializers.DictField(required=False)
+    # Generic metrics (spec §2): shape validation happens in ingest_metrics so a
+    # malformed block drops keys instead of failing the heartbeat.
+    metrics = _AnyJSONField(required=False, allow_null=True)
+    metric_descriptors = _AnyJSONField(required=False, allow_null=True)
+    # Coerced in the view (str <= 64 chars, else "") — a malformed hash must
+    # not 400 the heartbeat either.
+    metric_descriptors_hash = _AnyJSONField(required=False, allow_null=True)
 
     def validate_capabilities(self, value):
         if len(json.dumps(value, separators=(",", ":"))) > MAX_CAPABILITIES_BYTES:

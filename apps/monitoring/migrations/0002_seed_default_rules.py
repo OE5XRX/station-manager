@@ -9,6 +9,13 @@ fresh DBs (incl. DR-restores from an empty snapshot) end up with a dead
 alert-monitor loop. This migration closes that gap on every `migrate`
 run.
 
+Generic metrics (0006_generic_metrics_data): the cpu_temperature,
+disk_warning, disk_critical and ram_critical rows seeded here are converted
+in place to alert_type="threshold" rules by 0006. They are still seeded
+here on purpose — this migration must stay runnable on fresh DBs, and 0006
+is the single place that maps legacy rows (seeded or operator-tuned) to the
+generic engine. Do not drop them from DEFAULT_RULES.
+
 Idempotent: get_or_create matches on the unique alert_type field. An
 operator who later tunes threshold/severity/is_active via the UI is
 never overwritten by a re-run — defaults only apply on first creation.

@@ -59,6 +59,7 @@ from apps.deployments.services import (
 )
 from apps.images import github_releases
 from apps.images.models import ImageImportJob, ImageRelease
+from apps.monitoring.rules import rule_snapshot, snapshot_changes
 from apps.provisioning.models import ProvisioningJob
 from apps.provisioning.views import ACTIVE_PROVISIONING_STATUSES
 from apps.rollouts import services as rollout_services
@@ -668,32 +669,74 @@ class AlertRuleViewSet(
 ):
     """Full CRUD for AlertRule (``alert_rules.manage``).
 
-    alert_type is UNIQUE per the model, so create will fail with 400 if the
-    client POSTs a duplicate type.
+    Event alert_types are unique (conditional UniqueConstraint), so creating a
+    duplicate event type fails with 400; any number of ``threshold`` rules is
+    allowed. Evaluation reset on rule changes happens via model signals.
     """
 
     write_serializer_class = AlertRuleWriteSerializer
 
     def perform_create(self, serializer):
-        rule = serializer.save()
+        with transaction.atomic():
+            rule = serializer.save()
         audit_config_write(
             self.request,
-            message=f"AlertRule {rule.alert_type} created",
+            message=f"AlertRule {rule.alert_type} ({rule}) created",
+            details={"object": "alert_rule", "action": "created", "config": rule_snapshot(rule)},
         )
 
     def perform_update(self, serializer):
-        rule = serializer.save()
+        before = rule_snapshot(serializer.instance)
+        # Atomic: the UPDATE and the post_save evaluation reset commit together.
+        with transaction.atomic():
+            rule = serializer.save()
+        changes = snapshot_changes(before, rule_snapshot(rule))
         audit_config_write(
             self.request,
-            message=f"AlertRule {rule.alert_type} updated",
+            message=f"AlertRule {rule.alert_type} ({rule}) updated",
+            details={"object": "alert_rule", "action": "updated", "changes": changes},
         )
 
     def perform_destroy(self, instance):
         audit_config_write(
             self.request,
-            message=f"AlertRule {instance.alert_type} deleted",
+            message=f"AlertRule {instance.alert_type} ({instance}) deleted",
+            details={
+                "object": "alert_rule",
+                "action": "deleted",
+                "config": rule_snapshot(instance),
+            },
         )
-        instance.delete()
+        with transaction.atomic():
+            instance.delete()
+
+
+class MetricDefinitionViewSet(UpdateModelMixin, read_views.MetricDefinitionViewSet):
+    """Metric definitions: list/retrieve (``alert_rules.view``), update/partial
+    update of the operator fields only (``alert_rules.manage``).
+
+    Rows are created by heartbeat ingest and never deleted (rules reference
+    keys), so POST/DELETE are excluded -> 405.
+    """
+
+    http_method_names = ["get", "put", "patch", "head", "options"]
+
+    def perform_update(self, serializer):
+        fields = serializer.instance.OPERATOR_FIELDS
+        before = {f: getattr(serializer.instance, f) for f in fields}
+        # Atomic: a block's post_save reset commits with the UPDATE.
+        with transaction.atomic():
+            definition = serializer.save()
+        changes = {
+            f: {"old": before[f], "new": getattr(definition, f)}
+            for f in fields
+            if getattr(definition, f) != before[f]
+        }
+        audit_config_write(
+            self.request,
+            message=f"MetricDefinition {definition.key} updated ({', '.join(changes) or '-'})",
+            details={"object": "metric_definition", "action": "updated", "changes": changes},
+        )
 
 
 class DeploymentViewSet(

@@ -1,0 +1,65 @@
+{% load i18n %}
+{% comment %}
+  Station Metrics tab: current values from StationTelemetry.metrics, grouped
+  by MetricDefinition.group. Context: metric_groups, metric_count,
+  metric_breached_count, station. Values are pre-formatted (dot decimal,
+  definition precision) by stations.views.metric_groups.
+{% endcomment %}
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--cyan)"></span>{% trans "Metrics" %}
+      {% if metric_breached_count %}
+      <span class="pill pill-offline"><span class="dot"></span>{% blocktrans count n=metric_breached_count %}{{ n }} metric breached{% plural %}{{ n }} metrics breached{% endblocktrans %}</span>
+      {% endif %}
+    </div>
+    <div class="row-gap-8">
+      {% if station.telemetry and metric_groups %}<span class="t-label">{% trans "Updated" %} {{ station.telemetry.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+      {% if can.alert_rules.view %}<a class="btn btn-sm btn-ghost" href="{% url 'monitoring:alert_settings' %}#threshold-rules">{% trans "Threshold rules" %}</a>{% endif %}
+    </div>
+  </div>
+  <div class="panel-body">
+    {% if metric_groups %}
+    <div class="mx-grid">
+      {% for group_label, rows in metric_groups %}
+      <div class="panel mx-group">
+        <div class="panel-head">
+          <div class="panel-title" style="font-size:12px;">{{ group_label }}</div>
+          <span class="t-mono-sm t-muted">{{ rows|length }}</span>
+        </div>
+        <ul class="mx-list">
+          {% for m in rows %}
+          <li class="mx-row{% if m.breached %} is-breached is-{{ m.breached }}{% endif %}" title="{{ m.key }}">
+            <div>
+              <span class="mx-label">{{ m.label }}</span>
+              <span class="mx-key">{{ m.key }}</span>
+            </div>
+            {% if m.is_aggregate %}
+            <div class="mx-agg" aria-label="{% trans 'Minimum, average and maximum over the last heartbeat interval' %}">
+              <span class="mx-agg-cell"><span class="mx-agg-k">{% trans "min" %}</span><span class="mx-agg-v t-mono t-num">{{ m.min }}</span></span>
+              <span class="mx-agg-cell is-avg"><span class="mx-agg-k">{% trans "avg" %}</span><span class="mx-agg-v t-mono t-num">{{ m.avg }}<span class="mx-unit">{{ m.unit }}</span></span></span>
+              <span class="mx-agg-cell"><span class="mx-agg-k">{% trans "max" %}</span><span class="mx-agg-v t-mono t-num">{{ m.max }}</span></span>
+            </div>
+            {% else %}
+            <div class="mx-value">{{ m.avg }}<span class="mx-unit">{{ m.unit }}</span></div>
+            {% endif %}
+            {% if m.breached %}
+            <span class="mx-flag pill {% if m.breached == 'critical' %}pill-offline{% else %}pill-warn{% endif %}">
+              <span class="dot"></span>{% if m.breached == "critical" %}{% trans "Critical threshold breached" %}{% else %}{% trans "Threshold breached" %}{% endif %}
+            </span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+      <div class="empty-title">{% trans "No metrics reported yet" %}</div>
+      <div>{% trans "Metrics appear once the agent reports them in a heartbeat and describes them." %}</div>
+    </div>
+    {% endif %}
+  </div>
+</section>

@@ -589,6 +589,11 @@ class StationTelemetry(models.Model):
     # re-alert when io_error_count exceeds this value (prevents infinite re-alert
     # on a cumulative counter that stays non-zero after an operator resolves it).
     alerted_io_error_count = models.PositiveIntegerField(default=0)
+    # Generic metrics (current values only): {key: {"min","max","avg","ts"}}.
+    # Replaced per heartbeat, never merged — missing keys disappear.
+    metrics = models.JSONField(default=dict, blank=True)
+    # Descriptor hash last accepted from this station (spec §2.1).
+    metric_descriptors_hash = models.CharField(max_length=64, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

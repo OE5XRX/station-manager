@@ -48,7 +48,9 @@ def audit_station_write(
         logger.warning("API audit (station) write failed", exc_info=True)
 
 
-def audit_account_write(request, *, event_type, target_user=None, region=None, message=""):
+def audit_account_write(
+    request, *, event_type, target_user=None, region=None, message="", details=None
+):
     try:
         AccountAuditLog.log(
             event_type=event_type,
@@ -57,15 +59,19 @@ def audit_account_write(request, *, event_type, target_user=None, region=None, m
             region=region,
             message=message + _token_suffix(request),
             ip_address=_client_ip(request),
+            details=details,
         )
     except Exception:  # pragma: no cover
         logger.warning("API audit (account) write failed", exc_info=True)
 
 
-def audit_config_write(request, *, message):
+def audit_config_write(request, *, message, details=None):
     """Audit a subject-less global config/taxonomy write (StationTag, rollout
     sequences, alert rules). No station/region FK, so it records to
     AccountAuditLog with the CONFIG_CHANGED event type."""
     audit_account_write(
-        request, event_type=AccountAuditLog.EventType.CONFIG_CHANGED, message=message
+        request,
+        event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+        message=message,
+        details=details,
     )

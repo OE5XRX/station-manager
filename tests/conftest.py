@@ -245,44 +245,20 @@ def offline_alert_rule(db):
 
 @pytest.fixture
 def cpu_temp_alert_rule(db):
-    """An active AlertRule for cpu_temperature with threshold 80."""
+    """The active threshold rule ``cpu.temp_c gte 80`` (converted from the
+    legacy cpu_temperature rule by monitoring.0006)."""
     rule, _ = AlertRule.objects.update_or_create(
-        alert_type=AlertRule.AlertType.CPU_TEMPERATURE,
+        alert_type=AlertRule.AlertType.THRESHOLD,
+        metric_key="cpu.temp_c",
+        operator=AlertRule.Operator.GTE,
         defaults={
+            "name": "CPU temperature",
             "threshold": 80.0,
+            "aggregate": AlertRule.Aggregate.AVG,
+            "duration_seconds": 0,
             "severity": AlertRule.Severity.WARNING,
             "is_active": True,
             "description": "CPU temperature check",
-        },
-    )
-    return rule
-
-
-@pytest.fixture
-def disk_warning_alert_rule(db):
-    """An active AlertRule for disk_warning with threshold 90."""
-    rule, _ = AlertRule.objects.update_or_create(
-        alert_type=AlertRule.AlertType.DISK_WARNING,
-        defaults={
-            "threshold": 90.0,
-            "severity": AlertRule.Severity.WARNING,
-            "is_active": True,
-            "description": "Disk warning check",
-        },
-    )
-    return rule
-
-
-@pytest.fixture
-def ram_critical_alert_rule(db):
-    """An active AlertRule for ram_critical with threshold 90."""
-    rule, _ = AlertRule.objects.update_or_create(
-        alert_type=AlertRule.AlertType.RAM_CRITICAL,
-        defaults={
-            "threshold": 90.0,
-            "severity": AlertRule.Severity.CRITICAL,
-            "is_active": True,
-            "description": "RAM critical check",
         },
     )
     return rule

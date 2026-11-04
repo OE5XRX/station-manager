@@ -1,15 +1,18 @@
 """Alert engine: checks station health and creates/resolves alerts."""
 
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from apps.deployments.models import DeploymentResult
-from apps.stations.models import Station, StationInventory
+from apps.stations.models import Station
+from station_agent.metrics_contract import pattern_matcher
 
-from .models import Alert, AlertRule
+from .models import Alert, AlertRule, MetricDefinition, ThresholdState
+from .rules import ABOVE_OPERATORS, compare, format_duration, format_value
 
 logger = logging.getLogger(__name__)
 
@@ -306,125 +309,6 @@ def _check_station_offline():
     return new_alerts
 
 
-def _check_cpu_temperature():
-    """Check CPU temperature from station inventory data."""
-    new_alerts = []
-    rule = _get_active_rule(AlertRule.AlertType.CPU_TEMPERATURE)
-    if not rule:
-        return new_alerts
-
-    for inventory in StationInventory.objects.select_related("station").all():
-        cpu_data = inventory.data.get("cpu", {})
-        temp = cpu_data.get("temperature_c")
-        if temp is None:
-            continue
-
-        station = inventory.station
-        if temp >= rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.CPU_TEMPERATURE):
-                alert = _create_alert(
-                    station=station,
-                    rule=rule,
-                    title=f"High CPU temperature: {station.name}",
-                    message=(
-                        f"CPU temperature on {station.name} is {temp}C, "
-                        f"exceeding threshold of {rule.threshold}C."
-                    ),
-                )
-                new_alerts.append(alert)
-        else:
-            _auto_resolve(AlertRule.AlertType.CPU_TEMPERATURE, station=station)
-
-    return new_alerts
-
-
-def _check_disk_usage():
-    """Check disk usage from station inventory data."""
-    new_alerts = []
-    warning_rule = _get_active_rule(AlertRule.AlertType.DISK_WARNING)
-    critical_rule = _get_active_rule(AlertRule.AlertType.DISK_CRITICAL)
-
-    if not warning_rule and not critical_rule:
-        return new_alerts
-
-    for inventory in StationInventory.objects.select_related("station").all():
-        disks = inventory.data.get("disk", [])
-        if not isinstance(disks, list):
-            continue
-
-        station = inventory.station
-        max_usage = 0.0
-        for disk in disks:
-            usage = disk.get("usage_percent", 0.0)
-            if usage > max_usage:
-                max_usage = usage
-
-        # Check critical first (higher priority)
-        if critical_rule and max_usage >= critical_rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.DISK_CRITICAL):
-                alert = _create_alert(
-                    station=station,
-                    rule=critical_rule,
-                    title=f"Disk critical: {station.name}",
-                    message=(
-                        f"Disk usage on {station.name} is {max_usage}%, "
-                        f"exceeding critical threshold of {critical_rule.threshold}%."
-                    ),
-                )
-                new_alerts.append(alert)
-        elif critical_rule:
-            _auto_resolve(AlertRule.AlertType.DISK_CRITICAL, station=station)
-
-        if warning_rule and max_usage >= warning_rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.DISK_WARNING):
-                alert = _create_alert(
-                    station=station,
-                    rule=warning_rule,
-                    title=f"Disk warning: {station.name}",
-                    message=(
-                        f"Disk usage on {station.name} is {max_usage}%, "
-                        f"exceeding warning threshold of {warning_rule.threshold}%."
-                    ),
-                )
-                new_alerts.append(alert)
-        elif warning_rule:
-            _auto_resolve(AlertRule.AlertType.DISK_WARNING, station=station)
-
-    return new_alerts
-
-
-def _check_ram_usage():
-    """Check RAM usage from station inventory data."""
-    new_alerts = []
-    rule = _get_active_rule(AlertRule.AlertType.RAM_CRITICAL)
-    if not rule:
-        return new_alerts
-
-    for inventory in StationInventory.objects.select_related("station").all():
-        ram_data = inventory.data.get("ram", {})
-        usage = ram_data.get("usage_percent")
-        if usage is None:
-            continue
-
-        station = inventory.station
-        if usage >= rule.threshold:
-            if not _has_unresolved_alert(station, AlertRule.AlertType.RAM_CRITICAL):
-                alert = _create_alert(
-                    station=station,
-                    rule=rule,
-                    title=f"High RAM usage: {station.name}",
-                    message=(
-                        f"RAM usage on {station.name} is {usage}%, "
-                        f"exceeding threshold of {rule.threshold}%."
-                    ),
-                )
-                new_alerts.append(alert)
-        else:
-            _auto_resolve(AlertRule.AlertType.RAM_CRITICAL, station=station)
-
-    return new_alerts
-
-
 def _check_ota_failed():
     """Check for recent failed/rolled-back OTA deployments."""
     new_alerts = []
@@ -457,6 +341,224 @@ def _check_ota_failed():
     return new_alerts
 
 
+def _threshold_message(defn, station, rule, value, elapsed_seconds):
+    unit = defn.unit
+    direction = "above" if rule.operator in ABOVE_OPERATORS else "below"
+    msg = (
+        f"{defn.display_label} on {station.name}: "
+        f"{format_value(value, defn.precision)}{unit} {direction} "
+        f"{format_value(rule.threshold, defn.precision)}{unit}"
+    )
+    if elapsed_seconds > 0:
+        msg += f" for {format_duration(elapsed_seconds)}"
+    return msg + "."
+
+
+def _sample_is_current(sample, now) -> bool:
+    """True if the sample's ``ts`` (ISO string) is at most OFFLINE_THRESHOLD old.
+
+    Missing/unparseable ``ts`` counts as no current value. A naive ``ts`` is
+    read as UTC; a ``ts`` in the future (clock skew) counts as current.
+    """
+    ts = sample.get("ts")
+    if not isinstance(ts, str) or not ts:
+        return False
+    try:
+        parsed = datetime.fromisoformat(ts)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return now - parsed <= OFFLINE_THRESHOLD
+
+
+def _threshold_candidates(current, definitions, pattern):
+    """(station, key, sample, definition) for every current sample matching ``pattern``."""
+    matches = pattern_matcher(pattern)  # validated/split once, not per sample
+    return [
+        (station, key, sample, definitions[key])
+        for station, metrics in current
+        for key, sample in metrics.items()
+        if key in definitions and matches(key)
+    ]
+
+
+def _evaluate_threshold_rule(rule, candidates, states, now):
+    """Evaluate one (locked) rule over its candidates and persist the changed states.
+
+    ``states`` maps ``(station_id, metric_key)`` to the rule's ThresholdState rows.
+    Returns the newly created alerts.
+    """
+    new_alerts, to_create, to_update = [], [], []
+    duration = timedelta(seconds=rule.duration_seconds)
+    for station, key, sample, defn in candidates:
+        value = sample.get(rule.aggregate)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+
+        state = states.get((station.pk, key))
+        is_new = state is None
+        if is_new:
+            state = ThresholdState(rule=rule, station=station, metric_key=key)
+        before = (state.breach_since, state.ok_since, state.alert_id, state.last_evaluated_at)
+        open_alert = state.alert if state.alert and not state.alert.is_resolved else None
+
+        # A gap without current values (offline / key missing / stale ts)
+        # froze the state; it must not count toward the duration.
+        if (
+            state.last_evaluated_at is not None
+            and now - state.last_evaluated_at > OFFLINE_THRESHOLD
+        ):
+            if state.breach_since is not None and open_alert is None:
+                state.breach_since = now
+            if state.ok_since is not None:
+                state.ok_since = now
+
+        if compare(rule.operator, float(value), rule.threshold):
+            state.ok_since = None
+            state.breach_since = state.breach_since or now
+            if open_alert is None and now - state.breach_since >= duration:
+                elapsed = int((now - state.breach_since).total_seconds())
+                alert = _create_alert(
+                    station=station,
+                    rule=rule,
+                    title=f"{defn.display_label}: {station.name}",
+                    message=_threshold_message(defn, station, rule, value, elapsed),
+                )
+                state.alert = alert
+                open_alert = alert
+                new_alerts.append(alert)
+        else:
+            state.breach_since = None
+            if open_alert is not None:
+                state.ok_since = state.ok_since or now
+                if now - state.ok_since >= duration:
+                    Alert.objects.filter(pk=open_alert.pk, is_resolved=False).update(
+                        is_resolved=True, resolved_at=now
+                    )
+                    logger.info("Auto-resolved threshold alert %s", open_alert.pk)
+                    state.ok_since = None
+                    state.alert = None
+                    open_alert = None
+            else:
+                state.ok_since = None
+                state.alert = None
+
+        pending = state.ok_since is not None or (
+            state.breach_since is not None and open_alert is None
+        )
+        if pending:
+            state.last_evaluated_at = now
+
+        if (state.breach_since, state.ok_since, state.alert_id, state.last_evaluated_at) == before:
+            continue
+        if is_new:
+            to_create.append(state)
+            states[(station.pk, key)] = state
+        else:
+            to_update.append(state)
+
+    if to_create:
+        ThresholdState.objects.bulk_create(to_create)
+    if to_update:
+        ThresholdState.objects.bulk_update(
+            to_update, ["breach_since", "ok_since", "alert", "last_evaluated_at"]
+        )
+    return new_alerts
+
+
+def _check_thresholds(now=None):
+    """Evaluate generic threshold rules per (rule, station, concrete metric key).
+
+    Duration + hysteresis (spec §5.2): a breach must hold ``duration_seconds``
+    before an alert fires, and the value must stay OK for the same duration
+    before it auto-resolves. No current value (station offline, key absent, or
+    the sample's ``ts`` missing/older than OFFLINE_THRESHOLD) freezes the
+    state — neither fire nor resolve — and a pending timer restarts after
+    such a gap (``last_evaluated_at``), so the gap never counts toward the
+    duration. State lives in ``ThresholdState`` so a restart keeps the timers.
+
+    Each rule is evaluated and persisted inside a transaction holding the
+    AlertRule row lock (``select_for_update``); the rule-change/delete reset
+    takes the same lock, so a stale evaluation can never create an alert
+    after the rule was reset or disabled. The locked, fresh row's fields are
+    used; a rule that is gone/inactive by then is skipped. Under the lock
+    the rule's ThresholdState rows are always re-read and the candidate keys
+    re-checked for a block — a reset (rule edit, also A→B→A, or metric
+    block) that landed after the run's loads must not be overwritten with a
+    stale state (orphan open alert).
+
+    Queries are bounded per run: rules, definitions and online telemetry are
+    each loaded once; per rule with matching samples a constant number of
+    queries follows (savepoint, row lock, states, blocked keys, release),
+    plus writes only for alerts that fire/resolve and state rows that
+    changed (or have a pending timer).
+    """
+    from apps.stations.models import StationTelemetry
+
+    now = now or timezone.now()
+    rules = list(
+        AlertRule.objects.filter(alert_type=AlertRule.AlertType.THRESHOLD, is_active=True)
+    )
+    if not rules:
+        return []
+    definitions = {
+        d.key: d
+        for d in MetricDefinition.objects.filter(is_blocked=False).only(
+            "key", "label", "label_override", "unit", "precision"
+        )
+    }
+    # Offline / never-seen stations are skipped entirely → their state is frozen.
+    telemetry = list(
+        StationTelemetry.objects.select_related("station").filter(
+            station__last_seen__gte=now - OFFLINE_THRESHOLD
+        )
+    )
+    current = []
+    for tel in telemetry:
+        metrics = tel.metrics if isinstance(tel.metrics, dict) else {}
+        # Stale samples (e.g. heartbeat bumped last_seen but the error-isolated
+        # metrics ingest failed) are no current value.
+        current.append(
+            (
+                tel.station,
+                {
+                    k: v
+                    for k, v in metrics.items()
+                    if isinstance(v, dict) and _sample_is_current(v, now)
+                },
+            )
+        )
+    new_alerts = []
+    for rule in rules:
+        if not _threshold_candidates(current, definitions, rule.metric_key):
+            continue
+        with transaction.atomic():
+            locked = (
+                AlertRule.objects.select_for_update()
+                .filter(pk=rule.pk, alert_type=AlertRule.AlertType.THRESHOLD, is_active=True)
+                .first()
+            )
+            if locked is None:  # deleted / disabled since the load
+                continue
+            candidates = _threshold_candidates(current, definitions, locked.metric_key)
+            if not candidates:
+                continue
+            blocked = set(
+                MetricDefinition.objects.filter(
+                    key__in={key for _, key, _, _ in candidates}, is_blocked=True
+                ).values_list("key", flat=True)
+            )
+            if blocked:  # blocked since the definitions load
+                candidates = [c for c in candidates if c[1] not in blocked]
+            states = {
+                (st.station_id, st.metric_key): st
+                for st in ThresholdState.objects.filter(rule=locked).select_related("alert")
+            }
+            new_alerts.extend(_evaluate_threshold_rule(locked, candidates, states, now))
+    return new_alerts
+
+
 def check_alerts():
     """Run all alert checks and return a list of newly created alerts."""
     global _unresolved_cache
@@ -464,13 +566,11 @@ def check_alerts():
 
     new_alerts = []
     new_alerts.extend(_check_station_offline())
-    new_alerts.extend(_check_cpu_temperature())
-    new_alerts.extend(_check_disk_usage())
-    new_alerts.extend(_check_ram_usage())
     new_alerts.extend(_check_ota_failed())
     new_alerts.extend(_check_unexpected_reboot())
     new_alerts.extend(_check_power_warning())
     new_alerts.extend(_check_storage_health())
+    new_alerts.extend(_check_thresholds())
 
     if new_alerts:
         logger.info("Alert check complete: %d new alert(s) created.", len(new_alerts))
