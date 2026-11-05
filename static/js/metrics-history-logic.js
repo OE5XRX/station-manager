@@ -34,6 +34,13 @@
   var DEFAULT_RANGE = "24h";
   var EMPTY = "—"; // em dash for "no value"
   var MAX_DECIMALS = 6;
+  // Server-side cap on keys per history request (apps.history.query.MAX_KEYS).
+  // A metric group may hold more, so the glue splits it into chunks.
+  var MAX_KEYS_PER_REQUEST = 10;
+  // Nominal bucket width per resolution (seconds); raw is derived from data.
+  var STEP_SECONDS = { "5m": 300, "1h": 3600, "1d": 86400 };
+  var RAW_MIN_STEP = 60;
+  var GAP_FACTOR = 2.5;
 
   function rangeSeconds(rangeKey) {
     return Object.prototype.hasOwnProperty.call(RANGES, rangeKey)
@@ -72,21 +79,93 @@
     return typeof v === "number" && isFinite(v) ? v : null;
   }
 
+  /** Split ``keys`` into consecutive chunks of at most ``size``
+      (default MAX_KEYS_PER_REQUEST), preserving order. */
+  function chunkKeys(keys, size) {
+    var list = Array.isArray(keys) ? keys : [];
+    var n = typeof size === "number" && size >= 1 ? Math.floor(size) : MAX_KEYS_PER_REQUEST;
+    var out = [];
+    for (var i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+    return out;
+  }
+
+  /** Merge per-chunk API responses into one: ``series`` concatenated in
+      chunk order, response-level fields (since/until/resolution) from the
+      first response. Inputs are not mutated. Never throws. */
+  function mergeResponses(responses) {
+    var list = Array.isArray(responses) ? responses : [];
+    var first = list[0] && typeof list[0] === "object" ? list[0] : {};
+    var merged = {};
+    for (var k in first) {
+      if (Object.prototype.hasOwnProperty.call(first, k)) merged[k] = first[k];
+    }
+    merged.series = [];
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (r && Array.isArray(r.series)) merged.series = merged.series.concat(r.series);
+    }
+    return merged;
+  }
+
+  /** Expected spacing (seconds) for ``resolution``: fixed for 5m/1h/1d;
+      for raw max(60, median spacing of ``points``). null = unknown. */
+  function stepSeconds(resolution, points) {
+    if (Object.prototype.hasOwnProperty.call(STEP_SECONDS, resolution)) {
+      return STEP_SECONDS[resolution];
+    }
+    if (resolution !== "raw") return null;
+    var xs = [];
+    var list = Array.isArray(points) ? points : [];
+    for (var i = 0; i < list.length; i++) {
+      if (Array.isArray(list[i]) && num(list[i][0]) !== null) xs.push(list[i][0]);
+    }
+    var dx = [];
+    for (var j = 1; j < xs.length; j++) dx.push(xs[j] - xs[j - 1]);
+    if (!dx.length) return RAW_MIN_STEP;
+    dx.sort(function (a, b) { return a - b; });
+    var mid = Math.floor(dx.length / 2);
+    var median = dx.length % 2 ? dx[mid] : (dx[mid - 1] + dx[mid]) / 2;
+    return Math.max(RAW_MIN_STEP, median);
+  }
+
   /** API points ``[[ts, min, avg, max], ...]`` -> uPlot columns
       ``[xs, mins, avgs, maxs]``. Malformed points are skipped, non-finite
-      values become null (uPlot renders a gap). Never throws. */
-  function toUplotData(points) {
+      values become null (uPlot renders a gap). Never throws.
+
+      With a positive ``step`` (seconds), a null point at ``prev + step`` is
+      inserted wherever two points are more than GAP_FACTOR * step apart, so
+      offline periods break the avg line and the min/max band (nulls in all
+      three series) instead of being bridged. Without ``step`` no gaps are
+      inserted. */
+  function toUplotData(points, step) {
     var xs = [], mins = [], avgs = [], maxs = [];
     if (!Array.isArray(points)) return [xs, mins, avgs, maxs];
+    var gap = typeof step === "number" && isFinite(step) && step > 0 ? step : 0;
     for (var i = 0; i < points.length; i++) {
       var p = points[i];
       if (!Array.isArray(p) || num(p[0]) === null) continue;
+      var prev = xs.length ? xs[xs.length - 1] : null;
+      if (gap && prev !== null && p[0] - prev > GAP_FACTOR * gap) {
+        xs.push(prev + gap);
+        mins.push(null);
+        avgs.push(null);
+        maxs.push(null);
+      }
       xs.push(p[0]);
       mins.push(num(p[1]));
       avgs.push(num(p[2]));
       maxs.push(num(p[3]));
     }
     return [xs, mins, avgs, maxs];
+  }
+
+  /** Number of real (non-synthetic) points in uPlot columns. */
+  function realCount(data) {
+    var n = 0;
+    for (var i = 0; i < data[0].length; i++) {
+      if (data[1][i] !== null || data[2][i] !== null || data[3][i] !== null) n++;
+    }
+    return n;
   }
 
   function clampDecimals(precision, fallback) {
@@ -190,27 +269,29 @@
       if (s && typeof s.key === "string") byKey[s.key] = s;
     }
     var order = Array.isArray(keys) && keys.length ? keys : Object.keys(byKey);
+    var resolution = typeof body.resolution === "string" ? body.resolution : "";
     var charts = [];
     var total = 0;
     for (var j = 0; j < order.length; j++) {
       var key = order[j];
       var src = byKey[key] || {};
-      var data = toUplotData(src.points);
-      total += data[0].length;
+      var data = toUplotData(src.points, stepSeconds(resolution, src.points));
+      var count = realCount(data);
+      total += count;
       charts.push({
         key: key,
         label: typeof src.label === "string" && src.label ? src.label : key,
         unit: typeof src.unit === "string" ? src.unit : "",
         precision: clampDecimals(src.precision, 1),
         data: data,
-        count: data[0].length,
+        count: count,
       });
     }
     return {
       empty: total === 0,
       sinceS: isoToSeconds(body.since),
       untilS: isoToSeconds(body.until),
-      resolution: typeof body.resolution === "string" ? body.resolution : "",
+      resolution: resolution,
       charts: charts,
     };
   }
@@ -218,6 +299,10 @@
   return {
     RANGES: RANGES,
     DEFAULT_RANGE: DEFAULT_RANGE,
+    MAX_KEYS_PER_REQUEST: MAX_KEYS_PER_REQUEST,
+    chunkKeys: chunkKeys,
+    mergeResponses: mergeResponses,
+    stepSeconds: stepSeconds,
     rangeSeconds: rangeSeconds,
     parseKeys: parseKeys,
     buildUrl: buildUrl,

@@ -182,4 +182,88 @@ ok("prepareCharts: keeps request order and maps data", () => {
   assert.deepEqual(r.charts[1].data, [[100, 200], [1, 2], [2, 3], [3, 4]]);
 });
 
+// --- request chunking (API MAX_KEYS = 10) ------------------------------------
+ok("MAX_KEYS_PER_REQUEST matches the API limit", () => {
+  assert.equal(H.MAX_KEYS_PER_REQUEST, 10);
+});
+ok("chunkKeys: 11 keys -> [10, 1] in order", () => {
+  const keys = Array.from({ length: 11 }, (_, i) => "k" + i);
+  const chunks = H.chunkKeys(keys, H.MAX_KEYS_PER_REQUEST);
+  assert.deepEqual(chunks.map((c) => c.length), [10, 1]);
+  assert.deepEqual(chunks.flat(), keys);
+});
+ok("chunkKeys: defaults, exact multiple, empty and junk input", () => {
+  const ten = Array.from({ length: 10 }, (_, i) => "k" + i);
+  assert.deepEqual(H.chunkKeys(ten), [ten]);
+  assert.deepEqual(H.chunkKeys([], 10), []);
+  assert.deepEqual(H.chunkKeys(null, 10), []);
+  assert.deepEqual(H.chunkKeys(["a", "b", "c"], 0), [["a", "b", "c"]]); // invalid size -> default
+});
+ok("mergeResponses: series concatenated in chunk order, top-level from first", () => {
+  const a = { since: "s1", until: "u1", resolution: "5m",
+    series: [{ key: "k0", points: [] }, { key: "k1", points: [] }] };
+  const b = { since: "s2", until: "u2", resolution: "1h", series: [{ key: "k2", points: [] }] };
+  const m = H.mergeResponses([a, b]);
+  assert.deepEqual(m.series.map((s) => s.key), ["k0", "k1", "k2"]);
+  assert.equal(m.resolution, "5m");
+  assert.equal(m.since, "s1");
+  assert.equal(m.until, "u1");
+  assert.equal(a.series.length, 2, "inputs not mutated");
+});
+ok("mergeResponses: tolerates malformed input", () => {
+  assert.deepEqual(H.mergeResponses([]).series, []);
+  assert.deepEqual(H.mergeResponses(null).series, []);
+  assert.deepEqual(H.mergeResponses([null, { series: "x" }, { series: [{ key: "a" }] }]).series,
+    [{ key: "a" }]);
+});
+
+// --- gap insertion ----------------------------------------------------------
+ok("stepSeconds per resolution", () => {
+  assert.equal(H.stepSeconds("5m"), 300);
+  assert.equal(H.stepSeconds("1h"), 3600);
+  assert.equal(H.stepSeconds("1d"), 86400);
+  assert.equal(H.stepSeconds("bogus"), null);
+  // raw: max(60, median spacing)
+  assert.equal(H.stepSeconds("raw", [[0], [10], [20], [30]]), 60);
+  assert.equal(H.stepSeconds("raw", [[0], [120], [240], [9999]]), 120);
+  assert.equal(H.stepSeconds("raw", [[0]]), 60);
+});
+ok("toUplotData inserts a null point across gaps > 2.5 * step (all series)", () => {
+  const pts = [[0, 1, 2, 3], [300, 1, 2, 3], [3000, 4, 5, 6], [3300, 4, 5, 6]];
+  assert.deepEqual(H.toUplotData(pts, 300), [
+    [0, 300, 600, 3000, 3300],
+    [1, 1, null, 4, 4],
+    [2, 2, null, 5, 5],
+    [3, 3, null, 6, 6],
+  ]);
+});
+ok("toUplotData: regular spacing / small jitter -> no insertion", () => {
+  const pts = [[0, 1, 1, 1], [300, 1, 1, 1], [600, 1, 1, 1], [1300, 1, 1, 1]]; // 700 < 750
+  assert.deepEqual(H.toUplotData(pts, 300)[0], [0, 300, 600, 1300]);
+});
+ok("toUplotData without step stays backward compatible (no gaps)", () => {
+  const pts = [[0, 1, 1, 1], [100000, 2, 2, 2]];
+  assert.deepEqual(H.toUplotData(pts), [[0, 100000], [1, 2], [1, 2], [1, 2]]);
+});
+ok("prepareCharts breaks lines over offline periods using the response resolution", () => {
+  const body = { resolution: "1h", series: [{ key: "k",
+    points: [[0, 1, 1, 1], [3600, 1, 1, 1], [36000, 2, 2, 2]] }] };
+  const c = H.prepareCharts(body, ["k"]).charts[0];
+  assert.deepEqual(c.data[0], [0, 3600, 7200, 36000]);
+  assert.deepEqual(c.data[2], [1, 1, null, 2]);
+  assert.equal(c.count, 3, "count excludes synthetic gap points");
+});
+ok("prepareCharts raw: gap threshold from median spacing", () => {
+  const pts = [];
+  for (let t = 0; t <= 600; t += 30) pts.push([t, 1, 1, 1]);
+  pts.push([5000, 1, 1, 1]);
+  const c = H.prepareCharts({ resolution: "raw", series: [{ key: "k", points: pts }] }, ["k"]).charts[0];
+  // step = max(60, 30) = 60 -> gap after 600, null at 660
+  const i = c.data[0].indexOf(660);
+  assert.ok(i > 0, "null point inserted");
+  assert.equal(c.data[1][i], null);
+  assert.equal(c.data[3][i], null);
+  assert.equal(c.data[0].length, pts.length + 1);
+});
+
 console.log(`# ${passed} passed`);

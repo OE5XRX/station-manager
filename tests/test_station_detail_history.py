@@ -139,3 +139,15 @@ def test_history_js_never_uses_locale_number_formatting():
         code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
         assert "toLocaleString" not in code, rel
         assert "innerHTML" not in code, rel
+
+
+def test_js_chunk_size_matches_api_key_cap():
+    # A metric group can hold more keys than the API accepts per request; the
+    # browser glue chunks by MAX_KEYS_PER_REQUEST, which must track the server cap.
+    from apps.history.query import MAX_KEYS
+
+    logic = (REPO_ROOT / "static/js/metrics-history-logic.js").read_text()
+    m = re.search(r"var MAX_KEYS_PER_REQUEST = (\d+);", logic)
+    assert m and int(m.group(1)) == MAX_KEYS
+    glue = (REPO_ROOT / "static/js/metrics-history.js").read_text()
+    assert "L.chunkKeys(" in glue and "L.mergeResponses(" in glue

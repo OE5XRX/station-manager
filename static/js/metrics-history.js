@@ -129,23 +129,30 @@
     this.chartsHost.classList.add("is-loading");
     this.setStatus(this.msg("loading"), "loading");
 
-    var url = L.buildUrl(this.station, this.keys, this.range, Date.now());
-    fetch(url, {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-      signal: this.abort ? this.abort.signal : undefined,
-    })
-      .then(function (resp) {
+    // The API caps keys per request; a group may hold more. One request per
+    // chunk, in parallel, all on the same AbortController + seq; any failing
+    // chunk rejects the whole load (inline error). Same ``now`` for every
+    // chunk so the windows match.
+    var now = Date.now();
+    var signal = this.abort ? this.abort.signal : undefined;
+    var requests = L.chunkKeys(this.keys, L.MAX_KEYS_PER_REQUEST).map(function (chunk) {
+      return fetch(L.buildUrl(self.station, chunk, self.range, now), {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+        signal: signal,
+      }).then(function (resp) {
         if (!resp.ok) {
           var err = new Error("HTTP " + resp.status);
           err.status = resp.status;
           throw err;
         }
         return resp.json();
-      })
-      .then(function (body) {
+      });
+    });
+    Promise.all(requests)
+      .then(function (bodies) {
         if (seq !== self.seq) return;
-        self.render(L.prepareCharts(body, self.keys));
+        self.render(L.prepareCharts(L.mergeResponses(bodies), self.keys));
       })
       .catch(function (err) {
         if (seq !== self.seq || (err && err.name === "AbortError")) return;

@@ -464,6 +464,23 @@ def test_garbage_date_400(topology):  # noqa: F811
     assert resp.status_code == 400 and "since" in resp.data
 
 
+def test_until_near_datetime_min_without_since_400(topology):  # noqa: F811
+    # until - DEFAULT_SPAN would underflow datetime.min (OverflowError -> 500).
+    resp = _get(topology, {"until": "0001-01-01T01:00:00Z"})
+    assert resp.status_code == 400 and "until" in resp.data
+
+
+def test_since_before_epoch_400(topology):  # noqa: F811
+    resp = _get(topology, {"since": "0001-01-01T00:00:00Z", "until": "0001-01-02T00:00:00Z"})
+    assert resp.status_code == 400 and "since" in resp.data
+    assert "1970-01-01" in str(resp.data["since"])
+
+
+def test_until_before_epoch_400(topology):  # noqa: F811
+    resp = _get(topology, {"since": "1969-12-30T00:00:00Z", "until": "1969-12-31T00:00:00Z"})
+    assert resp.status_code == 400 and "until" in resp.data
+
+
 def test_unknown_resolution_400(topology):  # noqa: F811
     resp = _get(topology, {"resolution": "10s"})
     assert resp.status_code == 400 and "resolution" in resp.data

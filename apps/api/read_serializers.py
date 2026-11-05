@@ -3,7 +3,7 @@
 No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 """
 
-from datetime import UTC
+from datetime import UTC, datetime
 
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
@@ -572,6 +572,9 @@ class UserSerializer(serializers.ModelSerializer):
 # --- metric history (``/stations/{id}/metrics/history/``) ------------------------------
 
 
+_HISTORY_MIN_DT = datetime(1970, 1, 1, tzinfo=UTC)
+
+
 class MetricHistoryQuerySerializer(serializers.Serializer):
     """Query parameters of the metric history endpoint (validated input).
 
@@ -626,11 +629,26 @@ class MetricHistoryQuerySerializer(serializers.Serializer):
             raise serializers.ValidationError(f"Invalid metric key(s): {', '.join(invalid)}")
         return keys
 
+    @staticmethod
+    def _check_epoch(value):
+        if value is not None and value.astimezone(UTC) < _HISTORY_MIN_DT:
+            raise serializers.ValidationError("must be on or after 1970-01-01T00:00:00Z.")
+        return value
+
+    def validate_since(self, value):
+        return self._check_epoch(value)
+
+    def validate_until(self, value):
+        return self._check_epoch(value)
+
     def validate(self, attrs):
         now = self.context.get("now") or timezone.now()
         until = (attrs.get("until") or now).astimezone(UTC)
         since = attrs.get("since")
-        since = since.astimezone(UTC) if since else until - history_query.DEFAULT_SPAN
+        try:
+            since = since.astimezone(UTC) if since else until - history_query.DEFAULT_SPAN
+        except OverflowError:
+            raise serializers.ValidationError({"until": ["until is out of range."]}) from None
         if since >= until:
             raise serializers.ValidationError({"since": ["since must be before until."]})
         max_span = history_query.max_span()
