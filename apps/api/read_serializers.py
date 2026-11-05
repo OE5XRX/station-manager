@@ -3,6 +3,9 @@
 No ``fields="__all__"`` anywhere — sensitive fields are structurally absent.
 """
 
+from datetime import UTC
+
+from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
@@ -12,6 +15,7 @@ from apps.accounts.permissions import can
 from apps.accounts.visibility import Audience, audience_for, directory_visible_fields
 from apps.control.models import StationModule
 from apps.deployments.models import Deployment, DeploymentResult
+from apps.history import query as history_query
 from apps.images.models import ImageImportJob, ImageRelease
 from apps.monitoring.models import Alert, AlertRule, MetricDefinition
 from apps.monitoring.rules import inverted_override_field
@@ -30,6 +34,7 @@ from apps.stations.models import (
     StationTag,
     StationTelemetry,
 )
+from station_agent.metrics_contract import MAX_KEY_LEN, is_valid_key
 
 
 def _can_manage_stations(serializer) -> bool:
@@ -562,3 +567,133 @@ class UserSerializer(serializers.ModelSerializer):
             # Peers see the join year only (concept ``date_joined_year``).
             out.pop("date_joined", None)
         return out
+
+
+# --- metric history (``/stations/{id}/metrics/history/``) ------------------------------
+
+
+class MetricHistoryQuerySerializer(serializers.Serializer):
+    """Query parameters of the metric history endpoint (validated input).
+
+    ``validated_data`` is normalised: ``keys`` (list, or ``None`` = station default),
+    ``since``/``until`` (aware UTC, defaults applied), ``requested`` (raw parameter),
+    ``resolution``/``source`` (effective, see ``apps.history.query.choose_resolution``).
+    The reference ``now`` comes from ``context["now"]`` (default ``timezone.now()``).
+    """
+
+    keys = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=history_query.MAX_KEYS * (MAX_KEY_LEN + 1) * 2,
+        help_text=(
+            f"Comma-separated metric keys (max {history_query.MAX_KEYS}). Default: the "
+            "station's current metrics with a visible (non-hidden, non-blocked) definition."
+        ),
+    )
+    since = serializers.DateTimeField(
+        required=False,
+        default_timezone=UTC,
+        help_text="ISO 8601 start (naive = UTC). Default: until - 24 h.",
+    )
+    until = serializers.DateTimeField(
+        required=False,
+        default_timezone=UTC,
+        help_text="ISO 8601 end (naive = UTC). Default: now.",
+    )
+    resolution = serializers.ChoiceField(
+        choices=history_query.RESOLUTION_CHOICES,
+        default="auto",
+        help_text=(
+            f"raw | 5m | 1h | 1d | auto. auto = finest with <= {history_query.MAX_POINTS} "
+            f"points per series; an explicit resolution may yield at most "
+            f"{history_query.HARD_MAX_POINTS}. Sub-hour resolutions older than the raw "
+            "window are served as 1h."
+        ),
+    )
+
+    def validate_keys(self, value):
+        keys = list(dict.fromkeys(k.strip() for k in value.split(",") if k.strip()))
+        if not keys:
+            return None
+        if len(keys) > history_query.MAX_KEYS:
+            raise serializers.ValidationError(
+                f"At most {history_query.MAX_KEYS} keys per request (got {len(keys)})."
+            )
+        invalid = [k for k in keys if not is_valid_key(k)]
+        if invalid:
+            raise serializers.ValidationError(f"Invalid metric key(s): {', '.join(invalid)}")
+        return keys
+
+    def validate(self, attrs):
+        now = self.context.get("now") or timezone.now()
+        until = (attrs.get("until") or now).astimezone(UTC)
+        since = attrs.get("since")
+        since = since.astimezone(UTC) if since else until - history_query.DEFAULT_SPAN
+        if since >= until:
+            raise serializers.ValidationError({"since": ["since must be before until."]})
+        if until - since > history_query.MAX_SPAN:
+            raise serializers.ValidationError(
+                {"since": [f"Time range exceeds {history_query.MAX_SPAN.days} days."]}
+            )
+        requested = attrs.get("resolution", "auto")
+        resolution, source = history_query.choose_resolution(requested, since, until, now)
+        if requested != "auto":
+            points = history_query.expected_points(resolution, since, until)
+            if points > history_query.HARD_MAX_POINTS:
+                raise serializers.ValidationError(
+                    {
+                        "resolution": [
+                            f"Resolution {resolution} yields {points} points per series "
+                            f"(max {history_query.HARD_MAX_POINTS}); choose a coarser one."
+                        ]
+                    }
+                )
+        return {
+            "keys": attrs.get("keys"),
+            "since": since,
+            "until": until,
+            "requested": requested,
+            "resolution": resolution,
+            "source": source,
+        }
+
+
+@extend_schema_field(
+    {
+        "type": "array",
+        "description": "[epoch_seconds (int), min, avg, max], sorted by time.",
+        "items": {
+            "type": "array",
+            "items": {"type": "number"},
+            "minItems": 4,
+            "maxItems": 4,
+        },
+    }
+)
+class _HistoryPointsField(serializers.Field):
+    """Pass-through: keeps the epoch an ``int`` (a FloatField child would make it 1.7e9)."""
+
+    def __init__(self, **kwargs):
+        kwargs["read_only"] = True
+        super().__init__(**kwargs)
+
+    def to_representation(self, value):
+        return value
+
+
+class MetricHistorySeriesSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    label = serializers.CharField()
+    unit = serializers.CharField(allow_blank=True)
+    precision = serializers.IntegerField()
+    group = serializers.CharField()
+    points = _HistoryPointsField()
+
+
+class MetricHistorySerializer(serializers.Serializer):
+    station = serializers.IntegerField()
+    since = serializers.DateTimeField(default_timezone=UTC)
+    until = serializers.DateTimeField(default_timezone=UTC)
+    resolution = serializers.ChoiceField(choices=tuple(history_query.RESOLUTIONS))
+    source = serializers.ChoiceField(choices=("raw", "hourly"))
+    series = MetricHistorySeriesSerializer(many=True)
