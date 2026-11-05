@@ -4,12 +4,23 @@ Run as a loop (own compose service, see spec §3):
     python manage.py history_maintain --loop --interval 600
 """
 
+import argparse
 import time
 
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections
 
 from apps.history.maintenance import run_maintenance
+
+
+def _positive_int(value):
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive number of seconds")
+    return number
 
 
 class Command(BaseCommand):
@@ -23,7 +34,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--interval",
-            type=int,
+            type=_positive_int,
             default=600,
             help="Loop interval in seconds (default: 600).",
         )

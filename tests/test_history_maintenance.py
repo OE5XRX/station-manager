@@ -10,8 +10,9 @@ from io import StringIO
 from zoneinfo import ZoneInfo
 
 import pytest
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.db import connection
+from django.utils import timezone
 
 from apps.history import maintenance
 from apps.history.models import HistoryState, MetricHourly, MetricSample
@@ -20,6 +21,7 @@ from apps.history.partitions import (
     add_months,
     ensure_partitions,
     list_partitions,
+    month_start,
     partition_name,
 )
 
@@ -220,7 +222,9 @@ def test_compact_chunk_failure_keeps_progress(station, monkeypatch):
 
 
 def test_ensure_future_partitions_creates_next_month(require_postgres):
-    now = datetime(2027, 6, 10, tzinfo=UTC)
+    # Relative to the real clock: the migration pre-creates current + 3 months in the
+    # test DB, so a fixed date would already be covered once the calendar catches up.
+    now = add_months(month_start(timezone.now()), 8) + timedelta(days=9)
     names = maintenance.ensure_future_partitions(now=now)
     for table in PARTITIONED_TABLES:
         assert partition_name(table, now) in names
@@ -460,3 +464,9 @@ def test_command_loop(db, monkeypatch):
     with pytest.raises(StopLoopError):
         call_command("history_maintain", "--loop", "--interval", "7", stdout=StringIO())
     assert len(runs) == 2
+
+
+@pytest.mark.parametrize("interval", ["0", "-5", "abc"])
+def test_command_rejects_non_positive_interval(db, interval):
+    with pytest.raises(CommandError):
+        call_command("history_maintain", "--loop", "--interval", interval, stdout=StringIO())

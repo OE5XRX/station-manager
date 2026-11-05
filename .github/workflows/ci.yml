@@ -135,7 +135,8 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        # Same major as prod/dev (docker-compose: postgres:17).
+        image: postgres:17
         env:
           POSTGRES_USER: station_manager
           POSTGRES_PASSWORD: station_manager
