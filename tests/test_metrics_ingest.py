@@ -400,14 +400,15 @@ def test_nothing_to_store_creates_no_telemetry_row(station):
 def test_query_count_bounded(station, django_assert_max_num_queries):
     descs = [_desc(f"a.k{i:03d}") for i in range(50)]
     _ingest(station, metrics={f"a.k{i:03d}": i for i in range(50)}, descriptors=descs)
-    with django_assert_max_num_queries(8):
+    # Budgets include the history insert: SAVEPOINT + one bulk INSERT + RELEASE (+3).
+    with django_assert_max_num_queries(11):
         _ingest(
             station,
             metrics={f"a.k{i:03d}": i for i in range(50)},
             descriptors=descs,
             inventory=LEGACY_INVENTORY,
         )
-    with django_assert_max_num_queries(5):
+    with django_assert_max_num_queries(8):
         _ingest(station, metrics={f"a.k{i:03d}": i for i in range(50)}, descriptors_hash="x")
 
 
