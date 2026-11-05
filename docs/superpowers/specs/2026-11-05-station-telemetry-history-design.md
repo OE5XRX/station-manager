@@ -69,6 +69,10 @@ das Rechtemodell duplizieren; Export bleibt späteres Bolt-on).
      zusätzlich zeilenweises Löschen ist nicht nötig).
   4. `MetricHourly`-Partitionen älter als **2 Jahre** droppen.
 - Settings: `HISTORY_RAW_RETENTION_DAYS=30`, `HISTORY_HOURLY_RETENTION_DAYS=730`.
+- **Rollout-Lücke vermeiden:** die Migration legt Partitionen für den aktuellen + die nächsten
+  **3 Monate** an; der `servers`-Begleit-PR wird direkt nach dem Merge dieses PRs ausgerollt. Keine
+  DEFAULT-Partition. Fehlt dennoch eine Partition, loggt der Ingest einen Fehler (einmal pro
+  Stunde), Heartbeat läuft weiter. *(Entscheidung Spec-Autor)*
 - Verdichtung muss vor dem Droppen gelaufen sein (Command-Reihenfolge + Prüfung: keine
   Raw-Partition droppen, deren Stunden noch nicht verdichtet sind).
 
@@ -80,8 +84,10 @@ das Rechtemodell duplizieren; Export bleibt späteres Bolt-on).
   Serie zurückkommen). Quelle automatisch: Zeitraum im Raw-Fenster und Auflösung < 1h →
   `MetricSample`; sonst `MetricHourly`.
 - Antwort pro Key: Label/Einheit/Precision aus `MetricDefinition`, Punkte `[ts, min, avg, max]`.
-- Topologie-Rechte über `accessible_stations` (404 statt 403 für fremde Stationen, wie bestehende
-  Station-Endpunkte), Throttle wie andere API-Endpunkte, drf-spectacular-Schema.
+- Rechte **genau wie** der bestehende Endpunkt `/stations/{id}/telemetry/` (Area-Permission
+  `stations.view`, `AreaReadOnlyViewSet`-Muster; kein neues Topologie-Scoping — Historie darf nicht
+  strenger oder lockerer sein als die aktuellen Werte daneben). *(Entscheidung Spec-Autor)*
+  Throttle wie andere API-Endpunkte, drf-spectacular-Schema.
 - Max. Keys pro Request und max. Zeitraum begrenzen (Builder: sinnvolle Grenzen, dokumentieren).
 
 ## 5. UI (Station-Detail, Tab „Metriken")
@@ -99,7 +105,10 @@ das Rechtemodell duplizieren; Export bleibt späteres Bolt-on).
 - Verdichtung: korrekte min/max/avg/count, nur abgeschlossene Stunden, idempotent.
 - Aufbewahrung: Partitions-Drop-Grenzen (30 d / 730 d), kein Drop unverdichteter Stunden.
 - API: Rechte-Matrix (eigene/fremde Station, anonym), Auflösungswahl `auto`, Grenzen, Schema.
-- Migration auf Postgres (Partitionierung) im CI.
+- CI bleibt grundsätzlich auf SQLite. **Zusätzlicher CI-Job mit Postgres-Service** nur für die
+  History-Tests (Migration, Partitionierung, Verdichtung, Drop). Die Migration legt auf Postgres
+  partitionierte Tabellen an, auf SQLite normale Tabellen (Vendor-Weiche in der Migration); Models
+  so, dass beide funktionieren. *(Entscheidung Spec-Autor)*
 
 ## Dem Builder überlassen
 
