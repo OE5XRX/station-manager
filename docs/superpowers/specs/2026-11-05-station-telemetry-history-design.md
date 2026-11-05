@@ -57,9 +57,10 @@ das Rechtemodell duplizieren; Export bleibt späteres Bolt-on).
 
 ## 3. Verdichtung + Aufbewahrung
 
-- Management-Command `history_maintain` (läuft periodisch, z. B. stündlich — wie `check_alerts`
-  über den bestehenden Mechanismus im Deploy/Compose; Builder prüft, wie periodische Jobs heute
-  laufen, und hängt sich dort an):
+- Management-Command `history_maintain` mit `--loop --interval <s>` (gleiches Muster wie
+  `check_alerts --loop --interval 30`, das in `servers/services/station_manager/docker-compose.yml`
+  als eigener Service läuft). Betrieb: **neuer Compose-Service im `servers`-Repo** (Intervall
+  z. B. 600 s) — kleiner Begleit-PR dort, nach dem Merge dieses PRs:
   1. Fehlende `MetricHourly`-Stunden aus `MetricSample` berechnen (nur abgeschlossene Stunden;
      idempotent per Upsert).
   2. Partitionen anlegen (aktueller + nächster Monat) für beide Tabellen.
@@ -103,4 +104,4 @@ das Rechtemodell duplizieren; Export bleibt späteres Bolt-on).
 ## Dem Builder überlassen
 
 - Exakte Partitionsnamen, Index-Details, Chart-Bibliothek, Batch-Größen.
-- Wie der periodische Job eingehängt wird (bestehendes Muster übernehmen).
+- Intervall des Wartungs-Loops.
