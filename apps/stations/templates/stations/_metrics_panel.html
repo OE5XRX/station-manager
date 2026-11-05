@@ -51,6 +51,36 @@
           </li>
           {% endfor %}
         </ul>
+        {% comment %}
+          Lazy history charts (static/js/metrics-history.js): nothing is
+          fetched until the <details> is opened. data-history-keys lists the
+          group's visible keys only (hidden/blocked never reach metric_groups).
+        {% endcomment %}
+        <details class="mx-hist" data-history-station="{{ station.pk }}"
+                 data-history-keys="{% for m in rows %}{{ m.key }}{% if not forloop.last %},{% endif %}{% endfor %}"
+                 data-msg-loading="{% trans 'Loading history…' %}"
+                 data-msg-empty="{% trans 'No history yet. Charts fill in as the station sends heartbeats.' %}"
+                 data-msg-nodata="{% trans 'No readings in this range.' %}"
+                 data-msg-error="{% trans 'History could not be loaded' %}"
+                 data-msg-retry="{% trans 'Pick a range to try again.' %}"
+                 data-msg-resolution="{% trans 'Resolution' %}">
+          <summary class="mx-hist-summary">
+            <svg class="mx-hist-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+            <span>{% trans "History" %}</span>
+            <span class="mx-hist-meta t-mono-sm" data-history-meta></span>
+          </summary>
+          <div class="mx-hist-body">
+            <div class="btn-group mx-hist-ranges" role="group" aria-label="{% trans 'Time range' %}">
+              <button type="button" class="btn btn-sm" data-history-range="1h" aria-pressed="false" title="{% trans 'Last hour' %}">1h</button>
+              <button type="button" class="btn btn-sm active" data-history-range="24h" aria-pressed="true" title="{% trans 'Last 24 hours' %}">24h</button>
+              <button type="button" class="btn btn-sm" data-history-range="7d" aria-pressed="false" title="{% trans 'Last 7 days' %}">7d</button>
+              <button type="button" class="btn btn-sm" data-history-range="30d" aria-pressed="false" title="{% trans 'Last 30 days' %}">30d</button>
+              <button type="button" class="btn btn-sm" data-history-range="1y" aria-pressed="false" title="{% trans 'Last year' %}">1y</button>
+            </div>
+            <p class="mx-hist-status" data-history-status role="status" aria-live="polite"></p>
+            <div class="mx-hist-charts" data-history-charts></div>
+          </div>
+        </details>
       </div>
       {% endfor %}
     </div>
