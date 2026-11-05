@@ -2,11 +2,16 @@
 
 Resolutions and their source table:
 
-- ``raw`` (nominal 60 s, one row per heartbeat) and ``5m`` (raw rows bucketed in Python) are
-  served from ``MetricSample`` — but only while ``since`` lies inside the raw retention window.
-  Older ranges fall back to ``1h`` from ``MetricHourly`` (otherwise the answer would be empty).
+- ``raw`` (one row per heartbeat; budgeted at the worst-case 10 s interval) and ``5m`` (DB
+  aggregate per 300 s UTC epoch bucket) are served from ``MetricSample`` — but only while
+  ``since`` lies inside the raw window (``HISTORY_RAW_RETENTION_DAYS``, default 30 d). Older
+  ranges fall back to ``1h`` from ``MetricHourly`` (otherwise the answer would be empty).
 - ``1h`` (rows as is) and ``1d`` (DB aggregate per UTC day, count-weighted avg) are served from
-  ``MetricHourly``. Hours not yet compacted by ``history_maintain`` are not in there yet.
+  ``MetricHourly`` (kept ``HISTORY_HOURLY_RETENTION_DAYS``, default 730 d). Hours not yet
+  compacted by ``history_maintain`` are not in there yet.
+
+Retention settings are read per call (``max_span()``), never frozen at import.
+Hidden/blocked metric definitions are never returned (``visible_keys``), like ``/telemetry/``.
 
 All bucketing is in UTC (project ``TIME_ZONE`` is Europe/Vienna — never truncate locally).
 Points are ``[epoch_seconds:int, min, avg, max]``, sorted by time.
@@ -15,21 +20,80 @@ Points are ``[epoch_seconds:int, min, avg, max]``, sorted by time.
 from datetime import UTC, datetime, timedelta
 
 from django.conf import settings
-from django.db.models import F, FloatField, Max, Min, Sum
+from django.db.models import Avg, BigIntegerField, F, FloatField, Func, Max, Min, Q, Sum
 from django.db.models.functions import TruncDay
 
 from apps.history.models import MetricHourly, MetricSample
 
-# Bucket width per resolution in seconds (``raw`` is nominal: one heartbeat per minute).
-RESOLUTIONS = {"raw": 60, "5m": 300, "1h": 3600, "1d": 86400}
+# Bucket width per resolution in seconds. ``raw`` has no buckets (one row per heartbeat);
+# its value is the *worst-case* step for point estimates (auto choice, HARD_MAX_POINTS):
+# the agent's minimum ``heartbeat_interval`` is 10 s (``station_agent/config.py``), the
+# default 60 s — estimating with 60 would let a 10 s station return 6x the limit.
+RESOLUTIONS = {"raw": 10, "5m": 300, "1h": 3600, "1d": 86400}
 RESOLUTION_CHOICES = (*RESOLUTIONS, "auto")
 MAX_POINTS = 1000  # auto: target maximum points per series
 HARD_MAX_POINTS = 5000  # explicit resolution: hard limit per series (else 400)
 MAX_KEYS = 10  # keys per request
-MAX_SPAN = timedelta(days=settings.HISTORY_HOURLY_RETENTION_DAYS)
 DEFAULT_SPAN = timedelta(hours=24)
 
 _HOURLY_RESOLUTIONS = ("1h", "1d")
+
+
+def max_span() -> timedelta:
+    """Longest allowed ``until - since``: ``HISTORY_HOURLY_RETENTION_DAYS`` (read per call)."""
+    return timedelta(days=settings.HISTORY_HOURLY_RETENTION_DAYS)
+
+
+def visible_keys(keys: list[str]) -> list[str]:
+    """``keys`` without those whose definition is hidden or blocked (order kept).
+
+    Parity with the current-values list (``/telemetry/``), which never shows them. Keys
+    without a definition stay (they are shown with fallback metadata).
+    """
+    from apps.monitoring.models import MetricDefinition
+
+    if not keys:
+        return []
+    invisible = set(
+        MetricDefinition.objects.filter(key__in=keys)
+        .filter(Q(is_hidden=True) | Q(is_blocked=True))
+        .values_list("key", flat=True)
+    )
+    return [k for k in keys if k not in invisible]
+
+
+class _EpochBucket(Func):
+    """UTC epoch seconds (int) of ``ts`` floored to a multiple of ``step`` seconds."""
+
+    output_field = BigIntegerField()
+
+    def __init__(self, expression, step: int):
+        self.step = int(step)  # our constant, never user input — safe to inline
+        super().__init__(expression)
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return super().as_sql(
+            compiler,
+            connection,
+            # '%%%%s': one level for the template %-formatting, one for the SQLite
+            # backend's %s→? conversion (which turns '%%' back into '%').
+            template=(
+                f"((CAST(strftime('%%%%s', %(expressions)s) AS INTEGER) / {self.step}) "
+                f"* {self.step})"
+            ),
+            **extra_context,
+        )
+
+    def as_postgresql(self, compiler, connection, **extra_context):
+        return super().as_sql(
+            compiler,
+            connection,
+            template=(
+                f"CAST(EXTRACT(EPOCH FROM date_bin('{self.step} seconds', %(expressions)s, "
+                "TIMESTAMPTZ '1970-01-01 00:00:00+00')) AS bigint)"
+            ),
+            **extra_context,
+        )
 
 
 def default_keys(station) -> list[str]:
@@ -119,26 +183,20 @@ def fetch_series(
         return out
 
     if source == "raw" and resolution == "5m":
-        # Rows arrive sorted by (key, ts) → a bucket is complete when the key/bucket changes.
-        # min-of-mins, max-of-maxs, avg-of-avgs (one raw row per heartbeat, equal weight).
-        current = None  # [key, bucket, min, sum_avg, n, max]
+        # Bucketed in SQL (rows pulled = buckets, not heartbeats): min-of-mins,
+        # max-of-maxs, avg-of-avgs (one raw row per heartbeat, equal weight).
         lower = _floor(since, step)
-        for key, ts, v_min, v_avg, v_max in _rows(MetricSample, station, keys, lower, until):
-            epoch = int(ts.timestamp())
-            bucket = epoch - epoch % step
-            if current is not None and current[0] == key and current[1] == bucket:
-                current[2] = min(current[2], v_min)
-                current[3] += v_avg
-                current[4] += 1
-                current[5] = max(current[5], v_max)
-                continue
-            if current is not None:
-                out[current[0]].append(
-                    [current[1], current[2], current[3] / current[4], current[5]]
-                )
-            current = [key, bucket, v_min, v_avg, 1, v_max]
-        if current is not None:
-            out[current[0]].append([current[1], current[2], current[3] / current[4], current[5]])
+        rows = (
+            MetricSample.objects.filter(
+                station=station, metric_key__in=keys, ts__gte=lower, ts__lte=until
+            )
+            .annotate(bucket=_EpochBucket("ts", step))
+            .values("metric_key", "bucket")
+            .annotate(b_min=Min("min"), b_avg=Avg("avg"), b_max=Max("max"))
+            .order_by("metric_key", "bucket")
+        )
+        for r in rows:
+            out[r["metric_key"]].append([int(r["bucket"]), r["b_min"], r["b_avg"], r["b_max"]])
         return out
 
     if source == "hourly" and resolution == "1h":

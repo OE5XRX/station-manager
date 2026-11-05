@@ -118,20 +118,25 @@ class StationViewSet(AreaReadOnlyViewSet):
         ``[epoch_seconds, min, avg, max]`` (UTC, sorted). ``since``/``until`` are ISO 8601
         (naive = UTC; default: the last 24 h); the response echoes them in UTC (``Z``).
 
-        Resolutions: ``raw`` (one point per heartbeat, ~1/min) and ``5m`` come from the raw
-        table (kept ``HISTORY_RAW_RETENTION_DAYS``, 30 d); if ``since`` is older than that,
+        Resolutions: ``raw`` (one point per heartbeat) and ``5m`` come from the raw table
+        (kept ``HISTORY_RAW_RETENTION_DAYS``, default 30 d); if ``since`` is older than that,
         they are served as ``1h`` instead (the response reports the effective ``resolution``
         and ``source``). ``1h`` and ``1d`` (count-weighted daily average) come from the
-        hourly table (kept 730 d); the current, not yet compacted hour is not in there yet.
+        hourly table (kept ``HISTORY_HOURLY_RETENTION_DAYS``, default 730 d); the current,
+        not yet compacted hour is not in there yet.
 
-        Limits: at most 10 keys per request; time range at most 730 days;
-        ``resolution=auto`` (default) picks the finest resolution with at most 1000 points
-        per series; an explicit resolution may yield at most 5000 points per series,
-        otherwise 400. Validation errors are 400 with field-keyed messages.
+        Limits: at most 10 keys per request; time range at most
+        ``HISTORY_HOURLY_RETENTION_DAYS`` days; ``resolution=auto`` (default) picks the
+        finest resolution with at most 1000 points per series; an explicit resolution may
+        yield at most 5000 points per series, otherwise 400. Point counts for ``raw`` are
+        estimated at the shortest heartbeat interval (10 s). Validation errors are 400 with
+        field-keyed messages.
 
         Without ``keys``: the station's current metrics with a visible (non-hidden,
-        non-blocked) definition. Explicit keys are returned even if hidden or undefined
-        (undefined: ``label=key``, ``unit=""``, ``precision=1``, ``group="other"``).
+        non-blocked) definition. Like ``/telemetry/``, hidden or blocked keys are never
+        returned — they are silently dropped from an explicit ``keys`` list too. Undefined
+        explicit keys are returned (``label=key``, ``unit=""``, ``precision=1``,
+        ``group="other"``).
         """
         from apps.history import query as history_query
         from apps.monitoring.models import MetricDefinition
@@ -142,7 +147,11 @@ class StationViewSet(AreaReadOnlyViewSet):
         )
         params.is_valid(raise_exception=True)
         q = params.validated_data
-        keys = q["keys"] if q["keys"] is not None else history_query.default_keys(station)
+        keys = (
+            history_query.visible_keys(q["keys"])
+            if q["keys"] is not None
+            else history_query.default_keys(station)
+        )
         points = history_query.fetch_series(
             station, keys, q["since"], q["until"], q["resolution"], q["source"]
         )

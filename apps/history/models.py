@@ -9,6 +9,10 @@ Both use a composite primary key ``(station, metric_key, ts)``: Postgres require
 partition key to be part of every unique constraint, and the PK doubles as the index for
 the only access pattern (one station, some keys, a time range). That is why the station FK
 carries no separate index (``db_index=False``) — the PK prefix covers it.
+
+PostgreSQL only: the migration adds a BRIN index on ``ts`` to both partitioned parents
+(``<table>_ts_brin``, inherited by every partition) for time-only scans (compaction,
+retention). It is deliberately not part of the model state, so SQLite has no such index.
 """
 
 from django.db import models

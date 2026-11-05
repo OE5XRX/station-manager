@@ -126,3 +126,25 @@ def test_list_partitions_ignores_foreign_names(require_postgres):
         )
     names = [n for n, _, _ in partitions.list_partitions(connection, "history_metricsample")]
     assert "history_metricsample_odd" not in names
+
+
+def _brin_indexes(name):
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE schemaname = current_schema() AND tablename = %s AND indexdef ILIKE %s",
+            [name, "%using brin%"],
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+@pytest.mark.parametrize("table", partitions.PARTITIONED_TABLES)
+def test_brin_ts_index_on_parent_and_every_partition(require_postgres, table):
+    assert _brin_indexes(table) == [f"{table}_ts_brin"]
+    # Migration-created partitions and ones created later both inherit it.
+    far = partitions.add_months(partitions.month_start(datetime.now(UTC)), 9)
+    partitions.ensure_partitions(connection, table, far, 1)
+    names = [n for n, _, _ in partitions.list_partitions(connection, table)]
+    assert partitions.partition_name(table, far) in names
+    for name in names:
+        assert len(_brin_indexes(name)) == 1, name

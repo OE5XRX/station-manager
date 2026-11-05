@@ -587,7 +587,8 @@ class MetricHistoryQuerySerializer(serializers.Serializer):
         max_length=history_query.MAX_KEYS * (MAX_KEY_LEN + 1) * 2,
         help_text=(
             f"Comma-separated metric keys (max {history_query.MAX_KEYS}). Default: the "
-            "station's current metrics with a visible (non-hidden, non-blocked) definition."
+            "station's current metrics with a visible (non-hidden, non-blocked) definition. "
+            "Hidden or blocked keys are dropped from an explicit list too."
         ),
     )
     since = serializers.DateTimeField(
@@ -606,8 +607,9 @@ class MetricHistoryQuerySerializer(serializers.Serializer):
         help_text=(
             f"raw | 5m | 1h | 1d | auto. auto = finest with <= {history_query.MAX_POINTS} "
             f"points per series; an explicit resolution may yield at most "
-            f"{history_query.HARD_MAX_POINTS}. Sub-hour resolutions older than the raw "
-            "window are served as 1h."
+            f"{history_query.HARD_MAX_POINTS} (raw is estimated at a 10 s heartbeat). "
+            "Sub-hour resolutions older than the raw window (HISTORY_RAW_RETENTION_DAYS) "
+            "are served as 1h."
         ),
     )
 
@@ -631,9 +633,10 @@ class MetricHistoryQuerySerializer(serializers.Serializer):
         since = since.astimezone(UTC) if since else until - history_query.DEFAULT_SPAN
         if since >= until:
             raise serializers.ValidationError({"since": ["since must be before until."]})
-        if until - since > history_query.MAX_SPAN:
+        max_span = history_query.max_span()
+        if until - since > max_span:
             raise serializers.ValidationError(
-                {"since": [f"Time range exceeds {history_query.MAX_SPAN.days} days."]}
+                {"since": [f"Time range exceeds {max_span.days} days."]}
             )
         requested = attrs.get("resolution", "auto")
         resolution, source = history_query.choose_resolution(requested, since, until, now)

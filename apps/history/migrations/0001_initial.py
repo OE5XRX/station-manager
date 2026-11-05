@@ -8,7 +8,11 @@ Database: one ``RunPython`` that creates the tables itself:
   hand-written DDL as monthly RANGE-partitioned tables on ``ts`` (PK must contain the
   partition key → composite PK ``(station_id, metric_key, ts)``), plus partitions for the
   current UTC month and the next 3 (rollout head-start; ``history_maintain`` keeps them
-  coming). No DEFAULT partition on purpose.
+  coming). No DEFAULT partition on purpose. Each parent also gets a BRIN index on ``ts``
+  (``<table>_ts_brin``); on a partitioned parent ``CREATE INDEX`` cascades to every
+  current and future partition. It serves the time-only scans (compaction, retention
+  checks) that the ``(station_id, metric_key, ts)`` PK cannot; append-mostly ``ts`` makes
+  BRIN tiny. Not in the model state — SQLite has no such index.
 
 The RunPython runs *after* the state operations so its ``apps`` already knows the models
 (inside ``SeparateDatabaseAndState.database_operations`` it would only see the old state).
@@ -57,6 +61,10 @@ def create_tables(apps, schema_editor):
     ):
         schema_editor.execute(
             _SERIES_DDL.format(table=schema_editor.quote_name(table), extra=extra)
+        )
+        schema_editor.execute(
+            f"CREATE INDEX {schema_editor.quote_name(table + '_ts_brin')} "
+            f'ON {schema_editor.quote_name(table)} USING brin ("ts")'
         )
         partitions.ensure_partitions(connection, table, first, INITIAL_PARTITION_MONTHS)
 

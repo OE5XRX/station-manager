@@ -104,10 +104,35 @@ def test_compact_idempotent_then_next_hour(station):
     assert MetricHourly.objects.get().avg == 11.5
 
     _sample(station, _at(11, 50), 8, 10, 9.5)
-    assert maintenance.compact(now=_at(12, 1)) == 1
+    # 12:06 = past the hour boundary + COMPACT_GRACE, so hour 11 is compacted now.
+    assert maintenance.compact(now=_at(12, 6)) == 1
     row = MetricHourly.objects.get(ts=_at(11))
     assert (row.min, row.max, row.avg, row.count) == (8, 10, 9.25, 2)
     assert HistoryState.get().compacted_until == _at(12)
+
+
+def test_compact_grace_skips_just_closed_hour(station):
+    # Ingest stamps ts=now before its INSERT commits; right after the hour boundary such a
+    # row may still be invisible — the watermark must not pass the hour yet.
+    _set_compacted(_at(10))
+    _sample(station, datetime(2026, 11, 5, 10, 59, 30, tzinfo=UTC), 1, 3, 2)
+
+    assert maintenance.compact(now=_at(11, 2)) == 0
+    assert not MetricHourly.objects.exists()
+    assert HistoryState.get().compacted_until <= _at(10)
+
+    assert maintenance.compact(now=_at(11, 6)) == 1
+    assert MetricHourly.objects.get().ts == _at(10)
+    assert HistoryState.get().compacted_until == _at(11)
+
+
+def test_compact_grace_first_run(station):
+    # Same without a watermark: the first run must not move past the open grace window.
+    _sample(station, datetime(2026, 11, 5, 10, 59, 30, tzinfo=UTC), 1, 3, 2)
+
+    assert maintenance.compact(now=_at(11, 2)) == 0
+    assert HistoryState.get().compacted_until is None
+    assert maintenance.compact(now=_at(11, 6)) == 1
 
 
 def test_compact_separates_stations_and_keys(station, station_factory):
@@ -203,6 +228,25 @@ def test_ensure_future_partitions_creates_next_month(require_postgres):
         listed = {n for n, _lo, _hi in list_partitions(connection, table)}
         assert {partition_name(table, now), partition_name(table, add_months(now, 1))} <= listed
     assert maintenance.ensure_future_partitions(now=now) == []
+
+
+def _lock_timeout():
+    with connection.cursor() as cur:
+        cur.execute("SHOW lock_timeout")
+        return cur.fetchone()[0]
+
+
+def test_ensure_future_partitions_sets_ddl_lock_timeout(require_postgres):
+    # SET LOCAL lives until the end of the (test) transaction → observable afterwards.
+    assert _lock_timeout() != maintenance.DDL_LOCK_TIMEOUT
+    maintenance.ensure_future_partitions(now=NOW)
+    assert _lock_timeout() == maintenance.DDL_LOCK_TIMEOUT
+
+
+def test_drop_expired_sets_ddl_lock_timeout(require_postgres):
+    assert _lock_timeout() != maintenance.DDL_LOCK_TIMEOUT
+    maintenance.drop_expired(now=NOW)
+    assert _lock_timeout() == maintenance.DDL_LOCK_TIMEOUT
 
 
 def test_ensure_future_partitions_noop_on_sqlite(db):

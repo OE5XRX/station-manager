@@ -112,7 +112,10 @@ NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
 @pytest.mark.parametrize(
     ("span", "expected"),
     [
+        # raw is estimated at the worst-case 10 s heartbeat: 1 h = 360 points.
         (timedelta(hours=1), ("raw", "raw")),
+        (timedelta(hours=2), ("raw", "raw")),
+        (timedelta(hours=3), ("5m", "raw")),  # 1080 raw points > MAX_POINTS
         (timedelta(hours=24), ("5m", "raw")),
         (timedelta(days=7), ("1h", "hourly")),
         (timedelta(days=365), ("1d", "hourly")),
@@ -299,21 +302,21 @@ def test_default_keys_exclude_hidden_and_undefined(topology, defs):  # noqa: F81
     assert sorted(x["key"] for x in resp.json()["series"]) == sorted([KEY, KEY2])
 
 
-def test_explicit_hidden_and_undefined_keys_included(topology, defs, hour):  # noqa: F811
+def test_explicit_undefined_keys_included(topology, defs, hour):  # noqa: F811
     s = topology["station_in"]
-    _sample(s, HIDDEN, hour + timedelta(minutes=1), 1.0, 2.0, 3.0)
+    _sample(s, KEY, hour + timedelta(minutes=1), 1.0, 2.0, 3.0)
     resp = bearer(topology["admin"]).get(
         _url(s.pk),
         {
-            "keys": f"{HIDDEN},x.no.def",
+            "keys": f"{KEY},x.no.def",
             "since": _iso(hour),
             "until": _iso(hour + timedelta(hours=1)),
         },
     )
     assert resp.status_code == 200, resp.data
     series = resp.json()["series"]
-    assert [x["key"] for x in series] == [HIDDEN, "x.no.def"]
-    assert series[0]["label"] == "Mem" and len(series[0]["points"]) == 1
+    assert [x["key"] for x in series] == [KEY, "x.no.def"]
+    assert series[0]["label"] == "12 V rail" and len(series[0]["points"]) == 1
     assert series[1] == {
         "key": "x.no.def",
         "label": "x.no.def",
@@ -322,6 +325,73 @@ def test_explicit_hidden_and_undefined_keys_included(topology, defs, hour):  # n
         "group": "other",
         "points": [],
     }
+
+
+def test_explicit_hidden_and_blocked_keys_dropped(topology, defs, hour):  # noqa: F811
+    # Parity with /telemetry/, which never shows hidden (or blocked) metrics.
+    s = topology["station_in"]
+    blocked = "sys.disk.blk_pct"
+    MetricDefinition.objects.create(key=blocked, label="Blk", is_blocked=True)
+    _sample(s, HIDDEN, hour + timedelta(minutes=1), 1.0, 2.0, 3.0)
+    _sample(s, blocked, hour + timedelta(minutes=1), 1.0, 2.0, 3.0)
+    _sample(s, KEY, hour + timedelta(minutes=1), 1.0, 2.0, 3.0)
+    resp = bearer(topology["admin"]).get(
+        _url(s.pk),
+        {
+            "keys": f"{HIDDEN},{blocked},{KEY}",
+            "since": _iso(hour),
+            "until": _iso(hour + timedelta(hours=1)),
+        },
+    )
+    assert resp.status_code == 200, resp.data
+    assert [x["key"] for x in resp.json()["series"]] == [KEY]
+
+
+def test_only_hidden_key_requested_returns_no_series(topology, defs, hour):  # noqa: F811
+    s = topology["station_in"]
+    _sample(s, HIDDEN, hour + timedelta(minutes=1), 1.0, 2.0, 3.0)
+    resp = bearer(topology["admin"]).get(
+        _url(s.pk),
+        {"keys": HIDDEN, "since": _iso(hour), "until": _iso(hour + timedelta(hours=1))},
+    )
+    assert resp.status_code == 200, resp.data
+    assert resp.json()["series"] == []
+
+
+def test_5m_bucketing_in_db_bounds_rows(topology, defs, hour):  # noqa: F811
+    # 10 s heartbeats: 30 raw rows per bucket collapse to one point per 5 min in SQL.
+    s = topology["station_in"]
+    rows = [
+        MetricSample(
+            station=s,
+            metric_key=KEY,
+            ts=hour + timedelta(seconds=10 * i),
+            min=float(i),
+            avg=float(i) + 0.5,
+            max=float(i) + 1,
+        )
+        for i in range(60)
+    ]
+    MetricSample.objects.bulk_create(rows)
+    points = query.fetch_series(s, [KEY], hour, hour + timedelta(minutes=10), "5m", "raw")[KEY]
+    t0 = int(hour.timestamp())
+    assert points == [
+        [t0, 0.0, pytest.approx(15.0), 30.0],
+        [t0 + 300, 30.0, pytest.approx(45.0), 60.0],
+    ]
+    assert all(type(p[0]) is int for p in points)
+
+
+def test_5m_bucket_floor_is_utc_epoch_aligned(topology, defs, hour):  # noqa: F811
+    s = topology["station_in"]
+    _sample(s, KEY, hour + timedelta(minutes=4, seconds=59, microseconds=999000), 1, 1, 1)
+    _sample(s, KEY, hour + timedelta(minutes=5), 2, 2, 2)
+    # since inside the first bucket: the lower bound is floored, the bucket stays whole.
+    points = query.fetch_series(
+        s, [KEY], hour + timedelta(minutes=2), hour + timedelta(minutes=10), "5m", "raw"
+    )[KEY]
+    t0 = int(hour.timestamp())
+    assert points == [[t0, 1.0, 1.0, 1.0], [t0 + 300, 2.0, 2.0, 2.0]]
 
 
 # --- limits / validation ---------------------------------------------------------------
@@ -351,6 +421,27 @@ def test_span_too_long_400(topology):  # noqa: F811
     now = timezone.now()
     resp = _get(topology, {"since": _iso(now - timedelta(days=800)), "until": _iso(now)})
     assert resp.status_code == 400 and "since" in resp.data
+
+
+def test_raw_over_24h_exceeds_hard_max_400(topology):  # noqa: F811
+    # raw is budgeted at a 10 s heartbeat: 24 h = 8640 points > HARD_MAX_POINTS.
+    now = timezone.now()
+    resp = _get(
+        topology,
+        {"since": _iso(now - timedelta(hours=24)), "until": _iso(now), "resolution": "raw"},
+    )
+    assert resp.status_code == 400 and "resolution" in resp.data
+
+
+def test_max_span_follows_setting_per_call(topology, settings):  # noqa: F811
+    settings.HISTORY_HOURLY_RETENTION_DAYS = 10
+    assert query.max_span() == timedelta(days=10)
+    now = timezone.now()
+    resp = _get(topology, {"since": _iso(now - timedelta(days=20)), "until": _iso(now)})
+    assert resp.status_code == 400 and "since" in resp.data
+    assert "10 days" in str(resp.data["since"])
+    ok = _get(topology, {"since": _iso(now - timedelta(days=9)), "until": _iso(now)})
+    assert ok.status_code == 200, ok.data
 
 
 def test_raw_over_7d_exceeds_hard_max_400(topology):  # noqa: F811
