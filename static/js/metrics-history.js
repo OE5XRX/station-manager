@@ -68,13 +68,19 @@
     this.status = root.querySelector("[data-history-status]");
     this.chartsHost = root.querySelector("[data-history-charts]");
     this.meta = root.querySelector("[data-history-meta]");
-    this.range = L.DEFAULT_RANGE;
+    // Ranges longer than the API's max window (data-history-max-span) are
+    // disabled; if that rules out the default, start on the largest allowed.
+    this.allowed = L.allowedRanges(root.getAttribute("data-history-max-span"));
+    this.range = this.allowed.indexOf(L.DEFAULT_RANGE) >= 0
+      ? L.DEFAULT_RANGE
+      : this.allowed[this.allowed.length - 1];
     this.loaded = false;
     this.seq = 0;
     this.abort = null;
     this.plots = [];
     this.lastPrepared = null;
     this.bind();
+    this.markRange();
   }
 
   HistoryBlock.prototype.msg = function (name) {
@@ -88,6 +94,10 @@
       if (self.root.open) self.resize();
     });
     this.root.querySelectorAll("[data-history-range]").forEach(function (btn) {
+      if (self.allowed.indexOf(btn.getAttribute("data-history-range")) < 0) {
+        btn.disabled = true;
+        btn.setAttribute("aria-disabled", "true");
+      }
       btn.addEventListener("click", function () {
         self.setRange(btn.getAttribute("data-history-range"));
       });
@@ -99,14 +109,19 @@
   };
 
   HistoryBlock.prototype.setRange = function (range) {
-    if (!Object.prototype.hasOwnProperty.call(L.RANGES, range)) return;
+    if (this.allowed.indexOf(range) < 0) return;
     this.range = range;
+    this.markRange();
+    this.load();
+  };
+
+  HistoryBlock.prototype.markRange = function () {
+    var range = this.range;
     this.root.querySelectorAll("[data-history-range]").forEach(function (btn) {
       var on = btn.getAttribute("data-history-range") === range;
       btn.classList.toggle("active", on);
       btn.setAttribute("aria-pressed", on ? "true" : "false");
     });
-    this.load();
   };
 
   HistoryBlock.prototype.setStatus = function (text, kind) {
@@ -253,6 +268,8 @@
       when.textContent = ok ? L.formatTime(d[0][idx], span) : "";
     }
     var latest = L.lastIndex(chart.data);
+    // A point between two gaps has no line segment; draw it as a dot.
+    var isolated = L.isolatedIndices(chart.data[2]);
     show(latest);
 
     if (!chart.count) {
@@ -312,7 +329,22 @@
       series: [
         {},
         { label: "min", stroke: palette.edge, width: 1, points: { show: false } },
-        { label: "avg", stroke: palette.line, width: 1.75, points: { show: chart.count < 3 } },
+        {
+          label: "avg",
+          stroke: palette.line,
+          width: 1.75,
+          points: {
+            show: chart.count < 3,
+            size: 5,
+            fill: palette.line,
+            stroke: palette.line,
+            // uPlot 1.6.32: when markers are hidden, still draw these indices.
+            // null when shown (an index list would restrict them) or none.
+            filter: function (u, si, show) {
+              return show || !isolated.length ? null : isolated;
+            },
+          },
+        },
         { label: "max", stroke: palette.edge, width: 1, points: { show: false } },
       ],
       bands: [{ series: [3, 1], fill: palette.band }],

@@ -19,6 +19,7 @@ from django.views.generic import (
 from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import DeploymentResult
+from apps.history.query import max_span as history_max_span
 from apps.images.models import ImageRelease
 from apps.module_firmware import drain as module_drain
 from apps.provisioning.models import ProvisioningJob
@@ -208,6 +209,8 @@ class StationDetailView(AreaPermissionMixin, DetailView):
         groups = metric_groups(self.object)
         context["metric_groups"] = groups
         context["metric_count"] = sum(len(rows) for _label, rows in groups)
+        # History API window cap (seconds); the panel disables longer ranges.
+        context["history_max_span_s"] = int(history_max_span().total_seconds())
         context["metric_breached_count"] = sum(
             1 for _label, rows in groups for r in rows if r["breached"]
         )

@@ -55,8 +55,11 @@
           Lazy history charts (static/js/metrics-history.js): nothing is
           fetched until the <details> is opened. data-history-keys lists the
           group's visible keys only (hidden/blocked never reach metric_groups).
+          data-history-max-span = the API's max window in seconds
+          (apps.history.query.max_span); longer range buttons get disabled.
         {% endcomment %}
         <details class="mx-hist" data-history-station="{{ station.pk }}"
+                 data-history-max-span="{{ history_max_span_s }}"
                  data-history-keys="{% for m in rows %}{{ m.key }}{% if not forloop.last %},{% endif %}{% endfor %}"
                  data-msg-loading="{% trans 'Loading history…' %}"
                  data-msg-empty="{% trans 'No history yet. Charts fill in as the station sends heartbeats.' %}"

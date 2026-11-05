@@ -48,6 +48,37 @@
       : RANGES[DEFAULT_RANGE];
   }
 
+  /** Range keys (button order) whose span fits the API's max window
+      (``apps.history.query.max_span()``, seconds; numeric strings accepted).
+      A missing/invalid max — or one below every range, which would leave
+      nothing selectable — yields all ranges. */
+  function allowedRanges(maxSpanSeconds) {
+    var all = Object.keys(RANGES);
+    var max = typeof maxSpanSeconds === "string" && maxSpanSeconds.trim() !== ""
+      ? Number(maxSpanSeconds)
+      : maxSpanSeconds;
+    if (typeof max !== "number" || !isFinite(max) || max <= 0) return all;
+    var out = all.filter(function (k) { return RANGES[k] <= max; });
+    return out.length ? out : all;
+  }
+
+  /** Indices of non-null values whose neighbours are both null (or the array
+      edge). uPlot draws no line segment for such a point, so with markers
+      hidden it would be invisible; the glue draws these as dots. */
+  function isolatedIndices(values) {
+    var out = [];
+    if (!Array.isArray(values)) return out;
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] === null || values[i] === undefined) continue;
+      var prev = i > 0 ? values[i - 1] : null;
+      var next = i < values.length - 1 ? values[i + 1] : null;
+      if ((prev === null || prev === undefined) && (next === null || next === undefined)) {
+        out.push(i);
+      }
+    }
+    return out;
+  }
+
   /** Comma-separated data attribute -> list of non-empty, trimmed keys. */
   function parseKeys(raw) {
     if (typeof raw !== "string") return [];
@@ -311,6 +342,8 @@
     mergeResponses: mergeResponses,
     stepSeconds: stepSeconds,
     rangeSeconds: rangeSeconds,
+    allowedRanges: allowedRanges,
+    isolatedIndices: isolatedIndices,
     parseKeys: parseKeys,
     buildUrl: buildUrl,
     toUplotData: toUplotData,

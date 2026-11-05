@@ -151,3 +151,21 @@ def test_js_chunk_size_matches_api_key_cap():
     assert m and int(m.group(1)) == MAX_KEYS
     glue = (REPO_ROOT / "static/js/metrics-history.js").read_text()
     assert "L.chunkKeys(" in glue and "L.mergeResponses(" in glue
+
+
+@pytest.mark.django_db
+def test_history_block_carries_api_max_span(client, admin_user, settings):
+    # Range buttons beyond the API's max window (hourly retention) are disabled
+    # client-side; the block exposes that window in seconds.
+    settings.HISTORY_HOURLY_RETENTION_DAYS = 180
+    station = _setup()
+    content = _get(client, admin_user, station)
+    spans = re.findall(r'data-history-max-span="([^"]*)"', content)
+    assert spans == [str(180 * 86400)] * 2
+
+
+def test_history_js_disables_ranges_and_marks_isolated_points():
+    glue = (REPO_ROOT / "static/js/metrics-history.js").read_text()
+    assert "data-history-max-span" in glue and "L.allowedRanges(" in glue
+    assert "aria-disabled" in glue
+    assert "L.isolatedIndices(" in glue and "filter:" in glue

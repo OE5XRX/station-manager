@@ -289,4 +289,33 @@ ok("prepareCharts raw: gap threshold from median spacing", () => {
   assert.equal(c.data[0].length, pts.length + 1);
 });
 
+// --- allowedRanges ----------------------------------------------------------
+ok("allowedRanges keeps ranges within the API max span", () => {
+  assert.deepEqual(H.allowedRanges(730 * 86400), ["1h", "24h", "7d", "30d", "1y"]);
+  assert.deepEqual(H.allowedRanges(180 * 86400), ["1h", "24h", "7d", "30d"]);
+  assert.deepEqual(H.allowedRanges(86400), ["1h", "24h"], "equal to max is allowed");
+  assert.deepEqual(H.allowedRanges(7200), ["1h"]);
+});
+ok("allowedRanges: invalid or missing max -> all ranges", () => {
+  const all = Object.keys(H.RANGES);
+  for (const bad of [undefined, null, NaN, Infinity, 0, -5, "abc", ""]) {
+    assert.deepEqual(H.allowedRanges(bad), all, String(bad));
+  }
+  assert.deepEqual(H.allowedRanges("2592000"), ["1h", "24h", "7d", "30d"], "numeric string");
+  assert.deepEqual(H.allowedRanges(60), all, "below the smallest range -> all (nothing selectable otherwise)");
+});
+
+// --- isolatedIndices --------------------------------------------------------
+ok("isolatedIndices finds points with no non-null neighbour", () => {
+  assert.deepEqual(H.isolatedIndices([null, 5, null]), [1]);
+  assert.deepEqual(H.isolatedIndices([1, 2, null, 3, null]), [3]);
+  assert.deepEqual(H.isolatedIndices([4, null, 1, 2]), [0]);
+  assert.deepEqual(H.isolatedIndices([1, 2, null, 7]), [3], "trailing edge");
+  assert.deepEqual(H.isolatedIndices([9]), [0], "single point");
+  assert.deepEqual(H.isolatedIndices([1, 2, 3]), []);
+  assert.deepEqual(H.isolatedIndices([null, null]), []);
+  assert.deepEqual(H.isolatedIndices([]), []);
+  assert.deepEqual(H.isolatedIndices(undefined), []);
+});
+
 console.log(`# ${passed} passed`);
