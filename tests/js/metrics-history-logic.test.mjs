@@ -228,6 +228,28 @@ ok("stepSeconds per resolution", () => {
   assert.equal(H.stepSeconds("raw", [[0], [120], [240], [9999]]), 120);
   assert.equal(H.stepSeconds("raw", [[0]]), 60);
 });
+ok("stepSeconds bucketed: max(nominal, median spacing)", () => {
+  // 15-min heartbeat on 5m buckets: every third bucket filled.
+  const sparse = [[0], [900], [1800], [2700]];
+  assert.equal(H.stepSeconds("5m", sparse), 900);
+  // denser than nominal never lowers the step
+  assert.equal(H.stepSeconds("1h", [[0], [3600], [7200]]), 3600);
+  assert.equal(H.stepSeconds("1d", [[0], [86400], [172800], [999999]]), 86400);
+});
+ok("prepareCharts 5m with a 15-min heartbeat: no gaps; real outage still breaks", () => {
+  const pts = [];
+  for (let t = 0; t <= 9000; t += 900) pts.push([t, 1, 1, 1]); // 11 points, 15 min apart
+  const plain = H.prepareCharts({ resolution: "5m", series: [{ key: "k", points: pts }] }, ["k"])
+    .charts[0];
+  assert.deepEqual(plain.data[0], pts.map((p) => p[0]), "no null between 15-min points");
+  assert.ok(plain.data[2].every((v) => v !== null));
+  // outage: next point 3 * 900 s later (> 2.5 * 900) -> gap
+  const withOutage = pts.concat([[9000 + 2700, 2, 2, 2]]);
+  const c = H.prepareCharts({ resolution: "5m", series: [{ key: "k", points: withOutage }] },
+    ["k"]).charts[0];
+  assert.deepEqual(c.data[0].slice(-3), [9000, 9900, 11700]);
+  assert.deepEqual(c.data[2].slice(-3), [1, null, 2]);
+});
 ok("toUplotData inserts a null point across gaps > 2.5 * step (all series)", () => {
   const pts = [[0, 1, 2, 3], [300, 1, 2, 3], [3000, 4, 5, 6], [3300, 4, 5, 6]];
   assert.deepEqual(H.toUplotData(pts, 300), [
@@ -246,12 +268,13 @@ ok("toUplotData without step stays backward compatible (no gaps)", () => {
   assert.deepEqual(H.toUplotData(pts), [[0, 100000], [1, 2], [1, 2], [1, 2]]);
 });
 ok("prepareCharts breaks lines over offline periods using the response resolution", () => {
+  // Enough regular points that the median spacing is the 1 h nominal width.
   const body = { resolution: "1h", series: [{ key: "k",
-    points: [[0, 1, 1, 1], [3600, 1, 1, 1], [36000, 2, 2, 2]] }] };
+    points: [[0, 1, 1, 1], [3600, 1, 1, 1], [7200, 1, 1, 1], [46800, 2, 2, 2]] }] };
   const c = H.prepareCharts(body, ["k"]).charts[0];
-  assert.deepEqual(c.data[0], [0, 3600, 7200, 36000]);
-  assert.deepEqual(c.data[2], [1, 1, null, 2]);
-  assert.equal(c.count, 3, "count excludes synthetic gap points");
+  assert.deepEqual(c.data[0], [0, 3600, 7200, 10800, 46800]);
+  assert.deepEqual(c.data[2], [1, 1, 1, null, 2]);
+  assert.equal(c.count, 4, "count excludes synthetic gap points");
 });
 ok("prepareCharts raw: gap threshold from median spacing", () => {
   const pts = [];

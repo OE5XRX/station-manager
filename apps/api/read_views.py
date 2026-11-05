@@ -128,8 +128,10 @@ class StationViewSet(AreaReadOnlyViewSet):
         Limits: at most 10 keys per request; time range at most
         ``HISTORY_HOURLY_RETENTION_DAYS`` days; ``resolution=auto`` (default) picks the
         finest resolution with at most 1000 points per series; an explicit resolution may
-        yield at most 5000 points per series, otherwise 400. Point counts for ``raw`` are
-        estimated at the shortest heartbeat interval (10 s). Validation errors are 400 with
+        yield at most 2016 points per series when served from the raw table (``raw``,
+        ``5m`` — i.e. 7 days of 5m) and at most 5000 from the hourly table (``1h``, ``1d``),
+        otherwise 400. Point counts for ``raw`` are estimated at the shortest heartbeat
+        interval the server accepts (6 s, throttle 10/min). Validation errors are 400 with
         field-keyed messages.
 
         Without ``keys``: the station's current metrics with a visible (non-hidden,

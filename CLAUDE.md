@@ -37,13 +37,19 @@ Heartbeat min/max/avg, 30 d) + `MetricHourly` (min/max/avg/count, 730 d), Compos
 - **Nur auf Postgres partitioniert** (monatlich RANGE auf `ts`, `<table>_pYYYYMM`, handgeschriebene DDL in
   `0001_initial`); SQLite = normale Tabellen. Model-Felder und DDL müssen synchron bleiben. Keine DEFAULT-Partition;
   die Migration legt aktuellen + 3 Monate an, danach `history_maintain`.
-- **Betrieb:** eigener Compose-Service `python manage.py history_maintain --loop --interval 600` (servers-Repo).
+- **Betrieb:** eigener Compose-Service `history-maintainer` (`python manage.py history_maintain --loop --interval 600`),
+  vorhanden in `docker-compose.yml` und `deploy/docker-compose.prod.yml`; das servers-Repo braucht ihn ebenfalls.
   Reihenfolge compact → Partitionen anlegen → droppen. Raw-Partitionen werden nur gedroppt, wenn ihr Ende
-  `<= HistoryState.compacted_until` liegt (Watermark) — nie unverdichtete Stunden verlieren.
+  `<= HistoryState.compacted_until` liegt (Watermark) — nie unverdichtete Stunden verlieren. Retention-Settings
+  `< 1` zählen als 1 Tag; eine Partition mit Ende `> now` wird nie gedroppt.
 - **Ingest** (`record_samples`, aus `ingest_metrics`) nur für akzeptierte Werte, in einem Savepoint, fehlerisoliert
   (eine Error-Log-Zeile pro Stunde). Ein Fehler darf nie den Heartbeat oder die äußere Transaktion kaputtmachen.
+  Werte mit `|x| > HISTORY_MAX_ABS` (1e15) oder nicht-endlich werden nicht aufgezeichnet (sonst AVG-Overflow
+  in der Postgres-Verdichtung → Watermark steht für alle Stationen).
 - **API** `/api/v1/stations/{id}/metrics/history/` — Rechte exakt wie `/telemetry/`; Grenzen: 10 Keys, 730 d,
-  `auto` ≤ 1000 Punkte, explizit ≤ 5000. Aggregation immer in UTC (Projekt-TZ ist Europe/Vienna).
+  `auto` ≤ 1000 Punkte, explizit ≤ 2016 aus der Raw-Tabelle (`raw`/`5m`, = 7 d 5m; raw geschätzt mit 6 s =
+  Heartbeat-Throttle 10/min) bzw. ≤ 5000 aus der Hourly-Tabelle (`1h`/`1d`). Aggregation immer in UTC
+  (Projekt-TZ ist Europe/Vienna).
 - PG-Verhalten wird nur im CI-Job „History tests (Postgres)" getestet (`config.settings.test_postgres`,
   `tests/test_history_*.py`, Fixture `require_postgres`).
 

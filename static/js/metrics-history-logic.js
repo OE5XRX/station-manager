@@ -107,13 +107,20 @@
     return merged;
   }
 
-  /** Expected spacing (seconds) for ``resolution``: fixed for 5m/1h/1d;
-      for raw max(60, median spacing of ``points``). null = unknown. */
+  /** Expected spacing (seconds) for ``resolution``: max(nominal, median
+      spacing of ``points``). Nominal = bucket width for 5m/1h/1d, 60 for raw.
+      The median matters for bucketed resolutions too: a station with a
+      15-min heartbeat fills only every third 5m bucket, which must not count
+      as a gap. null = unknown resolution. */
   function stepSeconds(resolution, points) {
+    var nominal;
     if (Object.prototype.hasOwnProperty.call(STEP_SECONDS, resolution)) {
-      return STEP_SECONDS[resolution];
+      nominal = STEP_SECONDS[resolution];
+    } else if (resolution === "raw") {
+      nominal = RAW_MIN_STEP;
+    } else {
+      return null;
     }
-    if (resolution !== "raw") return null;
     var xs = [];
     var list = Array.isArray(points) ? points : [];
     for (var i = 0; i < list.length; i++) {
@@ -121,11 +128,11 @@
     }
     var dx = [];
     for (var j = 1; j < xs.length; j++) dx.push(xs[j] - xs[j - 1]);
-    if (!dx.length) return RAW_MIN_STEP;
+    if (!dx.length) return nominal;
     dx.sort(function (a, b) { return a - b; });
     var mid = Math.floor(dx.length / 2);
     var median = dx.length % 2 ? dx[mid] : (dx[mid - 1] + dx[mid]) / 2;
-    return Math.max(RAW_MIN_STEP, median);
+    return Math.max(nominal, median);
   }
 
   /** API points ``[[ts, min, avg, max], ...]`` -> uPlot columns

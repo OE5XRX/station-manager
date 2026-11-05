@@ -610,7 +610,9 @@ class MetricHistoryQuerySerializer(serializers.Serializer):
         help_text=(
             f"raw | 5m | 1h | 1d | auto. auto = finest with <= {history_query.MAX_POINTS} "
             f"points per series; an explicit resolution may yield at most "
-            f"{history_query.HARD_MAX_POINTS} (raw is estimated at a 10 s heartbeat). "
+            f"{history_query.HARD_MAX_POINTS_RAW} from the raw table (raw, 5m; raw is "
+            f"estimated at a {history_query.RESOLUTIONS['raw']} s heartbeat) or "
+            f"{history_query.HARD_MAX_POINTS} from the hourly table (1h, 1d). "
             "Sub-hour resolutions older than the raw window (HISTORY_RAW_RETENTION_DAYS) "
             "are served as 1h."
         ),
@@ -660,12 +662,13 @@ class MetricHistoryQuerySerializer(serializers.Serializer):
         resolution, source = history_query.choose_resolution(requested, since, until, now)
         if requested != "auto":
             points = history_query.expected_points(resolution, since, until)
-            if points > history_query.HARD_MAX_POINTS:
+            limit = history_query.max_points_for(source)
+            if points > limit:
                 raise serializers.ValidationError(
                     {
                         "resolution": [
                             f"Resolution {resolution} yields {points} points per series "
-                            f"(max {history_query.HARD_MAX_POINTS}); choose a coarser one."
+                            f"(max {limit}); choose a coarser one."
                         ]
                     }
                 )

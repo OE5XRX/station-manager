@@ -323,6 +323,55 @@ def test_drop_expired_hourly(station):
     assert list(MetricHourly.objects.values_list("ts", flat=True)) == [newer]
 
 
+LATE_NOV = datetime(2026, 11, 28, 12, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("days", [0, -5])
+def test_non_positive_retention_keeps_current_month(station, settings, days):
+    # -5 d at Nov 28 would put the cutoff on Dec 3 → the live November partition expired.
+    settings.HISTORY_RAW_RETENTION_DAYS = days
+    settings.HISTORY_HOURLY_RETENTION_DAYS = days
+    cur = datetime(2026, 11, 28, 10, tzinfo=UTC)
+    _sample(station, cur, 1, 1, 1)
+    _hourly(station, cur)
+    _set_compacted(datetime(2026, 11, 28, 12, tzinfo=UTC))
+
+    dropped = maintenance.drop_expired(now=LATE_NOV)
+
+    for table in (RAW, HOURLY):
+        assert partition_name(table, cur) not in dropped
+        assert partition_name(table, datetime(2026, 12, 1, tzinfo=UTC)) not in dropped
+    assert MetricSample.objects.filter(ts=cur).exists()
+    assert MetricHourly.objects.filter(ts=cur).exists()
+    if connection.vendor == "postgresql":
+        for table in (RAW, HOURLY):
+            listed = {n for n, _lo, _hi in list_partitions(connection, table)}
+            assert partition_name(table, cur) in listed
+
+
+def test_effective_retention_clamped_and_warned_once(settings, caplog, monkeypatch):
+    monkeypatch.setattr(maintenance, "_RETENTION_WARNED", set())
+    settings.HISTORY_RAW_RETENTION_DAYS = -5
+    settings.HISTORY_HOURLY_RETENTION_DAYS = 0
+    with caplog.at_level(logging.WARNING, logger="apps.history.maintenance"):
+        for _ in range(3):
+            assert maintenance.effective_retention_days("HISTORY_RAW_RETENTION_DAYS") == 1
+            assert maintenance.effective_retention_days("HISTORY_HOURLY_RETENTION_DAYS") == 1
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(msgs) == 2
+    assert any("HISTORY_RAW_RETENTION_DAYS" in m for m in msgs)
+    settings.HISTORY_RAW_RETENTION_DAYS = 30
+    assert maintenance.effective_retention_days("HISTORY_RAW_RETENTION_DAYS") == 30
+
+
+@pytest.mark.parametrize("days", [0, -5])
+def test_query_max_span_clamped(settings, days):
+    from apps.history import query
+
+    settings.HISTORY_HOURLY_RETENTION_DAYS = days
+    assert query.max_span() == timedelta(days=1)
+
+
 def test_retention_after_outage_never_passes_watermark(station):
     # Maintenance was down: watermark mid-Sept, raw Sept/Oct pending. A full run compacts
     # first, so afterwards Sept is compacted and may be dropped; Oct stays.

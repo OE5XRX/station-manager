@@ -2,7 +2,7 @@
 
 Resolutions and their source table:
 
-- ``raw`` (one row per heartbeat; budgeted at the worst-case 10 s interval) and ``5m`` (DB
+- ``raw`` (one row per heartbeat; budgeted at the worst-case 6 s interval) and ``5m`` (DB
   aggregate per 300 s UTC epoch bucket) are served from ``MetricSample`` — but only while
   ``since`` lies inside the raw window (``HISTORY_RAW_RETENTION_DAYS``, default 30 d). Older
   ranges fall back to ``1h`` from ``MetricHourly`` (otherwise the answer would be empty).
@@ -19,20 +19,24 @@ Points are ``[epoch_seconds:int, min, avg, max]``, sorted by time.
 
 from datetime import UTC, datetime, timedelta
 
-from django.conf import settings
 from django.db.models import Avg, BigIntegerField, F, FloatField, Func, Max, Min, Q, Sum
 from django.db.models.functions import TruncDay
 
+from apps.history.maintenance import effective_retention_days
 from apps.history.models import MetricHourly, MetricSample
 
 # Bucket width per resolution in seconds. ``raw`` has no buckets (one row per heartbeat);
-# its value is the *worst-case* step for point estimates (auto choice, HARD_MAX_POINTS):
-# the agent's minimum ``heartbeat_interval`` is 10 s (``station_agent/config.py``), the
-# default 60 s — estimating with 60 would let a 10 s station return 6x the limit.
-RESOLUTIONS = {"raw": 10, "5m": 300, "1h": 3600, "1d": 86400}
+# its value is the *worst-case* step for point estimates (auto choice, hard limits): the
+# server accepts a heartbeat every 6 s (DRF throttle ``"heartbeat": "10/min"`` in
+# ``config/settings/base.py``) — the agent's own minimum interval (10 s) is not the bound,
+# a station may send faster. Estimating with the 60 s default would let it return 10x the limit.
+RESOLUTIONS = {"raw": 6, "5m": 300, "1h": 3600, "1d": 86400}
 RESOLUTION_CHOICES = (*RESOLUTIONS, "auto")
 MAX_POINTS = 1000  # auto: target maximum points per series
-HARD_MAX_POINTS = 5000  # explicit resolution: hard limit per series (else 400)
+HARD_MAX_POINTS = 5000  # explicit resolution from the hourly table: hard limit (else 400)
+# Explicit resolution served from the raw table (raw, 5m): 7 days of 5m buckets. Bounds the
+# raw rows scanned/aggregated per request (5000 x 5m would be ~17 days of raw rows).
+HARD_MAX_POINTS_RAW = 2016
 MAX_KEYS = 10  # keys per request
 DEFAULT_SPAN = timedelta(hours=24)
 
@@ -40,8 +44,9 @@ _HOURLY_RESOLUTIONS = ("1h", "1d")
 
 
 def max_span() -> timedelta:
-    """Longest allowed ``until - since``: ``HISTORY_HOURLY_RETENTION_DAYS`` (read per call)."""
-    return timedelta(days=settings.HISTORY_HOURLY_RETENTION_DAYS)
+    """Longest allowed ``until - since``: ``HISTORY_HOURLY_RETENTION_DAYS`` (read per call,
+    clamped to >= 1 day like retention itself)."""
+    return timedelta(days=effective_retention_days("HISTORY_HOURLY_RETENTION_DAYS"))
 
 
 def visible_keys(keys: list[str]) -> list[str]:
@@ -117,6 +122,11 @@ def default_keys(station) -> list[str]:
     )
 
 
+def max_points_for(source: str) -> int:
+    """Hard per-series point limit for an explicit resolution served from ``source``."""
+    return HARD_MAX_POINTS_RAW if source == "raw" else HARD_MAX_POINTS
+
+
 def expected_points(resolution: str, since: datetime, until: datetime) -> int:
     """Nominal number of points per series for ``resolution`` over ``[since, until]``."""
     return int((until - since).total_seconds() // RESOLUTIONS[resolution])
@@ -141,7 +151,7 @@ def choose_resolution(
         raise ValueError(f"unknown resolution: {requested!r}")
     if resolution in _HOURLY_RESOLUTIONS:
         return resolution, "hourly"
-    raw_window_start = now - timedelta(days=settings.HISTORY_RAW_RETENTION_DAYS)
+    raw_window_start = now - timedelta(days=effective_retention_days("HISTORY_RAW_RETENTION_DAYS"))
     if since < raw_window_start:
         return "1h", "hourly"
     return resolution, "raw"

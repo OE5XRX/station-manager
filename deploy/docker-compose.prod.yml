@@ -47,6 +47,20 @@ services:
       redis:
         condition: service_started
 
+  history-maintainer:
+    image: ghcr.io/oe5xrx/station-manager:latest
+    restart: unless-stopped
+    command: python manage.py history_maintain --loop --interval 600
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   background-worker:
     image: ghcr.io/oe5xrx/station-manager:latest
     restart: unless-stopped

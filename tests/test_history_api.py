@@ -112,10 +112,10 @@ NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
 @pytest.mark.parametrize(
     ("span", "expected"),
     [
-        # raw is estimated at the worst-case 10 s heartbeat: 1 h = 360 points.
+        # raw is estimated at the worst-case 6 s heartbeat (throttle 10/min): 1 h = 600 points.
         (timedelta(hours=1), ("raw", "raw")),
-        (timedelta(hours=2), ("raw", "raw")),
-        (timedelta(hours=3), ("5m", "raw")),  # 1080 raw points > MAX_POINTS
+        (timedelta(hours=2), ("5m", "raw")),  # 1200 raw points > MAX_POINTS
+        (timedelta(hours=3), ("5m", "raw")),
         (timedelta(hours=24), ("5m", "raw")),
         (timedelta(days=7), ("1h", "hourly")),
         (timedelta(days=365), ("1d", "hourly")),
@@ -424,7 +424,7 @@ def test_span_too_long_400(topology):  # noqa: F811
 
 
 def test_raw_over_24h_exceeds_hard_max_400(topology):  # noqa: F811
-    # raw is budgeted at a 10 s heartbeat: 24 h = 8640 points > HARD_MAX_POINTS.
+    # raw is budgeted at a 6 s heartbeat: 24 h = 14400 points > HARD_MAX_POINTS_RAW.
     now = timezone.now()
     resp = _get(
         topology,
@@ -451,6 +451,64 @@ def test_raw_over_7d_exceeds_hard_max_400(topology):  # noqa: F811
         {"since": _iso(now - timedelta(days=7)), "until": _iso(now), "resolution": "raw"},
     )
     assert resp.status_code == 400 and "resolution" in resp.data
+
+
+def test_raw_limit_is_hard_max_points_raw_at_6s():
+    assert query.RESOLUTIONS["raw"] == 6
+    assert query.HARD_MAX_POINTS_RAW == 2016
+    assert query.max_points_for("raw") == query.HARD_MAX_POINTS_RAW
+    assert query.max_points_for("hourly") == query.HARD_MAX_POINTS
+
+
+def test_raw_within_raw_limit_ok(topology):  # noqa: F811
+    # 3 h at 6 s = 1800 points <= 2016.
+    now = timezone.now()
+    resp = _get(
+        topology,
+        {"since": _iso(now - timedelta(hours=3)), "until": _iso(now), "resolution": "raw"},
+    )
+    assert resp.status_code == 200, resp.data
+
+
+def test_raw_over_raw_limit_400(topology):  # noqa: F811
+    # 4 h at 6 s = 2400 points > 2016 (was fine under the old 5000 limit).
+    now = timezone.now()
+    resp = _get(
+        topology,
+        {"since": _iso(now - timedelta(hours=4)), "until": _iso(now), "resolution": "raw"},
+    )
+    assert resp.status_code == 400 and "resolution" in resp.data
+    assert "2016" in str(resp.data["resolution"])
+
+
+def test_5m_over_8d_exceeds_raw_source_limit_400(topology):  # noqa: F811
+    # 8 d of 5m = 2304 buckets aggregated from the raw table > HARD_MAX_POINTS_RAW.
+    now = timezone.now()
+    resp = _get(
+        topology,
+        {"since": _iso(now - timedelta(days=8)), "until": _iso(now), "resolution": "5m"},
+    )
+    assert resp.status_code == 400 and "resolution" in resp.data
+
+
+def test_5m_over_6d_ok(topology):  # noqa: F811
+    now = timezone.now()
+    resp = _get(
+        topology,
+        {"since": _iso(now - timedelta(days=6)), "until": _iso(now), "resolution": "5m"},
+    )
+    assert resp.status_code == 200, resp.data
+    assert resp.data["resolution"] == "5m" and resp.data["source"] == "raw"
+
+
+def test_1h_keeps_hard_max_points(topology):  # noqa: F811
+    # Hourly source keeps 5000: 200 d of 1h = 4800 points.
+    now = timezone.now()
+    resp = _get(
+        topology,
+        {"since": _iso(now - timedelta(days=200)), "until": _iso(now), "resolution": "1h"},
+    )
+    assert resp.status_code == 200, resp.data
 
 
 def test_since_not_before_until_400(topology):  # noqa: F811
@@ -496,3 +554,4 @@ def test_schema_documents_history_endpoint(topology):  # noqa: F811
     names = {p["name"] for p in op["parameters"]}
     assert {"keys", "since", "until", "resolution"} <= names
     assert "1000" in op["description"] and "5000" in op["description"]
+    assert "2016" in op["description"]

@@ -149,6 +149,24 @@ def ensure_future_partitions(now: datetime | None = None) -> list[str]:
 
 # --- retention -----------------------------------------------------------------------------
 
+# Settings already warned about as < 1 (``(name, value)``): one warning per process+value.
+_RETENTION_WARNED: set[tuple[str, object]] = set()
+
+
+def effective_retention_days(name: str) -> int:
+    """``settings.<name>`` (``HISTORY_RAW/HOURLY_RETENTION_DAYS``) clamped to at least 1 day.
+
+    A misconfigured value <= 0 would put the cutoff at/after ``now`` and expire the live
+    current/next partitions; it is treated as 1 and warned about once (per value).
+    """
+    value = getattr(settings, name)
+    if value >= 1:
+        return int(value)
+    if (name, value) not in _RETENTION_WARNED:
+        _RETENTION_WARNED.add((name, value))
+        logger.warning("history: %s=%r is < 1; using 1 day", name, value)
+    return 1
+
 
 def _raw_partition_safe(lo: datetime, hi: datetime, compacted_until: datetime | None) -> bool:
     if compacted_until is not None:
@@ -166,11 +184,11 @@ def _warn_uncompacted(name: str, compacted_until: datetime | None) -> None:
 
 
 def _drop_expired_partitioned(now: datetime, compacted_until: datetime | None) -> list[str]:
-    raw_cutoff = now - timedelta(days=settings.HISTORY_RAW_RETENTION_DAYS)
-    hourly_cutoff = now - timedelta(days=settings.HISTORY_HOURLY_RETENTION_DAYS)
+    raw_cutoff = now - timedelta(days=effective_retention_days("HISTORY_RAW_RETENTION_DAYS"))
+    hourly_cutoff = now - timedelta(days=effective_retention_days("HISTORY_HOURLY_RETENTION_DAYS"))
     dropped = []
     for name, lo, hi in partitions.list_partitions(connection, RAW_TABLE):
-        if hi > raw_cutoff:
+        if hi > raw_cutoff or hi > now:  # never a partition that is still live
             continue
         if not _raw_partition_safe(lo, hi, compacted_until):
             _warn_uncompacted(name, compacted_until)
@@ -178,7 +196,7 @@ def _drop_expired_partitioned(now: datetime, compacted_until: datetime | None) -
         partitions.drop_partition(connection, name)
         dropped.append(name)
     for name, _lo, hi in partitions.list_partitions(connection, HOURLY_TABLE):
-        if hi <= hourly_cutoff:
+        if hi <= hourly_cutoff and hi <= now:
             partitions.drop_partition(connection, name)
             dropped.append(name)
     return dropped
@@ -205,7 +223,14 @@ def _drop_expired_rows(now: datetime, compacted_until: datetime | None) -> list[
     """Non-partitioned fallback: delete the rows the partition drop would remove."""
     dropped = []
     # A raw "partition" [lo, hi) is expired when hi <= cutoff, i.e. lo < month_start(cutoff).
-    raw_limit = partitions.month_start(now - timedelta(days=settings.HISTORY_RAW_RETENTION_DAYS))
+    # Both limits are clamped to month_start(now): a live month is never deleted.
+    current = partitions.month_start(now)
+    raw_limit = min(
+        current,
+        partitions.month_start(
+            now - timedelta(days=effective_retention_days("HISTORY_RAW_RETENTION_DAYS"))
+        ),
+    )
     for lo in _months_with_rows(MetricSample, raw_limit):
         hi = partitions.add_months(lo, 1)
         name = partitions.partition_name(RAW_TABLE, lo)
@@ -215,8 +240,11 @@ def _drop_expired_rows(now: datetime, compacted_until: datetime | None) -> list[
             break
         MetricSample.objects.filter(ts__gte=lo, ts__lt=hi).delete()
         dropped.append(name)
-    hourly_limit = partitions.month_start(
-        now - timedelta(days=settings.HISTORY_HOURLY_RETENTION_DAYS)
+    hourly_limit = min(
+        current,
+        partitions.month_start(
+            now - timedelta(days=effective_retention_days("HISTORY_HOURLY_RETENTION_DAYS"))
+        ),
     )
     for lo in _months_with_rows(MetricHourly, hourly_limit):
         MetricHourly.objects.filter(ts__gte=lo, ts__lt=partitions.add_months(lo, 1)).delete()
@@ -230,6 +258,8 @@ def drop_expired(now: datetime | None = None) -> list[str]:
     Raw: partition end ``<= now - HISTORY_RAW_RETENTION_DAYS`` **and** ``<= compacted_until``
     (otherwise kept with a warning; with no watermark at all only empty partitions go).
     Hourly: partition end ``<= now - HISTORY_HOURLY_RETENTION_DAYS``.
+    Retention settings < 1 count as 1 day (``effective_retention_days``), and a partition
+    ending after ``now`` is never dropped.
     On PostgreSQL the drops run with ``lock_timeout = DDL_LOCK_TIMEOUT`` (see there).
     """
     now = _utc(now)

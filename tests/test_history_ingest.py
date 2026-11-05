@@ -6,7 +6,8 @@ the missing-partition test is PG-only.
 
 import json
 import logging
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 
 import pytest
 from django.core.cache import cache
@@ -14,9 +15,9 @@ from django.db import connection, transaction
 from django.test import Client
 from django.utils import timezone
 
-from apps.history import partitions
-from apps.history.ingest import INGEST_ERROR_CACHE_KEY, record_samples
-from apps.history.models import MetricSample
+from apps.history import maintenance, partitions
+from apps.history.ingest import HISTORY_MAX_ABS, INGEST_ERROR_CACHE_KEY, record_samples
+from apps.history.models import MetricHourly, MetricSample
 from apps.monitoring.metrics_ingest import ingest_metrics
 from apps.monitoring.models import MetricDefinition
 from apps.stations.models import StationTelemetry
@@ -138,6 +139,59 @@ def test_duplicate_heartbeat_same_ts_ignored(station):
     record_samples(station, ts, {KEY: {"min": 1.0, "max": 2.0, "avg": 1.5}})
     assert MetricSample.objects.count() == 1
     assert MetricSample.objects.get().avg == 12.1
+
+
+HUGE = {"min": 1e308, "max": 1e308, "avg": 1e308}
+
+
+def test_huge_value_not_recorded_others_are(station):
+    ts = timezone.now()
+    n = record_samples(station, ts, {KEY: VALUE, "a.b.huge_v": HUGE})
+    assert n == 1
+    assert list(MetricSample.objects.values_list("metric_key", flat=True)) == [KEY]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"min": -1e16, "max": 1.0, "avg": 0.5},  # min out of bounds
+        {"min": 0.0, "max": 1e16, "avg": 0.5},  # max out of bounds
+        {"min": 0.0, "max": 1.0, "avg": math.inf},
+        {"min": math.nan, "max": 1.0, "avg": 0.5},
+    ],
+)
+def test_out_of_bounds_or_non_finite_component_not_recorded(station, value):
+    assert record_samples(station, timezone.now(), {"a.b.bad_v": value, KEY: VALUE}) == 1
+    assert list(MetricSample.objects.values_list("metric_key", flat=True)) == [KEY]
+
+
+def test_bound_itself_is_recorded(station):
+    edge = {"min": -HISTORY_MAX_ABS, "max": HISTORY_MAX_ABS, "avg": 0.0}
+    assert record_samples(station, timezone.now(), {KEY: edge}) == 1
+
+
+def test_only_huge_values_no_insert(station, django_assert_num_queries):
+    with django_assert_num_queries(0):
+        assert record_samples(station, timezone.now(), {"a.b.huge_v": HUGE}) == 0
+
+
+def test_huge_value_via_ingest_metrics_not_recorded(station):
+    # normalize_value accepts any finite float; the history boundary must drop it.
+    _define(KEY)
+    _define("a.b.huge_v")
+    _ingest(station, metrics={KEY: VALUE, "a.b.huge_v": HUGE})
+    assert list(MetricSample.objects.values_list("metric_key", flat=True)) == [KEY]
+
+
+def test_compact_succeeds_after_huge_heartbeats(require_postgres, station):
+    # Two 1e308 samples in one hour would overflow Postgres AVG ("value out of range")
+    # and abort the whole compaction chunk for every station. They never reach the table.
+    ts = maintenance.hour_floor(timezone.now())  # current month: its partition exists
+    for offset in (0, 6):
+        record_samples(station, ts + timedelta(seconds=offset), {KEY: VALUE, "a.b.huge_v": HUGE})
+    assert maintenance.compact(now=ts + timedelta(hours=2)) == 1
+    row = MetricHourly.objects.get(station=station)
+    assert (row.metric_key, row.count) == (KEY, 2)
 
 
 # --- error isolation --------------------------------------------------------
