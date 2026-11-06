@@ -47,6 +47,20 @@ services:
       redis:
         condition: service_started
 
+  repeater-sync:
+    image: ghcr.io/oe5xrx/station-manager:latest
+    restart: unless-stopped
+    command: python manage.py sync_repeaters --loop --interval 86400
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   history-maintainer:
     image: ghcr.io/oe5xrx/station-manager:latest
     restart: unless-stopped
