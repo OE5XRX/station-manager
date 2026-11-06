@@ -230,6 +230,13 @@ def sweep_lock(station, now, idle_seconds, scope="station"):
         lock.last_activity is not None
         and (now - lock.last_activity).total_seconds() > idle_seconds
     )
+    if idle_lapsed and lock.pending_release_at is None:
+        # A running scan counts as activity while the holder is connected (scanner
+        # spec §7.5): an unattended-but-watched scan must not idle out. Lazy import:
+        # scan imports this module's siblings at load.
+        from .scan import scan_counts_as_activity
+
+        idle_lapsed = not scan_counts_as_activity(station)
     if grace_lapsed or idle_lapsed:
         _clear(lock)
         return True

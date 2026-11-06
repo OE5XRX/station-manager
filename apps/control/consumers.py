@@ -24,6 +24,7 @@ from . import (
     lock,
     persistence,
     registry,
+    scan,
     telemetry_subscriptions,
 )
 from .models import AgentConnection, StationModule
@@ -55,8 +56,28 @@ def _fresh_user(user):
 
 # Browser frames that operate the station: each re-checks control.use (fresh user).
 _USE_ACTIONS = frozenset(
-    {"lock_acquire", "lock_request", "lock_transfer", "ptt_keepalive", "apply_repeater"}
+    {
+        "lock_acquire",
+        "lock_request",
+        "lock_transfer",
+        "ptt_keepalive",
+        "apply_repeater",
+        "scan_start",
+        "scan_control",
+    }
 )
+
+# User-facing texts for scan_start refusals (codes are the contract, texts are cosmetic).
+_SCAN_ERRORS = {
+    "invalid_scan": "Invalid scan request",
+    "forbidden": "Scan could not be authorized",
+    "no_coordinates": "Station has no coordinates — radius scan unavailable",
+    "empty_scan_list": "No scan entries for this station",
+    "internal_error": "Scan could not be started",
+}
+
+# Agent scan states that tune a module: the operator mic must follow (gate tx route).
+_SCAN_TUNED_STATES = frozenset({"active", "held"})
 
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
@@ -128,6 +149,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             # this channel, never the station state the live connection owns.
             if station is not None and await self._release(station):
                 await self._mark_offline(station)
+                # The agent stops its scan on disconnect (dead-man): only drop the row.
+                await self._end_scan(station, "disconnect")
                 freed = await self._force_free(station)
                 if freed:
                     # Agent disconnect clears any held lock -> PTT must die too.
@@ -175,6 +198,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             await self._broadcast("control.state", {"msg": msg})
         elif mtype == "result":
             await self._broadcast("control.result", {"msg": msg})
+        elif mtype == "scan_state":
+            station = await self._cached_station()
+            if station is not None:
+                await self._apply_scan_state(station, msg)
+            await self._broadcast("control.scan_state", {"msg": msg})
         elif mtype == "event":
             updating = registry.FIRMWARE_UPDATING_EVENTS.get(msg.get("event"))
             if updating is not None:
@@ -256,6 +284,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     async def control_result(self, event):
         pass
 
+    async def control_scan_state(self, event):
+        pass
+
     async def control_event(self, event):
         pass
 
@@ -280,7 +311,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         continue
                     freed = await self._sweep(station)
                     if freed:
-                        # Lock swept (idle/grace) -> PTT must die.
+                        # Lock swept (idle/grace) -> PTT and the holder's scan must die.
+                        await self._stop_scan(station, "lock expired")
                         await self._do_clear_ptt(station)
                         await self._bridge_gate(station)
                         status = await self._lock_status(station)
@@ -512,6 +544,56 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             return True
         return False
 
+    async def _apply_scan_state(self, station, msg):
+        """Server side of an agent ``scan_state`` (spec §7.4): ``stopped`` drops the
+        ``ActiveScan`` row (+ audit); ``active``/``held`` on a tuned entry points the
+        authoritative audio-gate TX route at that module — the agent's router state
+        alone does not move the operator mic. Steps are neither persisted nor audited."""
+        try:
+            scan_id = msg.get("scan_id")
+            state = msg.get("state")
+            if not isinstance(scan_id, str):
+                return
+            if state == "stopped":
+                await self._end_scan(station, msg.get("reason") or "stopped", scan_id)
+            elif state in _SCAN_TUNED_STATES:
+                slot, module = msg.get("slot"), msg.get("module")
+                if slot is None or not isinstance(module, str):
+                    return  # nothing tuned yet
+                if not (isinstance(slot, str) or type(slot) is int):
+                    return
+                if await self._scan_set_tx_route(station, scan_id, slot, module):
+                    await self._bridge_gate(station)
+        except Exception:
+            logger.exception("control: applying scan_state failed")
+
+    @database_sync_to_async
+    def _scan_set_tx_route(self, station, scan_id, slot, module):
+        """Move the gate TX route for the station's current scan; True if it changed."""
+        from apps.audio import gate as audio_gate
+
+        if scan.current_scan_id(station) != scan_id:
+            return False  # a stale/replaced scan must not move the mic
+        before = audio_gate.get_state(station)
+        audio_gate.set_tx_route(station, slot, module)
+        after = audio_gate.get_state(station)
+        return (before.get("tx_slot"), before.get("tx_module")) != (
+            after.get("tx_slot"),
+            after.get("tx_module"),
+        )
+
+    async def _end_scan(self, station, reason, scan_id=None):
+        try:
+            await database_sync_to_async(scan.end_scan)(station, reason, scan_id)
+        except Exception:
+            logger.exception("control: ending scan failed")
+
+    async def _stop_scan(self, station, reason):
+        try:
+            await database_sync_to_async(scan.stop_active_scan)(station, reason)
+        except Exception:
+            logger.exception("control: stopping scan failed")
+
     async def _bridge_gate(self, station):
         """Read gate state and broadcast audio.gate to browser + agent audio groups.
 
@@ -738,6 +820,10 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._handle_command(station, msg)
         elif mtype == "apply_repeater":
             await self._handle_apply_repeater(station, msg)
+        elif mtype == "scan_start":
+            await self._handle_scan_start(station, msg)
+        elif mtype == "scan_control":
+            await self._handle_scan_control(station, msg)
         elif mtype == "ptt_keepalive":
             if await self._touch_if_holder(station):
                 await self._relay(msg)
@@ -887,6 +973,52 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             f"{self.user.username} applied repeater {_clip(plan['callsign'])} "
             f"on {_clip(plan['slot'])}/{_clip(plan['module'])}",
         )
+
+    async def _handle_scan_start(self, station, msg):
+        """Start a scan (spec §7.1): the server builds the effective list and hands it to
+        the agent, which runs the loop. Refused (no agent frame) without the lock, without
+        write on the frequency/tone capabilities, for a radius without station coordinates,
+        or when the effective list is empty."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._error(request_id, "not_locked", "You do not hold the lock")
+            return
+        try:
+            code, frame = await self._start_scan(station, msg)
+        except Exception:
+            logger.exception("control: starting scan failed")
+            code, frame = "internal_error", None
+        if code is not None:
+            await self._error(request_id, code, _SCAN_ERRORS.get(code, code))
+            return
+        await self._relay(frame)
+
+    async def _handle_scan_control(self, station, msg):
+        """stop/skip/hold/resume for the station's running scan (lock holder only)."""
+        request_id = msg.get("request_id")
+        action = msg.get("action")
+        if not await self._touch_if_holder(station):
+            await self._error(request_id, "not_locked", "You do not hold the lock")
+            return
+        if action not in scan.SCAN_ACTIONS:
+            await self._error(request_id, "invalid_action", "Unknown scan action")
+            return
+        if action == "stop":
+            # Server-side stop: the row goes now (an unreachable agent can't strand it).
+            scan_id = await self._stop_scan(station, "operator")
+        else:
+            scan_id = await database_sync_to_async(scan.current_scan_id)(station)
+            if scan_id is not None:
+                await self._relay(
+                    {
+                        "v": constants.PROTOCOL_VERSION,
+                        "type": "scan_control",
+                        "scan_id": scan_id,
+                        "action": action,
+                    }
+                )
+        if scan_id is None:
+            await self._error(request_id, "no_active_scan", "No scan is running")
 
     async def _authorize_command(self, station, msg):
         """Server-side capability gate (``control.<policy verb>``, spec §3.4) — the real
@@ -1073,6 +1205,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             "control_lock_released",
             f"{self.user.username} lost control (requires control.use)",
         )
+        await self._stop_scan(station, "lock released")
         await self._audio_clear_ptt(station)
         await self._audio_clear_tx_route(station)
         await self._bridge_gate(station)
@@ -1084,6 +1217,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._audit(
                 station, "control_lock_released", f"{self.user.username} released control"
             )
+            await self._stop_scan(station, "lock released")
             # Lock loss -> clear PTT and notify audio consumers.
             await self._audio_clear_ptt(station)
             await self._bridge_gate(station)
@@ -1112,7 +1246,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 "control_lock_transferred",
                 f"{self.user.username} -> user {to_user_id}",
             )
-            # Holder changed -> old holder can no longer key TX.
+            # Holder changed -> old holder can no longer key TX nor scan.
+            await self._stop_scan(station, "lock transferred")
             await self._audio_clear_ptt(station)
             await self._bridge_gate(station)
         if transferred is lock.DRAIN_REFUSED:
@@ -1139,7 +1274,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._audit(
             station, "control_lock_preempted", f"{self.user.username} preempted control"
         )
-        # Holder changed by preempt -> PTT dies.
+        # Holder changed by preempt -> PTT and the previous holder's scan die.
+        await self._stop_scan(station, "lock preempted", unless_user=self.user)
         await self._audio_clear_ptt(station)
         await self._bridge_gate(station)
         await self._broadcast_lock(station)
@@ -1179,6 +1315,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_inventory(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_scan_state(self, event):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_result(self, event):
@@ -1314,6 +1453,23 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         from . import serializers
 
         return serializers.snapshot(station)
+
+    @database_sync_to_async
+    def _start_scan(self, station, msg):
+        user = _fresh_user(self.user)
+        if user is None:
+            return "forbidden", None
+        return scan.start_scan(station, user, msg)
+
+    async def _stop_scan(self, station, reason, unless_user=None):
+        """Stop the station's scan (row + audit + agent stop); returns its scan_id."""
+        try:
+            return await database_sync_to_async(scan.stop_active_scan)(
+                station, reason, unless_user=unless_user
+            )
+        except Exception:
+            logger.exception("control: stopping scan failed")
+            return None
 
     @database_sync_to_async
     def _acquire(self, station):

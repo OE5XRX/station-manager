@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -231,3 +232,39 @@ class TelemetrySubscription(models.Model):
 
     def __str__(self):
         return f"{self.station_id}/{self.slot}/{self.module}/{self.capability}@{self.channel_name}"
+
+
+class ActiveScan(models.Model):
+    """The one running scan of a station (repeater-scanner spec §7).
+
+    The agent owns the loop; this row only remembers what the scan was built from,
+    so a scan-list edit can rebuild and push the list (``scan_update``) and a lock
+    change can stop it. Scan steps are never stored here (nor anywhere else).
+    """
+
+    station = models.OneToOneField(
+        "stations.Station",
+        verbose_name=_("station"),
+        on_delete=models.CASCADE,
+        related_name="active_scan",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name=_("user"),
+        on_delete=models.CASCADE,
+        related_name="active_scans",
+    )
+    scan_id = models.CharField(_("scan id"), max_length=32)
+    list_ids = models.JSONField(_("scan lists"), default=list, blank=True)
+    radius_km = models.FloatField(_("radius (km)"), null=True, blank=True)
+    band_map = models.JSONField(_("band map"), default=dict, blank=True)
+    listen_s = models.FloatField(_("listen window (s)"))
+    hang_s = models.FloatField(_("hang time (s)"))
+    started_at = models.DateTimeField(_("started at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("active scan")
+        verbose_name_plural = _("active scans")
+
+    def __str__(self):
+        return f"{self.station_id}/{self.scan_id}"
