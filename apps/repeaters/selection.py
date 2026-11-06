@@ -69,6 +69,23 @@ def _online_modules(station):
             yield module
 
 
+def usable_modules(station):
+    """Online modules advertising every capability a repeater preset needs."""
+    return list(_online_modules(station))
+
+
+def has_capability(module, name: str) -> bool:
+    return name in _caps(module)
+
+
+def module_band_of(module, freq: Decimal) -> str | None:
+    """Band of ``module`` (its ``rx_frequency`` ranges) containing ``freq``, else None."""
+    ranges: dict[str, list[tuple[Decimal, Decimal]]] = {}
+    for name, lo, hi in _module_ranges(module):
+        ranges.setdefault(name, []).append((lo, hi))
+    return _match_band(freq, ranges)
+
+
 def station_bands(station) -> dict[str, list[ModuleRef]]:
     bands: dict[str, list[ModuleRef]] = {}
     for module in _online_modules(station):

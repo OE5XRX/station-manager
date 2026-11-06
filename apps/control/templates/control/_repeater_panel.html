@@ -1,0 +1,110 @@
+{% load i18n %}
+{% comment %}
+Repeater panel — binds to the repeaterPanel Alpine component (repeater-panel.js).
+Sibling to #control-panel (own x-data root, spec 2026-11-06 §5.1). It never owns
+a socket: clicks go out via the "control:send" window event, replies come back
+as control:result / control:error events re-emitted by the control panel.
+Values are rendered through helper methods (rxMHz/txMHz) so this template stays
+free of capability names.
+{% endcomment %}
+{% trans "Slot" as slot_label %}
+<section x-data="repeaterPanel"
+         data-station-id="{{ station.id }}"
+         data-url="{% url 'control:station_repeaters' station.pk %}"
+         class="cp-module-card rp-panel mt-4"
+         aria-labelledby="rp-title">
+  <header class="cp-module-header rp-header">
+    <div class="cp-module-identity">
+      <h2 id="rp-title" class="rp-title">{% trans "Repeaters" %}</h2>
+      <span class="rp-count t-muted" x-show="rows.length" x-text="rows.length"></span>
+    </div>
+    <label class="rp-search">
+      <span class="visually-hidden">{% trans "Search callsign or site" %}</span>
+      <input type="search" class="form-control form-control-sm"
+             placeholder="{% trans 'Callsign or site' %}"
+             autocomplete="off" maxlength="64"
+             x-model="q" @input="search()">
+    </label>
+  </header>
+
+  <div class="rp-body">
+    <template x-if="mappedBands.length">
+      <div class="rp-bandmap" role="group" aria-label="{% trans 'Module per band' %}">
+        <template x-for="band in mappedBands" :key="band">
+          <label class="rp-bandmap-item">
+            <span class="rp-band" x-text="band"></span>
+            <select class="form-select form-select-sm"
+                    :value="slotFor(band)"
+                    @change="chooseSlot(band, $event.target.value)">
+              <template x-for="m in modulesFor(band)" :key="m.slot + '/' + m.module">
+                <option :value="m.slot" :selected="m.slot === slotFor(band)"
+                        x-text="'{{ slot_label|escapejs }} ' + m.slot + ' (' + m.module + ')'"></option>
+              </template>
+            </select>
+          </label>
+        </template>
+      </div>
+    </template>
+
+    <p class="rp-hint" x-show="!hasCoords">
+      {% trans "Sorted by callsign. Add coordinates to this station to sort by distance." %}
+    </p>
+    <p class="rp-hint" x-show="rows.length && !canApply">
+      {% trans "Take control of the station to tune a repeater." %}
+    </p>
+
+    <div class="rp-notice" role="status" aria-live="polite"
+         x-show="notice" :class="notice && !notice.ok ? 'is-error' : 'is-ok'"
+         x-text="notice ? notice.text : ''"></div>
+
+    <ul class="rp-list" x-show="rows.length" :aria-busy="loading ? 'true' : 'false'">
+      <template x-for="row in rows" :key="row.id">
+        <li>
+          <button type="button" class="rp-row"
+                  :class="{ 'is-tuned': isTuned(row), 'is-cross': row.cross_band, 'is-pending': isPending(row) }"
+                  :disabled="rowDisabled(row)"
+                  :title="rowTitle(row)"
+                  :aria-current="isTuned(row) ? 'true' : null"
+                  @click="apply(row)">
+            <span class="rp-call">
+              <span class="rp-callsign" x-text="row.callsign"></span>
+              <span class="rp-site" x-text="row.site_name"></span>
+            </span>
+            <span class="rp-mhz">
+              <span class="rp-rx" x-text="rxMHz(row)"></span>
+              <span class="rp-shift" x-text="shift(row)"></span>
+            </span>
+            <span class="rp-tone" x-text="tone(row)"></span>
+            <span class="rp-dist">
+              <template x-if="row.cross_band">
+                <span class="rp-cross">{% trans "cross-band – not yet supported" %}</span>
+              </template>
+              <template x-if="!row.cross_band">
+                <span class="rp-dist-inner">
+                  <svg class="rp-arrow" viewBox="0 0 10 10" aria-hidden="true" :style="arrowStyle(row)">
+                    <path d="M5 0.5 L8.5 9 L5 7 L1.5 9 Z"></path>
+                  </svg>
+                  <span x-text="distance(row)"></span>
+                </span>
+              </template>
+            </span>
+          </button>
+        </li>
+      </template>
+    </ul>
+
+    <p class="rp-empty" x-show="!loading && !loadError && !rows.length">
+      <span x-show="q">{% trans "No repeater matches this search." %}</span>
+      <span x-show="!q">{% trans "No repeater fits the bands of this station's online modules." %}</span>
+    </p>
+    <p class="rp-empty is-error" x-show="loadError">
+      {% trans "The repeater list could not be loaded." %}
+      <button type="button" class="btn btn-link btn-sm p-0 align-baseline" @click="refresh()">{% trans "Try again" %}</button>
+    </p>
+
+    <p class="rp-attribution" x-show="attribution">
+      <a :href="attribution ? attribution.url : '#'" rel="noopener" target="_blank"
+         x-text="attribution ? attribution.text : ''"></a>
+    </p>
+  </div>
+</section>
