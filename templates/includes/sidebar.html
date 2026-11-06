@@ -168,6 +168,20 @@
   </div>
   {% endif %}
 
+  {% if can.repeaters.view %}
+  <div class="nav-section">
+    <div class="nav-section-label">{% trans "Radio" %}</div>
+    <a href="{% url 'repeaters:list' %}"
+       class="nav-item{% if request.resolver_match.namespace == 'repeaters' %} active{% endif %}"
+       {% if request.resolver_match.namespace == 'repeaters' %}aria-current="page"{% endif %}>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 12v9"/><circle cx="12" cy="10" r="2"/><path d="M7.8 5.8a6 6 0 0 0 0 8.4"/><path d="M16.2 5.8a6 6 0 0 1 0 8.4"/>
+      </svg>
+      <span class="label">{% trans "Repeaters" %}</span>
+    </a>
+  </div>
+  {% endif %}
+
   {% if can.users.view %}
   <div class="nav-section">
     <div class="nav-section-label">{% trans "Members" %}</div>

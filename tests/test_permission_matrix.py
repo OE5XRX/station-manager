@@ -75,12 +75,13 @@ UI = {
     ("users", "manage"): ("GET", "accounts:user_create", None, None),
     ("api_tokens", "use"): ("GET", "accounts:api_tokens", None, None),
     ("audit", "view"): ("GET", "audit:audit_list", None, None),
+    ("repeaters", "view"): ("GET", "repeaters:list", None, None),
+    # Also open to region managers via can_manage_repeaters (not a level thing).
+    ("repeaters", "manage"): ("GET", "repeaters:create", None, None),
     ("sso", "manage"): ("GET", "sso:dashboard", None, None),
 }
 # control.use / control.manage live on the WS channel (WS table below).
 UI_NOT_APPLICABLE = {("control", "use"), ("control", "manage")}
-# repeaters has no routes yet (Task 5 adds the list page + CRUD and must move these into UI).
-UI_NOT_APPLICABLE |= {("repeaters", "view"), ("repeaters", "manage")}
 
 # (area, verb) -> (method, url with {objs-key} placeholders, JSON body or None)
 API = {
