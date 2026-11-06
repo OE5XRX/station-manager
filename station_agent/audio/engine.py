@@ -95,6 +95,10 @@ class AudioEngine:
         # "cleared but bridge not yet stopped" window is never observable to
         # a concurrent on_mic_state / stop that also acquires this lock.
         self._diag_lock: asyncio.Lock = asyncio.Lock()
+        # Serialises RX stream start/stop against a hot-plug refresh: the server re-sends
+        # source_subscribe for every demanded stream on each advertise, which must not race
+        # the refresh's own restart of the same stream into a second bridge.
+        self._rx_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     async def _to_thread(fn, *args):
@@ -110,6 +114,59 @@ class AudioEngine:
 
     async def advertise(self) -> None:
         await self._emit_json(self.registry.advertise_payload())
+
+    async def refresh(self, slots, rebuild=frozenset()) -> None:
+        """Apply a hot-plug change of the audio slot set (module moved, plugged, unplugged).
+
+        ``rebuild`` names slots whose audio device re-enumerated in place (e.g. after a module
+        firmware DFU): the stream set is unchanged but the old PipeWire node is gone, so their
+        pipelines are rebuilt. Streams of vanished slots stop with a clear ``idle`` state;
+        surviving streams whose slot re-enumerated, whose ``stream_ref`` moved, or whose bridge
+        died are restarted — after the re-advertise, so no frame carries a ref the server has
+        not mapped yet. A TX/diagnostic bridge on a vanished or re-enumerated slot is torn
+        down; the server's next ``mic_state`` keepalive restarts TX on the new node.
+        Re-advertises only if the stream set changed; otherwise only dead/rebuilt pipelines
+        are touched, so an unchanged periodic refresh is a no-op.
+        """
+        rebuild = set(rebuild)
+        gone: list[str] = []
+        restart: list[str] = []
+        async with self._rx_lock:
+            before = self.registry.advertise_payload()
+            self.registry.rebuild(slots)
+            changed = self.registry.advertise_payload() != before
+            for stream_id, state in list(self._rx.items()):
+                info = self.registry.get(stream_id)
+                if info is None:
+                    gone.append(stream_id)
+                elif (
+                    info.slot in rebuild
+                    or info.stream_ref != state["ref"]
+                    or not getattr(state["bridge"], "is_alive", lambda: True)()
+                ):
+                    restart.append(stream_id)
+            for stream_id in gone + restart:
+                await self._stop_rx(stream_id)
+            if changed:
+                logger.info("engine: audio slots now %s; re-advertising", sorted(slots))
+                await self.advertise()
+        for stream_id in gone:
+            await self._emit_stream_state(stream_id, "idle", "audio slot removed")
+
+        def _affected(slot) -> bool:
+            return slot not in slots or slot in rebuild
+
+        if self._tx is not None and _affected(self._tx["slot"]):
+            logger.info(
+                "engine: TX slot %s vanished/re-enumerated; tearing down", self._tx["slot"]
+            )
+            await self._teardown_tx()
+        if self._diag is not None and _affected(self._diag["slot"]):
+            logger.info("engine: diagnostic slot vanished/re-enumerated; aborting")
+            await self._teardown_diag()
+        for stream_id in restart:
+            logger.info("engine: rebuilding RX pipeline for %s", stream_id)
+            await self.on_source_subscribe(stream_id)
 
     async def stop(self) -> None:
         for stream_id in list(self._rx):
@@ -134,6 +191,10 @@ class AudioEngine:
 
     # --- RX (demand-gated source production) -------------------------------
     async def on_source_subscribe(self, stream_id: str) -> None:
+        async with self._rx_lock:
+            await self._start_rx(stream_id)
+
+    async def _start_rx(self, stream_id: str) -> None:
         info = self.registry.get(stream_id)
         if info is None:
             await self._emit_error("unknown_stream", f"no such stream {stream_id!r}")
@@ -170,14 +231,21 @@ class AudioEngine:
         await self._emit_stream_state(stream_id, "live", "")
 
     async def on_source_unsubscribe(self, stream_id: str) -> None:
+        async with self._rx_lock:
+            stopped = await self._stop_rx(stream_id)
+        if stopped:
+            await self._emit_stream_state(stream_id, "idle", "")
+
+    async def _stop_rx(self, stream_id: str) -> bool:
+        """Stop *stream_id*'s RX bridge (caller holds ``_rx_lock``); False if not running."""
         state = self._rx.pop(stream_id, None)
         if state is None:
-            return
+            return False
         # Close the in-flight-callback window: a reader-thread on_opus already past its dead
         # check may emit one last frame, but stop() joins the reader so none survive after.
         state["dead"] = True
         await self._to_thread(_safe_stop, state["bridge"])
-        await self._emit_stream_state(stream_id, "idle", "")
+        return True
 
     def _emit_media(self, stream_id: str, state: dict, payload: bytes) -> None:
         if state.get("dead"):

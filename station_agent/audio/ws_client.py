@@ -206,6 +206,29 @@ class AudioClient:
             self._loop.close()
             self._loop = None
 
+    def update_slots(self, slots, rebuild=frozenset()) -> None:
+        """Cross-thread (audio supervisor): apply a hot-plug change of the audio slot set.
+
+        Scheduled onto the client's loop; a no-op while disconnected — the next connect
+        re-lists the slots and builds fresh pipelines anyway."""
+        loop, engine = self._loop, self._engine
+        if loop is None or engine is None:
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._refresh_engine(engine, list(slots), set(rebuild)), loop
+            )
+        except RuntimeError:
+            return  # loop closing
+        fut.add_done_callback(_log_refresh_failure)
+
+    async def _refresh_engine(self, engine, slots, rebuild) -> None:
+        # The engine captured cross-thread may belong to a connection that has since dropped;
+        # its refresh would advertise on the new socket — skip it.
+        if self._engine is not engine:
+            return
+        await engine.refresh(slots, rebuild)
+
     def slot_active(self, slot: int) -> bool:
         """Cross-thread: True while *slot* carries TX/mic or diag audio (RX-only never counts)."""
         engine = self._engine
@@ -219,3 +242,11 @@ class AudioClient:
         ws, loop = self._ws, self._loop
         if ws is not None and loop is not None and loop.is_running():
             asyncio.run_coroutine_threadsafe(ws.close(), loop)
+
+
+def _log_refresh_failure(fut) -> None:
+    if fut.cancelled():
+        return
+    exc = fut.exception()
+    if exc is not None:
+        logger.error("Audio: hot-plug refresh failed: %s: %s", type(exc).__name__, exc)

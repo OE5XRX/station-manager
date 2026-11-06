@@ -121,8 +121,14 @@ class _SlotInventoryDebouncer:
 
 
 class ControlClient:
-    def __init__(self, config: AgentConfig, *, virtual_modules=None, on_firmware_check=None):
+    def __init__(
+        self, config: AgentConfig, *, virtual_modules=None, on_firmware_check=None, on_rescan=None
+    ):
         self._config = config
+        # Called (non-blocking, on the control loop) after each slot scan — connect and every
+        # re-discovery cycle — so the audio supervisor re-checks the audio slots on the same
+        # cadence instead of running its own poller.
+        self._on_rescan = on_rescan
         # Server `firmware_check` nudge, forwarded to each connection's Broker.
         self._on_firmware_check = on_firmware_check
         # Per-connection state, set in _connect_and_serve and cleared on disconnect. Read
@@ -142,7 +148,7 @@ class ControlClient:
         self._force_emit = False
         # Virtual control-plane modules (e.g. the audio-router, Spec 0 §5.6) forwarded to the
         # Broker on connect. None ⇒ physical-only behaviour, unchanged.
-        self._virtual_modules = virtual_modules
+        self._virtual_modules = list(virtual_modules) if virtual_modules else None
         self._ws = None
         self._shutdown = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -237,6 +243,7 @@ class ControlClient:
             broker.set_inventory(effective)
             await broker.emit_inventory()
             logger.info("Control: connected, inventory sent")
+            self._notify_rescan()
 
             rediscovery = loop.create_task(
                 self._rediscovery_loop(broker, loop, debouncer, effective)
@@ -314,6 +321,7 @@ class ControlClient:
             if self._shutdown.is_set() or self._ws is None:
                 return
             if not enabled:
+                self._notify_rescan()
                 continue
             try:
                 # The probe shares the single control serial with telemetry polls/commands;
@@ -334,19 +342,29 @@ class ControlClient:
                 if force:
                     with self._inv_lock:  # keep the forced emit for the next cycle
                         self._force_emit = True
+                self._notify_rescan()
                 continue
+            self._notify_rescan()
             self._apply_forgets(debouncer)
             effective = debouncer.update(discovered)
             self._publish_last_good(debouncer)
             if effective == last_emitted and not force:
                 continue
             if effective == last_emitted:
-                logger.info("Control: forced inventory re-emit (module firmware cycle ended)")
+                logger.info("Control: forced inventory re-emit")
             else:
                 logger.info("Control: inventory changed on re-discovery; re-emitting")
             last_emitted = effective
             broker.set_inventory(effective)
             await broker.emit_inventory()
+
+    def _notify_rescan(self) -> None:
+        if self._on_rescan is None:
+            return
+        try:
+            self._on_rescan()
+        except Exception:  # noqa: BLE001 — a hook error must never break the control link
+            logger.exception("Control: re-scan hook raised")
 
     # --- cross-thread hooks (module_ota cycle, main thread) ---------------------
     def last_inventory_entry(self, slot: int) -> dict | None:
@@ -407,6 +425,23 @@ class ControlClient:
             logger.warning("Control: event %s for slot %s dropped (loop closed)", event, slot)
             return
         fut.add_done_callback(lambda f: _log_send_failure(f, event, slot))
+
+    def set_virtual_modules(self, virtual_modules) -> None:
+        """Thread-safe: replace the virtual modules (audio hot-plug adds/removes the
+        audio-router) and force an inventory re-emit so the server sees the change.
+
+        While disconnected only the stored list changes; the next connect uses it."""
+        modules = list(virtual_modules)
+        self._virtual_modules = modules or None
+        loop, broker = self._loop, self._broker
+        if loop is None or broker is None:
+            return
+        try:
+            # Queued before the refresh's event set, so the re-emit sees the new modules.
+            loop.call_soon_threadsafe(broker.set_virtual_modules, modules)
+        except RuntimeError:  # loop closed meanwhile
+            return
+        self.request_inventory_refresh(force=True)
 
     def request_inventory_refresh(self, force: bool = False) -> None:
         """Thread-safe: make the re-discovery loop run one immediate cycle (emit if changed).

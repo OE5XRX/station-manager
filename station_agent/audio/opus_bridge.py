@@ -320,6 +320,12 @@ class RxBridge:
         except Exception:  # noqa: BLE001 — a consumer error must not kill the reader
             logger.exception("rx-bridge: on_opus callback raised")
 
+    def is_alive(self) -> bool:
+        """True while the gst pipeline runs. A pipeline whose source node vanished (module
+        unplugged / re-enumerated) exits; the engine's hot-plug refresh restarts it."""
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
     def stop(self) -> None:
         self._stop.set()
         _terminate(self._proc)
