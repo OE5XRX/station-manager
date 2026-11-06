@@ -692,6 +692,7 @@
       },
 
       toggleSub: function (streamId) {
+        delete this._scanSubs[streamId]; // an explicit choice outlives the scan
         if (this.subs[streamId]) {
           this.subs[streamId] = false;
           this._sendJSON({ v: 1, type: "unsubscribe", stream_ids: [streamId] });
@@ -706,6 +707,7 @@
       },
 
       applyPreset: function (name) {
+        this._scanSubs = {}; // the preset now decides every stream
         this.preset = name;
         var want = A.presetSubscriptions(name, this.streams);
 
@@ -814,9 +816,16 @@
 
       _saveState: function () {
         try {
+          // Streams held only for a running scan are not the operator's choice.
+          var subs = {};
+          for (var sid in this.subs) {
+            if (Object.prototype.hasOwnProperty.call(this.subs, sid) && !this._scanSubs[sid]) {
+              subs[sid] = this.subs[sid];
+            }
+          }
           var data = {
             preset: this.preset,
-            subs: this.subs,
+            subs: subs,
             mixer: this.mixer,
           };
           localStorage.setItem(this._storageKey(), JSON.stringify(data));

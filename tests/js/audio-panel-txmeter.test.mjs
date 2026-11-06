@@ -223,4 +223,30 @@ await ok("scan audio: follows the scan's slots, survives late streams, lets go o
   assert.equal(c.preset === "custom", false);
 });
 
+await ok("scan audio: a manual toggle or preset takes a stream out of the scan's hands", () => {
+  const c = factory();
+  const sent = [];
+  c._sendJSON = (m) => sent.push(m);
+  c.streams = [
+    { stream_id: "rx.1", direction: "rx", slot: "1" },
+    { stream_id: "rx.2", direction: "rx", slot: "1" },
+  ];
+  c._followScan(["1"]);
+  assert.deepEqual(c._scanSubs, { "rx.1": true, "rx.2": true });
+  // the scan-only streams are not persisted as the operator's choice
+  const saved = [];
+  globalThis.localStorage = { setItem: (k, v) => saved.push(JSON.parse(v)), getItem: () => null };
+  c._saveState();
+  assert.deepEqual(saved.pop().subs, {});
+  c.toggleSub("rx.1"); // operator unsubscribes
+  c.toggleSub("rx.1"); // ... and subscribes again: now theirs
+  assert.equal(c._scanSubs["rx.1"], undefined);
+  sent.length = 0;
+  c._followScan([]);
+  assert.deepEqual(sent.pop().stream_ids, ["rx.2"]); // rx.1 stays
+  c.applyPreset("custom");
+  assert.deepEqual(c._scanSubs, {});
+  delete globalThis.localStorage;
+});
+
 console.log("\n" + passed + " assertions passed");
