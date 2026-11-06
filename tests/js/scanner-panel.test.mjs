@@ -195,7 +195,7 @@ ok("replies: errors map to texts, matching only our request ids", () => {
   c._onReply({ type: "error", request_id: rid, error: { code: "empty_scan_list" } });
   assert.equal(c.pending, false);
   assert.match(c.notice.text, /no repeater|empty|nothing/i);
-  for (const code of ["not_locked", "forbidden", "no_coordinates", "empty_scan_list", "not_connected"]) {
+  for (const code of ["not_locked", "forbidden", "no_coordinates", "empty_scan_list", "not_connected", "invalid_scan", "invalid_action", "no_active_scan"]) {
     assert.ok(logic.errorText(code).length > 5, code);
   }
 });

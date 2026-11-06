@@ -119,6 +119,11 @@
         return "The station connection is down. Wait for it to reconnect.";
       case "timeout":
         return "The station did not answer in time.";
+      case "no_active_scan":
+        return "No scan is running.";
+      case "invalid_scan":
+      case "invalid_action":
+        return "The scan request was rejected. Reload the page and try again.";
       default:
         return "The scan could not be started.";
     }
