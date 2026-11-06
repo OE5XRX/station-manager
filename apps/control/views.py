@@ -1,3 +1,6 @@
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from django.views import View
 from django.views.generic import DetailView
 
 from apps.accounts.permissions import (
@@ -8,6 +11,8 @@ from apps.accounts.permissions import (
 )
 from apps.module_firmware import drain
 from apps.module_firmware.update_status import bulk_update_status
+from apps.repeaters.selection import repeaters_for_station, station_bands
+from apps.repeaters.views import ATTRIBUTION
 from apps.stations.models import Station
 
 from . import serializers
@@ -53,3 +58,52 @@ class StationControlView(AreaPermissionMixin, DetailView):
         # Station drain banner first paint; live updates come via lock frames.
         ctx["drain"] = drain.drain_status(station)
         return ctx
+
+
+# Search terms beyond this are noise (callsign/site are <= 128 chars).
+_MAX_QUERY = 64
+
+
+class StationRepeatersView(AreaPermissionMixin, View):
+    """Repeater panel data: usable repeaters for this station's online bands (spec §5.2).
+
+    ``control.view`` like the panel itself; applying a repeater is gated in the consumer.
+    """
+
+    area = "control"
+    verb = "view"
+
+    def get(self, request, pk):
+        station = get_object_or_404(Station, pk=pk)
+        q = request.GET.get("q", "").strip()[:_MAX_QUERY]
+        bands = {
+            band: [{"slot": ref.slot, "module": ref.module} for ref in refs]
+            for band, refs in station_bands(station).items()
+        }
+        rows = [
+            {
+                "id": row.repeater.pk,
+                "callsign": row.repeater.callsign,
+                "site_name": row.repeater.site_name,
+                "output_frequency": str(row.repeater.output_frequency),
+                "input_frequency": str(row.repeater.input_frequency),
+                "input_tone": row.repeater.input_tone,
+                "output_tone": row.repeater.output_tone,
+                "bandwidth": row.repeater.bandwidth,
+                "distance_km": None if row.distance_km is None else round(row.distance_km, 1),
+                "bearing": row.bearing,
+                "rx_band": row.rx_band,
+                "tx_band": row.tx_band,
+                "cross_band": row.cross_band,
+            }
+            for row in repeaters_for_station(station, q=q)
+        ]
+        return JsonResponse(
+            {
+                "bands": bands,
+                "station_has_coords": station.latitude is not None
+                and station.longitude is not None,
+                "attribution": ATTRIBUTION,
+                "repeaters": rows,
+            }
+        )

@@ -54,7 +54,9 @@ def _fresh_user(user):
 
 
 # Browser frames that operate the station: each re-checks control.use (fresh user).
-_USE_ACTIONS = frozenset({"lock_acquire", "lock_request", "lock_transfer", "ptt_keepalive"})
+_USE_ACTIONS = frozenset(
+    {"lock_acquire", "lock_request", "lock_transfer", "ptt_keepalive", "apply_repeater"}
+)
 
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
@@ -540,6 +542,54 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         audio_gate.clear_ptt(station)
 
 
+def _resolve_repeater(station, repeater_id, slot):
+    """Resolve a repeater + slot into the ``apply_preset`` plan (spec §5.3).
+
+    ``not_applicable``: malformed ids, invisible repeater, no usable online module on that
+    slot, or a frequency outside that module's bands. ``not_supported``: cross-band (needs
+    two modules, not yet implemented)."""
+    from apps.repeaters import selection
+    from apps.repeaters.models import Repeater
+
+    if type(repeater_id) is not int or not isinstance(slot, str):
+        return "not_applicable", None
+    repeater = Repeater.objects.visible().filter(pk=repeater_id).first()
+    if repeater is None:
+        return "not_applicable", None
+    module = next(
+        (m for m in selection.usable_modules(station) if m.slot == slot),
+        None,
+    )
+    if module is None:
+        return "not_applicable", None
+    rx_band = selection.module_band_of(module, repeater.output_frequency)
+    tx_band = selection.module_band_of(module, repeater.input_frequency)
+    if rx_band is not None and tx_band is not None and rx_band != tx_band:
+        return "not_supported", None
+    if rx_band is None or tx_band is None:
+        bands = selection.station_bands(station)
+        station_rx = selection.band_of(repeater.output_frequency, bands, station)
+        station_tx = selection.band_of(repeater.input_frequency, bands, station)
+        if station_rx is not None and station_tx is not None and station_rx != station_tx:
+            return "not_supported", None
+        return "not_applicable", None
+    values = {
+        "tx_frequency": float(repeater.input_frequency),
+        "rx_frequency": float(repeater.output_frequency),
+        "tx_tone": repeater.input_tone or "none",
+        "rx_tone": repeater.output_tone or "none",
+    }
+    if repeater.bandwidth and selection.has_capability(module, "bandwidth"):
+        values["bandwidth"] = repeater.bandwidth
+    return None, {
+        "slot": int(slot) if slot.isdigit() else slot,
+        "module": module.module_id,
+        "module_type": module.type,
+        "callsign": repeater.callsign,
+        "values": values,
+    }
+
+
 def _lock_status_with_drain(station, drain=lock.DRAIN_UNSET):
     """Lock frame payload plus ``drain`` — see ``lock.status_with_drain``."""
     return lock.status_with_drain(station, drain=drain)
@@ -675,6 +725,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
         if mtype == "command":
             await self._handle_command(station, msg)
+        elif mtype == "apply_repeater":
+            await self._handle_apply_repeater(station, msg)
         elif mtype == "ptt_keepalive":
             if await self._touch_if_holder(station):
                 await self._relay(msg)
@@ -750,6 +802,77 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             # A malformed value (e.g. a bool/str) is ignored here — it was
             # already relayed to the agent; we just don't crash the socket or
             # corrupt the gate. No bridge broadcast on a no-op.
+
+    async def _handle_apply_repeater(self, station, msg):
+        """One click in the repeater panel (spec §5.3): resolve the repeater server-side
+        into a single agent ``apply_preset`` for the chosen slot. Same gates as setting
+        the caps by hand (lock + per-capability write); the agent refuses while PTT is
+        active. The aggregated ``result`` comes back through ``control_result``."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._error(request_id, "not_locked", "You do not hold the lock")
+            return
+        try:
+            resolved = await self._resolve_repeater(
+                station, msg.get("repeater_id"), msg.get("slot")
+            )
+        except Exception:
+            logger.exception("control: resolving apply_repeater failed")
+            resolved = ("not_applicable", None)
+        code, plan = resolved
+        if code is not None:
+            await self._error(request_id, code, gettext("Repeater cannot be applied here"))
+            return
+        try:
+            denied = [
+                cap
+                for cap in plan["values"]
+                if not await self._may_write(cap, plan["module_type"])
+            ]
+        except Exception:
+            logger.exception("control: apply_repeater permission check failed; denying")
+            denied = list(plan["values"])
+        if denied:
+            await self._audit(
+                station,
+                "control_command",
+                f"{self.user.username} apply repeater {_clip(plan['callsign'])} "
+                f"denied ({', '.join(denied)})",
+            )
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "error",
+                        "code": "forbidden",
+                        "message": gettext("Repeater could not be authorized"),
+                        "request_id": request_id,
+                    }
+                )
+            )
+            return
+        await self._relay(
+            {
+                "v": constants.PROTOCOL_VERSION,
+                "type": "apply_preset",
+                "request_id": request_id,
+                "slot": plan["slot"],
+                "module": plan["module"],
+                "values": plan["values"],
+            }
+        )
+        if isinstance(request_id, str) or type(request_id) is int:
+            existing = self.pending.pop(request_id, None)
+            if existing is not None:
+                existing.cancel()
+            # Frequency/tone are not persist-policy caps: a stale entry must not persist.
+            self._persist_pending.pop(request_id, None)
+            self.pending[request_id] = asyncio.create_task(self._command_timeout(request_id))
+        await self._audit(
+            station,
+            "control_command",
+            f"{self.user.username} applied repeater {_clip(plan['callsign'])} "
+            f"on {_clip(plan['slot'])}/{_clip(plan['module'])}",
+        )
 
     async def _authorize_command(self, station, msg):
         """Server-side capability gate (``control.<policy verb>``, spec §3.4) — the real
@@ -1128,6 +1251,11 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             .values_list("type", flat=True)
             .first()
         )
+
+    @database_sync_to_async
+    def _resolve_repeater(self, station, repeater_id, slot):
+        """``(error_code, None)`` or ``(None, plan)`` for an ``apply_repeater`` frame."""
+        return _resolve_repeater(station, repeater_id, slot)
 
     @database_sync_to_async
     def _may_write(self, capability, module_type):
