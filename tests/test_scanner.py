@@ -298,8 +298,74 @@ def test_busy_slot_at_apply_holds_without_applying():
         rig.register(entries)
         s = rig.scanner()
         await s.start("s1", entries, 2.0, 5.0)
-        await _until(lambda: rig.states()[-1:] == [("held", "b")])
+        await _until(lambda: rig.states()[-1:] == [("held", "a")])
         assert rig.visits() == ["a"]  # b never applied while its slot is keyed
+        # Held is reported on (and tx_route points at) the entry the radio is still tuned to.
+        held = [m for m in rig.sent if m["state"] == "held"][-1]
+        assert (held["slot"], held["module"], held["index"]) == (1, "fm", 0)
+        assert rig.routes == [(1, "fm")]
+        await s.stop("operator")
+
+    _run(go())
+
+
+def test_hold_between_entries_reports_tuned_entry():
+    """A hold landing after _index advanced but before the next apply holds the tuned entry."""
+
+    async def go():
+        entries = [_entry("a", rx=145.6), _entry("b", slot=2, module="fm2", rx=433.0)]
+        rig = Rig()
+        rig.register(entries)
+        gate = asyncio.Event()
+        inner = rig.send
+
+        async def send(msg):
+            await inner(msg)
+            if (msg["state"], msg["ref"]) == ("scanning", "b"):
+                await gate.wait()  # suspend inside the `scanning b` emit step
+
+        rig.send = send
+        s = rig.scanner()
+        await s.start("s1", entries, 0.3, 5.0)
+        await _until(lambda: rig.states()[-1:] == [("scanning", "b")])
+        hold = asyncio.ensure_future(s.hold("ptt"))
+        await asyncio.sleep(0)
+        gate.set()
+        await hold
+        held = [m for m in rig.sent if m["state"] == "held"][-1]
+        assert (held["ref"], held["slot"], held["module"]) == ("a", 1, "fm")
+        assert rig.visits() == ["a"] and rig.routes == [(1, "fm")]
+        await s.control("s1", "resume")
+        await _until(lambda: len(rig.applied) >= 2)
+        assert rig.visits()[1] == "a"  # resume restarts the held (tuned) entry
+        await s.stop("operator")
+
+    _run(go())
+
+
+def test_self_stop_does_not_wipe_new_scan():
+    """A scan_start while the runner's own `stopped` frame is in flight keeps the new scan."""
+
+    async def go():
+        rig = Rig(apply_error=lambda ref: "timeout" if ref == "a" else None)
+        rig.register(ABC)
+        gate = asyncio.Event()
+        inner = rig.send
+
+        async def send(msg):
+            await inner(msg)
+            if msg["state"] == "stopped" and msg["scan_id"] == "s1":
+                await gate.wait()
+
+        rig.send = send
+        s = rig.scanner()
+        await s.start("s1", ABC[:1], 2.0, 5.0)
+        await _until(lambda: any(m["state"] == "stopped" for m in rig.sent))
+        await s.start("s2", ABC[1:], 2.0, 5.0)
+        gate.set()
+        await _until(lambda: len(rig.applied) >= 2)
+        assert s.running and s.scan_id == "s2"
+        assert rig.visits()[:2] == ["b", "c"]
         await s.stop("operator")
 
     _run(go())
@@ -424,6 +490,8 @@ def test_parse_entries_validation():
         [{**_entry("a"), "rx_frequency": "145.6"}],
         [{**_entry("a"), "tx_tone": 77}],
         [{**_entry("a"), "module": ""}],
+        [{**_entry("a"), "module": "m" * 65}],
+        [{**_entry("a"), "rx_tone": "1" * 17}],
         [{k: v for k, v in _entry("a").items() if k != "ref"}],
     ):
         assert parse_entries(bad) is None, bad

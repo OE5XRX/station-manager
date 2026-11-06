@@ -40,8 +40,13 @@ logger = logging.getLogger(__name__)
 MAX_ENTRIES = 500
 MAX_REF_LEN = 64
 MAX_LABEL_LEN = 128
+MAX_MODULE_LEN = 64
+MAX_TONE_LEN = 16
 LISTEN_RANGE_S = (0.2, 60.0)
 HANG_RANGE_S = (0.0, 600.0)
+# While parked on a carrier (active/hang) nothing short can be missed any more, so poll the
+# control line slower there; the listen window keeps the fine poll_s (spec §7.3).
+ACTIVE_POLL_MIN_S = 0.25
 
 _SLOT_UPDATING = "updating"
 _TUNING = ("rx_frequency", "tx_frequency", "rx_tone", "tx_tone")
@@ -84,11 +89,12 @@ def parse_entries(raw) -> list[dict] | None:
             return None
         if not (isinstance(slot, int) and not isinstance(slot, bool)):
             return None
-        if not (isinstance(module, str) and module):
+        if not (isinstance(module, str) and module and len(module) <= MAX_MODULE_LEN):
             return None
         if not (_is_num(e.get("rx_frequency")) and _is_num(e.get("tx_frequency"))):
             return None
-        if not (isinstance(e.get("rx_tone"), str) and isinstance(e.get("tx_tone"), str)):
+        tones = (e.get("rx_tone"), e.get("tx_tone"))
+        if not all(isinstance(t, str) and len(t) <= MAX_TONE_LEN for t in tones):
             return None
         out.append(
             {
@@ -143,8 +149,10 @@ class Scanner:
         self._listen_s = 2.0
         self._hang_s = 5.0
         self._index = 0
-        self._applied_index: int | None = None  # index whose settings are on the module
-        self._routed_index: int | None = None  # index tx_route points at
+        # ref of the entry the radio is actually tuned to (survives list updates; looked up by
+        # ref) and of the entry tx_route points at.
+        self._tuned_ref: str | None = None
+        self._routed_ref: str | None = None
         self._state: str | None = None
         self._last: tuple | None = None  # last emitted (state, index, ref)
         self._held = False
@@ -179,8 +187,9 @@ class Scanner:
         self._listen_s = listen_s
         self._hang_s = hang_s
         if not self._entries:
-            await self._emit_stopped("empty_scan_list")
+            msg = self._stopped_frame("empty_scan_list")
             self._reset()
+            await self._send_msg(msg)
             return
         self._task = asyncio.ensure_future(self._run())
 
@@ -225,10 +234,15 @@ class Scanner:
             pass  # wait out the in-flight step; the next one sees _held and parks
         if not self.running or self._stopping:
             return
+        # Between entries (_index already advanced, or a keyed slot refused the next apply)
+        # the radio is still on the last tuned entry: hold there, not on the untuned one.
+        pos = self._tuned_pos()
+        if pos is not None:
+            self._index = pos
         await self._emit("held", reason=reason)
         # Held on an entry that is actually tuned → PTT must key that module (spec §7.4).
-        if self._applied_index == self._index and self._routed_index != self._index:
-            await self._route(self._entries[self._index])
+        if pos is not None and self._routed_ref != self._tuned_ref:
+            await self._route(self._entries[pos])
 
     async def stop(self, reason: str) -> None:
         task = self._task
@@ -246,8 +260,7 @@ class Scanner:
         except Exception:  # noqa: BLE001
             logger.exception("scanner: task failed while stopping")
         self._task = None
-        await self._emit_stopped(reason)
-        self._reset()
+        await self._send_stopped(reason)
 
     # --- runner ------------------------------------------------------------------------
     async def _run(self) -> None:
@@ -285,8 +298,7 @@ class Scanner:
         if self._stopping:
             return  # an external stop() owns the shutdown
         self._task = None
-        await self._emit_stopped(reason)
-        self._reset()
+        await self._send_stopped(reason)
 
     def _next_index(self, offset: int) -> int:
         """Index of the next entry; adopts a pending list update at this step boundary.
@@ -300,7 +312,6 @@ class Scanner:
             new, self._pending = self._pending, None
             pos = next((i for i, e in enumerate(new) if e["ref"] == cur_ref), None)
             self._entries = new
-            self._applied_index = self._routed_index = None
             self._fail_streak = 0
             if pos is None:
                 return self._index % len(new)
@@ -314,18 +325,19 @@ class Scanner:
             raise _HeldSignal
         await self._step(self._emit, "scanning")
         values = {k: entry[k] for k in _TUNING}
-        self._applied_index = None
         results = await self._step(self._apply_preset, entry["slot"], entry["module"], values)
-        if not isinstance(results, dict):
+        # Set synchronously after the apply step, so hold() (which waits for the step) always
+        # sees the outcome. A failed/partial apply leaves the radio on no known entry.
+        ok = isinstance(results, dict) and bool(results)
+        failed = [r for r in results.values() if not r.get("ok")] if ok else []
+        self._tuned_ref = entry["ref"] if ok and not failed else None
+        if not ok:
             return False
-        failed = [r for r in results.values() if not r.get("ok")]
         if any((r.get("error") or {}).get("code") == _SLOT_UPDATING for r in failed):
             raise _StopSignal("module_update")
-        if failed or not results:
+        if failed:
             logger.info("scanner: skipping %s (apply failed: %s)", entry["ref"], failed)
             return False
-        self._applied_index = self._index
-        self._routed_index = None
         try:
             # Listen window: poll continuously so a short over is not missed.
             deadline = self._now() + self._listen_s
@@ -343,7 +355,7 @@ class Scanner:
             while True:
                 if self._skip:
                     return True
-                await self._sleep(self._poll_s)
+                await self._sleep(max(self._poll_s, ACTIVE_POLL_MIN_S))
                 if await self._carrier(entry):
                     if hang_end is not None:
                         hang_end = None
@@ -377,7 +389,12 @@ class Scanner:
             await self._set_tx_route(entry["slot"], entry["module"])
         except Exception:  # noqa: BLE001 — routing is best effort; the scan goes on
             logger.exception("scanner: setting tx_route to %s failed", entry["ref"])
-        self._routed_index = self._index
+        self._routed_ref = entry["ref"]
+
+    def _tuned_pos(self) -> int | None:
+        if self._tuned_ref is None:
+            return None
+        return next((i for i, e in enumerate(self._entries) if e["ref"] == self._tuned_ref), None)
 
     # --- frames ------------------------------------------------------------------------
     async def _emit(self, state: str, *, reason: str | None = None) -> None:
@@ -389,16 +406,26 @@ class Scanner:
         self._last = (state, self._index, ref)
         await self._send_frame(state, entry, reason)
 
-    async def _emit_stopped(self, reason: str) -> None:
+    async def _send_stopped(self, reason: str) -> None:
+        """Snapshot the terminal frame and reset BEFORE awaiting the send: a scan_start that
+        runs while the send is suspended must not have its fresh state wiped afterwards."""
+        msg = self._stopped_frame(reason)
+        self._reset()
+        await self._send_msg(msg)
+
+    def _stopped_frame(self, reason: str) -> dict | None:
         entry = None
         if self._entries and 0 <= self._index < len(self._entries):
             entry = self._entries[self._index]
-        await self._send_frame("stopped", entry, reason)
+        return self._frame("stopped", entry, reason)
 
     async def _send_frame(self, state: str, entry: dict | None, reason: str | None) -> None:
+        await self._send_msg(self._frame(state, entry, reason))
+
+    def _frame(self, state: str, entry: dict | None, reason: str | None) -> dict | None:
         if self._scan_id is None:
-            return
-        msg = proto.build_scan_state(
+            return None
+        return proto.build_scan_state(
             self._scan_id,
             state,
             self._index,
@@ -408,6 +435,10 @@ class Scanner:
             self._ts(),
             reason=reason,
         )
+
+    async def _send_msg(self, msg: dict | None) -> None:
+        if msg is None:
+            return
         try:
             await self._send(msg)
         except Exception:  # noqa: BLE001 — a dead link must not kill the scan task
