@@ -1077,3 +1077,65 @@ def test_bridge_pipelines_are_pinned_to_their_target():
     assert "node.dont-reconnect=true" in _PIN_STREAM
     assert _PIN_STREAM in build_rx_argv("n", 47000, 8000)
     assert _PIN_STREAM in build_tx_argv("n", 47000, 16000)
+
+
+# --- review round 3 regressions ----------------------------------------------------------
+
+
+def test_old_mic_ref_still_injected_within_grace_after_ref_shift():
+    """TX keyed on slot 3; a module appears in slot 2 → op.mic's ref moves. Mic media still
+    carrying the old ref (server/browser not remapped yet) must keep feeding TX."""
+    from station_agent.audio import frame as frame_mod
+
+    fed = []
+    eng, _, factory, _ = make_engine([3], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_mic_state(active=True, tx_slot=3, tx_module="fm")
+        factory.tx[0].feed_opus = fed.append
+        old_ref = eng.registry.mic_ref
+        await eng.refresh([2, 3])
+        assert eng.registry.mic_ref != old_ref
+        await eng.on_media_frame(
+            frame_mod.pack_frame(stream_ref=old_ref, seq=0, ts=0, flags=0, payload=b"old")
+        )
+        await eng.on_media_frame(
+            frame_mod.pack_frame(
+                stream_ref=eng.registry.mic_ref, seq=1, ts=0, flags=0, payload=b"new"
+            )
+        )
+        return old_ref
+
+    old_ref = asyncio.run(scenario())
+    assert fed == [b"old", b"new"]
+    assert not factory.tx[0].stopped
+
+    # After the grace window the stale ref is no longer accepted.
+    eng._prev_mic_ref = (old_ref, 0.0)
+    assert eng._is_mic_ref(old_ref) is False
+
+
+def test_no_abort_result_when_diag_finished_concurrently():
+    eng, _, _, sent = make_engine([2], NODES)
+
+    class Bridge:
+        def stop(self):
+            pass
+
+    async def scenario():
+        await eng.start()
+        base = {"v": 1, "type": "diag_result", "request_id": "r1"}
+        eng._diag = {"bridge": Bridge(), "slot": 2, "ref": 0x8001, "base": base}
+
+        real = eng._teardown_diag
+
+        async def finished_first():
+            eng._diag = None  # the measurement completed and answered meanwhile
+            return await real()
+
+        eng._teardown_diag = finished_first
+        await eng.refresh([3])
+
+    asyncio.run(scenario())
+    assert not [m for m in sent if m["type"] == "diag_result"]

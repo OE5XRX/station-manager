@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from station_agent.audio import frame
 from station_agent.audio.bridge_factory import BridgeFactory
@@ -45,6 +46,11 @@ logger = logging.getLogger(__name__)
 # A hot-plug refresh restarts a dead RX pipeline at most this many times in a row before it
 # reports the stream as errored (bounds respawn churn of a persistently failing pipeline).
 _MAX_DEAD_RESTARTS = 3
+
+# After a hot-plug re-advertise moves op.mic's stream_ref, mic media still carrying the old
+# ref is accepted this long — until the server/browser remapped — so an unrelated keyed TX
+# is not dropped into the mic dead-man by a slot change elsewhere.
+_MIC_REF_GRACE_S = 5.0
 
 # Opus DTX comfort-noise packets are ≤2 bytes; flag them so a receiver can treat the gap
 # as comfort noise rather than loss.
@@ -116,6 +122,8 @@ class AudioEngine:
         # Serialises a TX bridge start (on_mic_state) against a hot-plug refresh's TX
         # teardown, so the teardown never stops a bridge whose start is still in flight.
         self._tx_lock: asyncio.Lock = asyncio.Lock()
+        # (old op.mic ref, monotonic deadline) after a ref-moving refresh; see _MIC_REF_GRACE_S.
+        self._prev_mic_ref: tuple[int, float] | None = None
 
     @staticmethod
     async def _to_thread(fn, *args):
@@ -153,7 +161,10 @@ class AudioEngine:
             if self._closed:
                 return
             before = self.registry.advertise_payload()
+            old_mic_ref = self.registry.mic_ref
             self.registry.rebuild(slots)
+            if old_mic_ref is not None and old_mic_ref != self.registry.mic_ref:
+                self._prev_mic_ref = (old_mic_ref, time.monotonic() + _MIC_REF_GRACE_S)
             changed = self.registry.advertise_payload() != before
             for stream_id, state in list(self._rx.items()):
                 info = self.registry.get(stream_id)
@@ -213,10 +224,11 @@ class AudioEngine:
         diag = self._diag
         if diag is not None and _affected(diag["slot"]):
             logger.info("engine: diagnostic slot vanished/re-enumerated; aborting")
-            await self._teardown_diag()
+            torn = await self._teardown_diag()
             # The cancelled measurement never emits its result — answer the command here so
-            # the server does not wait for its own timeout.
-            if diag.get("base") is not None:
+            # the server does not wait for its own timeout. Only if this teardown actually
+            # aborted that run (it may have finished and answered concurrently).
+            if torn is diag and diag.get("base") is not None:
                 await self._emit_json(
                     {**diag["base"], "error": "aborted: audio slot vanished or re-enumerated"}
                 )
@@ -434,10 +446,21 @@ class AudioEngine:
         if self._diag is not None and mf.stream_ref == self._diag["ref"]:
             self._diag["bridge"].feed_opus(mf.payload)
             return
-        if self._tx is None or mf.stream_ref != self.registry.mic_ref:
+        if self._tx is None or not self._is_mic_ref(mf.stream_ref):
             return  # only op.mic media is injected, and only while TX is up
         self._tx["bridge"].feed_opus(mf.payload)
         self._arm_dead_man()  # pet the dead-man (NOT the TOT — that is an absolute ceiling)
+
+    def _is_mic_ref(self, ref: int) -> bool:
+        if ref == self.registry.mic_ref:
+            return True
+        prev = self._prev_mic_ref
+        if prev is None:
+            return False
+        if time.monotonic() >= prev[1]:
+            self._prev_mic_ref = None
+            return False
+        return ref == prev[0]
 
     async def set_tx_route(self, slot, module) -> None:
         self.tx_route = None if slot is None else {"slot": slot, "module": module}
@@ -556,8 +579,10 @@ class AudioEngine:
             await self._teardown_diag()
         await self._emit_json(result)
 
-    async def _teardown_diag(self) -> None:
+    async def _teardown_diag(self) -> dict | None:
         """Tear down the in-flight diagnostic bridge and cancel the measurement task.
+
+        Returns the diagnostic it cleared (``None`` if none was running).
 
         Safe to call from both ``stop()`` and from within ``_run_u_measurement``'s
         ``finally`` block: when called from the measurement task itself we must NOT
@@ -581,6 +606,7 @@ class AudioEngine:
                 await self._to_thread(_safe_stop, diag["bridge"])
             if task is not None and task is not asyncio.current_task():
                 task.cancel()
+            return diag
 
     # --- safety timers -----------------------------------------------------
     def _arm_dead_man(self) -> None:
