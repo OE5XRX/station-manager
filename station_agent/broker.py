@@ -122,7 +122,8 @@ class Broker:
             self._scan_set_tx_route,
             self._send,
             poll_s=scan_poll_s,
-            busy=self.slot_busy,
+            ptt_active=lambda: bool(self._ptt or self._ptt_inflight or self._unkeying),
+            paused=slot_pause.paused_slots,
             ts=self._ts,
         )
 
@@ -253,7 +254,7 @@ class Broker:
         # first; hold() returns only once no scanner step is in flight, so the scanner can
         # never retune the module after (or under) this command.
         if is_ptt and value is True:
-            await self.scanner.hold("ptt")
+            await self.scanner.hold("ptt", keyed=(slot, module))
         elif op == "set" and capability in self._SCAN_HOLD_CAPS:
             if slot in self.scanner.active_slots():
                 await self.scanner.hold("manual")

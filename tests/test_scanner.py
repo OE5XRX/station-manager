@@ -40,7 +40,8 @@ class Rig:
         self.sent = []
         self.apply_error = apply_error or (lambda ref: None)
         self.read_error = read_error or (lambda ref: None)
-        self.busy_fn = busy or (lambda slot: False)
+        self.busy_fn = busy or (lambda rig: False)  # PTT keyed anywhere? (gets the rig)
+        self.paused = set()
         self._by_freq = {}
 
     def register(self, entries):
@@ -77,8 +78,8 @@ class Rig:
     def now(self):
         return self.t
 
-    def busy(self, slot):
-        return self.busy_fn(slot)
+    def ptt_active(self):
+        return self.busy_fn(self)
 
     def scanner(self):
         return Scanner(
@@ -89,7 +90,9 @@ class Rig:
             sleep=self.sleep,
             now=self.now,
             poll_s=0.1,
-            busy=self.busy,
+            ptt_active=self.ptt_active,
+            paused=lambda: self.paused,
+            held_check_s=0.001,
         )
 
     def states(self):
@@ -293,7 +296,7 @@ def test_ptt_holds():
 
 def test_busy_slot_at_apply_holds_without_applying():
     async def go():
-        rig = Rig(busy=lambda slot: slot == 2)
+        rig = Rig(busy=lambda r: r.t >= 1.0)
         entries = [_entry("a", rx=145.6), _entry("b", slot=2, rx=433.0)]
         rig.register(entries)
         s = rig.scanner()
@@ -303,7 +306,7 @@ def test_busy_slot_at_apply_holds_without_applying():
         # Held is reported on (and tx_route points at) the entry the radio is still tuned to.
         held = [m for m in rig.sent if m["state"] == "held"][-1]
         assert (held["slot"], held["module"], held["index"]) == (1, "fm", 0)
-        assert rig.routes == [(1, "fm")]
+        assert rig.routes == []  # a PTT is keyed: tx_route is not moved under it
         await s.stop("operator")
 
     _run(go())
@@ -406,7 +409,9 @@ def test_hold_resume_while_runner_sleeps_reapplies_entry():
 
 def test_stop_during_runner_side_hold_waits_for_held_frame():
     async def go():
-        rig = Rig(busy=lambda slot: slot == 2)
+        # Keyed until the held frame went out (released while it is in flight), so the hold
+        # also routes tx_route afterwards — both must complete before stop() cancels.
+        rig = Rig(busy=lambda r: r.t >= 0.2 and not any(m["state"] == "held" for m in r.sent))
         entries = [_entry("a", rx=145.6), _entry("b", slot=2, rx=433.0)]
         rig.register(entries)
         gate = asyncio.Event()
@@ -457,6 +462,79 @@ def test_self_stop_does_not_wipe_new_scan():
         assert s.running and s.scan_id == "s2"
         assert rig.visits()[:2] == ["b", "c"]
         await s.stop("operator")
+
+    _run(go())
+
+
+def test_resume_while_ptt_keyed_stays_held():
+    """Resuming while a PTT is still keyed (any slot) must not retune or move tx_route."""
+
+    async def go():
+        keyed = {"on": False}
+        rig = Rig(lambda ref, t: ref == "b", busy=lambda r: keyed["on"])
+        entries = [_entry("a", rx=145.6), _entry("b", slot=2, module="fm2", rx=433.0)]
+        rig.register(entries)
+        s = rig.scanner()
+        await s.start("s1", entries, 0.3, 5.0)
+        await _until(lambda: len(rig.applied) >= 1)
+        keyed["on"] = True
+        await s.hold("ptt", keyed=(2, "fm2"))
+        n, routes = len(rig.applied), list(rig.routes)
+        await s.control("s1", "resume")
+        await _until(lambda: [m["state"] for m in rig.sent].count("held") >= 2)
+        for _ in range(200):
+            await asyncio.sleep(0)
+        assert len(rig.applied) == n and rig.routes == routes
+        keyed["on"] = False
+        await s.control("s1", "resume")
+        await _until(lambda: ("active", "b") in rig.states())
+        await s.stop("operator")
+
+    _run(go())
+
+
+def test_ptt_on_other_module_does_not_move_tx_route():
+    async def go():
+        rig = Rig()
+        rig.register(ABC)
+        s = rig.scanner()
+        await s.start("s1", ABC, 2.0, 5.0)
+        await _until(lambda: len(rig.applied) >= 1)
+        await s.hold("ptt", keyed=(2, "fm2"))  # keying a module the scan is not tuned on
+        assert rig.states()[-1] == ("held", "a")
+        assert rig.routes == []
+        await s.stop("operator")
+
+    _run(go())
+
+
+def test_drain_while_held_stops_scan():
+    async def go():
+        rig = Rig()
+        rig.register(ABC)
+        s = rig.scanner()
+        await s.start("s1", ABC, 2.0, 5.0)
+        await _until(lambda: len(rig.applied) >= 1)
+        await s.hold("operator")
+        rig.paused = {1}
+        await _until(lambda: not s.running)
+        assert rig.sent[-1]["state"] == "stopped"
+        assert rig.sent[-1]["reason"] == "module_update"
+
+    _run(go())
+
+
+def test_drain_of_other_scanned_slot_stops_scan_mid_entry():
+    async def go():
+        rig = Rig(lambda ref, t: ref == "a")  # parked active on slot 1
+        entries = [_entry("a", rx=145.6), _entry("b", slot=2, rx=433.0)]
+        rig.register(entries)
+        s = rig.scanner()
+        await s.start("s1", entries, 2.0, 5.0)
+        await _until(lambda: ("active", "a") in rig.states())
+        rig.paused = {2}  # slot 2 (scanned, not the current one) starts a firmware update
+        await _until(lambda: not s.running)
+        assert rig.sent[-1]["reason"] == "module_update"
 
     _run(go())
 

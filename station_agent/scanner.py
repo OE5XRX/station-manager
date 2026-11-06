@@ -128,7 +128,9 @@ class Scanner:
         sleep=asyncio.sleep,
         now=time.monotonic,
         poll_s: float = 0.1,
-        busy=None,
+        ptt_active=None,
+        paused=None,
+        held_check_s: float = 1.0,
         ts=None,
     ):
         self._apply_preset = apply_preset  # async (slot, module, values) -> {cap: {ok, ...}}
@@ -138,7 +140,11 @@ class Scanner:
         self._sleep = sleep
         self._now = now
         self._poll_s = poll_s
-        self._busy = busy or (lambda slot: False)  # PTT keyed on slot?
+        # Any PTT keyed/being keyed on the station? Then the scan must not retune or re-route.
+        self._ptt_active = ptt_active or (lambda: False)
+        # Slots paused for a module firmware update (a drain on a scanned slot stops the scan).
+        self._paused = paused or (lambda: ())
+        self._held_check_s = held_check_s
         self._ts = ts or now
         self._step_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
@@ -230,8 +236,12 @@ class Scanner:
         else:
             logger.debug("scanner: ignoring unknown action %r", action)
 
-    async def hold(self, reason: str) -> None:
-        """Park on the current entry. Returns once no scanner step is in flight."""
+    async def hold(self, reason: str, keyed: tuple[int, str] | None = None) -> None:
+        """Park on the current entry. Returns once no scanner step is in flight.
+
+        ``keyed`` = the (slot, module) a PTT is about to key: tx_route is then only moved to
+        the tuned entry if that is the keyed module — never away from a module being keyed.
+        """
         if not self.running or self._held or self._stopping:
             return
         self._held = True
@@ -251,7 +261,11 @@ class Scanner:
             await self._emit("held", reason=reason)
             # Held on an entry that is actually tuned → PTT must key that module (§7.4).
             if pos is not None and self._routed_ref != self._tuned_ref:
-                await self._route(self._entries[pos])
+                entry = self._entries[pos]
+                target = (entry["slot"], entry["module"])
+                # Never move the mic away from a module that is (being) keyed.
+                if keyed == target or (keyed is None and not self._ptt_active()):
+                    await self._route(entry)
 
     async def stop(self, reason: str) -> None:
         task = self._task
@@ -276,7 +290,7 @@ class Scanner:
         try:
             while True:
                 if self._held:
-                    await self._resume.wait()
+                    await self._wait_resume()
                     self._index = self._next_index(0)
                     continue
                 if self._stopping:
@@ -301,6 +315,19 @@ class Scanner:
         except Exception:  # noqa: BLE001 — never leave a zombie scan behind
             logger.exception("scanner: scan %s crashed", self._scan_id)
             await self._finish("internal_error")
+
+    async def _wait_resume(self) -> None:
+        """Park until resumed; a module firmware drain on a scanned slot stops the scan."""
+        while not self._resume.is_set():
+            if self._drained():
+                raise _StopSignal("module_update")
+            try:
+                await asyncio.wait_for(self._resume.wait(), self._held_check_s)
+            except TimeoutError:
+                pass
+
+    def _drained(self) -> bool:
+        return bool(set(self._paused()) & self.active_slots())
 
     async def _finish(self, reason: str) -> None:
         """Self-termination from inside the runner (stop() would cancel ourselves)."""
@@ -330,9 +357,7 @@ class Scanner:
     async def _visit(self, entry: dict) -> bool:
         """Scan one entry. True = it was reachable (whatever the carrier did)."""
         self._visit_gen = self._hold_gen
-        if self._busy(entry["slot"]):
-            await self.hold("ptt")
-            raise _HeldSignal
+        await self._hold_if_keyed()
         await self._step(self._emit, "scanning")
         values = {k: entry[k] for k in _TUNING}
         results = await self._step(self._apply_preset, entry["slot"], entry["module"], values)
@@ -359,6 +384,7 @@ class Scanner:
                 if self._now() >= deadline:
                     return True
                 await self._sleep(self._poll_s)
+            await self._hold_if_keyed()
             await self._step(self._route, entry)
             await self._step(self._emit, "active")
             hang_end = None
@@ -388,10 +414,19 @@ class Scanner:
             raise _EntryFailedError
         return res.get("value") is True
 
+    async def _hold_if_keyed(self) -> None:
+        # A PTT keyed anywhere (e.g. still keyed when the operator resumed): retuning or
+        # moving tx_route now would change the transmitter under the operator (§7.4).
+        if self._ptt_active():
+            await self.hold("ptt")
+            raise _HeldSignal
+
     async def _step(self, fn, *args):
         async with self._step_lock:
             if self._held or self._stopping or self._visit_gen != self._hold_gen:
                 raise _HeldSignal
+            if self._drained():
+                raise _StopSignal("module_update")
             return await fn(*args)
 
     async def _route(self, entry: dict) -> None:
