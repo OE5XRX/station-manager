@@ -125,3 +125,56 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  test-history-postgres:
+    # The normal suite runs on SQLite. The history tables are monthly RANGE-partitioned
+    # on PostgreSQL only (vendor-switched migration in apps/history), so partitioning,
+    # partition upkeep/drop and the PG-only ingest edge cases need a real Postgres.
+    name: History tests (Postgres)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Same major as prod/dev (docker-compose: postgres:17).
+        image: postgres:17
+        env:
+          POSTGRES_USER: station_manager
+          POSTGRES_PASSWORD: station_manager
+          POSTGRES_DB: station_manager
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test_postgres
+      DJANGO_SECRET_KEY: ci-test-secret-key
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: station_manager
+      POSTGRES_PASSWORD: station_manager
+      POSTGRES_DB: station_manager
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Cache pip
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements/dev.txt', 'requirements/base.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements/dev.txt
+
+      - name: Run history tests on Postgres
+        run: pytest -q tests/test_history_*.py

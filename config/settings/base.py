@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.audit",
     "apps.monitoring",
     "apps.webpush",
+    "apps.history",
     "apps.images",
     "apps.module_firmware",
     "apps.provisioning",
@@ -301,6 +302,11 @@ SESSION_COOKIE_SAMESITE = "Lax"
 AXES_FAILURE_LIMIT = 5
 AXES_COOLOFF_TIME = 1  # hours
 AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
+
+# Telemetry history (apps/history): raw samples / hourly aggregates retention in days.
+# Partitions are dropped whole once their *end* is older than the retention.
+HISTORY_RAW_RETENTION_DAYS = int(os.environ.get("HISTORY_RAW_RETENTION_DAYS", "30"))
+HISTORY_HOURLY_RETENTION_DAYS = int(os.environ.get("HISTORY_HOURLY_RETENTION_DAYS", "730"))
 
 # Alert notifications — Email
 ALERT_EMAIL_ENABLED = os.environ.get("ALERT_EMAIL_ENABLED", "false").lower() == "true"

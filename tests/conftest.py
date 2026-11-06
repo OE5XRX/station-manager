@@ -366,3 +366,18 @@ def anon_client():
     from rest_framework.test import APIClient
 
     return APIClient()
+
+
+@pytest.fixture
+def require_postgres(db):
+    """Skip unless the test DB is PostgreSQL (history partitioning tests).
+
+    The normal suite runs on SQLite; the ``test-history-postgres`` CI job runs
+    ``tests/test_history_*.py`` with ``config.settings.test_postgres``.
+    """
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip(
+            "requires PostgreSQL (run with DJANGO_SETTINGS_MODULE=config.settings.test_postgres)"
+        )

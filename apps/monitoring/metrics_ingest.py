@@ -257,6 +257,8 @@ def ingest_metrics(
         _count = None  # rows may have been created
 
     stored: dict[str, dict] = {}
+    # Values that passed every check of a known definition -> history (spec history §2).
+    accepted: dict[str, dict] = {}
     seen_pks, rejected = [], []
     has_undefined = False
     ts = now.isoformat()
@@ -291,6 +293,7 @@ def ingest_metrics(
                 continue
             if key not in descriptor_keys and definition.pk is not None:
                 seen_pks.append(definition.pk)
+            accepted[key] = value
         stored[key] = {**value, "ts": ts}
 
     _warn_cap(cap_dropped)
@@ -323,6 +326,12 @@ def ingest_metrics(
             tel.save()
         else:
             tel.save(update_fields=["metrics", "metric_descriptors_hash", "updated_at"])
+
+    if accepted:
+        # Lazy import: the monitoring -> history dependency exists only at call time.
+        from apps.history.ingest import record_samples
+
+        record_samples(station, now, accepted)  # error-isolated, never raises
 
     if list_sent:
         return False

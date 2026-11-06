@@ -2,6 +2,7 @@
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
@@ -28,6 +29,8 @@ from apps.api.read_serializers import (
     ImageImportJobSerializer,
     ImageReleaseSerializer,
     MetricDefinitionSerializer,
+    MetricHistoryQuerySerializer,
+    MetricHistorySerializer,
     ProvisioningJobSerializer,
     RegionAssignmentSerializer,
     RegionSerializer,
@@ -105,6 +108,78 @@ class StationViewSet(AreaReadOnlyViewSet):
         if obj is None:
             raise NotFound()
         return Response(StationTelemetrySerializer(obj, context={"request": request}).data)
+
+    @extend_schema(parameters=[MetricHistoryQuerySerializer], responses=MetricHistorySerializer)
+    @action(detail=True, url_path="metrics/history", url_name="metrics-history")
+    def metrics_history(self, request, pk=None):
+        """Downsampled history of the station's generic metrics.
+
+        Same permissions as ``/stations/{id}/telemetry/``. Each series point is
+        ``[epoch_seconds, min, avg, max]`` (UTC, sorted). ``since``/``until`` are ISO 8601
+        (naive = UTC; default: the last 24 h); the response echoes them in UTC (``Z``).
+
+        Resolutions: ``raw`` (one point per heartbeat) and ``5m`` come from the raw table
+        (kept ``HISTORY_RAW_RETENTION_DAYS``, default 30 d); if ``since`` is older than that,
+        they are served as ``1h`` instead (the response reports the effective ``resolution``
+        and ``source``). ``1h`` and ``1d`` (count-weighted daily average) come from the
+        hourly table (kept ``HISTORY_HOURLY_RETENTION_DAYS``, default 730 d); the current,
+        not yet compacted hour is not in there yet.
+
+        Limits: at most 10 keys per request; time range at most
+        ``HISTORY_HOURLY_RETENTION_DAYS`` days; ``resolution=auto`` (default) picks the
+        finest resolution with at most 1000 points per series; an explicit resolution may
+        yield at most 2016 points per series when served from the raw table (``raw``,
+        ``5m`` — i.e. 7 days of 5m) and at most 5000 from the hourly table (``1h``, ``1d``),
+        otherwise 400. Point counts for ``raw`` are estimated at the shortest heartbeat
+        interval the server accepts (6 s, throttle 10/min). Validation errors are 400 with
+        field-keyed messages.
+
+        Without ``keys``: the station's current metrics with a visible (non-hidden,
+        non-blocked) definition. Like ``/telemetry/``, hidden or blocked keys are never
+        returned — they are silently dropped from an explicit ``keys`` list too. Undefined
+        explicit keys are returned (``label=key``, ``unit=""``, ``precision=1``,
+        ``group="other"``).
+        """
+        from apps.history import query as history_query
+        from apps.monitoring.models import MetricDefinition
+
+        station = self.get_object()
+        params = MetricHistoryQuerySerializer(
+            data=request.query_params, context={"now": timezone.now()}
+        )
+        params.is_valid(raise_exception=True)
+        q = params.validated_data
+        keys = (
+            history_query.visible_keys(q["keys"])
+            if q["keys"] is not None
+            else history_query.default_keys(station)
+        )
+        points = history_query.fetch_series(
+            station, keys, q["since"], q["until"], q["resolution"], q["source"]
+        )
+        defs = {d.key: d for d in MetricDefinition.objects.filter(key__in=keys)}
+        series = []
+        for key in keys:
+            d = defs.get(key)
+            series.append(
+                {
+                    "key": key,
+                    "label": d.display_label if d else key,
+                    "unit": d.unit if d else "",
+                    "precision": d.precision if d else 1,
+                    "group": d.group if d else "other",
+                    "points": points[key],
+                }
+            )
+        payload = {
+            "station": station.pk,
+            "since": q["since"],
+            "until": q["until"],
+            "resolution": q["resolution"],
+            "source": q["source"],
+            "series": series,
+        }
+        return Response(MetricHistorySerializer(payload).data)
 
     @action(detail=True, url_path="inventory")
     def inventory(self, request, pk=None):

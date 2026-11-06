@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n %}
+{% load i18n static %}
 
 {% block title %}{{ station.name }} · OE5XRX{% endblock %}
 
@@ -548,8 +548,14 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" nonce="{{ csp_nonce }}">
+{% if metric_groups %}<link rel="stylesheet" href="{% static 'vendor/uplot/uPlot.min.css' %}" nonce="{{ csp_nonce }}">{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" nonce="{{ csp_nonce }}"></script>
+{% if metric_groups %}
+<script src="{% static 'vendor/uplot/uPlot.iife.min.js' %}" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'js/metrics-history-logic.js' %}" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'js/metrics-history.js' %}" nonce="{{ csp_nonce }}" defer></script>
+{% endif %}
 {% endblock %}
