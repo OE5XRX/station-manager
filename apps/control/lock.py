@@ -236,7 +236,12 @@ def sweep_lock(station, now, idle_seconds, scope="station"):
         # scan imports this module's siblings at load.
         from .scan import scan_counts_as_activity
 
-        idle_lapsed = not scan_counts_as_activity(station)
+        if scan_counts_as_activity(station):
+            # Refresh, not just skip: once the scan ends (also agent-side, e.g.
+            # no_reachable_entries) the holder gets a full idle window again.
+            lock.last_activity = now
+            lock.save(update_fields=["last_activity"])
+            idle_lapsed = False
     if grace_lapsed or idle_lapsed:
         _clear(lock)
         return True

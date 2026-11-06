@@ -399,6 +399,11 @@ def test_idle_sweep_skipped_while_scanning():
     ControlLock.objects.filter(station=station).update(last_activity=long_ago)
     ActiveScan.objects.create(station=station, user=user, scan_id="x", listen_s=2, hang_s=5)
     assert lock.sweep_lock(station, now=timezone.now(), idle_seconds=300) is False
+    # The scan counted as activity: once it ends on its own, no immediate idle release.
+    assert ControlLock.objects.get(station=station).last_activity > long_ago
+    assert scan.end_scan(station, "no_reachable_entries") is True
+    assert lock.sweep_lock(station, now=timezone.now(), idle_seconds=300) is False
+    ActiveScan.objects.create(station=station, user=user, scan_id="y", listen_s=2, hang_s=5)
     # Holder's browser gone: the reconnect grace still frees the lock.
     ControlLock.objects.filter(station=station).update(
         pending_release_at=timezone.now() - timedelta(seconds=1)
