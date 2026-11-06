@@ -508,6 +508,33 @@ def test_start_while_keyed_holds_naming_no_entry():
     _run(go())
 
 
+def test_stop_between_entries_names_tuned_entry():
+    async def go():
+        rig = Rig()
+        rig.register(ABC)
+        gate = asyncio.Event()
+        inner = rig.send
+
+        async def send(msg):
+            await inner(msg)
+            if (msg["state"], msg["ref"]) == ("scanning", "b"):
+                await gate.wait()
+
+        rig.send = send
+        s = rig.scanner()
+        await s.start("s1", ABC, 0.3, 5.0)
+        await _until(lambda: rig.states()[-1:] == [("scanning", "b")])
+        stop = asyncio.ensure_future(s.stop("operator"))
+        await asyncio.sleep(0)
+        gate.set()
+        await stop
+        assert rig.visits() == ["a"]
+        last = rig.sent[-1]
+        assert (last["state"], last["ref"], last["index"]) == ("stopped", "a", 0)
+
+    _run(go())
+
+
 def test_ptt_on_other_module_does_not_move_tx_route():
     async def go():
         rig = Rig()

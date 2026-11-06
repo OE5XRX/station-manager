@@ -461,9 +461,12 @@ class Scanner:
         await self._send_msg(msg)
 
     def _stopped_frame(self, reason: str) -> dict | None:
-        entry = None
-        if self._entries and 0 <= self._index < len(self._entries):
-            entry = self._entries[self._index]
+        # The module stays where it last was (spec §7.5): name the tuned entry, not _index
+        # (already advanced between entries), and no entry if nothing is tuned.
+        pos = self._tuned_pos()
+        if pos is not None:
+            self._index = pos
+        entry = self._entries[pos] if pos is not None else None
         return self._frame("stopped", entry, reason)
 
     async def _send_frame(self, state: str, entry: dict | None, reason: str | None) -> None:
