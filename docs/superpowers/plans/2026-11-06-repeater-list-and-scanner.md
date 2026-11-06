@@ -210,6 +210,8 @@
 
 ### Task 9: Scan lists, scan builder, server scan orchestration
 
+> **Split for parallel execution:** **9a** = everything in `apps/repeaters` (ScanList/ScanListEntry models + migration `0002`, owner-only CRUD + `mine.json`, `build_scan_entries`, their tests `tests/test_repeaters_scanlists.py`, `tests/test_scan_builder.py`). **9b** = everything in `apps/control` (`ActiveScan` + migration, consumer frames, lock hooks, list-edit → `scan_update` signal, `tests/test_control_scan.py`). 9a runs parallel to Task 8; 9b starts after Task 8 and 9a are merged (both touch `consumers.py`).
+
 **Files:**
 - Modify: `apps/repeaters/models.py` (+ migration), `apps/repeaters/{views,urls,forms}.py`, templates `apps/repeaters/templates/repeaters/scanlist_*.html`
 - Create: `apps/repeaters/scan.py`, `apps/control/scan.py`; migration in `apps/control` for `ActiveScan`
