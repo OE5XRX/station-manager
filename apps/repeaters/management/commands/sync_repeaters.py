@@ -45,8 +45,9 @@ class Command(BaseCommand):
             self.stdout.write(f"Syncing repeaters every {options['interval']}s...")
             while True:
                 close_old_connections()
-                self._run()
-                time.sleep(options["interval"])
+                ok = self._run()
+                # Retry a failed run soon instead of waiting a full interval.
+                time.sleep(options["interval"] if ok else min(options["interval"], 900))
         else:
             self._run()
 
@@ -58,12 +59,13 @@ class Command(BaseCommand):
             # Keep existing data; the next iteration retries.
             logger.error("sync_repeaters: ÖVSV fetch failed: %s", exc)
             self.stderr.write(f"sync_repeaters: fetch failed: {exc}")
-            return
+            return False
         except Exception:
             logger.exception("sync_repeaters: unexpected error")
             self.stderr.write("sync_repeaters: unexpected error (see log)")
-            return
+            return False
         self.stdout.write(
             f"sync_repeaters: created={result.created} updated={result.updated} "
             f"deactivated={result.deactivated} skipped={result.skipped}"
         )
+        return True

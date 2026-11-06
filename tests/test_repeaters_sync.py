@@ -151,3 +151,55 @@ def test_command_syncs():
     with mock.patch("apps.repeaters.oevsv.urllib.request.urlopen", _fake_urlopen):
         call_command("sync_repeaters", stdout=out)
     assert "created=6" in out.getvalue()
+
+
+def test_malformed_rows_skipped_good_row_kept():
+    trx = _load("oevsv_trx.json") + [
+        {
+            "uid": 4001,
+            "callsign": "X1",
+            "site_name": 5,
+            "frequency_tx": 145.6,
+            "frequency_rx": 145.0,
+        },
+        {
+            "uid": 4002,
+            "callsign": "X2",
+            "site_name": ["a"],
+            "frequency_tx": 145.6,
+            "frequency_rx": 145.0,
+        },
+        {"uid": 4003, "callsign": "X3", "frequency_tx": 123456, "frequency_rx": 145.0},
+        {"uid": 4004, "callsign": "X4", "frequency_tx": float("nan"), "frequency_rx": 145.0},
+    ]
+    rows = normalize(trx, _load("oevsv_site.json"))
+    ids = {r["external_id"] for r in rows}
+    assert {"2119", "4001", "4002"} <= ids and not ids & {"4003", "4004"}
+
+
+def test_out_of_range_tone_and_coords_sanitised():
+    trx = [
+        {"uid": 1, "callsign": "A", "frequency_tx": 145.6, "frequency_rx": 145.0, "ctcss_rx": 1e10}
+    ]
+    sites = [{"site_name": "S", "latitude": 999, "longitude": float("nan")}]
+    trx[0]["site_name"] = "S"
+    (r,) = normalize(trx, sites)
+    assert r["input_tone"] == "none" and r["latitude"] is None and r["longitude"] is None
+
+
+def test_empty_or_drifted_feed_raises_and_keeps_data():
+    sync_repeaters(_rows(), NOW)
+    with pytest.raises(OevsvError):
+        sync_repeaters([], NOW)
+    assert Repeater.objects.filter(active=True).count() == 5
+    drifted = [{"uid": 1, "freq_tx": 145.6}]
+    with mock.patch("apps.repeaters.oevsv._get_json", side_effect=[drifted, []]):
+        with pytest.raises(OevsvError):
+            fetch_oevsv()
+
+
+def test_oversized_response_rejected():
+    big = io.BytesIO(b"[" + b" " * (11 * 1024 * 1024) + b"]")
+    with mock.patch("apps.repeaters.oevsv.urllib.request.urlopen", return_value=big):
+        with pytest.raises(OevsvError):
+            fetch_oevsv()

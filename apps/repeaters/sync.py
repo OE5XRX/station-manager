@@ -4,6 +4,7 @@ from datetime import datetime
 from django.db import transaction
 
 from .models import Repeater
+from .oevsv import OevsvError
 
 FIELDS = (
     "callsign",
@@ -32,6 +33,9 @@ def sync_repeaters(rows: list[dict], now: datetime) -> SyncResult:
     """Upsert ÖVSV rows by ``external_id``; never touches manual entries."""
     result = SyncResult()
     existing = {r.external_id: r for r in Repeater.objects.filter(source=Repeater.Source.OEVSV)}
+    active_before = sum(1 for r in existing.values() if r.active)
+    if active_before and (not rows or (active_before >= 10 and len(rows) < active_before / 2)):
+        raise OevsvError(f"refusing sync: {len(rows)} rows vs {active_before} active")
     seen = set()
     for row in rows:
         ext = row.get("external_id")
