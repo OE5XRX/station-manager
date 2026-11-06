@@ -321,6 +321,9 @@ class ControlClient:
             if self._shutdown.is_set() or self._ws is None:
                 return
             if not enabled:
+                if force:  # e.g. the audio-router was added/removed: no scan, but re-emit
+                    broker.set_inventory(last_emitted)
+                    await broker.emit_inventory()
                 self._notify_rescan()
                 continue
             try:

@@ -42,6 +42,10 @@ except ImportError:  # pragma: no cover — guard against hypothetical future cy
 
 logger = logging.getLogger(__name__)
 
+# A hot-plug refresh restarts a dead RX pipeline at most this many times in a row before it
+# reports the stream as errored (bounds respawn churn of a persistently failing pipeline).
+_MAX_DEAD_RESTARTS = 3
+
 # Opus DTX comfort-noise packets are ≤2 bytes; flag them so a receiver can treat the gap
 # as comfort noise rather than loss.
 _DTX_MAX_BYTES = 2
@@ -99,6 +103,12 @@ class AudioEngine:
         # source_subscribe for every demanded stream on each advertise, which must not race
         # the refresh's own restart of the same stream into a second bridge.
         self._rx_lock: asyncio.Lock = asyncio.Lock()
+        # Set by stop(): a refresh/subscribe scheduled cross-thread may still run after the
+        # connection dropped and must not start bridges on this discarded engine.
+        self._closed = False
+        # stream_id -> consecutive dead-bridge restarts by refresh; bounds the respawn churn
+        # of a pipeline that keeps dying (reset once a refresh finds it alive again).
+        self._rx_restarts: dict[str, int] = {}
 
     @staticmethod
     async def _to_thread(fn, *args):
@@ -131,27 +141,44 @@ class AudioEngine:
         rebuild = set(rebuild)
         gone: list[str] = []
         restart: list[str] = []
+        given_up: list[str] = []
         async with self._rx_lock:
+            if self._closed:
+                return
             before = self.registry.advertise_payload()
             self.registry.rebuild(slots)
             changed = self.registry.advertise_payload() != before
             for stream_id, state in list(self._rx.items()):
                 info = self.registry.get(stream_id)
+                alive = getattr(state["bridge"], "is_alive", lambda: True)()
                 if info is None:
                     gone.append(stream_id)
-                elif (
-                    info.slot in rebuild
-                    or info.stream_ref != state["ref"]
-                    or not getattr(state["bridge"], "is_alive", lambda: True)()
-                ):
+                elif info.slot in rebuild or info.stream_ref != state["ref"]:
                     restart.append(stream_id)
-            for stream_id in gone + restart:
+                elif not alive:
+                    n = self._rx_restarts.get(stream_id, 0) + 1
+                    self._rx_restarts[stream_id] = n
+                    (restart if n <= _MAX_DEAD_RESTARTS else given_up).append(stream_id)
+                else:
+                    self._rx_restarts.pop(stream_id, None)
+            for stream_id in gone + restart + given_up:
                 await self._stop_rx(stream_id)
             if changed:
                 logger.info("engine: audio slots now %s; re-advertising", sorted(slots))
                 await self.advertise()
+            # Restart inside the lock (after the advertise, so no frame carries an unmapped
+            # ref): a source_unsubscribe arriving meanwhile must see the restarted stream, or
+            # it would no-op and leave an undemanded pipeline running.
+            for stream_id in restart:
+                logger.info("engine: rebuilding RX pipeline for %s", stream_id)
+                await self._start_rx(stream_id)
         for stream_id in gone:
+            self._rx_restarts.pop(stream_id, None)
             await self._emit_stream_state(stream_id, "idle", "audio slot removed")
+        for stream_id in given_up:
+            self._rx_restarts.pop(stream_id, None)
+            logger.warning("engine: RX pipeline for %s keeps dying; giving up", stream_id)
+            await self._emit_stream_state(stream_id, "error", "RX pipeline keeps failing")
 
         def _affected(slot) -> bool:
             return slot not in slots or slot in rebuild
@@ -161,16 +188,27 @@ class AudioEngine:
                 "engine: TX slot %s vanished/re-enumerated; tearing down", self._tx["slot"]
             )
             await self._teardown_tx()
-        if self._diag is not None and _affected(self._diag["slot"]):
+        diag = self._diag
+        if diag is not None and _affected(diag["slot"]):
             logger.info("engine: diagnostic slot vanished/re-enumerated; aborting")
             await self._teardown_diag()
-        for stream_id in restart:
-            logger.info("engine: rebuilding RX pipeline for %s", stream_id)
-            await self.on_source_subscribe(stream_id)
+            # The cancelled measurement never emits its result — answer the command here so
+            # the server does not wait for its own timeout.
+            if diag.get("base") is not None:
+                await self._emit_json(
+                    {**diag["base"], "error": "aborted: audio slot vanished or re-enumerated"}
+                )
 
     async def stop(self) -> None:
-        for stream_id in list(self._rx):
-            await self.on_source_unsubscribe(stream_id)
+        # Closed before taking the lock: a refresh/subscribe queued behind it then bails
+        # instead of starting a bridge after the snapshot below.
+        self._closed = True
+        async with self._rx_lock:
+            stopped = list(self._rx)
+            for stream_id in stopped:
+                await self._stop_rx(stream_id)
+        for stream_id in stopped:
+            await self._emit_stream_state(stream_id, "idle", "")
         await self._teardown_tx()
         await self._teardown_diag()
 
@@ -195,6 +233,8 @@ class AudioEngine:
             await self._start_rx(stream_id)
 
     async def _start_rx(self, stream_id: str) -> None:
+        if self._closed:
+            return
         info = self.registry.get(stream_id)
         if info is None:
             await self._emit_error("unknown_stream", f"no such stream {stream_id!r}")
@@ -457,7 +497,7 @@ class AudioEngine:
             logger.exception("engine: U diagnostic bridge start failed")
             await self._to_thread(_safe_stop, bridge)
             return {**base, "error": f"U diagnostic bridge start failed: {exc}"}
-        self._diag = {"bridge": bridge, "slot": slot, "ref": diag_ref}
+        self._diag = {"bridge": bridge, "slot": slot, "ref": diag_ref, "base": base}
         self._diag_task = asyncio.ensure_future(
             self._run_u_measurement(base, slot, signal, bridge)
         )

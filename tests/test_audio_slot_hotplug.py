@@ -795,3 +795,132 @@ def test_audio_client_update_slots_skips_stale_engine(tmp_path):
 def test_audio_client_update_slots_disconnected_is_noop(tmp_path):
     client = _audio_client(tmp_path)
     client.update_slots([3])  # no loop / engine: nothing scheduled, nothing raised
+
+
+# --- review round 1 regressions ----------------------------------------------------------
+
+
+def test_unsubscribe_during_refresh_restart_does_not_leave_orphan_bridge():
+    """A source_unsubscribe arriving while refresh restarts the stream must stop the
+    restarted bridge, not no-op and leave an undemanded pipeline running."""
+    eng, _, factory, _ = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        await asyncio.gather(eng.refresh([2], rebuild={2}), eng.on_source_unsubscribe("slot2.rx"))
+
+    asyncio.run(scenario())
+    assert "slot2.rx" not in eng._rx
+    assert all(b.stopped for b in factory.rx)
+
+
+def test_refresh_after_stop_starts_nothing():
+    """A refresh scheduled cross-thread that runs after the connection dropped (engine
+    stopped) must not start bridges on the discarded engine."""
+    eng, _, factory, _ = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        await asyncio.gather(eng.stop(), eng.refresh([2], rebuild={2}))
+        await eng.on_source_subscribe("slot2.rx")
+
+    asyncio.run(scenario())
+    assert eng._rx == {}
+    assert all(b.stopped for b in factory.rx)
+
+
+def test_dead_rx_restarts_are_bounded_then_error():
+    from station_agent.audio import engine as engine_mod
+
+    eng, _, factory, sent = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        for _ in range(engine_mod._MAX_DEAD_RESTARTS + 1):
+            factory.rx[-1].alive = False
+            await eng.refresh([2])
+
+    asyncio.run(scenario())
+    assert len(factory.rx) == 1 + engine_mod._MAX_DEAD_RESTARTS
+    assert "slot2.rx" not in eng._rx
+    last = _states(sent, "slot2.rx")[-1]
+    assert last["state"] == "error"
+
+
+def test_dead_rx_restart_counter_resets_when_alive():
+    from station_agent.audio import engine as engine_mod
+
+    eng, _, factory, _ = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        for _ in range(engine_mod._MAX_DEAD_RESTARTS * 2):
+            factory.rx[-1].alive = False
+            await eng.refresh([2])
+            await eng.refresh([2])  # alive again → counter reset
+
+    asyncio.run(scenario())
+    assert "slot2.rx" in eng._rx
+
+
+def test_refresh_aborting_diag_answers_the_command():
+    eng, _, _, sent = make_engine([2], NODES)
+
+    class Bridge:
+        def stop(self):
+            pass
+
+    async def scenario():
+        await eng.start()
+        base = {"v": 1, "type": "diag_result", "request_id": "r1"}
+        eng._diag = {"bridge": Bridge(), "slot": 2, "ref": 0x8001, "base": base}
+        await eng.refresh([3])
+
+    asyncio.run(scenario())
+    res = [m for m in sent if m["type"] == "diag_result"]
+    assert res and res[-1]["request_id"] == "r1" and "aborted" in res[-1]["error"]
+    assert eng._diag is None
+
+
+def test_forced_emit_honoured_when_slot_discovery_disabled(tmp_path):
+    from station_agent.control_client import _SlotInventoryDebouncer
+
+    client = _control_client(tmp_path)
+    client._config.slot_discovery_enabled = False
+
+    class FakeBroker:
+        def __init__(self):
+            self.emitted = asyncio.Event()
+            self.inv = None
+
+        async def rediscover(self, _fn):
+            raise AssertionError("no scan when discovery is disabled")
+
+        def set_inventory(self, inv):
+            self.inv = inv
+
+        async def emit_inventory(self):
+            self.emitted.set()
+
+    async def scenario():
+        fake = FakeBroker()
+        client._ws = object()
+        client._refresh_event = asyncio.Event()
+        client._loop = asyncio.get_running_loop()
+        task = asyncio.ensure_future(
+            client._rediscovery_loop(fake, client._loop, _SlotInventoryDebouncer(), [])
+        )
+        client.request_inventory_refresh(force=True)
+        await asyncio.wait_for(fake.emitted.wait(), timeout=2.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return fake.inv
+
+    assert asyncio.run(scenario()) == []
