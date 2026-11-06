@@ -163,7 +163,12 @@ def test_malformed_descriptors_ignored(station):
         station=station, slot="1", module_id="bad", online=True, capability_descriptor="oops"
     )
     m = _module(station, "2", VHF, module_id="fm")
-    m.capability_descriptor[0]["ranges"] = [{"name": "vhf"}, {"name": "x", "min": "a", "max": 1}]
+    m.capability_descriptor[0]["ranges"] = [
+        {"name": "vhf"},
+        {"name": "x", "min": "a", "max": 1},
+        {"name": "n", "min": "NaN", "max": 1},
+        {"name": "i", "min": 0, "max": "Infinity"},
+    ]
     m.save()
     assert station_bands(station) == {}
 
@@ -180,3 +185,10 @@ def test_bearing_wraps_near_north():
     assert bearing_label(48, 14, 49, 13.99) == "N"
     assert bearing_label(48, 14, 48.5, 14.6) == "NE"
     assert bearing_label(48, 14, 48.5, 13.4) == "NW"
+
+
+def test_unhashable_capability_name_ignored(station):
+    m = _module(station, "1", VHF)
+    m.capability_descriptor.append({"name": ["x"]})
+    m.save()
+    assert "vhf" in station_bands(station)

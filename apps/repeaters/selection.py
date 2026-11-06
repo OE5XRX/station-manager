@@ -40,7 +40,9 @@ def _caps(module) -> dict[str, dict]:
     descriptor = module.capability_descriptor
     if not isinstance(descriptor, list):
         return {}
-    return {c["name"]: c for c in descriptor if isinstance(c, dict) and "name" in c}
+    return {
+        c["name"]: c for c in descriptor if isinstance(c, dict) and isinstance(c.get("name"), str)
+    }
 
 
 def _module_ranges(module) -> list[tuple[str, Decimal, Decimal]]:
@@ -48,9 +50,11 @@ def _module_ranges(module) -> list[tuple[str, Decimal, Decimal]]:
     out = []
     for rng in _caps(module).get("rx_frequency", {}).get("ranges") or []:
         try:
-            out.append((str(rng["name"]), Decimal(str(rng["min"])), Decimal(str(rng["max"]))))
+            lo, hi = Decimal(str(rng["min"])), Decimal(str(rng["max"]))
         except (KeyError, ArithmeticError, TypeError, ValueError):
             continue
+        if lo.is_finite() and hi.is_finite():
+            out.append((str(rng["name"]), lo, hi))
     return out
 
 
