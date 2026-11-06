@@ -18,7 +18,9 @@ from collections.abc import Callable
 
 from station_agent import descriptor as desc
 from station_agent import protocol as proto
+from station_agent import scanner as scan
 from station_agent import slot_pause
+from station_agent.audio.router_module import MODULE_ID as AUDIO_ROUTER_ID
 from station_agent.slot_control import SlotControl
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ class Broker:
         virtual_modules=None,
         now=time.monotonic,
         on_firmware_check: Callable[[], None] | None = None,
+        scan_poll_s: float = 0.1,
     ):
         self._send = send
         # Server `firmware_check` nudge -> module_ota cycle (runs on the main thread; the
@@ -111,6 +114,17 @@ class Broker:
         # slot_discovery.probe_slot). re-discovery therefore does NOT hold these locks (see
         # rediscover()). See CLAUDE.md "Control-Device Single-Owner-Invariante".
         self._slot_locks: dict[int, asyncio.Lock] = {}
+        # Sequential carrier scanner (repeater-scanner spec §7): one task, driving the same
+        # apply_preset/_execute path as commands, so it is just another serialized opener.
+        self.scanner = scan.Scanner(
+            self.apply_preset,
+            self._scan_read_carrier,
+            self._scan_set_tx_route,
+            self._send,
+            poll_s=scan_poll_s,
+            busy=self.slot_busy,
+            ts=self._ts,
+        )
 
     # --- inventory cache ---------------------------------------------------
     def set_virtual_modules(self, virtual_modules) -> None:
@@ -163,6 +177,12 @@ class Broker:
             await self.handle_keepalive(msg)
         elif mtype == "apply_preset":
             await self.handle_apply_preset(msg)
+        elif mtype == "scan_start":
+            await self.handle_scan_start(msg)
+        elif mtype == "scan_update":
+            await self.handle_scan_update(msg)
+        elif mtype == "scan_control":
+            await self.handle_scan_control(msg)
         elif mtype == "firmware_check":
             if self._on_firmware_check is not None:
                 try:
@@ -229,6 +249,14 @@ class Broker:
             token = desc.format_value(cap["type"], value)
 
         is_ptt = op == "do" and self._is_ptt_cap(cap)
+        # Spec §7.4: PTT while scanning, or a hand retune of a scanned module, holds the scan
+        # first; hold() returns only once no scanner step is in flight, so the scanner can
+        # never retune the module after (or under) this command.
+        if is_ptt and value is True:
+            await self.scanner.hold("ptt")
+        elif op == "set" and capability in self._SCAN_HOLD_CAPS:
+            if slot in self.scanner.active_slots():
+                await self.scanner.hold("manual")
         if is_ptt:
             self._ptt_inflight.add((slot, module))
         try:
@@ -255,6 +283,10 @@ class Broker:
     # Fixed application order: tx before rx so a half-applied preset never listens on the
     # new output while still transmitting on the old input; bandwidth last.
     _PRESET_ORDER = ("tx_frequency", "rx_frequency", "tx_tone", "rx_tone", "bandwidth")
+    # A hand `set` of one of these on a scanned slot holds the scan (spec §7.4).
+    _SCAN_HOLD_CAPS = frozenset(
+        ("frequency", "rx_frequency", "tx_frequency", "rx_tone", "tx_tone")
+    )
 
     async def apply_preset(self, slot, module, values) -> dict[str, dict]:
         """Apply a batch of settings in fixed order; return ``{cap: {"ok", "error"?}}``.
@@ -341,6 +373,8 @@ class Broker:
         if self.slot_busy(slot):
             await self._send(proto.build_result(request_id, False, error=("ptt_active", "")))
             return
+        if slot in self.scanner.active_slots():
+            await self.scanner.hold("manual")
         results = await self.apply_preset(slot, module, values)
         all_ok = all(r["ok"] for r in results.values())
         # Per-cap outcome only (no echoed values); the state frame carries the values.
@@ -353,6 +387,61 @@ class Broker:
         ok_values = {n: r["value"] for n, r in results.items() if r["ok"]}
         if ok_values:
             await self._send(proto.build_state(slot, module, ok_values, self._ts()))
+
+    # --- scanner -------------------------------------------------------------------
+    @staticmethod
+    def _valid_scan_id(scan_id) -> bool:
+        return isinstance(scan_id, str) and 0 < len(scan_id) <= 64
+
+    async def handle_scan_start(self, msg: dict) -> None:
+        scan_id = msg.get("scan_id")
+        if not self._valid_scan_id(scan_id):
+            logger.debug("broker: dropping scan_start with invalid scan_id %r", scan_id)
+            return
+        entries = scan.parse_entries(msg.get("entries"))
+        if not entries:
+            # Answer with a terminal state so the server can drop its ActiveScan row.
+            reason = "invalid_scan" if entries is None else "empty_scan_list"
+            await self._send(
+                proto.build_scan_state(
+                    scan_id, "stopped", 0, None, None, None, self._ts(), reason=reason
+                )
+            )
+            return
+        await self.scanner.start(
+            scan_id,
+            entries,
+            scan.clamp_window(msg.get("listen_s"), scan.LISTEN_RANGE_S, 2.0),
+            scan.clamp_window(msg.get("hang_s"), scan.HANG_RANGE_S, 5.0),
+        )
+
+    async def handle_scan_update(self, msg: dict) -> None:
+        entries = scan.parse_entries(msg.get("entries"))
+        if entries is None:
+            logger.warning("broker: ignoring malformed scan_update")
+            return
+        await self.scanner.update(msg.get("scan_id"), entries)
+
+    async def handle_scan_control(self, msg: dict) -> None:
+        await self.scanner.control(msg.get("scan_id"), msg.get("action"))
+
+    async def _scan_read_carrier(self, slot, module) -> dict:
+        return await self._execute(slot, module, "get", "carrier", None)
+
+    async def _scan_set_tx_route(self, slot, module) -> None:
+        """Point the audio-router's tx_route at the scanned module (spec §7.4)."""
+        routers = [vm for vm in self._virtual.values() if vm.module_id == AUDIO_ROUTER_ID]
+        router = routers[0] if routers else None
+        if router is None:
+            return
+        result = await router.handle_command("set", "tx_route", {"slot": slot, "module": module})
+        if result.get("ok"):
+            # Mirrored like a tx_route command's state frame, so the server follows the route.
+            await self._send(
+                proto.build_state(
+                    router.slot, router.module_id, {"tx_route": result.get("value")}, self._ts()
+                )
+            )
 
     async def _handle_virtual_command(
         self, request_id, slot, module, vm, op, capability, value
@@ -728,6 +817,8 @@ class Broker:
                 cancelled_tasks.append(entry["task"])
             del self._ptt[(slot, module)]
             await self._unkey(slot, module, entry["cap"], "ws_disconnect")
+        # Dead-man (spec §7.2): no server, no scan — the module stays on its current entry.
+        await self.scanner.stop("disconnect")
         for task in cancelled_tasks:
             try:
                 await task
@@ -736,6 +827,7 @@ class Broker:
         await self.stop()
 
     async def stop(self) -> None:
+        await self.scanner.stop("shutdown")
         tasks = []
         for sub in list(self._subscriptions.values()):
             if sub["task"] is not None:

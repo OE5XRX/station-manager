@@ -55,6 +55,25 @@ def build_event(slot, module, event: str, detail) -> dict:
     return _envelope("event", slot=slot, module=module, event=event, detail=detail)
 
 
+def build_scan_state(
+    scan_id, state, index, ref, slot, module, ts: float, reason: str | None = None
+) -> dict:
+    """Scanner transition (repeater-scanner spec §7.6); ``reason`` on held/stopped."""
+    msg = _envelope(
+        "scan_state",
+        scan_id=scan_id,
+        state=state,
+        index=index,
+        ref=ref,
+        slot=slot,
+        module=module,
+        ts=ts,
+    )
+    if reason is not None:
+        msg["reason"] = reason
+    return msg
+
+
 def build_inventory(slots: list) -> dict:
     return _envelope("inventory", slots=slots)
 
