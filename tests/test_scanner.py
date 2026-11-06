@@ -493,6 +493,21 @@ def test_resume_while_ptt_keyed_stays_held():
     _run(go())
 
 
+def test_start_while_keyed_holds_naming_no_entry():
+    async def go():
+        rig = Rig(busy=lambda r: True)
+        rig.register(ABC)
+        s = rig.scanner()
+        await s.start("s1", ABC, 2.0, 5.0)
+        await _until(lambda: any(m["state"] == "held" for m in rig.sent))
+        held = rig.sent[-1]
+        assert (held["ref"], held["slot"], held["module"]) == (None, None, None)
+        assert rig.applied == [] and rig.routes == []
+        await s.stop("operator")
+
+    _run(go())
+
+
 def test_ptt_on_other_module_does_not_move_tx_route():
     async def go():
         rig = Rig()

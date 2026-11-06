@@ -258,7 +258,9 @@ class Scanner:
             pos = self._tuned_pos()
             if pos is not None:
                 self._index = pos
-            await self._emit("held", reason=reason)
+            # Nothing tuned yet (scan started while keyed) or the last apply failed: the held
+            # frame names no entry rather than one the radio is not on.
+            await self._emit("held", reason=reason, untuned=pos is None)
             # Held on an entry that is actually tuned → PTT must key that module (§7.4).
             if pos is not None and self._routed_ref != self._tuned_ref:
                 entry = self._entries[pos]
@@ -442,8 +444,8 @@ class Scanner:
         return next((i for i, e in enumerate(self._entries) if e["ref"] == self._tuned_ref), None)
 
     # --- frames ------------------------------------------------------------------------
-    async def _emit(self, state: str, *, reason: str | None = None) -> None:
-        entry = self._entries[self._index] if self._entries else None
+    async def _emit(self, state: str, *, reason: str | None = None, untuned: bool = False) -> None:
+        entry = self._entries[self._index] if self._entries and not untuned else None
         ref = entry["ref"] if entry else None
         self._state = state
         if (state, self._index, ref) == self._last and reason is None:
