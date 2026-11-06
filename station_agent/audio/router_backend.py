@@ -36,6 +36,8 @@ _CARD_RE = re.compile(r"card(\d+)$")
 
 _DEFAULT_TIMEOUT = 5.0
 
+_stat = os.stat  # seam: tests fake sysfs inode generations
+
 
 @dataclass(frozen=True)
 class RunResult:
@@ -170,7 +172,7 @@ class PipeWireRouterBackend:
 
     def _card_generation(self, card: int) -> int | None:
         try:
-            return os.stat(os.path.join(self._sysfs_sound, f"card{card}")).st_ino
+            return _stat(os.path.join(self._sysfs_sound, f"card{card}")).st_ino
         except OSError:
             return None
 

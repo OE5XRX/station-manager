@@ -333,7 +333,11 @@ def test_rx_bridge_is_alive_tracks_process():
 # --- backend generations -----------------------------------------------------------------
 
 
-def test_backend_audio_slot_generations_change_on_reenumeration(tmp_path):
+def test_backend_audio_slot_generations_change_on_reenumeration(tmp_path, monkeypatch):
+    import types
+
+    from station_agent.audio import router_backend
+
     sysfs = tmp_path / "sound"
     (sysfs / "card1").mkdir(parents=True)
     (sysfs / "card0").mkdir()
@@ -344,18 +348,26 @@ def test_backend_audio_slot_generations_change_on_reenumeration(tmp_path):
             return RunResult(0, "OE5XRX_SLOT=2\n", "")
         return RunResult(0, "ID_FOO=1\n", "")
 
+    # The generation is the card dir's inode; kernfs allocates a fresh one on re-registration.
+    # Fake it so the test does not depend on the CI filesystem's inode reuse policy.
+    inodes = {"card1": 10}
+    monkeypatch.setattr(
+        router_backend,
+        "_stat",
+        lambda path: types.SimpleNamespace(st_ino=inodes[os.path.basename(path)]),
+    )
     be = PipeWireRouterBackend(run=run, sysfs_sound=str(sysfs))
     gen1 = be.audio_slot_generations()
-    assert list(gen1) == [2]
-    assert gen1[2][0] == 1
-    # Re-enumeration: the card directory is recreated (new kernfs node). Keep an extra dir
-    # around so the filesystem cannot hand the freed inode straight back.
-    (sysfs / "keep").mkdir()
-    os.rmdir(sysfs / "card1")
-    (sysfs / "card1").mkdir()
-    gen2 = be.audio_slot_generations()
-    assert list(gen2) == [2]
-    assert gen2 != gen1
+    assert gen1 == {2: (1, 10)}
+    assert be.audio_slot_generations() == gen1  # unchanged device → same snapshot
+    inodes["card1"] = 11  # re-enumerated in place, same card index
+    assert be.audio_slot_generations() == {2: (1, 11)}
+
+    def unreadable(path):
+        raise OSError("gone")
+
+    monkeypatch.setattr(router_backend, "_stat", unreadable)
+    assert be.audio_slot_generations() == {2: (1, None)}
 
 
 # --- AudioSupervisor ---------------------------------------------------------------------
