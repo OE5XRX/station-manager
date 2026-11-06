@@ -193,8 +193,8 @@ def test_execute_exception_isolated():
 
         b._execute = boom
         out = asyncio.run(b.apply_preset(1, "fm", {"tx_frequency": 145.0, "rx_frequency": 145.6}))
-        assert calls == ["tx_frequency", "rx_frequency"]
-        assert all(not r["ok"] for r in out.values())
+        assert calls == ["tx_frequency"]
+        assert all(r["error"]["code"] == "internal_error" for r in out.values())
     finally:
         fw.stop()
 

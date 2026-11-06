@@ -303,7 +303,8 @@ class Broker:
                 res = await self._execute(slot, module, "set", name, token)
             except Exception:  # noqa: BLE001 — one cap must not abort the batch
                 logger.exception("broker: apply_preset %s/%s %s raised", slot, module, name)
-                results[name] = {"ok": False, "error": {"code": proto.TIMEOUT, "msg": ""}}
+                results[name] = {"ok": False, "error": {"code": "internal_error", "msg": ""}}
+                abort = results[name]["error"]
                 continue
             if res.get("ok"):
                 results[name] = {"ok": True, "value": res.get("value")}
