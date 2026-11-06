@@ -49,6 +49,10 @@
 - [ ] **Step 3: Implement** `const FieldSpec CARRIER_SPEC{"carrier", ValueType::Bool, nullptr, nullptr, 0, nullptr, 0, /*readonly=*/true};` and `CarrierCap::onGet()`: not `ctx_.ready()` → `Result::err("driver_error")`; else `Result::okBool(sa818_get_squelch(ctx_.dev) == SA818_SQUELCH_CLOSED)` (CLOSED = carrier present — comment this inversion).
 - [ ] **Step 4: Run** full `build_and_tests` + `clang_format` locally → PASS.
 - [ ] **Step 5: Commit + PR** `feat(sa818): readonly carrier telemetry from SQL pin`. Note in PR: verify on HW whether SQL honours `rx_tone`.
+- [ ] **Step 6: Release dry-run on the branch:** `gh workflow run release.yml -R OE5XRX/FW-RemoteStation --ref <branch> -f dry_run=true` → green (all release targets build + smoke).
+- [ ] **Step 7: After the user merges the PR** (user gate): dispatch the real release on `main`: `gh workflow run release.yml -R OE5XRX/FW-RemoteStation --ref main -f dry_run=false` → new tag `YY.MM.DD-NN` (> `26.11.06-01`), release published with signed assets + `SHA256SUMS`.
+- [ ] **Step 8: Verify the release:** `gh release view <tag> -R OE5XRX/FW-RemoteStation` lists the fm-sa818 assets incl. `.sig`/certs and `SHA256SUMS`.
+- [ ] **Step 9: Roll to the FM module via prod** (confirm with the user before touching prod): import the release in prod station-manager (module-firmware GitHub release browser), assign it to the station's FM module, let the reconciler/OTA push it; confirm the module's inventory now advertises `carrier` and `module fm get carrier` answers. The station-manager tasks below do **not** wait for this — they test against `tests/fake_fw.py`.
 
 ---
 
