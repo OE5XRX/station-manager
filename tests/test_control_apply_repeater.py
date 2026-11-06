@@ -246,7 +246,7 @@ def test_apply_requires_control_use(control_agent_auth):
 
 @pytest.mark.django_db(transaction=True)
 def test_apply_result_reaches_browser_and_cancels_timeout(control_agent_auth, settings):
-    settings.CONTROL_COMMAND_TIMEOUT_SECONDS = 0.3
+    settings.CONTROL_PRESET_TIMEOUT_SECONDS = 0.3
     station, user = _setup("ar-result")
     rep = _rep()
 
@@ -274,6 +274,32 @@ def test_apply_result_reaches_browser_and_cancels_timeout(control_agent_auth, se
         # The timeout was cancelled: no timeout error follows.
         await asyncio.sleep(0.5)
         assert await browser.receive_nothing(timeout=0.2)
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_apply_uses_preset_timeout_not_command_timeout(control_agent_auth, settings):
+    """A preset is up to 5 sequential sets: the single-command timeout must not fire."""
+    settings.CONTROL_COMMAND_TIMEOUT_SECONDS = 0.1
+    settings.CONTROL_PRESET_TIMEOUT_SECONDS = 0.8
+    station, user = _setup("ar-ptimeout")
+    rep = _rep()
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(user, station.id)
+        assert (await browser.connect())[0] is True
+        await browser.send_json_to({"type": "lock_acquire"})
+        await _until(browser, lambda m: m.get("type") == "lock" and m.get("state") == "held")
+        await browser.send_json_to(_frame(rep.pk, rid="r9"))
+        assert (await agent.receive_json_from(timeout=2))["type"] == "apply_preset"
+        assert await browser.receive_nothing(timeout=0.4)  # past the command timeout
+        err = await _until(browser, lambda m: m.get("type") == "error")
+        assert err["request_id"] == "r9" and err["error"]["code"] == "timeout"
         await browser.disconnect()
         await agent.disconnect()
 

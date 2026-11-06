@@ -866,7 +866,10 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 existing.cancel()
             # Frequency/tone are not persist-policy caps: a stale entry must not persist.
             self._persist_pending.pop(request_id, None)
-            self.pending[request_id] = asyncio.create_task(self._command_timeout(request_id))
+            timeout = getattr(django.conf.settings, "CONTROL_PRESET_TIMEOUT_SECONDS", 30)
+            self.pending[request_id] = asyncio.create_task(
+                self._command_timeout(request_id, timeout)
+            )
         await self._audit(
             station,
             "control_command",
@@ -945,7 +948,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 msg.get("value"),
             )
 
-    async def _command_timeout(self, request_id):
+    async def _command_timeout(self, request_id, timeout=None):
         """Fire a timeout error to the browser if no result arrives in time.
 
         Reads the timeout from settings at call-time (not the module-level
@@ -953,7 +956,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         an importlib reload.
         """
         try:
-            timeout = getattr(django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10)
+            if timeout is None:
+                timeout = getattr(django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10)
             await asyncio.sleep(timeout)
             await self.send(
                 text_data=json.dumps(

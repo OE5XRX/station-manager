@@ -262,6 +262,8 @@ ok("control panel forwards control:send frames to its socket", () => {
   };
   cp._onSendEvent({ detail: { type: "apply_repeater", request_id: "r1", repeater_id: 1, slot: "1" } });
   cp._onSendEvent({ detail: "junk" });
+  cp._onSendEvent({ detail: { type: "lock_transfer", to_user_id: 2 } }); // not a bridge type
+  cp._onSendEvent({ detail: { type: "command", request_id: "c1", capability: "ptt" } });
   cp._onSendEvent({ detail: { request_id: "r2" } });
   assert.equal(sent.length, 1);
   assert.equal(sent[0].type, "apply_repeater");
@@ -276,6 +278,20 @@ ok("an unsendable frame is answered with not_connected", () => {
   assert.equal(cap.seen.length, 1);
   assert.equal(cap.seen[0].request_id, "r3");
   assert.equal(cap.seen[0].error.code, "not_connected");
+});
+
+ok("a forbidden reply to a bridged frame is left to the sibling panel", () => {
+  const cp = registered.controlPanel();
+  cp._send = () => true;
+  const toasts = [];
+  cp._showDenyNotice = (t) => toasts.push(t);
+  cp._onSendEvent({ detail: { type: "apply_repeater", request_id: "b1" } });
+  cp._onError({ type: "error", code: "forbidden", message: "no", request_id: "b1" });
+  assert.equal(toasts.length, 0);
+  // Any other forbidden frame (own widgets, audio panel, connect gate) still toasts.
+  cp._onError({ type: "error", code: "forbidden", message: "no", request_id: "audio-tx-1" });
+  cp._onError({ type: "error", code: "forbidden", message: "no" });
+  assert.equal(toasts.length, 2);
 });
 
 ok("control panel re-emits state/result/error/inventory frames as window events", () => {

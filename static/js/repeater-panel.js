@@ -19,8 +19,8 @@
   var SEARCH_DEBOUNCE_MS = 250;
   var REFRESH_DEBOUNCE_MS = 600;
   var NOTICE_MS = 6000;
-  // Last-resort unblock if no reply ever arrives (server timeout is 10 s).
-  var PENDING_GIVEUP_MS = 15000;
+  // Last-resort unblock if no reply ever arrives (server preset timeout is 30 s).
+  var PENDING_GIVEUP_MS = 35000;
   var TUNE_EPSILON = 0.0005; // MHz; module values round-trip as floats
   var BEARINGS = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
   var RX_CAP = "rx_" + "frequency";
