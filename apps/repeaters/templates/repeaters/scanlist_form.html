@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ form_title }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'repeaters:scanlists' %}">{% trans "Scan lists" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ form_title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <h1 class="page-title">{{ form_title }}</h1>
+  </div>
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+  <section class="panel mb-20">
+    <div class="panel-body">
+      <div class="form-group">
+        <label class="form-label" for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+        {{ form.name }}
+        {% if form.name.errors %}<div class="form-error">{{ form.name.errors|join:", " }}</div>{% endif %}
+      </div>
+    </div>
+  </section>
+  <div class="page-head-actions">
+    <button type="submit" class="btn btn-primary">{% trans "Create list" %}</button>
+    <a href="{% url 'repeaters:scanlists' %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}

@@ -3,9 +3,23 @@ from decimal import Decimal, InvalidOperation
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from .models import Repeater
+from .models import Repeater, ScanList, ScanListEntry
 
 _TONE_HELP = _('CTCSS in Hz (e.g. "88.5") or "none".')
+
+
+def normalize_tone(raw: str) -> str:
+    """CTCSS in Hz (60-260) as plain decimal string, or ``"none"``; ValidationError otherwise."""
+    raw = (raw or "").strip().lower()
+    if raw in ("", "none"):
+        return "none"
+    try:
+        hz = Decimal(raw)
+    except InvalidOperation:
+        hz = None
+    if hz is None or not hz.is_finite() or not Decimal("60") <= hz <= Decimal("260"):
+        raise forms.ValidationError(_('Enter a CTCSS tone in Hz (60-260, e.g. "88.5") or "none".'))
+    return format(hz.normalize(), "f")
 
 
 def _number(**attrs):
@@ -79,18 +93,7 @@ class RepeaterForm(forms.ModelForm):
         return self._positive("input_frequency")
 
     def _tone(self, name):
-        raw = (self.cleaned_data.get(name) or "").strip().lower()
-        if raw in ("", "none"):
-            return "none"
-        try:
-            hz = Decimal(raw)
-        except InvalidOperation:
-            hz = None
-        if hz is None or not hz.is_finite() or not Decimal("60") <= hz <= Decimal("260"):
-            raise forms.ValidationError(
-                _('Enter a CTCSS tone in Hz (60-260, e.g. "88.5") or "none".')
-            )
-        return format(hz.normalize(), "f")
+        return normalize_tone(self.cleaned_data.get(name))
 
     def clean_input_tone(self):
         return self._tone("input_tone")
@@ -114,4 +117,66 @@ class RepeaterForm(forms.ModelForm):
         cleaned = super().clean()
         if (cleaned.get("latitude") is None) != (cleaned.get("longitude") is None):
             raise forms.ValidationError(_("Enter both latitude and longitude, or neither."))
+        return cleaned
+
+
+class ScanListForm(forms.ModelForm):
+    class Meta:
+        model = ScanList
+        fields = ["name"]
+        widgets = {"name": forms.TextInput(attrs={"class": "form-control", "autofocus": True})}
+
+    def clean_name(self):
+        name = (self.cleaned_data.get("name") or "").strip()
+        if not name:
+            raise forms.ValidationError(_("Enter a name."))
+        return name
+
+
+class ScanListEntryForm(forms.ModelForm):
+    """One entry: a repeater reference *or* a free (simplex) frequency."""
+
+    repeater = forms.ModelChoiceField(
+        label=_("Repeater"),
+        queryset=Repeater.objects.none(),
+        required=False,
+        widget=forms.Select(attrs={"class": "form-control"}),
+    )
+
+    class Meta:
+        model = ScanListEntry
+        fields = ["repeater", "frequency", "tone", "label"]
+        widgets = {
+            "frequency": _number(step="0.00001", min="0.00001"),
+            "tone": forms.TextInput(attrs={"class": "form-control"}),
+            "label": forms.TextInput(attrs={"class": "form-control", "maxlength": 64}),
+        }
+        help_texts = {"tone": _TONE_HELP}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["repeater"].queryset = Repeater.objects.visible()
+        self.fields["repeater"].label_from_instance = lambda r: (
+            f"{r.callsign} {r.output_frequency.normalize():f} MHz"
+            + (f" ({r.site_name})" if r.site_name else "")
+        )
+        self.fields["tone"].required = False
+
+    def clean_tone(self):
+        return normalize_tone(self.cleaned_data.get("tone"))
+
+    def clean_frequency(self):
+        value = self.cleaned_data.get("frequency")
+        if value is not None and value <= 0:
+            raise forms.ValidationError(_("Must be greater than zero."))
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        has_repeater = cleaned.get("repeater") is not None
+        has_frequency = cleaned.get("frequency") is not None
+        if has_repeater == has_frequency and not self.errors:
+            raise forms.ValidationError(_("Choose either a repeater or enter a frequency."))
+        if has_repeater:
+            cleaned["tone"] = "none"
         return cleaned
