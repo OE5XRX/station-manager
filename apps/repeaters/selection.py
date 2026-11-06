@@ -47,14 +47,18 @@ def _caps(module) -> dict[str, dict]:
 
 def _module_ranges(module) -> list[tuple[str, Decimal, Decimal]]:
     """``(band name, min, max)`` from the module's ``rx_frequency`` capability."""
+    ranges = _caps(module).get("rx_frequency", {}).get("ranges")
+    if not isinstance(ranges, list):
+        return []
     out = []
-    for rng in _caps(module).get("rx_frequency", {}).get("ranges") or []:
+    for rng in ranges:
         try:
+            name = str(rng["name"])
             lo, hi = Decimal(str(rng["min"])), Decimal(str(rng["max"]))
         except (KeyError, ArithmeticError, TypeError, ValueError):
             continue
         if lo.is_finite() and hi.is_finite():
-            out.append((str(rng["name"]), lo, hi))
+            out.append((name, lo, hi))
     return out
 
 

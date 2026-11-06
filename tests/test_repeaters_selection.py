@@ -192,3 +192,13 @@ def test_unhashable_capability_name_ignored(station):
     m.capability_descriptor.append({"name": ["x"]})
     m.save()
     assert "vhf" in station_bands(station)
+
+
+def test_nameless_and_non_list_ranges_ignored(station):
+    m = _module(station, "1", VHF)
+    m.capability_descriptor[0]["ranges"] = [{"min": 134, "max": 174}, "junk", None]
+    m.save()
+    m2 = _module(station, "2", VHF, module_id="fm2")
+    m2.capability_descriptor[0]["ranges"] = 5
+    m2.save()
+    assert station_bands(station) == {}
