@@ -1404,3 +1404,40 @@
   .rp-tone { grid-column: 1; }
   .rp-dist { grid-column: 2; }
 }
+
+/* ---------- Scanner panel (spec 2026-11-06 §6) ----------------------------------
+   Same card language as the repeater panel. While a scan runs, the readout is the
+   one loud element: its left rail takes the state colour (carrier = accent). */
+.sp-body { position: relative; z-index: 1; padding: 10px 14px 12px; }
+.sp-manage { font-size: 12px; color: var(--ink-2); }
+.sp-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--line);
+  background: color-mix(in srgb, var(--ink-0) 4%, transparent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.sp-readout.is-active { border-left-color: var(--accent); }
+.sp-readout.is-hang { border-left-color: var(--accent); opacity: 0.85; }
+.sp-readout.is-held { border-left-style: dashed; }
+.sp-state { color: var(--ink-0); font-weight: 600; }
+.sp-where { color: var(--ink-1, var(--ink-0)); }
+.sp-pos { margin-left: auto; color: var(--ink-2); }
+.sp-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.sp-form { display: flex; flex-direction: column; gap: 12px; }
+.sp-source { border: 0; margin: 0; padding: 0; min-width: 0; }
+.sp-legend { float: none; width: auto; margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-1, var(--ink-0)); }
+.sp-radius { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sp-check { display: inline-flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
+.sp-num { width: 5.5em; font-family: var(--font-mono); }
+.sp-lists { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.sp-n { font-family: var(--font-mono); font-size: 11px; }
+.sp-timing { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px; }
+.sp-field { display: flex; flex-direction: column; gap: 3px; margin: 0; font-size: 12px; color: var(--ink-2); }
+.sp-start { margin-left: auto; }
+.sp-panel .rp-notice { margin: 10px 0 0; }
+.sp-panel[x-cloak] { display: none; }

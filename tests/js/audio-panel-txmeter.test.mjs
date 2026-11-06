@@ -202,4 +202,65 @@ await ok("forbidden frame (message) surfaces as micError", () => {
   assert.equal(c.micError, "Keine Berechtigung");
 });
 
+await ok("scan audio: follows the scan's slots, survives late streams, lets go on stop", () => {
+  const c = factory();
+  const sent = [];
+  c._sendJSON = (m) => sent.push(m);
+  c.streams = [];
+  c._followScan(["1"]); // scan starts before the streams are known
+  assert.equal(sent.length, 0);
+  c.streams = [
+    { stream_id: "rx.1", direction: "rx", slot: "1" },
+    { stream_id: "rx.2", direction: "rx", slot: "2" },
+    { stream_id: "rx.3", direction: "rx", slot: "3" },
+  ];
+  c.subs["rx.3"] = true; // the operator's own choice
+  c._subscribeScanStreams(); // what _onStreams calls after a refresh
+  assert.deepEqual(sent.pop().stream_ids, ["rx.1"]);
+  c._followScan([]);
+  assert.deepEqual(sent.pop().stream_ids, ["rx.1"]); // only the scan's own stream
+  assert.equal(c.subs["rx.3"], true);
+  assert.equal(c.preset === "custom", false);
+});
+
+await ok("scan audio: a manual toggle or preset takes a stream out of the scan's hands", () => {
+  const c = factory();
+  const sent = [];
+  c._sendJSON = (m) => sent.push(m);
+  c.streams = [
+    { stream_id: "rx.1", direction: "rx", slot: "1" },
+    { stream_id: "rx.2", direction: "rx", slot: "1" },
+  ];
+  c._followScan(["1"]);
+  assert.deepEqual(c._scanSubs, { "rx.1": true, "rx.2": true });
+  // the scan-only streams are not persisted as the operator's choice
+  const saved = [];
+  globalThis.localStorage = { setItem: (k, v) => saved.push(JSON.parse(v)), getItem: () => null };
+  c._saveState();
+  assert.deepEqual(saved.pop().subs, {});
+  c.toggleSub("rx.1"); // operator unsubscribes
+  c.toggleSub("rx.1"); // ... and subscribes again: now theirs
+  assert.equal(c._scanSubs["rx.1"], undefined);
+  sent.length = 0;
+  c._followScan([]);
+  assert.deepEqual(sent.pop().stream_ids, ["rx.2"]); // rx.1 stays
+  c.applyPreset("custom");
+  assert.deepEqual(c._scanSubs, {});
+  delete globalThis.localStorage;
+});
+
+await ok("scan audio: a stream the operator unsubscribed stays off until the scan ends", () => {
+  const c = factory();
+  const sent = [];
+  c._sendJSON = (m) => sent.push(m);
+  c.streams = [{ stream_id: "rx.1", direction: "rx", slot: "1" }];
+  c._followScan(["1"]);
+  c.toggleSub("rx.1"); // operator mutes it
+  assert.equal(c.subs["rx.1"], false);
+  sent.length = 0;
+  c._subscribeScanStreams(); // streams refresh
+  assert.equal(sent.length, 0);
+  assert.equal(c.subs["rx.1"], false);
+});
+
 console.log("\n" + passed + " assertions passed");

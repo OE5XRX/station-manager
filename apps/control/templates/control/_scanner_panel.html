@@ -1,0 +1,89 @@
+{% load i18n %}
+{% comment %}
+Scanner panel — binds to the scannerPanel Alpine component (scanner-panel.js).
+Sibling to #control-panel (own x-data root); it never owns a socket: frames go out
+via the "control:send" window event, the agent's scan_state comes back as the
+"control:scan_state" event. Hidden until an online module advertises carrier
+detection. Values are rendered through helper methods so this template stays free
+of capability names.
+{% endcomment %}
+<section x-data="scannerPanel"
+         x-cloak x-show="visible"
+         data-station-id="{{ station.id }}"
+         data-lists-url="{% url 'repeaters:scanlists_mine' %}"
+         class="cp-module-card sp-panel mt-4"
+         aria-labelledby="sp-title">
+  <header class="cp-module-header">
+    <div class="cp-module-identity">
+      <h2 id="sp-title" class="rp-title">{% trans "Scanner" %}</h2>
+    </div>
+    <a class="sp-manage" href="{% url 'repeaters:scanlists' %}">{% trans "Manage scan lists" %}</a>
+  </header>
+
+  <div class="sp-body">
+    <div class="sp-readout" role="status" aria-live="polite" x-show="running"
+         :class="scan ? 'is-' + scan.state : ''">
+      <span class="sp-state" x-text="stateLabel()"></span>
+      <span class="sp-where" x-text="where()"></span>
+      <span class="sp-pos" x-text="position()"></span>
+    </div>
+
+    <div class="sp-controls" x-show="running" role="group" aria-label="{% trans 'Scan controls' %}">
+      <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="!canSkip" @click="control('skip')">{% trans "Skip" %}</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" x-show="!held" :disabled="!canHold" @click="control('hold')">{% trans "Hold" %}</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" x-show="held" :disabled="!canResume" @click="control('resume')">{% trans "Resume" %}</button>
+      <button type="button" class="btn btn-sm btn-danger" :disabled="!canUse" @click="control('stop')">{% trans "Stop scan" %}</button>
+    </div>
+
+    <form class="sp-form" x-show="!running" @submit.prevent="start()">
+      <fieldset class="sp-source">
+        <legend class="sp-legend">{% trans "What to scan" %}</legend>
+        <div class="sp-radius">
+          <label class="sp-check">
+            <input type="checkbox" x-model="useRadius">
+            <span>{% trans "Repeaters within" %}</span>
+          </label>
+          <input type="text" inputmode="decimal" lang="en" class="form-control form-control-sm sp-num"
+                 x-model="radiusKm" :disabled="!useRadius"
+                 aria-label="{% trans 'Radius in kilometres' %}">
+          <span class="t-muted">km</span>
+        </div>
+        <ul class="sp-lists" x-show="lists.length">
+          <template x-for="l in lists" :key="l.id">
+            <li>
+              <label class="sp-check">
+                <input type="checkbox" :value="String(l.id)"
+                       :checked="selected.indexOf(String(l.id)) >= 0"
+                       @change="toggleList(l.id)">
+                <span x-text="l.name"></span>
+                <span class="t-muted sp-n" x-text="l.count"></span>
+              </label>
+            </li>
+          </template>
+        </ul>
+        <p class="rp-hint sp-nolists" x-show="!lists.length && !listsError">
+          {% trans "You have no scan lists yet." %}
+          <a href="{% url 'repeaters:scanlists' %}">{% trans "Create one" %}</a>
+        </p>
+        <p class="rp-hint is-error" x-show="listsError">{% trans "Your scan lists could not be loaded." %}</p>
+      </fieldset>
+
+      <div class="sp-timing">
+        <label class="sp-field">
+          <span>{% trans "Listen per channel (s)" %}</span>
+          <input type="text" inputmode="decimal" lang="en" class="form-control form-control-sm sp-num" x-model="listenS">
+        </label>
+        <label class="sp-field">
+          <span>{% trans "Wait for a reply (s)" %}</span>
+          <input type="text" inputmode="decimal" lang="en" class="form-control form-control-sm sp-num" x-model="hangS">
+        </label>
+        <button type="submit" class="btn btn-sm btn-primary sp-start" :disabled="!canStart">{% trans "Start scan" %}</button>
+      </div>
+      <p class="rp-hint" x-show="!canUse">{% trans "Take control of the station to start a scan." %}</p>
+    </form>
+
+    <div class="rp-notice" role="status" aria-live="polite"
+         x-show="notice" :class="notice && !notice.ok ? 'is-error' : 'is-ok'"
+         x-text="notice ? notice.text : ''"></div>
+  </div>
+</section>
