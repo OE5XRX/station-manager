@@ -34,8 +34,8 @@
   var SEND_EVENT = "control:send";
   // Frame types a sibling panel may send through the bridge (everything else
   // has its own path: commands via the widgets / store.sendCommand, lock UX here).
-  var BRIDGE_TYPES = { apply_repeater: true };
-  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true };
+  var BRIDGE_TYPES = { apply_repeater: true, scan_start: true, scan_control: true };
+  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true, scan_state: true };
 
   function emitFrame(msg) {
     if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
