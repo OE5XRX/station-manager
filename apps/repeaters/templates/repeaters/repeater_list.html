@@ -23,6 +23,9 @@
     {% else %}
       <a href="{% url 'repeaters:list' %}?show=all" class="btn btn-ghost">{% trans "Show all, incl. inactive" %}</a>
     {% endif %}
+    {% if can.control.use %}
+      <a href="{% url 'repeaters:scanlists' %}" class="btn btn-ghost">{% trans "My scan lists" %}</a>
+    {% endif %}
     {% if can_manage %}
       <a href="{% url 'repeaters:create' %}" class="btn btn-primary">{% trans "Add repeater" %}</a>
     {% endif %}

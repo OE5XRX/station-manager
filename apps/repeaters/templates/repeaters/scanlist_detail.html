@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ scan_list.name }} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'repeaters:scanlists' %}">{% trans "Scan lists" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ scan_list.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <h1 class="page-title">{{ scan_list.name }}</h1>
+    <p class="page-sub">{% trans "Entries are scanned top to bottom. Use the arrows to change the order." %}</p>
+  </div>
+  <div class="page-head-actions">
+    <a href="{% url 'repeaters:scanlist_delete' scan_list.pk %}" class="btn btn-ghost">{% trans "Delete list" %}</a>
+  </div>
+</div>
+
+<section class="panel mb-20">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Entries" %}</div>
+  </div>
+  <div class="panel-body flush">
+  {% if entries %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "Entry" %}</th>
+            <th class="num">{% trans "Receive (MHz)" %}</th>
+            <th class="num">{% trans "Transmit (MHz)" %}</th>
+            <th>{% trans "Tone" %}</th>
+            <th style="width:1%;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in entries %}
+          <tr>
+            {% if e.repeater %}
+            <td data-primary data-label="{% trans 'Entry' %}">
+              <span class="t-mono">{{ e.label|default:e.repeater.callsign }}</span>
+              {% if not e.repeater.active %}<span class="t-label">{% trans "inactive, skipped" %}</span>{% endif %}
+              {% if e.repeater.site_name %}<div class="t-mono-sm t-muted">{{ e.repeater.site_name }}</div>{% endif %}
+            </td>
+            <td class="num t-mono" data-label="{% trans 'Receive (MHz)' %}">{{ e.repeater.output_frequency|stringformat:".4f" }}</td>
+            <td class="num t-mono" data-label="{% trans 'Transmit (MHz)' %}">{{ e.repeater.input_frequency|stringformat:".4f" }}</td>
+            <td class="t-mono-sm" data-label="{% trans 'Tone' %}">{{ e.repeater.input_tone }} / {{ e.repeater.output_tone }}</td>
+            {% else %}
+            <td data-primary data-label="{% trans 'Entry' %}">
+              <span class="t-mono">{{ e.label|default:_("Free frequency") }}</span>
+              <div class="t-mono-sm t-muted">{% trans "simplex" %}</div>
+            </td>
+            <td class="num t-mono" data-label="{% trans 'Receive (MHz)' %}">{{ e.frequency|stringformat:".4f" }}</td>
+            <td class="num t-mono" data-label="{% trans 'Transmit (MHz)' %}">{{ e.frequency|stringformat:".4f" }}</td>
+            <td class="t-mono-sm" data-label="{% trans 'Tone' %}">{{ e.tone }}</td>
+            {% endif %}
+            <td style="white-space:nowrap;">
+              <form method="post" action="{% url 'repeaters:scanlist_entry_move' scan_list.pk e.pk %}" style="display:inline;">
+                {% csrf_token %}
+                <button class="btn btn-sm btn-ghost" name="direction" value="up" aria-label="{% trans 'Move up' %}"{% if forloop.first %} disabled{% endif %}>↑</button>
+                <button class="btn btn-sm btn-ghost" name="direction" value="down" aria-label="{% trans 'Move down' %}"{% if forloop.last %} disabled{% endif %}>↓</button>
+              </form>
+              <form method="post" action="{% url 'repeaters:scanlist_entry_delete' scan_list.pk e.pk %}" style="display:inline;">
+                {% csrf_token %}
+                <button class="btn btn-sm btn-ghost">{% trans "Remove" %}</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="t-muted" style="padding:20px;">{% trans "This list is empty. Add a repeater or a frequency below." %}</p>
+  {% endif %}
+  </div>
+</section>
+
+<section class="panel mb-20">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot"></span>{% trans "Add a repeater" %}</div>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="{% url 'repeaters:scanlist_entry_add' scan_list.pk %}">
+      {% csrf_token %}
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="id_repeater">{% trans "Repeater" %}</label>
+          {{ entry_form.repeater }}
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="id_rep_label">{% trans "Label (optional)" %}</label>
+          <input type="text" name="label" id="id_rep_label" class="form-control" maxlength="64">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">{% trans "Add repeater" %}</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel mb-20">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Add a free frequency" %}</div>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="{% url 'repeaters:scanlist_entry_add' scan_list.pk %}">
+      {% csrf_token %}
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="id_frequency">{% trans "Frequency (MHz)" %}</label>
+          {{ entry_form.frequency }}
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="id_tone">{% trans "Tone" %}</label>
+          {{ entry_form.tone }}
+          <div class="t-label">{{ entry_form.tone.help_text }}</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="id_freq_label">{% trans "Label (optional)" %}</label>
+          <input type="text" name="label" id="id_freq_label" class="form-control" maxlength="64">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">{% trans "Add frequency" %}</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title"><span class="dot"></span>{% trans "Rename list" %}</div>
+  </div>
+  <div class="panel-body">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="form-group">
+        <label class="form-label" for="{{ rename_form.name.id_for_label }}">{{ rename_form.name.label }}</label>
+        {{ rename_form.name }}
+        {% if rename_form.name.errors %}<div class="form-error">{{ rename_form.name.errors|join:", " }}</div>{% endif %}
+      </div>
+      <button type="submit" class="btn btn-ghost">{% trans "Save name" %}</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

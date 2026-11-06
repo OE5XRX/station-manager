@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -81,3 +82,66 @@ class Repeater(models.Model):
     @property
     def is_simplex(self) -> bool:
         return self.input_frequency == self.output_frequency
+
+
+class ScanList(models.Model):
+    """A user's own, ordered scan list; goes with the user to every station."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="scan_lists",
+        verbose_name=_("owner"),
+    )
+    name = models.CharField(_("name"), max_length=64)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("scan list")
+        verbose_name_plural = _("scan lists")
+        ordering = ["name", "pk"]
+
+    def __str__(self):
+        return self.name
+
+
+class ScanListEntry(models.Model):
+    """Either a reference to a repeater or a free (simplex) frequency."""
+
+    scan_list = models.ForeignKey(ScanList, on_delete=models.CASCADE, related_name="entries")
+    position = models.PositiveIntegerField(_("position"), default=0)
+    repeater = models.ForeignKey(
+        Repeater,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="scan_entries",
+        verbose_name=_("repeater"),
+    )
+    frequency = models.DecimalField(
+        _("frequency (MHz)"), max_digits=9, decimal_places=5, null=True, blank=True
+    )
+    tone = models.CharField(_("tone"), max_length=8, default="none")
+    label = models.CharField(_("label"), max_length=64, blank=True)
+
+    class Meta:
+        verbose_name = _("scan list entry")
+        verbose_name_plural = _("scan list entries")
+        ordering = ["position", "pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(repeater__isnull=False, frequency__isnull=True)
+                    | models.Q(repeater__isnull=True, frequency__isnull=False)
+                ),
+                name="scanlistentry_repeater_xor_frequency",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        if (self.repeater_id is None) == (self.frequency is None):
+            raise ValidationError(_("Set either a repeater or a frequency, not both or neither."))
+
+    def __str__(self):
+        return self.label or (str(self.repeater) if self.repeater_id else f"{self.frequency}")

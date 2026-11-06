@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Delete scan list" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'repeaters:scanlists' %}">{% trans "Scan lists" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{{ scan_list.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <h1 class="page-title">{% trans "Delete scan list" %}</h1>
+    <p class="page-sub">
+      {% blocktrans with name=scan_list.name %}"{{ name }}" and all its entries are removed. A scan that is running with this list keeps going with the remaining sources.{% endblocktrans %}
+    </p>
+  </div>
+</div>
+<form method="post">
+  {% csrf_token %}
+  <div class="page-head-actions">
+    <button type="submit" class="btn btn-danger">{% trans "Delete list" %}</button>
+    <a href="{% url 'repeaters:scanlist_detail' scan_list.pk %}" class="btn btn-ghost">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}
