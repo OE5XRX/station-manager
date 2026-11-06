@@ -202,4 +202,25 @@ await ok("forbidden frame (message) surfaces as micError", () => {
   assert.equal(c.micError, "Keine Berechtigung");
 });
 
+await ok("scan audio: follows the scan's slots, survives late streams, lets go on stop", () => {
+  const c = factory();
+  const sent = [];
+  c._sendJSON = (m) => sent.push(m);
+  c.streams = [];
+  c._followScan(["1"]); // scan starts before the streams are known
+  assert.equal(sent.length, 0);
+  c.streams = [
+    { stream_id: "rx.1", direction: "rx", slot: "1" },
+    { stream_id: "rx.2", direction: "rx", slot: "2" },
+    { stream_id: "rx.3", direction: "rx", slot: "3" },
+  ];
+  c.subs["rx.3"] = true; // the operator's own choice
+  c._subscribeScanStreams(); // what _onStreams calls after a refresh
+  assert.deepEqual(sent.pop().stream_ids, ["rx.1"]);
+  c._followScan([]);
+  assert.deepEqual(sent.pop().stream_ids, ["rx.1"]); // only the scan's own stream
+  assert.equal(c.subs["rx.3"], true);
+  assert.equal(c.preset === "custom", false);
+});
+
 console.log("\n" + passed + " assertions passed");

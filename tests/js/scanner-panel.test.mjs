@@ -132,8 +132,6 @@ ok("start needs the lock", () => {
 // -- state rendering -----------------------------------------------------------------
 ok("scan_state drives the state line", () => {
   const c = panel();
-  window.dispatchEvent(new CustomEvent("control:scan_state", { detail: { type: "scan_state", state: "scanning", index: 1, ref: "r:7", slot: "1", module: "fm0" } }));
-  // listener only attached via init(); call handler directly
   c._onScanState({ state: "scanning", index: 1, ref: "r:7", slot: "1", module: "fm0", label: "OE5XLL", rx_frequency: 145.6, count: 6 });
   assert.equal(c.running, true);
   assert.equal(c.stateLabel(), "Scanning");
@@ -226,6 +224,54 @@ ok("scan audio hook lists the carrier slots", () => {
   cap.stop();
   assert.equal(cap.seen.length, 1); // once per scan, not per transition
   assert.deepEqual(cap.seen[0].slots, ["1"]);
+});
+
+ok("scan_state settles the in-flight request (no stuck buttons, no timeout notice)", () => {
+  const c = panel();
+  c.selected = ["3"];
+  c.start();
+  assert.equal(c.pending, true);
+  c._onScanState({ state: "scanning", index: 0, ref: "r:1", slot: "1", module: "fm0" });
+  assert.equal(c.pending, false);
+  assert.deepEqual(c._requests, {});
+  assert.equal(c.notice, null);
+  c.control("stop");
+  assert.equal(c.pending, true);
+  c._onScanState({ state: "stopped", reason: "operator" });
+  assert.equal(c.pending, false);
+});
+
+ok("a lost reply times out with a notice and unblocks", () => {
+  const c = panel();
+  c.selected = ["3"];
+  const cap = capture("control:send");
+  c.start();
+  cap.stop();
+  c._onReply({ type: "error", request_id: cap.seen[0].request_id, error: { code: "timeout" } });
+  assert.equal(c.pending, false);
+  assert.match(c.notice.text, /did not answer/);
+});
+
+ok("init seeds slots from the inventory and follows control:inventory", () => {
+  const c = scannerPanel();
+  c.$el = { getAttribute: (k) => (k === "data-station-id" ? "42" : null) };
+  const realGet = document.getElementById;
+  document.getElementById = () => ({ textContent: JSON.stringify([INV[1]]) });
+  c.init();
+  document.getElementById = realGet;
+  assert.equal(c.visible, false);
+  window.dispatchEvent(new CustomEvent("control:inventory", { detail: { slots: INV } }));
+  assert.equal(c.visible, true);
+  c.destroy();
+});
+
+ok("scan stop tells the audio panel to let go", () => {
+  const c = panel();
+  c._onScanState({ state: "scanning", index: 0, ref: "r:1", slot: "1", module: "fm0" });
+  const cap = capture("scan:audio");
+  c._onScanState({ state: "stopped", reason: "operator" });
+  cap.stop();
+  assert.deepEqual(cap.seen[0].slots, []);
 });
 
 console.log(`${passed} passed`);

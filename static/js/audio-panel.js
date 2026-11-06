@@ -87,6 +87,8 @@
       _closed: false,
       _stationId: null,
       _listeners: [],
+      _scanSlots: null,         // slots of the running scan (scanner panel) | null
+      _scanSubs: {},            // {[stream_id]: true} subscribed on the scan's behalf
 
       // Stream index built from "streams" messages.
       _index: { byId: {}, byRef: {}, list: [] },
@@ -400,6 +402,7 @@
         if (wantIds.length > 0) {
           this._sendJSON({ v: 1, type: "subscribe", stream_ids: wantIds });
         }
+        this._subscribeScanStreams();
       },
 
       _onStreamState: function (msg) {
@@ -840,16 +843,42 @@
           self._teardown();
         };
         this._addListener(window, "beforeunload", onBeforeUnload);
-        // Scanner panel: a scan listens on several slots at once, so subscribe
-        // the RX stream of every slot it names (detail: {slots: ["1", ...]}).
+        // Scanner panel: a scan listens on several slots at once, so follow it
+        // with the RX streams of the slots it names (detail: {slots: ["1", ...]});
+        // an empty list (scan over) takes them down again.
         this._addListener(window, "scan:audio", function (e) {
-          self._subscribeSlots((e.detail && e.detail.slots) || []);
+          self._followScan((e.detail && e.detail.slots) || []);
         });
       },
 
-      _subscribeSlots: function (slots) {
+      // Subscribe the scan's RX streams and remember which ones are ours, so the
+      // end of the scan only drops those (never the operator's own choices).
+      // Not persisted: a scan must not rewrite the saved preset.
+      _followScan: function (slots) {
+        if (!slots.length) {
+          this._scanSlots = null;
+          var drop = [];
+          for (var id in this._scanSubs) {
+            if (!Object.prototype.hasOwnProperty.call(this._scanSubs, id)) continue;
+            if (this.subs[id]) {
+              this.subs[id] = false;
+              drop.push(id);
+              this._teardownStreamCtx(id);
+            }
+          }
+          this._scanSubs = {};
+          if (drop.length > 0) this._sendJSON({ v: 1, type: "unsubscribe", stream_ids: drop });
+          return;
+        }
+        this._scanSlots = slots;
+        this._subscribeScanStreams();
+      },
+
+      // Also re-run on every streams refresh: the scan may start before they load.
+      _subscribeScanStreams: function () {
+        if (!this._scanSlots) return;
         var want = {};
-        for (var i = 0; i < slots.length; i++) want[String(slots[i])] = true;
+        for (var i = 0; i < this._scanSlots.length; i++) want[String(this._scanSlots[i])] = true;
         var toSub = [];
         for (var j = 0; j < this.streams.length; j++) {
           var st = this.streams[j];
@@ -857,13 +886,10 @@
           // Streams that do not name a slot cannot be filtered: take them.
           if (st.slot !== undefined && st.slot !== null && !want[String(st.slot)]) continue;
           this.subs[st.stream_id] = true;
+          this._scanSubs[st.stream_id] = true;
           toSub.push(st.stream_id);
         }
-        if (toSub.length > 0) {
-          this._sendJSON({ v: 1, type: "subscribe", stream_ids: toSub });
-          this.preset = "custom";
-          this._saveState();
-        }
+        if (toSub.length > 0) this._sendJSON({ v: 1, type: "subscribe", stream_ids: toSub });
       },
 
       _addListener: function (target, type, handler) {

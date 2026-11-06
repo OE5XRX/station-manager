@@ -357,6 +357,8 @@
           var wasRunning = this.scan !== null;
           this.scan = null;
           this._audioAnnounced = false;
+          this._settle();
+          window.dispatchEvent(new CustomEvent("scan:audio", { detail: { slots: [] } }));
           // The operator's own stop needs no explanation.
           if (wasRunning && msg.reason !== "operator") {
             this._notify({ ok: false, text: reasonText(msg.reason) });
@@ -364,11 +366,20 @@
           return;
         }
         this.scan = msg;
+        this._settle();
         // One subscribe per scan: the carrier slots' RX audio, so a hit is audible.
         if (!this._audioAnnounced) {
           this._audioAnnounced = true;
           window.dispatchEvent(new CustomEvent("scan:audio", { detail: { slots: carrierSlots(this.slots) } }));
         }
+      },
+
+      // The server only relays scan_start/scan_control, so the agent's scan_state
+      // is the success reply: it ends every request still in flight.
+      _settle: function () {
+        this._requests = {};
+        this.pending = false;
+        clearTimeout(this._pendingTimer);
       },
 
       _onReply: function (msg) {
