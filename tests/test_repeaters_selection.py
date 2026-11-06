@@ -148,3 +148,35 @@ def test_haversine_and_bearing_known_pairs():
     assert bearing_label(48, 14, 47, 14) == "S"
     assert bearing_label(48, 14, 48, 13) == "W"
     assert bearing_label(48, 14, 48.5, 14.6) == "NE"
+
+
+def test_range_boundaries_inclusive(station):
+    _module(station, "1", VHF)
+    _rep("LO", "134.000", "134.000")
+    _rep("HI", "174.000", "174.000")
+    _rep("OUT", "174.00001", "145.000")
+    assert [r.repeater.callsign for r in repeaters_for_station(station)] == ["HI", "LO"]
+
+
+def test_malformed_descriptors_ignored(station):
+    StationModule.objects.create(
+        station=station, slot="1", module_id="bad", online=True, capability_descriptor="oops"
+    )
+    m = _module(station, "2", VHF, module_id="fm")
+    m.capability_descriptor[0]["ranges"] = [{"name": "vhf"}, {"name": "x", "min": "a", "max": 1}]
+    m.save()
+    assert station_bands(station) == {}
+
+
+def test_query_count_independent_of_repeater_count(station, django_assert_max_num_queries):
+    _module(station, "1", VHF)
+    for i in range(20):
+        _rep(f"R{i}", "145.600", "145.000")
+    with django_assert_max_num_queries(4):
+        assert len(repeaters_for_station(station)) == 20
+
+
+def test_bearing_wraps_near_north():
+    assert bearing_label(48, 14, 49, 13.99) == "N"
+    assert bearing_label(48, 14, 48.5, 14.6) == "NE"
+    assert bearing_label(48, 14, 48.5, 13.4) == "NW"

@@ -69,14 +69,31 @@ def station_bands(station) -> dict[str, list[ModuleRef]]:
     return bands
 
 
-def band_of(freq: Decimal, bands: dict[str, list[ModuleRef]], station) -> str | None:
-    """Band name containing ``freq`` among the station's ``bands``, else None."""
-    freq = Decimal(str(freq))
+def _band_ranges(station, bands) -> dict[str, list[tuple[Decimal, Decimal]]]:
+    """``{band: [(min, max), ...]}`` for ``bands`` (one pass over the modules)."""
+    out: dict[str, list[tuple[Decimal, Decimal]]] = {}
     for module in _online_modules(station):
         for name, lo, hi in _module_ranges(module):
-            if name in bands and lo <= freq <= hi:
-                return name
+            if name in bands:
+                out.setdefault(name, []).append((lo, hi))
+    return out
+
+
+def _match_band(freq: Decimal, ranges: dict[str, list[tuple[Decimal, Decimal]]]) -> str | None:
+    freq = Decimal(str(freq))
+    for name, spans in ranges.items():
+        if any(lo <= freq <= hi for lo, hi in spans):
+            return name
     return None
+
+
+def band_of(freq: Decimal, bands: dict[str, list[ModuleRef]], station) -> str | None:
+    """Band name containing ``freq`` among the station's ``bands``, else None.
+
+    Only ``rx_frequency`` ranges are consulted: the FM module advertises the same
+    named band for ``tx_frequency``, so a frequency is usable for both directions.
+    """
+    return _match_band(freq, _band_ranges(station, bands))
 
 
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
@@ -102,6 +119,7 @@ def repeaters_for_station(
     bands = station_bands(station)
     if not bands:
         return []
+    ranges = _band_ranges(station, bands)
     qs = Repeater.objects.visible()
     if q:
         qs = qs.filter(Q(callsign__icontains=q) | Q(site_name__icontains=q))
@@ -109,8 +127,8 @@ def repeaters_for_station(
     has_coords = station.latitude is not None and station.longitude is not None
     rows: list[RepeaterRow] = []
     for rep in qs:
-        rx_band = band_of(rep.output_frequency, bands, station)
-        tx_band = band_of(rep.input_frequency, bands, station)
+        rx_band = _match_band(rep.output_frequency, ranges)
+        tx_band = _match_band(rep.input_frequency, ranges)
         if rx_band is None or tx_band is None:
             continue
         distance = bearing = None
