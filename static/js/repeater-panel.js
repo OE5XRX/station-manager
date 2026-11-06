@@ -82,6 +82,15 @@
     return mods[0].slot;
   }
 
+  // Module id serving ``band`` on ``slot`` (a slot may host several modules).
+  function moduleOf(bands, band, slot) {
+    var mods = (bands && bands[band]) || [];
+    for (var i = 0; i < mods.length; i++) {
+      if (mods[i].slot === slot) return mods[i].module;
+    }
+    return null;
+  }
+
   function near(a, b) {
     var x = Number(a);
     var y = Number(b);
@@ -205,6 +214,7 @@
     saveBandmap: saveBandmap,
     multiBands: multiBands,
     resolveSlot: resolveSlot,
+    moduleOf: moduleOf,
     tunedSlot: tunedSlot,
     formatMHz: formatMHz,
     formatShift: formatShift,
@@ -427,7 +437,13 @@
         }, PENDING_GIVEUP_MS);
         window.dispatchEvent(
           new CustomEvent("control:send", {
-            detail: { type: "apply_repeater", request_id: rid, repeater_id: row.id, slot: slot },
+            detail: {
+              type: "apply_repeater",
+              request_id: rid,
+              repeater_id: row.id,
+              slot: slot,
+              module: moduleOf(this.bands, row.rx_band, slot),
+            },
           }),
         );
         return true;

@@ -542,37 +542,48 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         audio_gate.clear_ptt(station)
 
 
-def _resolve_repeater(station, repeater_id, slot):
-    """Resolve a repeater + slot into the ``apply_preset`` plan (spec §5.3).
+def _resolve_repeater(station, repeater_id, slot, module_id=None):
+    """Resolve a repeater + slot (+ optional module) into the ``apply_preset`` plan (§5.3).
 
-    ``not_applicable``: malformed ids, invisible repeater, no usable online module on that
-    slot, or a frequency outside that module's bands. ``not_supported``: cross-band (needs
-    two modules, not yet implemented)."""
+    A slot may host several modules: ``module_id`` (from the panel's band map) pins one,
+    otherwise the first usable module of the slot whose band covers both frequencies wins.
+    ``not_applicable``: malformed ids, invisible repeater, no usable online module, or a
+    frequency outside every candidate's bands. ``not_supported``: cross-band (needs two
+    modules, not yet implemented)."""
     from apps.repeaters import selection
     from apps.repeaters.models import Repeater
 
     if type(repeater_id) is not int or not isinstance(slot, str):
         return "not_applicable", None
+    if module_id is not None and not isinstance(module_id, str):
+        return "not_applicable", None
     repeater = Repeater.objects.visible().filter(pk=repeater_id).first()
     if repeater is None:
         return "not_applicable", None
-    module = next(
-        (m for m in selection.usable_modules(station) if m.slot == slot),
-        None,
-    )
+    candidates = [
+        m
+        for m in selection.usable_modules(station)
+        if m.slot == slot and (module_id is None or m.module_id == module_id)
+    ]
+    if not candidates:
+        return "not_applicable", None
+    module = None
+    cross_band = False
+    for candidate in candidates:
+        rx_band = selection.module_band_of(candidate, repeater.output_frequency)
+        tx_band = selection.module_band_of(candidate, repeater.input_frequency)
+        if rx_band is not None and rx_band == tx_band:
+            module = candidate
+            break
+        cross_band = cross_band or (rx_band is not None and tx_band is not None)
     if module is None:
-        return "not_applicable", None
-    rx_band = selection.module_band_of(module, repeater.output_frequency)
-    tx_band = selection.module_band_of(module, repeater.input_frequency)
-    if rx_band is not None and tx_band is not None and rx_band != tx_band:
-        return "not_supported", None
-    if rx_band is None or tx_band is None:
-        bands = selection.station_bands(station)
-        station_rx = selection.band_of(repeater.output_frequency, bands, station)
-        station_tx = selection.band_of(repeater.input_frequency, bands, station)
-        if station_rx is not None and station_tx is not None and station_rx != station_tx:
-            return "not_supported", None
-        return "not_applicable", None
+        if not cross_band:
+            bands = selection.station_bands(station)
+            station_rx = selection.band_of(repeater.output_frequency, bands, station)
+            station_tx = selection.band_of(repeater.input_frequency, bands, station)
+            cross_band = station_rx is not None and station_tx is not None
+            cross_band = cross_band and station_rx != station_tx
+        return ("not_supported" if cross_band else "not_applicable"), None
     values = {
         "tx_frequency": float(repeater.input_frequency),
         "rx_frequency": float(repeater.output_frequency),
@@ -814,7 +825,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return
         try:
             resolved = await self._resolve_repeater(
-                station, msg.get("repeater_id"), msg.get("slot")
+                station, msg.get("repeater_id"), msg.get("slot"), msg.get("module")
             )
         except Exception:
             logger.exception("control: resolving apply_repeater failed")
@@ -1257,9 +1268,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def _resolve_repeater(self, station, repeater_id, slot):
+    def _resolve_repeater(self, station, repeater_id, slot, module_id):
         """``(error_code, None)`` or ``(None, plan)`` for an ``apply_repeater`` frame."""
-        return _resolve_repeater(station, repeater_id, slot)
+        return _resolve_repeater(station, repeater_id, slot, module_id)
 
     @database_sync_to_async
     def _may_write(self, capability, module_type):

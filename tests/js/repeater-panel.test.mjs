@@ -190,6 +190,7 @@ ok("chooseSlot stores the band choice and redirects clicks", () => {
   assert.equal(frame.type, "apply_repeater");
   assert.equal(frame.repeater_id, 7);
   assert.equal(frame.slot, "2");
+  assert.equal(frame.module, "fm1");
   assert.equal(typeof frame.request_id, "string");
 });
 

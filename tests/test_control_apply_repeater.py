@@ -76,8 +76,11 @@ def _rep(callsign="OE5XLL", out="145.600", inp="145.000", **kw):
     )
 
 
-def _frame(rep_id, slot="1", rid="r1"):
-    return {"type": "apply_repeater", "request_id": rid, "repeater_id": rep_id, "slot": slot}
+def _frame(rep_id, slot="1", rid="r1", module=None):
+    frame = {"type": "apply_repeater", "request_id": rid, "repeater_id": rep_id, "slot": slot}
+    if module is not None:
+        frame["module"] = module
+    return frame
 
 
 def _run(station, user, frame, acquire=True):
@@ -304,3 +307,30 @@ def test_apply_uses_preset_timeout_not_command_timeout(control_agent_auth, setti
         await agent.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_apply_picks_matching_module_when_slot_hosts_several(control_agent_auth):
+    """Slot "1" hosts a UHF module first and a VHF one second: the VHF one is used."""
+    station, user = _setup("ar-multi", ranges=(UHF,))
+    StationModule.objects.create(
+        station=station,
+        slot="1",
+        module_id="fm9",
+        type="fm_transceiver",
+        online=True,
+        capability_descriptor=_desc(VHF),
+    )
+    rep = _rep()
+    kind, frame = _run(station, user, _frame(rep.pk))
+    assert kind == "relayed" and frame["module"] == "fm9"
+    StationModule.objects.filter(station=station).update(online=True)
+    kind, frame = _run(station, user, _frame(rep.pk, module="fm9"))
+    assert kind == "relayed" and frame["module"] == "fm9"
+    StationModule.objects.filter(station=station).update(online=True)
+    # Pinned to the UHF module: that module cannot work a VHF repeater.
+    kind, frame = _run(station, user, _frame(rep.pk, module="fm0"))
+    assert kind == "error" and _code(frame) == "not_applicable"
+    StationModule.objects.filter(station=station).update(online=True)
+    kind, frame = _run(station, user, _frame(rep.pk, module=5))
+    assert kind == "error" and _code(frame) == "not_applicable"
