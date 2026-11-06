@@ -840,6 +840,30 @@
           self._teardown();
         };
         this._addListener(window, "beforeunload", onBeforeUnload);
+        // Scanner panel: a scan listens on several slots at once, so subscribe
+        // the RX stream of every slot it names (detail: {slots: ["1", ...]}).
+        this._addListener(window, "scan:audio", function (e) {
+          self._subscribeSlots((e.detail && e.detail.slots) || []);
+        });
+      },
+
+      _subscribeSlots: function (slots) {
+        var want = {};
+        for (var i = 0; i < slots.length; i++) want[String(slots[i])] = true;
+        var toSub = [];
+        for (var j = 0; j < this.streams.length; j++) {
+          var st = this.streams[j];
+          if (!A.isRxSource(st) || this.subs[st.stream_id]) continue;
+          // Streams that do not name a slot cannot be filtered: take them.
+          if (st.slot !== undefined && st.slot !== null && !want[String(st.slot)]) continue;
+          this.subs[st.stream_id] = true;
+          toSub.push(st.stream_id);
+        }
+        if (toSub.length > 0) {
+          this._sendJSON({ v: 1, type: "subscribe", stream_ids: toSub });
+          this.preset = "custom";
+          this._saveState();
+        }
       },
 
       _addListener: function (target, type, handler) {
