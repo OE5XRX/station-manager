@@ -249,4 +249,18 @@ await ok("scan audio: a manual toggle or preset takes a stream out of the scan's
   delete globalThis.localStorage;
 });
 
+await ok("scan audio: a stream the operator unsubscribed stays off until the scan ends", () => {
+  const c = factory();
+  const sent = [];
+  c._sendJSON = (m) => sent.push(m);
+  c.streams = [{ stream_id: "rx.1", direction: "rx", slot: "1" }];
+  c._followScan(["1"]);
+  c.toggleSub("rx.1"); // operator mutes it
+  assert.equal(c.subs["rx.1"], false);
+  sent.length = 0;
+  c._subscribeScanStreams(); // streams refresh
+  assert.equal(sent.length, 0);
+  assert.equal(c.subs["rx.1"], false);
+});
+
 console.log("\n" + passed + " assertions passed");

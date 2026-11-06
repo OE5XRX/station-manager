@@ -88,6 +88,7 @@
       _stationId: null,
       _listeners: [],
       _scanSlots: null,         // slots of the running scan (scanner panel) | null
+      _scanOptOut: {},          // streams the operator toggled by hand during the scan
       _scanSubs: {},            // {[stream_id]: true} subscribed on the scan's behalf
 
       // Stream index built from "streams" messages.
@@ -693,6 +694,7 @@
 
       toggleSub: function (streamId) {
         delete this._scanSubs[streamId]; // an explicit choice outlives the scan
+        if (this._scanSlots) this._scanOptOut[streamId] = true; // ... and the scan must not undo it
         if (this.subs[streamId]) {
           this.subs[streamId] = false;
           this._sendJSON({ v: 1, type: "unsubscribe", stream_ids: [streamId] });
@@ -866,6 +868,7 @@
       _followScan: function (slots) {
         if (!slots.length) {
           this._scanSlots = null;
+          this._scanOptOut = {};
           var drop = [];
           for (var id in this._scanSubs) {
             if (!Object.prototype.hasOwnProperty.call(this._scanSubs, id)) continue;
@@ -891,7 +894,7 @@
         var toSub = [];
         for (var j = 0; j < this.streams.length; j++) {
           var st = this.streams[j];
-          if (!A.isRxSource(st) || this.subs[st.stream_id]) continue;
+          if (!A.isRxSource(st) || this.subs[st.stream_id] || this._scanOptOut[st.stream_id]) continue;
           // Streams that do not name a slot cannot be filtered: take them.
           if (st.slot !== undefined && st.slot !== null && !want[String(st.slot)]) continue;
           this.subs[st.stream_id] = true;
