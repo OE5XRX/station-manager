@@ -157,3 +157,12 @@ def test_unknown_station_404(client, viewer):
     client.force_login(viewer)
     r = client.get(reverse("control:station_repeaters", args=[999999]))
     assert r.status_code == 404
+
+
+def test_panel_includes_repeater_panel(client, viewer):
+    station = Station.objects.create(name="s-panel")
+    client.force_login(viewer)
+    html = client.get(reverse("control:station_control", args=[station.pk])).content.decode()
+    assert 'x-data="repeaterPanel"' in html
+    assert reverse("control:station_repeaters", args=[station.pk]) in html
+    assert "js/repeater-panel.js" in html

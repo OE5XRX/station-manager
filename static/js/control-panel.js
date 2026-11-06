@@ -29,6 +29,17 @@
   // next poll, so it never shows a pre-flash state after the strip disappears.
   var FW_STATUS_REFRESH = "fw-status-refresh";
 
+  // Sibling panels (repeater panel, …) have no socket of their own: they send via
+  // the window event "control:send" and listen to the frames re-emitted below.
+  var SEND_EVENT = "control:send";
+  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true };
+
+  function emitFrame(msg) {
+    if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+    if (typeof CustomEvent !== "function") return;
+    window.dispatchEvent(new CustomEvent("control:" + msg.type, { detail: msg }));
+  }
+
   function notifyFwSettled() {
     if (typeof document === "undefined" || !document.body) return;
     if (typeof CustomEvent !== "function") return;
@@ -313,6 +324,7 @@
       // Message router
       // ---------------------------------------------------------------------
       _route: function (msg) {
+        if (msg && EMIT_TYPES[msg.type]) emitFrame(msg);
         switch (msg.type) {
           case "inventory":
             this._ingestInventory(msg.slots || []);
@@ -916,6 +928,24 @@
         this._addListener(window, "blur", onBlur);
         this._addListener(document, "visibilitychange", onVisibility);
         this._addListener(window, "beforeunload", onBeforeUnload);
+        this._addListener(window, SEND_EVENT, function (e) {
+          self._onSendEvent(e);
+        });
+      },
+
+      // Forward a sibling panel's frame to the socket. A frame that cannot be sent
+      // is answered locally so the sender never waits on a dead socket.
+      _onSendEvent: function (e) {
+        var frame = e && e.detail;
+        if (!frame || typeof frame !== "object" || typeof frame.type !== "string") return;
+        if (this._send(frame)) return;
+        if (frame.request_id !== undefined) {
+          emitFrame({
+            type: "error",
+            request_id: frame.request_id,
+            error: { code: "not_connected", msg: "" },
+          });
+        }
       },
 
       _addListener: function (target, type, handler) {
