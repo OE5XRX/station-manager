@@ -181,3 +181,25 @@ def test_form_rejects_bad_frequency():
     form = RepeaterForm(data=_payload(output_frequency="-1"))
     assert not form.is_valid()
     assert "output_frequency" in form.errors
+
+
+def test_admin_cannot_bulk_delete_oevsv_rows(client, admin_user):
+    oevsv = _rep("OEVSV1")
+    manual = _rep("MAN9", source="manual")
+    _login(client, admin_user)
+    url = reverse("admin:repeaters_repeater_changelist")
+    resp = client.post(
+        url,
+        {"action": "delete_selected", "_selected_action": [oevsv.pk, manual.pk], "post": "yes"},
+    )
+    assert resp.status_code in (200, 302)
+    assert Repeater.objects.filter(pk=oevsv.pk).exists()
+    assert Repeater.objects.filter(pk=manual.pk).exists()
+
+
+def test_admin_oevsv_delete_page_forbidden(client, admin_user):
+    oevsv = _rep("OEVSV2")
+    resp = _login(client, admin_user).get(
+        reverse("admin:repeaters_repeater_delete", args=[oevsv.pk])
+    )
+    assert resp.status_code == 403
