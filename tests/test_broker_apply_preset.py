@@ -128,3 +128,90 @@ def test_public_apply_preset_returns_per_cap_dict():
         assert out["tx_frequency"]["ok"] is True
     finally:
         fw.stop()
+
+
+def test_failure_frame_shape():
+    fw, b, col = _setup()
+    try:
+        asyncio.run(b.handle(_frame({"rx_frequency": 999.0})))
+        res = col.sent[0]
+        assert res["ok"] is False
+        assert res["error"]["code"] == "preset_failed"
+        assert res["value"]["rx_frequency"]["ok"] is False
+    finally:
+        fw.stop()
+
+
+def test_unknown_key_rejected():
+    fw, b, col = _setup()
+    try:
+        asyncio.run(b.handle(_frame({"tx_frequency": 145.0, "ptt": True})))
+        assert col.sent[0]["ok"] is False
+        assert col.sent[0]["error"]["code"] == "validation_failed"
+        assert not any(b" set " in ln for ln in fw.received)
+    finally:
+        fw.stop()
+
+
+def test_malformed_and_unknown_slot():
+    fw, b, col = _setup()
+    try:
+        asyncio.run(b.handle({**_frame(FULL), "slot": "x"}))
+        assert col.sent[0]["error"]["code"] == "validation_failed"
+        out = asyncio.run(b.apply_preset(9, "fm", {"tx_frequency": 145.0}))
+        assert out["tx_frequency"]["error"]["code"] == "unknown_slot"
+    finally:
+        fw.stop()
+
+
+def test_virtual_module_not_applied():
+    class VM:
+        slot = 1000
+        module_id = "router"
+
+    fw, b, _ = _setup()
+    try:
+        b._virtual[(1000, "router")] = VM()
+        b._descriptors[(1000, "router")] = {"capabilities": []}
+        out = asyncio.run(b.apply_preset(1000, "router", {"tx_frequency": 145.0}))
+        assert out["tx_frequency"] == {
+            "ok": False,
+            "error": {"code": "wrong_op", "msg": "virtual module"},
+        }
+    finally:
+        fw.stop()
+
+
+def test_execute_exception_isolated():
+    fw, b, _ = _setup()
+    try:
+        calls = []
+
+        async def boom(slot, module, op, cap, token, **kw):
+            calls.append(cap)
+            raise RuntimeError("x")
+
+        b._execute = boom
+        out = asyncio.run(b.apply_preset(1, "fm", {"tx_frequency": 145.0, "rx_frequency": 145.6}))
+        assert calls == ["tx_frequency", "rx_frequency"]
+        assert all(not r["ok"] for r in out.values())
+    finally:
+        fw.stop()
+
+
+def test_timeout_bails_out_remaining_caps():
+    fw, b, _ = _setup()
+    try:
+        calls = []
+
+        async def slow(slot, module, op, cap, token, **kw):
+            calls.append(cap)
+            return {"ok": False, "error": "timeout"}
+
+        b._execute = slow
+        out = asyncio.run(b.apply_preset(1, "fm", FULL))
+        assert calls == ["tx_frequency"]
+        assert set(out) == set(FULL)
+        assert all(r["error"]["code"] == "timeout" for r in out.values())
+    finally:
+        fw.stop()

@@ -272,9 +272,24 @@ class Broker:
                 for name in self._PRESET_ORDER
                 if name in values
             }
+        if (slot, module) in self._virtual:
+            # Virtual modules (audio-router) have their own command handler; _execute would
+            # only snapshot their state and report a false success without setting anything.
+            return {
+                name: {"ok": False, "error": {"code": proto.WRONG_OP, "msg": "virtual module"}}
+                for name in self._PRESET_ORDER
+                if name in values
+            }
         caps = desc.index_capabilities(descriptor)
+        # Bail-out: a whole-device failure (timeout / slot paused / slot gone) would repeat for
+        # every remaining cap (up to 5 x slot_command_timeout while the control loop is
+        # blocked), so the remaining caps inherit that error instead of being attempted.
+        abort: dict | None = None
         for name in self._PRESET_ORDER:
             if name not in values:
+                continue
+            if abort is not None:
+                results[name] = {"ok": False, "error": dict(abort)}
                 continue
             value = values[name]
             cap = caps.get(name)
@@ -293,10 +308,10 @@ class Broker:
             if res.get("ok"):
                 results[name] = {"ok": True, "value": res.get("value")}
             else:
-                results[name] = {
-                    "ok": False,
-                    "error": {"code": res.get("error", proto.TIMEOUT), "msg": ""},
-                }
+                code = res.get("error", proto.TIMEOUT)
+                results[name] = {"ok": False, "error": {"code": code, "msg": ""}}
+                if code in (proto.TIMEOUT, "updating", proto.UNKNOWN_SLOT):
+                    abort = results[name]["error"]
         return results
 
     async def handle_apply_preset(self, msg: dict) -> None:
@@ -314,6 +329,7 @@ class Broker:
             not _valid_addr(slot, module)
             or not isinstance(values, dict)
             or not any(k in values for k in self._PRESET_ORDER)
+            or any(k not in self._PRESET_ORDER for k in values)
         ):
             await self._send(
                 proto.build_result(
@@ -328,7 +344,7 @@ class Broker:
         all_ok = all(r["ok"] for r in results.values())
         # Per-cap outcome only (no echoed values); the state frame carries the values.
         value = {n: {k: v for k, v in r.items() if k != "value"} for n, r in results.items()}
-        reply = proto.build_result(request_id, all_ok, value=value)
+        reply = proto.build_result(request_id, all_ok, value=value, error=("preset_failed", ""))
         if not all_ok:
             # build_result drops `value` on failure; the per-cap detail is the point here.
             reply["value"] = value
