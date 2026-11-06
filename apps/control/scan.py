@@ -277,14 +277,19 @@ def _flush_pending():
 
 def _list_changed(list_id):
     """Coalesce: a cascade delete fires one signal per entry, but one push per commit
-    suffices (later on_commit callbacks find the set already flushed)."""
+    suffices. The flush is registered once per transaction — while it is still queued
+    in ``run_on_commit`` ids join the pending set; otherwise (new transaction, or the
+    previous one rolled back and dropped its callback) the set starts fresh, so ids of
+    a rolled-back edit are never pushed by a later, unrelated commit."""
     if list_id is None:
         return
-    ids = getattr(_pending, "ids", None)
-    if ids is None:
-        ids = _pending.ids = set()
-    ids.add(list_id)
-    transaction.on_commit(_flush_pending)
+    conn = transaction.get_connection()
+    queued = any(func is _flush_pending for _sids, func, _robust in conn.run_on_commit)
+    if not queued:
+        _pending.ids = set()
+    _pending.ids.add(list_id)
+    if not queued:
+        transaction.on_commit(_flush_pending)
 
 
 def _connect_signals():

@@ -593,3 +593,48 @@ def test_edit_of_unrelated_list_pushes_nothing(monkeypatch):
     assert sent == []
     scan.push_scan_updates({used.pk})
     assert [f["type"] for f in sent] == ["scan_update"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_connect_drops_stale_active_scan(control_agent_auth):
+    # Server restart / superseded socket: a row nobody ends would block the idle sweep.
+    station, user = _setup("sc-stale-row")
+    ActiveScan.objects.create(station=station, user=user, scan_id="old", listen_s=2, hang_s=5)
+
+    async def scenario():
+        agent = _agent_comm(station.id)
+        assert (await agent.connect())[0] is True
+        left = await database_sync_to_async(ActiveScan.objects.count)()
+        await agent.disconnect()
+        return left
+
+    assert asyncio.run(scenario()) == 0
+    assert StationAuditLog.objects.filter(
+        station=station, message="scan stopped (agent reconnect)"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rolled_back_list_edit_is_not_pushed_later(monkeypatch):
+    from django.db import transaction
+
+    station, user = _setup("sc-rollback")
+    rolled, other = _list_with_freq(user, name="rolled"), _list_with_freq(user, name="other")
+    ActiveScan.objects.create(
+        station=station, user=user, scan_id="x", list_ids=[rolled.pk], listen_s=2, hang_s=5
+    )
+    pushed = []
+    monkeypatch.setattr(scan, "push_scan_updates", lambda ids: pushed.append(set(ids)))
+
+    class AbortError(Exception):
+        pass
+
+    with pytest.raises(AbortError):
+        with transaction.atomic():
+            ScanListEntry.objects.create(scan_list=rolled, position=1, frequency=Decimal("145.3"))
+            raise AbortError
+    assert pushed == []
+    with transaction.atomic():
+        ScanListEntry.objects.create(scan_list=other, position=1, frequency=Decimal("145.4"))
+        ScanListEntry.objects.create(scan_list=other, position=2, frequency=Decimal("145.45"))
+    assert pushed == [{other.pk}]  # one push per commit, without the rolled-back list

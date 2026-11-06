@@ -131,6 +131,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self._claim(station)
         self._claimed = True
+        # A (re)connected agent runs no scan (it stops on disconnect): any row left over
+        # (server restart, superseded half-open socket) is stale and would keep the lock
+        # from idling out.
+        await self._end_scan(station, "agent reconnect")
         await self.accept()
         self.sweep_task = asyncio.create_task(self._sweep_loop())
 
