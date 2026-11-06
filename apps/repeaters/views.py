@@ -161,6 +161,10 @@ class RepeaterDeactivateView(AreaPermissionMixin, ManageRequiredMixin, TemplateV
         return redirect(reverse("repeaters:list"))
 
 
+MAX_SCAN_LISTS = 50
+MAX_ENTRIES_PER_LIST = 200
+
+
 class ScanListMixin(AreaPermissionMixin):
     """Scan lists belong to their owner and need ``control.use``; others get a 404."""
 
@@ -191,6 +195,16 @@ class ScanListCreateView(ScanListMixin, CreateView):
     model = ScanList
     form_class = ScanListForm
     template_name = "repeaters/scanlist_form.html"
+
+    def post(self, request, *args, **kwargs):
+        if ScanList.objects.filter(owner=request.user).count() >= MAX_SCAN_LISTS:
+            messages.error(
+                request,
+                _("You can have at most %(n)d scan lists. Delete one first.")
+                % {"n": MAX_SCAN_LISTS},
+            )
+            return redirect("repeaters:scanlists")
+        return super().post(request, *args, **kwargs)
 
     def form_valid(self, form):
         form.instance.owner = self.request.user
@@ -252,6 +266,12 @@ class ScanListEntryAddView(ScanListMixin, View):
 
     def post(self, request, pk):
         scan_list = self.get_scan_list()
+        if scan_list.entries.count() >= MAX_ENTRIES_PER_LIST:
+            messages.error(
+                request,
+                _("A scan list holds at most %(n)d entries.") % {"n": MAX_ENTRIES_PER_LIST},
+            )
+            return redirect("repeaters:scanlist_detail", pk=scan_list.pk)
         form = ScanListEntryForm(request.POST)
         if form.is_valid():
             entry = form.save(commit=False)

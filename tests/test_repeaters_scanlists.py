@@ -254,3 +254,31 @@ def test_mine_json_shape_and_scope(client, member_user, staff_user):
     assert resp.status_code == 200
     assert resp.json() == [{"id": sl.pk, "name": "Home", "count": 2}]
     assert reverse("repeaters:scanlists_mine").endswith("/repeaters/scanlists/mine.json")
+
+
+def test_move_down_swaps_and_last_down_is_noop(client, member_user):
+    sl = ScanList.objects.create(owner=member_user, name="L")
+    a = _entry(sl, 0, frequency=Decimal("145.5"))
+    b = _entry(sl, 1, frequency=Decimal("145.6"))
+    c = _login(client, member_user)
+    c.post(reverse("repeaters:scanlist_entry_move", args=[sl.pk, a.pk]), {"direction": "down"})
+    assert [e.pk for e in sl.entries.all()] == [b.pk, a.pk]
+    c.post(reverse("repeaters:scanlist_entry_move", args=[sl.pk, a.pk]), {"direction": "down"})
+    assert [e.pk for e in sl.entries.all()] == [b.pk, a.pk]
+
+
+def test_list_cap(client, member_user, monkeypatch):
+    monkeypatch.setattr("apps.repeaters.views.MAX_SCAN_LISTS", 1)
+    ScanList.objects.create(owner=member_user, name="one")
+    _login(client, member_user).post(reverse("repeaters:scanlist_create"), {"name": "two"})
+    assert ScanList.objects.filter(owner=member_user).count() == 1
+
+
+def test_entry_cap(client, member_user, monkeypatch):
+    monkeypatch.setattr("apps.repeaters.views.MAX_ENTRIES_PER_LIST", 1)
+    sl = ScanList.objects.create(owner=member_user, name="L")
+    _entry(sl, 0, frequency=Decimal("145.5"))
+    _login(client, member_user).post(
+        reverse("repeaters:scanlist_entry_add", args=[sl.pk]), {"frequency": "145.6"}
+    )
+    assert sl.entries.count() == 1

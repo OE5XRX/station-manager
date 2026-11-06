@@ -86,15 +86,14 @@ def test_order_lists_in_given_order_then_radius_by_distance(station, member_user
     station.latitude, station.longitude = Decimal("48.0"), Decimal("14.0")
     station.save()
     _module(station, "1", VHF)
-    near = _rep("NEAR", "145.600", "145.000", latitude=Decimal("48.1"), longitude=Decimal("14.0"))
-    far = _rep("FAR", "145.700", "145.100", latitude=Decimal("48.5"), longitude=Decimal("14.0"))
+    _rep("NEAR", "145.600", "145.000", latitude=Decimal("48.1"), longitude=Decimal("14.0"))
+    _rep("FAR", "145.700", "145.100", latitude=Decimal("48.5"), longitude=Decimal("14.0"))
     a, b = _rep("AAA", "145.650", "145.050"), _rep("BBB", "145.675", "145.075")
     l1, l2 = _list(member_user, "one"), _list(member_user, "two")
     _add(l1, 0, repeater=a)
     _add(l2, 0, repeater=b)
     entries = _build(station, member_user, list_ids=[l2.pk, l1.pk], radius_km=100)
     assert [e["label"] for e in entries] == ["BBB", "AAA", "NEAR", "FAR"]
-    assert near and far
 
 
 def test_dedupe_on_rx_frequency_and_tone(station, member_user):

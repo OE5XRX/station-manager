@@ -83,7 +83,15 @@ def build_scan_entries(
             "entries__repeater"
         )
     }
-    visible_ids = set(Repeater.objects.visible().values_list("pk", flat=True))
+    referenced = {
+        item.repeater_id
+        for scan_list in owned.values()
+        for item in scan_list.entries.all()
+        if item.repeater_id is not None
+    }
+    visible_ids = set(
+        Repeater.objects.visible().filter(pk__in=referenced).values_list("pk", flat=True)
+    )
     for list_id in list_ids:
         scan_list = owned.get(list_id)
         if scan_list is None:
