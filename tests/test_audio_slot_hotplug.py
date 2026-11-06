@@ -924,3 +924,156 @@ def test_forced_emit_honoured_when_slot_discovery_disabled(tmp_path):
         return fake.inv
 
     assert asyncio.run(scenario()) == []
+
+
+# --- review round 2 regressions ----------------------------------------------------------
+
+
+def test_failed_restart_is_retried_on_a_later_refresh():
+    """In-place re-enumeration where the PipeWire node lags the sysfs card: the first
+    rebuild cannot resolve the node; a later (unchanged) refresh must bring it back live."""
+    eng, backend, factory, sent = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        node = backend.nodes.pop((2, "rx"))
+        await eng.refresh([2], rebuild={2})
+        assert "slot2.rx" not in eng._rx
+        backend.nodes[(2, "rx")] = node
+        await eng.refresh([2])
+
+    asyncio.run(scenario())
+    assert eng._rx["slot2.rx"]["bridge"] is factory.rx[-1]
+    assert _states(sent, "slot2.rx")[-1]["state"] == "live"
+
+
+def test_unsubscribed_stream_is_not_retried():
+    eng, backend, factory, _ = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        node = backend.nodes.pop((2, "rx"))
+        await eng.refresh([2], rebuild={2})
+        await eng.on_source_unsubscribe("slot2.rx")
+        backend.nodes[(2, "rx")] = node
+        await eng.refresh([2])
+
+    asyncio.run(scenario())
+    assert eng._rx == {}
+    assert len(factory.rx) == 1
+
+
+def test_retry_of_unresolvable_stream_is_bounded():
+    from station_agent.audio import engine as engine_mod
+
+    eng, backend, _, sent = make_engine([2], NODES)
+
+    async def scenario():
+        await eng.start()
+        await eng.on_source_subscribe("slot2.rx")
+        backend.nodes.pop((2, "rx"))
+        await eng.refresh([2], rebuild={2})
+        for _ in range(engine_mod._MAX_DEAD_RESTARTS + 2):
+            await eng.refresh([2])
+
+    asyncio.run(scenario())
+    assert "slot2.rx" not in eng._rx_demand
+    assert _states(sent, "slot2.rx")[-1]["state"] == "error"
+
+
+def test_refresh_tx_teardown_waits_for_in_flight_tx_start():
+    import time
+
+    events = []
+
+    class SlowTx(FakeTx):
+        def start(self):
+            time.sleep(0.05)
+            events.append(("start", self))
+            super().start()
+
+        def stop(self):
+            events.append(("stop", self))
+            super().stop()
+
+    eng, _, factory, _ = make_engine([2], NODES)
+    factory.make_tx = lambda node, rate, on_meter=None: (
+        factory.tx.append(SlowTx(node, rate)) or factory.tx[-1]
+    )
+
+    async def scenario():
+        await eng.start()
+        await asyncio.gather(
+            eng.on_mic_state(active=True, tx_slot=2, tx_module="fm"),
+            eng.refresh([2], rebuild={2}),
+        )
+
+    asyncio.run(scenario())
+    tx = factory.tx[0]
+    # Either the teardown ran after the start completed, or the start never raced it.
+    assert events.index(("start", tx)) < events.index(("stop", tx))
+    assert eng._tx is None
+
+
+def test_supervisor_client_setup_failure_is_retried():
+    be = ScanBackend({}, {3: (1, 11)})
+    calls = {"n": 0}
+    clients = []
+
+    def client_factory():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("key not loadable")
+        c = FakeClient()
+        clients.append(c)
+        return c
+
+    sup = AudioSupervisor(
+        be,
+        client_factory=client_factory,
+        router_factory=object,
+        settle_s=0.0,
+        confirm=2,
+        wait=lambda timeout: False,
+    )
+    sup.initial_scan()
+    control = FakeControl()
+    sup.start(control)
+    try:
+        assert sup.check() is False  # setup failed → not applied, router not registered
+        assert control.virtual == []
+        assert sup.check() is True  # retried on the next re-discovery
+        assert clients and control.virtual[-1] and control.virtual[-1][0] is sup.router_module
+    finally:
+        sup.stop()
+
+
+def test_supervisor_initial_client_failure_withdraws_router():
+    def boom():
+        raise RuntimeError("key")
+
+    sup = AudioSupervisor(
+        ScanBackend({2: (1, 10)}),
+        client_factory=boom,
+        router_factory=object,
+        settle_s=0.0,
+        wait=lambda timeout: False,
+    )
+    assert sup.initial_scan() == [2]
+    control = FakeControl()
+    sup.start(control)
+    try:
+        assert sup.router_module is None
+        assert control.virtual == [[]]
+    finally:
+        sup.stop()
+
+
+def test_bridge_pipelines_are_pinned_to_their_target():
+    from station_agent.audio.opus_bridge import _PIN_STREAM, build_rx_argv, build_tx_argv
+
+    assert "node.dont-reconnect=true" in _PIN_STREAM
+    assert _PIN_STREAM in build_rx_argv("n", 47000, 8000)
+    assert _PIN_STREAM in build_tx_argv("n", 47000, 16000)

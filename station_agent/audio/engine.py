@@ -109,6 +109,13 @@ class AudioEngine:
         # stream_id -> consecutive dead-bridge restarts by refresh; bounds the respawn churn
         # of a pipeline that keeps dying (reset once a refresh finds it alive again).
         self._rx_restarts: dict[str, int] = {}
+        # RX streams the server currently demands (subscribe minus unsubscribe). A stream whose
+        # (re)start failed drops out of _rx but stays demanded, so a later refresh retries it —
+        # the server re-sends source_subscribe only on the first-demand edge or an advertise.
+        self._rx_demand: set[str] = set()
+        # Serialises a TX bridge start (on_mic_state) against a hot-plug refresh's TX
+        # teardown, so the teardown never stops a bridge whose start is still in flight.
+        self._tx_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     async def _to_thread(fn, *args):
@@ -172,22 +179,37 @@ class AudioEngine:
             for stream_id in restart:
                 logger.info("engine: rebuilding RX pipeline for %s", stream_id)
                 await self._start_rx(stream_id)
+            # Demanded streams whose earlier (re)start failed (e.g. the PipeWire node lagged
+            # the sysfs card): retry, bounded by the same consecutive-restart counter.
+            for stream_id in sorted(self._rx_demand - set(self._rx) - set(given_up)):
+                if self.registry.get(stream_id) is None:
+                    continue
+                n = self._rx_restarts.get(stream_id, 0) + 1
+                self._rx_restarts[stream_id] = n
+                if n > _MAX_DEAD_RESTARTS:
+                    given_up.append(stream_id)
+                    continue
+                logger.info("engine: retrying RX pipeline for %s", stream_id)
+                await self._start_rx(stream_id)
         for stream_id in gone:
             self._rx_restarts.pop(stream_id, None)
+            self._rx_demand.discard(stream_id)
             await self._emit_stream_state(stream_id, "idle", "audio slot removed")
         for stream_id in given_up:
             self._rx_restarts.pop(stream_id, None)
+            self._rx_demand.discard(stream_id)
             logger.warning("engine: RX pipeline for %s keeps dying; giving up", stream_id)
             await self._emit_stream_state(stream_id, "error", "RX pipeline keeps failing")
 
         def _affected(slot) -> bool:
             return slot not in slots or slot in rebuild
 
-        if self._tx is not None and _affected(self._tx["slot"]):
-            logger.info(
-                "engine: TX slot %s vanished/re-enumerated; tearing down", self._tx["slot"]
-            )
-            await self._teardown_tx()
+        async with self._tx_lock:
+            if self._tx is not None and _affected(self._tx["slot"]):
+                logger.info(
+                    "engine: TX slot %s vanished/re-enumerated; tearing down", self._tx["slot"]
+                )
+                await self._teardown_tx()
         diag = self._diag
         if diag is not None and _affected(diag["slot"]):
             logger.info("engine: diagnostic slot vanished/re-enumerated; aborting")
@@ -230,6 +252,8 @@ class AudioEngine:
     # --- RX (demand-gated source production) -------------------------------
     async def on_source_subscribe(self, stream_id: str) -> None:
         async with self._rx_lock:
+            if stream_id != OP_MIC and self.registry.get(stream_id) is not None:
+                self._rx_demand.add(stream_id)
             await self._start_rx(stream_id)
 
     async def _start_rx(self, stream_id: str) -> None:
@@ -272,6 +296,8 @@ class AudioEngine:
 
     async def on_source_unsubscribe(self, stream_id: str) -> None:
         async with self._rx_lock:
+            self._rx_demand.discard(stream_id)
+            self._rx_restarts.pop(stream_id, None)
             stopped = await self._stop_rx(stream_id)
         if stopped:
             await self._emit_stream_state(stream_id, "idle", "")
@@ -309,7 +335,8 @@ class AudioEngine:
     async def on_mic_state(self, *, active: bool, tx_slot, tx_module) -> None:
         if not active:
             self._mic_active = False
-            await self._teardown_tx()
+            async with self._tx_lock:  # after an in-flight start, never beside it
+                await self._teardown_tx()
             return
         if not isinstance(tx_slot, int) or isinstance(tx_slot, bool):
             logger.warning("engine: mic_state with non-int tx_slot %r — ignoring", tx_slot)
@@ -327,6 +354,10 @@ class AudioEngine:
         if self._diag is not None:
             logger.info("engine: mic_state active — aborting in-flight diagnostic")
         await self._teardown_diag()
+        async with self._tx_lock:
+            await self._start_tx(tx_slot, tx_module)
+
+    async def _start_tx(self, tx_slot: int, tx_module) -> None:
         # Idempotent re-assert: the server re-sends mic_state(active) on every PTT
         # keepalive (~1/s). Restarting the bridge for the same route would drop ~a few
         # hundred ms of audio each second (chopped syllables) and flicker the TX meter.

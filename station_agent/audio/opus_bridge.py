@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 RTP_TS_PER_FRAME = 960
 _LOOPBACK = "127.0.0.1"
 _RTP_PT = 96
+# Pin the bridge stream to its target node: without these WirePlumber relinks a stream whose
+# target vanished (module unplugged / re-enumerated) to the default node — RX would carry
+# another slot's audio and TX would feed another module's sink. With them the stream is
+# dropped instead, gst exits, and the hot-plug refresh rebuilds it on the new node.
+_PIN_STREAM = "stream-properties=props,node.dont-reconnect=true,node.dont-fallback=true"
 _STOP_WAIT = 3.0
 
 
@@ -51,6 +56,7 @@ def build_rx_argv(rx_node: str, port: int, rate: int) -> list[str]:
         "-q",
         "pipewiresrc",
         f"target-object={rx_node}",
+        _PIN_STREAM,
         "!",
         "audioconvert",
         "!",
@@ -119,7 +125,7 @@ def build_tx_argv(
         "!",
         "audioresample",
     ]
-    sink = ["pipewiresink", f"target-object={tx_node}", "sync=false"]
+    sink = ["pipewiresink", f"target-object={tx_node}", _PIN_STREAM, "sync=false"]
     if dsp is None and not meter:
         return [*head, "!", f"audio/x-raw,rate={rate},channels=1", "!", *sink]
 

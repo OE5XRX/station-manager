@@ -102,10 +102,14 @@ class AudioSupervisor:
         """
         self._control = control
         with self._lock:
-            if self._applied:
-                self._start_client()
-            else:
+            if not self._applied:
                 logger.info("Audio channel disabled")
+            elif not self._start_client():
+                # Withdraw the router (no audio WS behind it) and forget the snapshot, so the
+                # next re-discovery retries the 0→n start.
+                self._applied = {}
+                self._router = None
+                self._set_virtual([])
         self._thread = threading.Thread(target=self._run, name="audio-supervisor", daemon=True)
         self._thread.start()
 
@@ -171,10 +175,10 @@ class AudioSupervisor:
         with self._lock:
             if self._shutdown.is_set():
                 return False
-            self._apply(snap)
-        return True
+            return self._apply(snap)
 
-    def _apply(self, snap: dict) -> None:
+    def _apply(self, snap: dict) -> bool:
+        """Apply *snap*; False if it could not be applied (retried on the next trigger)."""
         old, self._applied = self._applied, snap
         slots = sorted(snap)
         if not slots:
@@ -182,14 +186,17 @@ class AudioSupervisor:
             self._stop_client()
             self._router = None
             self._set_virtual([])
-            return
+            return True
         if self._client is None:
             logger.info("Audio: audio slots %s appeared; starting audio channel", slots)
+            if not self._start_client():
+                self._applied = old  # not applied: the next re-discovery retries
+                return False
+            # Router only once the audio WS exists, so tx_route is never advertised without it.
             if self._router is None:
                 self._router = self._router_factory()
             self._set_virtual([self._router])
-            self._start_client()
-            return
+            return True
         rebuild = {s for s in snap if s in old and old[s] != snap[s]}
         logger.info(
             "Audio: audio slots changed %s -> %s (re-enumerated: %s)",
@@ -198,6 +205,7 @@ class AudioSupervisor:
             sorted(rebuild),
         )
         self._refresh_client(rebuild)
+        return True
 
     def _refresh_client(self, rebuild: set) -> None:
         client = self._client
@@ -217,16 +225,17 @@ class AudioSupervisor:
         except Exception:  # noqa: BLE001
             logger.exception("audio supervisor: updating control virtual modules failed")
 
-    def _start_client(self) -> None:
-        logger.info("Audio channel enabled")
+    def _start_client(self) -> bool:
         try:
             client = self._client_factory()
         except Exception:  # noqa: BLE001 — a broken audio setup must not take the agent down
             logger.exception("audio supervisor: audio client setup failed; audio stays off")
-            return
+            return False
+        logger.info("Audio channel enabled")
         thread = threading.Thread(target=client.run, name="audio-client", daemon=True)
         self._client, self._client_thread = client, thread
         thread.start()
+        return True
 
     def _stop_client(self) -> None:
         client, thread = self._client, self._client_thread
