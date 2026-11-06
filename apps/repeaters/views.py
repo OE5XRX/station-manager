@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext as _
@@ -102,8 +103,12 @@ class RepeaterUpdateView(AreaPermissionMixin, ManageRequiredMixin, ManualOnlyMix
     success_url = reverse_lazy("repeaters:list")
 
     def form_valid(self, form):
+        def _plain(value):
+            # Foreign keys (replaces) compare by pk on both sides.
+            return str(getattr(value, "pk", value) if value is not None else "")
+
         changes = {
-            name: [str(form.initial.get(name) or ""), str(form.cleaned_data[name] or "")]
+            name: [_plain(form.initial.get(name)), _plain(form.cleaned_data[name])]
             for name in form.changed_data
         }
         response = super().form_valid(form)
@@ -116,7 +121,7 @@ class RepeaterUpdateView(AreaPermissionMixin, ManageRequiredMixin, ManualOnlyMix
 
 
 class RepeaterDeactivateView(AreaPermissionMixin, ManageRequiredMixin, TemplateView):
-    """GET: confirm page. POST: toggle ``active`` (deactivate / reactivate)."""
+    """GET: confirm page. POST ``target=deactivate|reactivate`` sets ``active`` explicitly."""
 
     area = "repeaters"
     verbs = {"GET": "view", "POST": "view"}
@@ -133,15 +138,21 @@ class RepeaterDeactivateView(AreaPermissionMixin, ManageRequiredMixin, TemplateV
 
     def post(self, request, *args, **kwargs):
         repeater = self.get_repeater()
-        repeater.active = not repeater.active
-        repeater.save(update_fields=["active", "updated_at"])
-        verb = "Reactivated" if repeater.active else "Deactivated"
-        _audit(
-            request,
-            f"{verb} repeater {repeater.callsign}",
-            repeater,
-            {"active": [str(not repeater.active), str(repeater.active)]},
-        )
+        target = request.POST.get("target")
+        if target not in ("deactivate", "reactivate"):
+            return HttpResponseBadRequest("target must be deactivate or reactivate")
+        new_active = target == "reactivate"
+        if repeater.active != new_active:
+            old = repeater.active
+            repeater.active = new_active
+            repeater.save(update_fields=["active", "updated_at"])
+            verb = "Reactivated" if new_active else "Deactivated"
+            _audit(
+                request,
+                f"{verb} repeater {repeater.callsign}",
+                repeater,
+                {"active": [str(old), str(new_active)]},
+            )
         messages.success(
             request,
             _("Repeater reactivated.") if repeater.active else _("Repeater deactivated."),

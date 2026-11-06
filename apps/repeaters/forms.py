@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
@@ -75,6 +77,26 @@ class RepeaterForm(forms.ModelForm):
 
     def clean_input_frequency(self):
         return self._positive("input_frequency")
+
+    def _tone(self, name):
+        raw = (self.cleaned_data.get(name) or "").strip().lower()
+        if raw in ("", "none"):
+            return "none"
+        try:
+            hz = Decimal(raw)
+        except InvalidOperation:
+            hz = None
+        if hz is None or not hz.is_finite() or not Decimal("60") <= hz <= Decimal("260"):
+            raise forms.ValidationError(
+                _('Enter a CTCSS tone in Hz (60-260, e.g. "88.5") or "none".')
+            )
+        return format(hz.normalize(), "f")
+
+    def clean_input_tone(self):
+        return self._tone("input_tone")
+
+    def clean_output_tone(self):
+        return self._tone("output_tone")
 
     def clean_latitude(self):
         value = self.cleaned_data.get("latitude")

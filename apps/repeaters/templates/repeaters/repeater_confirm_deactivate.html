@@ -26,6 +26,7 @@
 </div>
 <form method="post">
   {% csrf_token %}
+  <input type="hidden" name="target" value="{% if repeater.active %}deactivate{% else %}reactivate{% endif %}">
   <div class="page-head-actions">
     <button type="submit" class="btn {% if repeater.active %}btn-danger{% else %}btn-primary{% endif %}">
       {% if repeater.active %}{% trans "Deactivate" %}{% else %}{% trans "Reactivate" %}{% endif %}
