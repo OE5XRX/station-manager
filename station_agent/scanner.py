@@ -78,13 +78,15 @@ def parse_entries(raw) -> list[dict] | None:
     if not isinstance(raw, list) or len(raw) > MAX_ENTRIES:
         return None
     out = []
+    seen: set[str] = set()
     for e in raw:
         if not isinstance(e, dict):
             return None
         ref, label = e.get("ref"), e.get("label", "")
         slot, module = e.get("slot"), e.get("module")
-        if not (isinstance(ref, str) and ref and len(ref) <= MAX_REF_LEN):
-            return None
+        if not (isinstance(ref, str) and ref and len(ref) <= MAX_REF_LEN) or ref in seen:
+            return None  # refs identify entries (tuned entry, list adoption): must be unique
+        seen.add(ref)
         if not (isinstance(label, str) and len(label) <= MAX_LABEL_LEN):
             return None
         if not (isinstance(slot, int) and not isinstance(slot, bool)):
@@ -156,6 +158,10 @@ class Scanner:
         self._state: str | None = None
         self._last: tuple | None = None  # last emitted (state, index, ref)
         self._held = False
+        # Bumped by every hold(). A visit captures it at start; a step of that visit after
+        # any hold — even one already resumed/skipped while the runner slept — aborts it.
+        self._hold_gen = 0
+        self._visit_gen = 0
         self._stopping = False
         self._skip = False
         self._resume = asyncio.Event()
@@ -229,20 +235,23 @@ class Scanner:
         if not self.running or self._held or self._stopping:
             return
         self._held = True
+        self._hold_gen += 1
         self._resume.clear()
+        # Waits out the in-flight step (the next one sees the hold and aborts its visit). The
+        # held frame and tx_route change run under the lock too, so a stop() can never cancel
+        # the runner midway through them (the runner itself calls hold() on a keyed slot).
         async with self._step_lock:
-            pass  # wait out the in-flight step; the next one sees _held and parks
-        if not self.running or self._stopping:
-            return
-        # Between entries (_index already advanced, or a keyed slot refused the next apply)
-        # the radio is still on the last tuned entry: hold there, not on the untuned one.
-        pos = self._tuned_pos()
-        if pos is not None:
-            self._index = pos
-        await self._emit("held", reason=reason)
-        # Held on an entry that is actually tuned → PTT must key that module (spec §7.4).
-        if pos is not None and self._routed_ref != self._tuned_ref:
-            await self._route(self._entries[pos])
+            if not self.running or self._stopping:
+                return
+            # Between entries (_index already advanced, or a keyed slot refused the next
+            # apply) the radio is still on the last tuned entry: hold there.
+            pos = self._tuned_pos()
+            if pos is not None:
+                self._index = pos
+            await self._emit("held", reason=reason)
+            # Held on an entry that is actually tuned → PTT must key that module (§7.4).
+            if pos is not None and self._routed_ref != self._tuned_ref:
+                await self._route(self._entries[pos])
 
     async def stop(self, reason: str) -> None:
         task = self._task
@@ -320,6 +329,7 @@ class Scanner:
 
     async def _visit(self, entry: dict) -> bool:
         """Scan one entry. True = it was reachable (whatever the carrier did)."""
+        self._visit_gen = self._hold_gen
         if self._busy(entry["slot"]):
             await self.hold("ptt")
             raise _HeldSignal
@@ -380,7 +390,7 @@ class Scanner:
 
     async def _step(self, fn, *args):
         async with self._step_lock:
-            if self._held or self._stopping:
+            if self._held or self._stopping or self._visit_gen != self._hold_gen:
                 raise _HeldSignal
             return await fn(*args)
 
