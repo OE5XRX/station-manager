@@ -113,6 +113,12 @@ class Broker:
         self._slot_locks: dict[int, asyncio.Lock] = {}
 
     # --- inventory cache ---------------------------------------------------
+    def set_virtual_modules(self, virtual_modules) -> None:
+        """Replace the virtual modules (audio hot-plug adds/removes the audio-router).
+
+        Takes effect with the next :meth:`set_inventory`."""
+        self._virtual = {(vm.slot, vm.module_id): vm for vm in (virtual_modules or [])}
+
     def set_inventory(self, discovered: list) -> None:
         self._descriptors.clear()
         self._controls.clear()

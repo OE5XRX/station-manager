@@ -36,6 +36,8 @@ _CARD_RE = re.compile(r"card(\d+)$")
 
 _DEFAULT_TIMEOUT = 5.0
 
+_stat = os.stat  # seam: tests fake sysfs inode generations
+
 
 @dataclass(frozen=True)
 class RunResult:
@@ -60,6 +62,7 @@ class RouterBackend(Protocol):
     def resolve_node(self, slot: int, direction: str) -> str | None: ...
     def alsa_card_for_slot(self, slot: int) -> int | None: ...
     def list_audio_slots(self) -> list[int]: ...
+    def audio_slot_generations(self) -> dict[int, tuple[int, int | None]]: ...
     def link(self, out_node: str, in_node: str) -> bool: ...
     def unlink(self, out_node: str, in_node: str) -> bool: ...
     def set_volume(self, node: str, linear: float) -> bool: ...
@@ -150,6 +153,28 @@ class PipeWireRouterBackend:
             if slot is not None:
                 slots.add(slot)
         return sorted(slots)
+
+    def audio_slot_generations(self) -> dict[int, tuple[int, int | None]]:
+        """``{slot: (card index, generation)}`` for every slot with an audio card.
+
+        The generation is the inode of the card's sysfs directory: kernfs allocates node ids
+        cyclically, so a card that re-enumerates in place (USB replug, module firmware DFU)
+        gets a new one even when it reuses the same card index. Lets the hot-plug supervisor
+        tell "same slot, new device" apart from "unchanged". ``None`` when unreadable.
+        First card per slot wins, like :meth:`_card_for_slot`.
+        """
+        out: dict[int, tuple[int, int | None]] = {}
+        for card in self._card_indices():
+            slot = self._slot_for_card(card)
+            if slot is not None and slot not in out:
+                out[slot] = (card, self._card_generation(card))
+        return out
+
+    def _card_generation(self, card: int) -> int | None:
+        try:
+            return _stat(os.path.join(self._sysfs_sound, f"card{card}")).st_ino
+        except OSError:
+            return None
 
     def _card_indices(self) -> list[int]:
         if not self._sysfs_sound:

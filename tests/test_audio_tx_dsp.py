@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from station_agent.audio import tx_dsp
-from station_agent.audio.opus_bridge import build_tx_argv
+from station_agent.audio.opus_bridge import _PIN_STREAM, build_tx_argv
 
 
 def _cfg(**k):
@@ -25,7 +25,7 @@ def _pipeline_order(argv):
 def test_plain_argv_unchanged_when_no_dsp():
     argv = build_tx_argv("n", 47000, 16000)
     assert "audiodynamic" not in argv and "tee" not in argv
-    assert argv[-3:] == ["pipewiresink", "target-object=n", "sync=false"]
+    assert argv[-4:] == ["pipewiresink", "target-object=n", _PIN_STREAM, "sync=false"]
 
 
 def test_full_chain_order_limiter_last_before_sink():
@@ -217,7 +217,7 @@ def _smoke_argv_from_production(cfg):
     caps = "audio/x-raw,format=F32LE,rate=16000,channels=1"
     body = prod[prod.index(caps) + 1 :]
     sink = body.index("pipewiresink")
-    assert body[sink : sink + 3] == ["pipewiresink", "target-object=n", "sync=false"]
+    assert body[sink : sink + 4] == ["pipewiresink", "target-object=n", _PIN_STREAM, "sync=false"]
     body[sink : sink + 3] = ["fakesink", "sync=false"]
     src = ["audiotestsrc", "wave=sine", "freq=440", "volume=0.5", "num-buffers=40"]
     return ["gst-launch-1.0", "-q", *src, "samplesperbuffer=800", "!", caps, *body]

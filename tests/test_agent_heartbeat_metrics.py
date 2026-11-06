@@ -326,7 +326,10 @@ def _run_agent_once(monkeypatch, tmp_path, collector_cls):
     monkeypatch.setattr(agent_mod, "MetricsCollector", collector_cls)
     monkeypatch.setattr(agent_mod, "ModuleOta", lambda *a, **kw: None)
     monkeypatch.setattr(agent, "_recover_module_ota", lambda: None)
-    monkeypatch.setattr("station_agent.audio.detect.audio_path_present", lambda c: False)
+    monkeypatch.setattr(
+        "station_agent.audio.router_backend.PipeWireRouterBackend.audio_slot_generations",
+        lambda self: {},
+    )
     monkeypatch.setattr("station_agent.control_client.ControlClient", _Ctl)
     monkeypatch.setattr("station_agent.bootinfo.mark_clean_shutdown", lambda d: None)
     agent.run()

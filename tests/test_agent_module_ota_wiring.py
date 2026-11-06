@@ -123,7 +123,10 @@ def harness(monkeypatch, tmp_path):
 
         monkeypatch.setattr(agent_mod, "send_heartbeat", fake_heartbeat)
         monkeypatch.setattr(agent_mod, "ModuleOta", fake)
-        monkeypatch.setattr("station_agent.audio.detect.audio_path_present", lambda c: False)
+        monkeypatch.setattr(
+            "station_agent.audio.router_backend.PipeWireRouterBackend.audio_slot_generations",
+            lambda self: {},
+        )
         monkeypatch.setattr("station_agent.control_client.ControlClient", FakeControlClient)
         agent = StationAgent()
 
@@ -154,7 +157,14 @@ def _nudge():
 def test_module_ota_built_with_control_and_audio(harness):
     agent, _, fake, _ = harness()
     _cfg, _http, kwargs = fake.init_args
-    assert kwargs == {"control": FakeControlClient.instances[-1], "audio": None}
+    from station_agent.audio.supervisor import AudioSupervisor
+
+    assert kwargs["control"] is FakeControlClient.instances[-1]
+    # The hot-plug supervisor (not a one-shot client) answers slot_active for module OTA,
+    # and is wired as the control re-scan hook.
+    assert isinstance(kwargs["audio"], AudioSupervisor)
+    assert kwargs["audio"].slot_active(2) is False
+    assert FakeControlClient.instances[-1].kwargs["on_rescan"] == kwargs["audio"].kick
     assert _nudge() == agent._wake.set
 
 

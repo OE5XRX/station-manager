@@ -737,28 +737,43 @@ class StationAgent:
 
         # Audio auto-on (interim): enable audio when a discovered slot exposes an audio path,
         # not from a config flag. TODO(FW-describe): switch to the `audio` capability later.
-        from .audio.detect import audio_path_present
+        # The supervisor keeps it in step with hot-plug (module moved / plugged / unplugged /
+        # re-enumerated after a DFU), re-checking on every control re-discovery cycle.
+        from .audio.bridge_factory import BridgeFactory
+        from .audio.router_backend import PipeWireRouterBackend
+        from .audio.router_module import AudioRouterModule
+        from .audio.streams import StreamRegistry
+        from .audio.supervisor import AudioSupervisor
+        from .audio.tx_settings import TxAudioSettings
 
-        audio_present = audio_path_present(config)
+        tx_settings = TxAudioSettings()
+        router_backend = PipeWireRouterBackend(sysfs_sound=config.audio_sysfs_sound)
 
-        # Build the audio-router virtual control-plane module (Spec 0 §5.6) when audio is on,
-        # so the control inventory advertises audio streams + the tx_route capability.
-        audio_router_module = None
-        if audio_present:
-            from .audio.router_backend import PipeWireRouterBackend
-            from .audio.router_module import AudioRouterModule
-            from .audio.streams import StreamRegistry
+        def _list_audio_streams():
+            reg = StreamRegistry(rx_rate=config.audio_rx_rate, mic_rate=config.audio_mic_rate)
+            reg.rebuild(router_backend.list_audio_slots())
+            return reg.advertise_payload()["streams"]
 
-            router_backend = PipeWireRouterBackend(sysfs_sound=config.audio_sysfs_sound)
+        def _make_audio_client():
+            from .audio.ws_client import AudioClient
 
-            def _list_audio_streams():
-                reg = StreamRegistry(rx_rate=config.audio_rx_rate, mic_rate=config.audio_mic_rate)
-                reg.rebuild(router_backend.list_audio_slots())
-                return reg.advertise_payload()["streams"]
-
-            audio_router_module = AudioRouterModule(
-                slot=config.audio_router_slot, list_streams=_list_audio_streams
+            return AudioClient(
+                config,
+                bridge_factory=BridgeFactory(
+                    port_base=config.audio_udp_port_base, tx_settings=tx_settings
+                ),
             )
+
+        # Audio-router virtual control-plane module (Spec 0 §5.6), present while audio is on,
+        # so the control inventory advertises audio streams + the tx_route capability.
+        audio = AudioSupervisor(
+            router_backend,
+            client_factory=_make_audio_client,
+            router_factory=lambda: AudioRouterModule(
+                slot=config.audio_router_slot, list_streams=_list_audio_streams
+            ),
+        )
+        audio.initial_scan()
 
         # Control channel always runs — server_url is a required config field, so a station
         # that talks to the server always exposes its control plane. (No control_enabled flag.)
@@ -767,46 +782,26 @@ class StationAgent:
         from .control_client import ControlClient
 
         logger.info("Control channel enabled")
-        virtual = [audio_router_module] if audio_router_module is not None else None
+        virtual = [audio.router_module] if audio.router_module is not None else None
         control_client = ControlClient(
-            config, virtual_modules=virtual, on_firmware_check=self._wake.set
+            config,
+            virtual_modules=virtual,
+            on_firmware_check=self._wake.set,
+            on_rescan=audio.kick,
         )
         control_thread = threading.Thread(
             target=control_client.run, name="control-client", daemon=True
         )
         control_thread.start()
 
-        # Start audio client in a background thread if enabled
-        from .audio.tx_settings import TxAudioSettings
-
-        tx_settings = TxAudioSettings()
-        audio_client = None
-        audio_thread = None
-        if audio_present:
-            from .audio.bridge_factory import BridgeFactory
-            from .audio.ws_client import AudioClient
-
-            logger.info("Audio channel enabled")
-            audio_client = AudioClient(
-                config,
-                bridge_factory=BridgeFactory(
-                    port_base=config.audio_udp_port_base, tx_settings=tx_settings
-                ),
-            )
-            audio_thread = threading.Thread(
-                target=audio_client.run, name="audio-client", daemon=True
-            )
-            audio_thread.start()
-        else:
-            logger.info("Audio channel disabled")
+        # Start the audio client (if audio slots were found) + the hot-plug supervisor.
+        audio.start(control_client)
 
         # Module firmware OTA: runs only on this (main) thread, sequentially with image OTA.
         self._config = config
         self._tx_settings = tx_settings
         try:
-            self._module_ota = ModuleOta(
-                config, http_client, control=control_client, audio=audio_client
-            )
+            self._module_ota = ModuleOta(config, http_client, control=control_client, audio=audio)
         except Exception:  # noqa: BLE001 — module OTA must not keep the agent down
             logger.exception("module_ota setup failed; module firmware updates disabled")
         self._recover_module_ota()
@@ -845,11 +840,8 @@ class StationAgent:
         if control_thread is not None:
             control_thread.join(timeout=5)
 
-        # Stop audio client on shutdown
-        if audio_client is not None:
-            audio_client.stop()
-        if audio_thread is not None:
-            audio_thread.join(timeout=5)
+        # Stop the audio supervisor + client on shutdown
+        audio.stop()
 
         # Stop the metrics sampler
         if self._metrics is not None:
