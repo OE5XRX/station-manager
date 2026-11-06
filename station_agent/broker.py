@@ -161,6 +161,8 @@ class Broker:
             await self.handle_unsubscribe(msg)
         elif mtype == "ptt_keepalive":
             await self.handle_keepalive(msg)
+        elif mtype == "apply_preset":
+            await self.handle_apply_preset(msg)
         elif mtype == "firmware_check":
             if self._on_firmware_check is not None:
                 try:
@@ -249,6 +251,91 @@ class Broker:
         else:
             err_code = result.get("error", proto.TIMEOUT)
             await self._send(proto.build_result(request_id, False, error=(err_code, "")))
+
+    # Fixed application order: tx before rx so a half-applied preset never listens on the
+    # new output while still transmitting on the old input; bandwidth last.
+    _PRESET_ORDER = ("tx_frequency", "rx_frequency", "tx_tone", "rx_tone", "bandwidth")
+
+    async def apply_preset(self, slot, module, values) -> dict[str, dict]:
+        """Apply a batch of settings in fixed order; return ``{cap: {"ok", "error"?}}``.
+
+        Each cap goes through the normal validate -> ``_execute`` path (slot lock + devlock),
+        one at a time, so the single-owner invariant on the control line is preserved. A
+        failing cap does not abort the rest. Does NOT check ``slot_busy`` (callers do).
+        """
+        results: dict[str, dict] = {}
+        descriptor = self._descriptor(slot, module)
+        if descriptor is None:
+            code = proto.UNKNOWN_SLOT if slot not in self._controls else proto.UNKNOWN_MODULE
+            return {
+                name: {"ok": False, "error": {"code": code, "msg": f"{slot}/{module}"}}
+                for name in self._PRESET_ORDER
+                if name in values
+            }
+        caps = desc.index_capabilities(descriptor)
+        for name in self._PRESET_ORDER:
+            if name not in values:
+                continue
+            value = values[name]
+            cap = caps.get(name)
+            try:
+                desc.validate_command(cap, "set", value)
+            except proto.ProtocolError as exc:
+                results[name] = {"ok": False, "error": {"code": exc.code, "msg": exc.msg}}
+                continue
+            token = desc.format_value(cap["type"], value)
+            try:
+                res = await self._execute(slot, module, "set", name, token)
+            except Exception:  # noqa: BLE001 — one cap must not abort the batch
+                logger.exception("broker: apply_preset %s/%s %s raised", slot, module, name)
+                results[name] = {"ok": False, "error": {"code": proto.TIMEOUT, "msg": ""}}
+                continue
+            if res.get("ok"):
+                results[name] = {"ok": True, "value": res.get("value")}
+            else:
+                results[name] = {
+                    "ok": False,
+                    "error": {"code": res.get("error", proto.TIMEOUT), "msg": ""},
+                }
+        return results
+
+    async def handle_apply_preset(self, msg: dict) -> None:
+        request_id = msg.get("request_id")
+        slot = msg.get("slot")
+        module = msg.get("module")
+        values = msg.get("values")
+        if not (
+            (isinstance(request_id, str) and request_id)
+            or (isinstance(request_id, int) and not isinstance(request_id, bool))
+        ):
+            logger.debug("broker: dropping apply_preset with invalid request_id %r", request_id)
+            return
+        if (
+            not _valid_addr(slot, module)
+            or not isinstance(values, dict)
+            or not any(k in values for k in self._PRESET_ORDER)
+        ):
+            await self._send(
+                proto.build_result(
+                    request_id, False, error=(proto.VALIDATION_FAILED, "malformed apply_preset")
+                )
+            )
+            return
+        if self.slot_busy(slot):
+            await self._send(proto.build_result(request_id, False, error=("ptt_active", "")))
+            return
+        results = await self.apply_preset(slot, module, values)
+        all_ok = all(r["ok"] for r in results.values())
+        # Per-cap outcome only (no echoed values); the state frame carries the values.
+        value = {n: {k: v for k, v in r.items() if k != "value"} for n, r in results.items()}
+        reply = proto.build_result(request_id, all_ok, value=value)
+        if not all_ok:
+            # build_result drops `value` on failure; the per-cap detail is the point here.
+            reply["value"] = value
+        await self._send(reply)
+        ok_values = {n: r["value"] for n, r in results.items() if r["ok"]}
+        if ok_values:
+            await self._send(proto.build_state(slot, module, ok_values, self._ts()))
 
     async def _handle_virtual_command(
         self, request_id, slot, module, vm, op, capability, value
