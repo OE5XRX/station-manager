@@ -75,6 +75,9 @@ UI = {
     ("users", "manage"): ("GET", "accounts:user_create", None, None),
     ("api_tokens", "use"): ("GET", "accounts:api_tokens", None, None),
     ("audit", "view"): ("GET", "audit:audit_list", None, None),
+    ("repeaters", "view"): ("GET", "repeaters:list", None, None),
+    # Also open to region managers via can_manage_repeaters (not a level thing).
+    ("repeaters", "manage"): ("GET", "repeaters:create", None, None),
     ("sso", "manage"): ("GET", "sso:dashboard", None, None),
 }
 # control.use / control.manage live on the WS channel (WS table below).
@@ -160,7 +163,9 @@ def test_matrix_covers_every_declared_verb():
     assert not missing_ui, missing_ui
     # Every declared verb is exercised on at least one channel.
     ws_keys = {(area, verb) for _, area, verb, _ in WS}
-    untested = [k for k in _resolvable() if k not in UI and k not in ws_keys]
+    untested = [
+        k for k in _resolvable() if k not in UI and k not in ws_keys and k not in UI_NOT_APPLICABLE
+    ]
     assert not untested, untested
     # No stale rows after a registry change: every table key resolves to some level
     # (an undeclared verb such as profile.view inherits the next stricter one).

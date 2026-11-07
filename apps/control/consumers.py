@@ -24,6 +24,7 @@ from . import (
     lock,
     persistence,
     registry,
+    scan,
     telemetry_subscriptions,
 )
 from .models import AgentConnection, StationModule
@@ -54,7 +55,29 @@ def _fresh_user(user):
 
 
 # Browser frames that operate the station: each re-checks control.use (fresh user).
-_USE_ACTIONS = frozenset({"lock_acquire", "lock_request", "lock_transfer", "ptt_keepalive"})
+_USE_ACTIONS = frozenset(
+    {
+        "lock_acquire",
+        "lock_request",
+        "lock_transfer",
+        "ptt_keepalive",
+        "apply_repeater",
+        "scan_start",
+        "scan_control",
+    }
+)
+
+# User-facing texts for scan_start refusals (codes are the contract, texts are cosmetic).
+_SCAN_ERRORS = {
+    "invalid_scan": "Invalid scan request",
+    "forbidden": "Scan could not be authorized",
+    "no_coordinates": "Station has no coordinates — radius scan unavailable",
+    "empty_scan_list": "No scan entries for this station",
+    "internal_error": "Scan could not be started",
+}
+
+# Agent scan states that tune a module: the operator mic must follow (gate tx route).
+_SCAN_TUNED_STATES = frozenset({"active", "held"})
 
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
@@ -89,6 +112,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self._reapply_touched = set()
         # str(slot) -> slot exactly as the agent reports it (an int slot must go back as int).
         self._wire_slots = {}
+        # (scan_id, {ref: (label, rx_frequency)}, count) of the last scan_start/scan_update
+        # relayed to this agent: enriches its scan_state frames for the browser panel.
+        self._scan_index = None
+        # (scan_id, state) last stored via scan.note_state: one DB write per transition.
+        self._scan_noted = None
 
         from urllib.parse import parse_qs
 
@@ -108,6 +136,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self._claim(station)
         self._claimed = True
+        # A (re)connected agent runs no scan (it stops on disconnect): any row left over
+        # (server restart, superseded half-open socket) is stale and would keep the lock
+        # from idling out.
+        await self._end_scan(station, "agent reconnect")
         await self.accept()
         self.sweep_task = asyncio.create_task(self._sweep_loop())
 
@@ -126,6 +158,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             # this channel, never the station state the live connection owns.
             if station is not None and await self._release(station):
                 await self._mark_offline(station)
+                # The agent stops its scan on disconnect (dead-man): only drop the row.
+                await self._end_scan(station, "disconnect")
                 freed = await self._force_free(station)
                 if freed:
                     # Agent disconnect clears any held lock -> PTT must die too.
@@ -173,6 +207,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             await self._broadcast("control.state", {"msg": msg})
         elif mtype == "result":
             await self._broadcast("control.result", {"msg": msg})
+        elif mtype == "scan_state":
+            station = await self._cached_station()
+            if station is not None:
+                await self._apply_scan_state(station, msg)
+            await self._broadcast("control.scan_state", {"msg": self._enrich_scan_state(msg)})
         elif mtype == "event":
             updating = registry.FIRMWARE_UPDATING_EVENTS.get(msg.get("event"))
             if updating is not None:
@@ -214,10 +253,39 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         """A ControlConsumer relayed a §7 downstream frame -> send to agent."""
         frame = event["frame"]
         self._note_user_set(frame)
+        self._note_scan_entries(frame)
         await self.send(text_data=json.dumps(frame))
         if isinstance(frame, dict) and frame.get("type") == "firmware_check":
             # Target/release changed: the drain state may have changed with it.
             await self._broadcast_lock_refresh()
+
+    def _note_scan_entries(self, frame):
+        """Remember label/frequency per entry ref of a relayed scan list (in memory only)."""
+        if not isinstance(frame, dict) or frame.get("type") not in ("scan_start", "scan_update"):
+            return
+        entries = frame.get("entries")
+        if not isinstance(entries, list):
+            return
+        index = {
+            e["ref"]: (e.get("label"), e.get("rx_frequency"))
+            for e in entries
+            if isinstance(e, dict) and isinstance(e.get("ref"), str)
+        }
+        self._scan_index = (frame.get("scan_id"), index, len(entries))
+
+    def _enrich_scan_state(self, msg):
+        """Add ``label``/``rx_frequency``/``count`` from the relayed scan list to an agent
+        ``scan_state`` (the agent sends only ``ref``/``index``). Agent-sent fields win."""
+        if self._scan_index is None or not isinstance(msg, dict):
+            return msg
+        scan_id, index, count = self._scan_index
+        if msg.get("scan_id") != scan_id:
+            return msg
+        extra = {"count": count}
+        ref = msg.get("ref")
+        if isinstance(ref, str) and ref in index:
+            extra["label"], extra["rx_frequency"] = index[ref]
+        return {**extra, **msg}
 
     async def _broadcast_lock_refresh(self, drain=lock.DRAIN_UNSET):
         """Re-broadcast ``control.lock`` with a fresh drain payload (best effort).
@@ -254,6 +322,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     async def control_result(self, event):
         pass
 
+    async def control_scan_state(self, event):
+        pass
+
     async def control_event(self, event):
         pass
 
@@ -278,7 +349,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         continue
                     freed = await self._sweep(station)
                     if freed:
-                        # Lock swept (idle/grace) -> PTT must die.
+                        # Lock swept (idle/grace) -> PTT and the holder's scan must die.
+                        await self._stop_scan(station, "lock expired")
                         await self._do_clear_ptt(station)
                         await self._bridge_gate(station)
                         status = await self._lock_status(station)
@@ -510,6 +582,86 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             return True
         return False
 
+    async def _apply_scan_state(self, station, msg):
+        """Server side of an agent ``scan_state`` (spec §7.4): ``stopped`` drops the
+        ``ActiveScan`` row (+ audit); ``active``/``held`` on a tuned entry points the
+        authoritative audio-gate TX route at that module — the agent's router state
+        alone does not move the operator mic. Steps are neither persisted nor audited."""
+        try:
+            scan_id = msg.get("scan_id")
+            state = msg.get("state")
+            if not isinstance(scan_id, str):
+                return
+            if state == "stopped":
+                await self._end_scan(station, msg.get("reason") or "stopped", scan_id)
+                return
+            coarse = scan.coarse_state(state)
+            if coarse is not None and self._scan_noted != (scan_id, coarse):
+                await database_sync_to_async(scan.note_state)(station, scan_id, coarse)
+                self._scan_noted = (scan_id, coarse)
+            if state in _SCAN_TUNED_STATES:
+                slot, module = msg.get("slot"), msg.get("module")
+                if slot is None or not isinstance(module, str):
+                    return  # nothing tuned yet
+                if not (isinstance(slot, str) or type(slot) is int):
+                    return
+                if await self._scan_set_tx_route(station, scan_id, slot, module):
+                    await self._bridge_gate(station)
+        except Exception:
+            logger.exception("control: applying scan_state failed")
+
+    @database_sync_to_async
+    def _scan_set_tx_route(self, station, scan_id, slot, module):
+        """Move the gate TX route for the station's current scan; True if it changed."""
+        from apps.audio import gate as audio_gate
+
+        if scan.current_scan_id(station) != scan_id:
+            return False  # a stale/replaced scan must not move the mic
+        before = audio_gate.get_state(station)
+        if audio_gate.ptt_keyed(station) and (
+            str(before.get("ptt_slot")),
+            before.get("ptt_module"),
+        ) != (str(slot), module):
+            return False  # never move the mic away from a keyed module (agent does the same)
+        audio_gate.set_tx_route(station, slot, module)
+        after = audio_gate.get_state(station)
+        return (before.get("tx_slot"), before.get("tx_module")) != (
+            after.get("tx_slot"),
+            after.get("tx_module"),
+        )
+
+    async def _end_scan(self, station, reason, scan_id=None):
+        """Drop the station's ``ActiveScan``. Without ``scan_id`` the server ends it itself
+        (agent gone/reconnected): no agent ``stopped`` will follow, so the browsers get a
+        synthetic one — otherwise their scanner panel would stay "running"."""
+        try:
+            removed = await database_sync_to_async(scan.end_scan)(station, reason, scan_id)
+            if removed is not None and scan_id is None:
+                await self._broadcast(
+                    "control.scan_state",
+                    {
+                        "msg": {
+                            "v": constants.PROTOCOL_VERSION,
+                            "type": "scan_state",
+                            "scan_id": removed,
+                            "state": "stopped",
+                            "index": None,
+                            "ref": None,
+                            "slot": None,
+                            "module": None,
+                            "reason": "disconnect",
+                        }
+                    },
+                )
+        except Exception:
+            logger.exception("control: ending scan failed")
+
+    async def _stop_scan(self, station, reason):
+        try:
+            await database_sync_to_async(scan.stop_active_scan)(station, reason)
+        except Exception:
+            logger.exception("control: stopping scan failed")
+
     async def _bridge_gate(self, station):
         """Read gate state and broadcast audio.gate to browser + agent audio groups.
 
@@ -538,6 +690,65 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         from apps.audio import gate as audio_gate
 
         audio_gate.clear_ptt(station)
+
+
+def _resolve_repeater(station, repeater_id, slot, module_id=None):
+    """Resolve a repeater + slot (+ optional module) into the ``apply_preset`` plan (§5.3).
+
+    A slot may host several modules: ``module_id`` (from the panel's band map) pins one,
+    otherwise the first usable module of the slot whose band covers both frequencies wins.
+    ``not_applicable``: malformed ids, invisible repeater, no usable online module, or a
+    frequency outside every candidate's bands. ``not_supported``: cross-band (needs two
+    modules, not yet implemented)."""
+    from apps.repeaters import selection
+    from apps.repeaters.models import Repeater
+
+    if type(repeater_id) is not int or not isinstance(slot, str):
+        return "not_applicable", None
+    if module_id is not None and not isinstance(module_id, str):
+        return "not_applicable", None
+    repeater = Repeater.objects.visible().filter(pk=repeater_id).first()
+    if repeater is None:
+        return "not_applicable", None
+    candidates = [
+        m
+        for m in selection.usable_modules(station)
+        if m.slot == slot and (module_id is None or m.module_id == module_id)
+    ]
+    if not candidates:
+        return "not_applicable", None
+    module = None
+    cross_band = False
+    for candidate in candidates:
+        rx_band = selection.module_band_of(candidate, repeater.output_frequency)
+        tx_band = selection.module_band_of(candidate, repeater.input_frequency)
+        if rx_band is not None and rx_band == tx_band:
+            module = candidate
+            break
+        cross_band = cross_band or (rx_band is not None and tx_band is not None)
+    if module is None:
+        if not cross_band:
+            bands = selection.station_bands(station)
+            station_rx = selection.band_of(repeater.output_frequency, bands, station)
+            station_tx = selection.band_of(repeater.input_frequency, bands, station)
+            cross_band = station_rx is not None and station_tx is not None
+            cross_band = cross_band and station_rx != station_tx
+        return ("not_supported" if cross_band else "not_applicable"), None
+    values = {
+        "tx_frequency": float(repeater.input_frequency),
+        "rx_frequency": float(repeater.output_frequency),
+        "tx_tone": repeater.input_tone or "none",
+        "rx_tone": repeater.output_tone or "none",
+    }
+    if repeater.bandwidth and selection.has_capability(module, "bandwidth"):
+        values["bandwidth"] = repeater.bandwidth
+    return None, {
+        "slot": int(slot) if slot.isdigit() else slot,
+        "module": module.module_id,
+        "module_type": module.type,
+        "callsign": repeater.callsign,
+        "values": values,
+    }
 
 
 def _lock_status_with_drain(station, drain=lock.DRAIN_UNSET):
@@ -622,6 +833,34 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             )
         )
         await self._send_lock_status(station)
+        await self._send_scan_snapshot(station)
+
+    async def _send_scan_snapshot(self, station):
+        """A (re)loaded page must learn about a scan already running: one synthetic
+        ``scan_state`` with the coarse stored state (no step — the next agent frame fills
+        that in). ``starting`` is shown as ``active``."""
+        try:
+            current = await database_sync_to_async(scan.current_scan)(station)
+        except Exception:
+            logger.exception("control: reading the running scan failed")
+            return
+        if current is None:
+            return
+        scan_id, state = current
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "v": constants.PROTOCOL_VERSION,
+                    "type": "scan_state",
+                    "scan_id": scan_id,
+                    "state": state if state in scan.NOTED_STATES else "active",
+                    "index": None,
+                    "ref": None,
+                    "slot": None,
+                    "module": None,
+                }
+            )
+        )
 
     async def _reject(self, code, reason):
         """Accept-then-error reject so the browser sees a real reason."""
@@ -675,6 +914,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
 
         if mtype == "command":
             await self._handle_command(station, msg)
+        elif mtype == "apply_repeater":
+            await self._handle_apply_repeater(station, msg)
+        elif mtype == "scan_start":
+            await self._handle_scan_start(station, msg)
+        elif mtype == "scan_control":
+            await self._handle_scan_control(station, msg)
         elif mtype == "ptt_keepalive":
             if await self._touch_if_holder(station):
                 await self._relay(msg)
@@ -751,6 +996,126 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             # already relayed to the agent; we just don't crash the socket or
             # corrupt the gate. No bridge broadcast on a no-op.
 
+    async def _handle_apply_repeater(self, station, msg):
+        """One click in the repeater panel (spec §5.3): resolve the repeater server-side
+        into a single agent ``apply_preset`` for the chosen slot. Same gates as setting
+        the caps by hand (lock + per-capability write); the agent refuses while PTT is
+        active. The aggregated ``result`` comes back through ``control_result``."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._error(request_id, "not_locked", "You do not hold the lock")
+            return
+        try:
+            resolved = await self._resolve_repeater(
+                station, msg.get("repeater_id"), msg.get("slot"), msg.get("module")
+            )
+        except Exception:
+            logger.exception("control: resolving apply_repeater failed")
+            resolved = ("not_applicable", None)
+        code, plan = resolved
+        if code is not None:
+            await self._error(request_id, code, gettext("Repeater cannot be applied here"))
+            return
+        try:
+            denied = [
+                cap
+                for cap in plan["values"]
+                if not await self._may_write(cap, plan["module_type"])
+            ]
+        except Exception:
+            logger.exception("control: apply_repeater permission check failed; denying")
+            denied = list(plan["values"])
+        if denied:
+            await self._audit(
+                station,
+                "control_command",
+                f"{self.user.username} apply repeater {_clip(plan['callsign'])} "
+                f"denied ({', '.join(denied)})",
+            )
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "error",
+                        "code": "forbidden",
+                        "message": gettext("Repeater could not be authorized"),
+                        "request_id": request_id,
+                    }
+                )
+            )
+            return
+        await self._relay(
+            {
+                "v": constants.PROTOCOL_VERSION,
+                "type": "apply_preset",
+                "request_id": request_id,
+                "slot": plan["slot"],
+                "module": plan["module"],
+                "values": plan["values"],
+            }
+        )
+        if isinstance(request_id, str) or type(request_id) is int:
+            existing = self.pending.pop(request_id, None)
+            if existing is not None:
+                existing.cancel()
+            # Frequency/tone are not persist-policy caps: a stale entry must not persist.
+            self._persist_pending.pop(request_id, None)
+            timeout = getattr(django.conf.settings, "CONTROL_PRESET_TIMEOUT_SECONDS", 30)
+            self.pending[request_id] = asyncio.create_task(
+                self._command_timeout(request_id, timeout)
+            )
+        await self._audit(
+            station,
+            "control_command",
+            f"{self.user.username} applied repeater {_clip(plan['callsign'])} "
+            f"on {_clip(plan['slot'])}/{_clip(plan['module'])}",
+        )
+
+    async def _handle_scan_start(self, station, msg):
+        """Start a scan (spec §7.1): the server builds the effective list and hands it to
+        the agent, which runs the loop. Refused (no agent frame) without the lock, without
+        write on the frequency/tone capabilities, for a radius without station coordinates,
+        or when the effective list is empty."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._error(request_id, "not_locked", "You do not hold the lock")
+            return
+        try:
+            code, frame = await self._start_scan(station, msg)
+        except Exception:
+            logger.exception("control: starting scan failed")
+            code, frame = "internal_error", None
+        if code is not None:
+            await self._error(request_id, code, _SCAN_ERRORS.get(code, code))
+            return
+        await self._relay(frame)
+
+    async def _handle_scan_control(self, station, msg):
+        """stop/skip/hold/resume for the station's running scan (lock holder only)."""
+        request_id = msg.get("request_id")
+        action = msg.get("action")
+        if not await self._touch_if_holder(station):
+            await self._error(request_id, "not_locked", "You do not hold the lock")
+            return
+        if action not in scan.SCAN_ACTIONS:
+            await self._error(request_id, "invalid_action", "Unknown scan action")
+            return
+        if action == "stop":
+            # Server-side stop: the row goes now (an unreachable agent can't strand it).
+            scan_id = await self._stop_scan(station, "operator")
+        else:
+            scan_id = await database_sync_to_async(scan.current_scan_id)(station)
+            if scan_id is not None:
+                await self._relay(
+                    {
+                        "v": constants.PROTOCOL_VERSION,
+                        "type": "scan_control",
+                        "scan_id": scan_id,
+                        "action": action,
+                    }
+                )
+        if scan_id is None:
+            await self._error(request_id, "no_active_scan", "No scan is running")
+
     async def _authorize_command(self, station, msg):
         """Server-side capability gate (``control.<policy verb>``, spec §3.4) — the real
         authz check; the read-only UI render is cosmetic. Every capability command a
@@ -822,7 +1187,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 msg.get("value"),
             )
 
-    async def _command_timeout(self, request_id):
+    async def _command_timeout(self, request_id, timeout=None):
         """Fire a timeout error to the browser if no result arrives in time.
 
         Reads the timeout from settings at call-time (not the module-level
@@ -830,7 +1195,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         an importlib reload.
         """
         try:
-            timeout = getattr(django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10)
+            if timeout is None:
+                timeout = getattr(django.conf.settings, "CONTROL_COMMAND_TIMEOUT_SECONDS", 10)
             await asyncio.sleep(timeout)
             await self.send(
                 text_data=json.dumps(
@@ -935,6 +1301,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             "control_lock_released",
             f"{self.user.username} lost control (requires control.use)",
         )
+        await self._stop_scan(station, "lock released")
         await self._audio_clear_ptt(station)
         await self._audio_clear_tx_route(station)
         await self._bridge_gate(station)
@@ -946,6 +1313,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._audit(
                 station, "control_lock_released", f"{self.user.username} released control"
             )
+            await self._stop_scan(station, "lock released")
             # Lock loss -> clear PTT and notify audio consumers.
             await self._audio_clear_ptt(station)
             await self._bridge_gate(station)
@@ -974,7 +1342,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 "control_lock_transferred",
                 f"{self.user.username} -> user {to_user_id}",
             )
-            # Holder changed -> old holder can no longer key TX.
+            # Holder changed -> old holder can no longer key TX nor scan.
+            await self._stop_scan(station, "lock transferred")
             await self._audio_clear_ptt(station)
             await self._bridge_gate(station)
         if transferred is lock.DRAIN_REFUSED:
@@ -1001,7 +1370,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._audit(
             station, "control_lock_preempted", f"{self.user.username} preempted control"
         )
-        # Holder changed by preempt -> PTT dies.
+        # Holder changed by preempt -> PTT and the previous holder's scan die.
+        await self._stop_scan(station, "lock preempted", unless_user=self.user)
         await self._audio_clear_ptt(station)
         await self._bridge_gate(station)
         await self._broadcast_lock(station)
@@ -1041,6 +1411,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_inventory(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_scan_state(self, event):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_result(self, event):
@@ -1130,6 +1503,11 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         )
 
     @database_sync_to_async
+    def _resolve_repeater(self, station, repeater_id, slot, module_id):
+        """``(error_code, None)`` or ``(None, plan)`` for an ``apply_repeater`` frame."""
+        return _resolve_repeater(station, repeater_id, slot, module_id)
+
+    @database_sync_to_async
     def _may_write(self, capability, module_type):
         user = _fresh_user(self.user)
         if user is None:
@@ -1171,6 +1549,23 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         from . import serializers
 
         return serializers.snapshot(station)
+
+    @database_sync_to_async
+    def _start_scan(self, station, msg):
+        user = _fresh_user(self.user)
+        if user is None:
+            return "forbidden", None
+        return scan.start_scan(station, user, msg)
+
+    async def _stop_scan(self, station, reason, unless_user=None):
+        """Stop the station's scan (row + audit + agent stop); returns its scan_id."""
+        try:
+            return await database_sync_to_async(scan.stop_active_scan)(
+                station, reason, unless_user=unless_user
+            )
+        except Exception:
+            logger.exception("control: stopping scan failed")
+            return None
 
     @database_sync_to_async
     def _acquire(self, station):

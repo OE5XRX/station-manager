@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Repeaters" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Repeaters" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <h1 class="page-title">{% trans "Repeaters" %}</h1>
+    <p class="page-sub">
+      {% trans "Frequencies are from the station's point of view: it receives on the repeater output and transmits on the repeater input." %}
+    </p>
+  </div>
+  <div class="page-head-actions">
+    {% if show_all %}
+      <a href="{% url 'repeaters:list' %}" class="btn btn-ghost">{% trans "Show active only" %}</a>
+    {% else %}
+      <a href="{% url 'repeaters:list' %}?show=all" class="btn btn-ghost">{% trans "Show all, incl. inactive" %}</a>
+    {% endif %}
+    {% if can.control.use %}
+      <a href="{% url 'repeaters:scanlists' %}" class="btn btn-ghost">{% trans "My scan lists" %}</a>
+    {% endif %}
+    {% if can_manage %}
+      <a href="{% url 'repeaters:create' %}" class="btn btn-primary">{% trans "Add repeater" %}</a>
+    {% endif %}
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title">
+      <span class="dot" style="background:var(--cyan)"></span>
+      <span>{% trans "Repeater list" %}</span>
+      <span class="t-mono-sm t-muted" style="margin-left:10px;">
+        {% blocktrans count n=repeaters|length %}{{ n }} entry{% plural %}{{ n }} entries{% endblocktrans %}
+      </span>
+    </div>
+  </div>
+  <div class="panel-body flush">
+  {% if repeaters %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "Callsign" %}</th>
+            <th>{% trans "Site" %}</th>
+            <th class="num">{% trans "Output (RX)" %}</th>
+            <th class="num">{% trans "Input (TX)" %}</th>
+            <th>{% trans "Tones" %}</th>
+            <th>{% trans "Source" %}</th>
+            {% if can_manage %}<th style="width:1%;"></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in repeaters %}
+          <tr {% if not r.active %}class="is-archived"{% endif %}>
+            <td data-primary data-label="{% trans 'Callsign' %}">
+              <span class="t-mono">{{ r.callsign }}</span>
+              {% if not r.active %}<span class="t-label">{% trans "inactive" %}</span>{% endif %}
+              {% if r.replaces %}
+                <div class="t-mono-sm t-muted">{% blocktrans with cs=r.replaces.callsign %}replaces ÖVSV entry {{ cs }}{% endblocktrans %}</div>
+              {% endif %}
+            </td>
+            <td data-label="{% trans 'Site' %}">{{ r.site_name|default:"—" }}{% if r.locator %} <span class="t-mono-sm t-muted">{{ r.locator }}</span>{% endif %}</td>
+            <td class="num t-mono" data-label="{% trans 'Output (RX)' %}">{{ r.output_frequency|stringformat:".4f" }}</td>
+            <td class="num t-mono" data-label="{% trans 'Input (TX)' %}">{% if r.is_simplex %}{% trans "simplex" %}{% else %}{{ r.input_frequency|stringformat:".4f" }}{% endif %}</td>
+            <td class="t-mono-sm" data-label="{% trans 'Tones' %}">{{ r.input_tone }} / {{ r.output_tone }}</td>
+            <td data-label="{% trans 'Source' %}">
+              {% if r.source == "oevsv" %}
+                <span class="badge">ÖVSV</span>
+              {% else %}
+                <span class="badge">{% trans "Manual" %}</span>
+              {% endif %}
+            </td>
+            {% if can_manage %}
+            <td>
+              {% if r.source == "manual" %}
+                <a href="{% url 'repeaters:update' r.pk %}" class="btn btn-sm btn-ghost">{% trans "Edit" %}</a>
+                <a href="{% url 'repeaters:deactivate' r.pk %}" class="btn btn-sm btn-ghost">{% if r.active %}{% trans "Deactivate" %}{% else %}{% trans "Reactivate" %}{% endif %}</a>
+              {% endif %}
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="t-muted" style="padding:20px;">
+      {% trans "No repeaters yet. The ÖVSV import fills this list automatically; manual entries can be added at any time." %}
+    </p>
+  {% endif %}
+  </div>
+</section>
+
+<p class="t-label" style="margin-top:12px;">
+  <a href="{{ attribution.url }}" rel="noopener" target="_blank">{{ attribution.text }}</a>
+</p>
+{% endblock %}

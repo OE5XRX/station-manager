@@ -308,6 +308,8 @@ class AccountAuditLog(models.Model):
         CONFIG_CHANGED = "config_changed", _("Config Changed")
         # === Added in Unified Permissions (2026-10-14) ===
         PERMISSION_DENIED = "permission_denied", _("Permission Denied")
+        # === Added in Repeater list & scanner (2026-11-06) ===
+        REPEATER_CHANGED = "repeater_changed", _("Repeater Changed")
 
     event_type = models.CharField(
         _("event type"),

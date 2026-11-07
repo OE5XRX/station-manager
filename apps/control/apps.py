@@ -6,3 +6,8 @@ class ControlConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "apps.control"
     verbose_name = _("Control")
+
+    def ready(self):
+        from . import scan
+
+        scan._connect_signals()

@@ -30,6 +30,7 @@ SPEC_MATRIX = {
     "alerts": ("A", None, "S"),
     "alert_rules": ("A", None, "Ad"),
     "modules": ("A", None, "S"),
+    "repeaters": ("A", None, "S"),
     "users": ("M", None, "Ad"),
     "api_tokens": (None, "M", None),
     "audit": ("Ad", None, None),

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Scan lists" %} · OE5XRX{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{% url 'dashboard:index' %}">OE5XRX</a>
+  <span class="sep">/</span>
+  <a href="{% url 'repeaters:list' %}">{% trans "Repeaters" %}</a>
+  <span class="sep">/</span>
+  <span class="cur">{% trans "Scan lists" %}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head-main">
+    <h1 class="page-title">{% trans "Scan lists" %}</h1>
+    <p class="page-sub">
+      {% trans "Your own lists follow you to every station. At a station the scanner skips entries whose band the station does not have." %}
+    </p>
+  </div>
+  <div class="page-head-actions">
+    <a href="{% url 'repeaters:scanlist_create' %}" class="btn btn-primary">{% trans "New scan list" %}</a>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-body flush">
+  {% if scan_lists %}
+    <div class="table-wrap" data-mobile-cards style="border:none;border-radius:0;">
+      <table class="t-table">
+        <thead>
+          <tr>
+            <th>{% trans "Name" %}</th>
+            <th class="num">{% trans "Entries" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sl in scan_lists %}
+          <tr>
+            <td data-primary data-label="{% trans 'Name' %}"><a href="{% url 'repeaters:scanlist_detail' sl.pk %}">{{ sl.name }}</a></td>
+            <td class="num t-mono" data-label="{% trans 'Entries' %}">{{ sl.count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="t-muted" style="padding:20px;">
+      {% trans "You have no scan lists yet. Create one, then add repeaters or free frequencies to scan." %}
+    </p>
+  {% endif %}
+  </div>
+</section>
+{% endblock %}

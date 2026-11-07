@@ -29,6 +29,20 @@
   // next poll, so it never shows a pre-flash state after the strip disappears.
   var FW_STATUS_REFRESH = "fw-status-refresh";
 
+  // Sibling panels (repeater panel, …) have no socket of their own: they send via
+  // the window event "control:send" and listen to the frames re-emitted below.
+  var SEND_EVENT = "control:send";
+  // Frame types a sibling panel may send through the bridge (everything else
+  // has its own path: commands via the widgets / store.sendCommand, lock UX here).
+  var BRIDGE_TYPES = { apply_repeater: true, scan_start: true, scan_control: true };
+  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true, scan_state: true };
+
+  function emitFrame(msg) {
+    if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+    if (typeof CustomEvent !== "function") return;
+    window.dispatchEvent(new CustomEvent("control:" + msg.type, { detail: msg }));
+  }
+
   function notifyFwSettled() {
     if (typeof document === "undefined" || !document.body) return;
     if (typeof CustomEvent !== "function") return;
@@ -70,6 +84,7 @@
       _caps: {}, // "slot module cap" -> descriptor
       _capNames: {}, // "slot module" -> {settings:[], telemetry:[]}
       _reqWidget: {}, // request_id -> "slot module cap"
+      _bridgeReqs: {}, // request_id -> true for frames a sibling panel sent (it shows the outcome)
       _reqSeq: 0,
       _listeners: [],
       _lossTimer: null,
@@ -313,6 +328,7 @@
       // Message router
       // ---------------------------------------------------------------------
       _route: function (msg) {
+        if (msg && EMIT_TYPES[msg.type]) emitFrame(msg);
         switch (msg.type) {
           case "inventory":
             this._ingestInventory(msg.slots || []);
@@ -384,6 +400,7 @@
 
       _onResult: function (msg) {
         var rid = msg.request_id;
+        if (rid !== undefined) delete this._bridgeReqs[rid];
         var wkey = this._reqWidget[rid];
         if (rid !== undefined) delete this._reqWidget[rid];
         if (wkey && this.pending[wkey]) delete this.pending[wkey];
@@ -399,6 +416,9 @@
         var rid = msg.request_id;
         var wkey = rid !== undefined ? this._reqWidget[rid] : null;
         if (rid !== undefined) delete this._reqWidget[rid];
+        // A sibling panel's frame: that panel shows the outcome — no second toast here.
+        var bridged = rid !== undefined && this._bridgeReqs[rid] === true;
+        if (bridged) delete this._bridgeReqs[rid];
         if (wkey && this.pending[wkey]) delete this.pending[wkey];
         // Normalise both frame shapes: {error:{code,msg}} and the permission frame
         // {code:"forbidden", message} (spec 2026-10-14 §5.2).
@@ -408,7 +428,7 @@
           // Control grant refused while a module firmware update drains the station.
           this._showDenyNotice(err.msg || L.errorMessage(code));
         }
-        if (code === "forbidden") {
+        if (code === "forbidden" && !bridged) {
           // Toast the server's explanation. If the socket then closes with 4403 this
           // was the connect gate, and _scheduleReconnect promotes it to connError.
           this._lastDenial = err.msg || L.errorMessage(code);
@@ -916,6 +936,32 @@
         this._addListener(window, "blur", onBlur);
         this._addListener(document, "visibilitychange", onVisibility);
         this._addListener(window, "beforeunload", onBeforeUnload);
+        this._addListener(window, SEND_EVENT, function (e) {
+          self._onSendEvent(e);
+        });
+      },
+
+      // Forward a sibling panel's frame to the socket. A frame that cannot be sent
+      // is answered locally so the sender never waits on a dead socket.
+      _onSendEvent: function (e) {
+        var frame = e && e.detail;
+        if (!frame || typeof frame !== "object" || !BRIDGE_TYPES[frame.type]) return;
+        if (this._send(frame)) {
+          if (frame.request_id !== undefined) {
+            // Successful scan_start/scan_control get no reply: bound the map.
+            var ids = Object.keys(this._bridgeReqs);
+            if (ids.length >= 32) delete this._bridgeReqs[ids[0]];
+            this._bridgeReqs[frame.request_id] = true;
+          }
+          return;
+        }
+        if (frame.request_id !== undefined) {
+          emitFrame({
+            type: "error",
+            request_id: frame.request_id,
+            error: { code: "not_connected", msg: "" },
+          });
+        }
       },
 
       _addListener: function (target, type, handler) {

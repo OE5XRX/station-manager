@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.monitoring",
     "apps.webpush",
     "apps.history",
+    "apps.repeaters",
     "apps.images",
     "apps.module_firmware",
     "apps.provisioning",
@@ -257,6 +258,9 @@ CHANNEL_LAYERS = {
 CONTROL_T_IDLE_SECONDS = 300  # idle lock auto-free (5 min)
 CONTROL_RECONNECT_GRACE_SECONDS = 12  # hold survives a short WS blip
 CONTROL_COMMAND_TIMEOUT_SECONDS = 10  # no result -> timeout error to browser
+# apply_preset (repeater apply) runs up to 5 sequential sets on the module (each up to
+# the agent's slot command timeout), so it gets its own, longer budget.
+CONTROL_PRESET_TIMEOUT_SECONDS = 30
 CONTROL_LOCK_SWEEP_INTERVAL_SECONDS = 5
 # Offline StationModule rows (control panel cards) not seen for this long are pruned
 # while processing a non-empty inventory snapshot (apps.control.registry).

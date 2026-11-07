@@ -1,0 +1,9 @@
+[
+ {"uid":2119,"band":"2m","frequency_tx":145.6,"frequency_rx":145,"callsign":"OE5XLL","site_name":"Lichtenberg","status":"active","fm":true,"ctcss_tx":null,"ctcss_rx":null},
+ {"uid":2120,"band":"70cm","frequency_tx":438.475,"frequency_rx":430.875,"callsign":"OE5XLL","site_name":"Lichtenberg","status":"active","fm":true,"ctcss_tx":null,"ctcss_rx":null},
+ {"uid":2163,"band":"70cm","frequency_tx":439.025,"frequency_rx":431.425,"callsign":"OE7XFJ","site_name":"Harschbichl","status":"active","fm":true,"ctcss_tx":null,"ctcss_rx":77},
+ {"uid":2086,"band":"2m","frequency_tx":145.7,"frequency_rx":145.1,"callsign":"OE3XSA","site_name":"Sandl","status":"active","fm":true,"ctcss_tx":88.5,"ctcss_rx":162.2},
+ {"uid":3001,"band":"2m","frequency_tx":145.5,"frequency_rx":145.5,"callsign":"OE9SIM","site_name":"Nowhere","status":"active","fm":true,"ctcss_tx":null,"ctcss_rx":null},
+ {"uid":3002,"band":"2m","frequency_tx":null,"frequency_rx":145.0,"callsign":"OE9BAD","site_name":"Lichtenberg","status":"active","fm":true,"ctcss_tx":null,"ctcss_rx":null},
+ {"uid":3003,"band":"2m","frequency_tx":145.8,"frequency_rx":145.2,"callsign":"OE9OLD","site_name":null,"status":"historic","fm":true,"ctcss_tx":null,"ctcss_rx":null}
+]

@@ -28,6 +28,9 @@ class FakeFirmware:
         # Every command line the fake received (stripped), so tests can assert that a
         # slot was (or was NOT) touched — e.g. a paused slot must see no `module list`.
         self.received: list[bytes] = []
+        # `carrier` telemetry reading: a bool, or a zero-arg callable evaluated per `get`
+        # (lets scanner tests script a carrier that follows the tuned frequency).
+        self.carrier = False
         self._master_fd, self._slave_fd = os.openpty()
         # Real UARTs deliver raw bytes: no line discipline, no echo, no CR/LF
         # mapping. A bare openpty() slave is canonical+echoing, which hides
@@ -100,7 +103,9 @@ class FakeFirmware:
             return
         if op == "get":
             # Telemetry returns a canned reading; settings echo last-set value.
-            if c.get("kind") == "telemetry":
+            if cap == "carrier":
+                val = bool(self.carrier() if callable(self.carrier) else self.carrier)
+            elif c.get("kind") == "telemetry":
                 val = 42 if c.get("type") == "int" else "vhf"
             else:
                 val = self.state[mid].get(cap)
