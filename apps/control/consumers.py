@@ -594,10 +594,12 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 return
             if state == "stopped":
                 await self._end_scan(station, msg.get("reason") or "stopped", scan_id)
-            elif state in _SCAN_TUNED_STATES:
-                if self._scan_noted != (scan_id, state):
-                    await database_sync_to_async(scan.note_state)(station, scan_id, state)
-                    self._scan_noted = (scan_id, state)
+                return
+            coarse = scan.coarse_state(state)
+            if coarse is not None and self._scan_noted != (scan_id, coarse):
+                await database_sync_to_async(scan.note_state)(station, scan_id, coarse)
+                self._scan_noted = (scan_id, coarse)
+            if state in _SCAN_TUNED_STATES:
                 slot, module = msg.get("slot"), msg.get("module")
                 if slot is None or not isinstance(module, str):
                     return  # nothing tuned yet

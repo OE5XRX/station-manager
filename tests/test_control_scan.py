@@ -703,6 +703,32 @@ def test_scan_state_stores_coarse_state(control_agent_auth):
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("running", ["scanning", "active", "hang"])
+def test_resumed_scan_counts_as_activity_again(control_agent_auth, running):
+    # Review #192 r2: a quiet scan only ever sends "scanning" — that must count as running.
+    station, user = _setup(f"sc-resume-{running}")
+    _rep()
+
+    async def scenario():
+        agent, browser = await _connect(station, user)
+        start = await _started(agent, browser, _start())
+        for state in ("held", running):
+            await agent.send_json_to(_scan_state(start["scan_id"], state))
+            await _until(browser, lambda m, st=state: m.get("state") == st)
+        result = await database_sync_to_async(
+            lambda: (
+                ActiveScan.objects.values_list("state", flat=True).get(),
+                scan.scan_counts_as_activity(station),
+            )
+        )()
+        await browser.disconnect()
+        await agent.disconnect()
+        return result
+
+    assert asyncio.run(scenario()) == ("active", True)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_held_scan_state_never_moves_mic_off_a_keyed_module(control_agent_auth):
     station, user = _setup("sc-keyed")
     _rep()

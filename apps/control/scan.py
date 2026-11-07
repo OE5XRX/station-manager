@@ -186,8 +186,17 @@ def current_scan(station):
     return ActiveScan.objects.filter(station=station).values_list("scan_id", "state").first()
 
 
+# Agent scan_state -> stored coarse state: every running phase is "active", a parked
+# scan "held"; "stopped" ends the row instead.
+_COARSE = {"scanning": "active", "active": "active", "hang": "active", "held": "held"}
+
+
+def coarse_state(state):
+    return _COARSE.get(state) if isinstance(state, str) else None
+
+
 def note_state(station, scan_id, state):
-    """Store the coarse agent state (``active``/``held``) of the current scan."""
+    """Store the coarse state (``active``/``held``, see ``coarse_state``) of the current scan."""
     if state not in NOTED_STATES:
         return
     ActiveScan.objects.filter(station=station, scan_id=scan_id).exclude(state=state).update(
