@@ -618,7 +618,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         if scan.current_scan_id(station) != scan_id:
             return False  # a stale/replaced scan must not move the mic
         before = audio_gate.get_state(station)
-        if before.get("ptt_active") and (
+        if audio_gate.ptt_keyed(station) and (
             str(before.get("ptt_slot")),
             before.get("ptt_module"),
         ) != (str(slot), module):

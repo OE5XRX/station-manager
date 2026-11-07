@@ -751,6 +751,29 @@ def test_held_scan_state_never_moves_mic_off_a_keyed_module(control_agent_auth):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_expired_ptt_does_not_pin_the_tx_route(control_agent_auth):
+    # Review #192 r3: a lapsed (not yet swept) PTT must not block the scan's route.
+    station, user = _setup("sc-expptt")
+    _rep()
+
+    async def scenario():
+        agent, browser = await _connect(station, user)
+        start = await _started(agent, browser, _start())
+        await database_sync_to_async(audio_gate.set_tx_route)(station, 2, "fm9")
+        await database_sync_to_async(audio_gate.set_ptt)(station, 2, "fm9", ttl=-1)
+        await agent.send_json_to(_scan_state(start["scan_id"], "active"))
+        await _until(browser, lambda m: m.get("type") == "scan_state")
+        gate = await database_sync_to_async(audio_gate.get_state)(station)
+        await database_sync_to_async(audio_gate.clear_ptt)(station)
+        await browser.disconnect()
+        await agent.disconnect()
+        return gate
+
+    gate = asyncio.run(scenario())
+    assert (gate["tx_slot"], gate["tx_module"]) == (1, "fm0")
+
+
+@pytest.mark.django_db(transaction=True)
 def test_agent_disconnect_tells_browsers_the_scan_stopped(control_agent_auth):
     station, user = _setup("sc-gonebc")
     _rep()
