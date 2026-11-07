@@ -393,7 +393,13 @@
         this.pending = false;
         clearTimeout(this._pendingTimer);
         if (msg.type === "error") {
-          this._notify({ ok: false, text: errorText((msg.error && msg.error.code) || msg.code) });
+          var code = (msg.error && msg.error.code) || msg.code;
+          if (code === "no_active_scan" && this.scan) {
+            // The scan already ended without this page hearing it: show it as stopped.
+            this._onScanState({ state: "stopped", reason: "operator" });
+            return;
+          }
+          this._notify({ ok: false, text: errorText(code) });
         }
       },
 

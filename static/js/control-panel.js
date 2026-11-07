@@ -947,7 +947,12 @@
         var frame = e && e.detail;
         if (!frame || typeof frame !== "object" || !BRIDGE_TYPES[frame.type]) return;
         if (this._send(frame)) {
-          if (frame.request_id !== undefined) this._bridgeReqs[frame.request_id] = true;
+          if (frame.request_id !== undefined) {
+            // Successful scan_start/scan_control get no reply: bound the map.
+            var ids = Object.keys(this._bridgeReqs);
+            if (ids.length >= 32) delete this._bridgeReqs[ids[0]];
+            this._bridgeReqs[frame.request_id] = true;
+          }
           return;
         }
         if (frame.request_id !== undefined) {

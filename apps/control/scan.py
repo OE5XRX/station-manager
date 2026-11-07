@@ -6,7 +6,8 @@ keeps the station's ``ActiveScan`` row in step with the scan's lifetime, stops t
 when the lock changes hands, and pushes a rebuilt list (``scan_update``) whenever one of
 the scan's lists is edited.
 
-Only start and stop are audited; individual scan steps never touch the DB here.
+Only start and stop are audited; individual scan steps never touch the DB here (only the
+coarse ``starting``/``active``/``held`` state transition is stored, see ``note_state``).
 All functions are synchronous (consumers wrap them in ``database_sync_to_async``).
 """
 
@@ -14,12 +15,15 @@ import logging
 import math
 import threading
 import uuid
+from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import transaction
+from django.db.models import Q
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 from . import capability_policy, constants
 from .models import ActiveScan, StationModule
@@ -40,6 +44,10 @@ LISTEN_RANGE_S = (0.2, 60.0)
 HANG_RANGE_S = (0.0, 600.0)
 DEFAULT_LISTEN_S = 2.0
 DEFAULT_HANG_S = 5.0
+# A scan the agent has not confirmed yet (no scan_state) keeps the lock busy only this long:
+# an agent that ignores scan_start must not hold the lock forever.
+START_GRACE_S = 30.0
+NOTED_STATES = frozenset({"active", "held"})
 
 
 def agent_group(station_pk):
@@ -173,11 +181,25 @@ def current_scan_id(station):
     return ActiveScan.objects.filter(station=station).values_list("scan_id", flat=True).first()
 
 
+def current_scan(station):
+    """``(scan_id, state)`` of the station's running scan, or ``None``."""
+    return ActiveScan.objects.filter(station=station).values_list("scan_id", "state").first()
+
+
+def note_state(station, scan_id, state):
+    """Store the coarse agent state (``active``/``held``) of the current scan."""
+    if state not in NOTED_STATES:
+        return
+    ActiveScan.objects.filter(station=station, scan_id=scan_id).exclude(state=state).update(
+        state=state
+    )
+
+
 def end_scan(station, reason, scan_id=None):
     """The agent reported the scan stopped (or the agent is gone): drop the row + audit.
 
     ``scan_id`` guards against a late ``stopped`` of a replaced scan deleting its
-    successor. Returns True when a row was removed."""
+    successor. Returns the removed row's ``scan_id`` (``None`` if nothing was removed)."""
     with transaction.atomic():
         rows = (
             ActiveScan.objects.select_for_update().select_related("user").filter(station=station)
@@ -186,10 +208,10 @@ def end_scan(station, reason, scan_id=None):
             rows = rows.filter(scan_id=scan_id)
         row = rows.first()
         if row is None:
-            return False
+            return None
         row.delete()
         _audit(station, row.user, f"scan stopped ({str(reason)[:32]})")
-    return True
+    return row.scan_id
 
 
 def stop_active_scan(station, reason, *, unless_user=None):
@@ -215,8 +237,15 @@ def stop_active_scan(station, reason, *, unless_user=None):
 
 
 def scan_counts_as_activity(station):
-    """A running scan keeps the lock from idling out (spec §7.5)."""
-    return ActiveScan.objects.filter(station=station).exists()
+    """A running scan keeps the lock from idling out (spec §7.5) — but only while it
+    actually scans: a held (parked) scan idles like a tuned radio, and an unconfirmed
+    start only counts for ``START_GRACE_S``."""
+    fresh = timezone.now() - timedelta(seconds=START_GRACE_S)
+    return (
+        ActiveScan.objects.filter(station=station)
+        .filter(Q(state="active") | Q(state="starting", started_at__gte=fresh))
+        .exists()
+    )
 
 
 def _send_to_agent(station_pk, frame):

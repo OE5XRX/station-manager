@@ -260,6 +260,9 @@ class ActiveScan(models.Model):
     band_map = models.JSONField(_("band map"), default=dict, blank=True)
     listen_s = models.FloatField(_("listen window (s)"))
     hang_s = models.FloatField(_("hang time (s)"))
+    # Coarse agent-reported state (starting until the first scan_state, then active/held)
+    # — never the current step. Only "active" (or a fresh "starting") keeps the lock busy.
+    state = models.CharField(_("state"), max_length=16, default="starting")
     started_at = models.DateTimeField(_("started at"), auto_now_add=True)
 
     class Meta:

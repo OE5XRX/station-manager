@@ -69,9 +69,12 @@ Spec: `docs/superpowers/specs/2026-11-06-repeater-list-and-scanner-design.md`.
   als `scan_start`/`scan_update`; der Agent tastet sequentiell ab und meldet `scan_state`. Eine
   Listen-Änderung pusht per Signal (on_commit, coalesced) ein `scan_update` an laufende Scans.
 - **Scan-Schritte werden nie persistiert oder auditiert.** `ActiveScan` (1 pro Station) merkt sich
-  nur die Bauparameter; Start/Stop werden auditiert. Lock-Release/-Transfer/-Ablauf und Agent-Disconnect
-  beenden den Scan; ein laufender Scan zählt als Lock-Aktivität. `scan_state` `active`/`held` bewegt die
-  Audio-Gate-TX-Route (nur für die aktuelle `scan_id`). Der Agent-Consumer reichert `scan_state` für den
+  nur die Bauparameter + den groben Zustand (`starting`/`active`/`held`, eine DB-Write pro Wechsel);
+  Start/Stop werden auditiert. Lock-Release/-Transfer/-Ablauf und Agent-Disconnect beenden den Scan
+  (Disconnect → synthetisches `stopped` an die Browser; ein neu verbundener Browser bekommt einen
+  `scan_state`-Snapshot). Nur ein `active` (oder max. 30 s unbestätigter `starting`) Scan zählt als
+  Lock-Aktivität — ein gehaltener idlet wie ein Radio. `scan_state` `active`/`held` bewegt die
+  Audio-Gate-TX-Route (nur für die aktuelle `scan_id`, nie weg von einem gekeyten Modul). Der Agent-Consumer reichert `scan_state` für den
   Browser in-memory mit `label`/`rx_frequency`/`count` aus der zuletzt durchgereichten Liste an.
 - `apply_repeater` (Browser) wird serverseitig zu **einem** `apply_preset`-Frame aufgelöst
   (tx/rx-Frequenz + Töne + ggf. Bandbreite, nur beworbene Capabilities).

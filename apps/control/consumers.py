@@ -115,6 +115,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         # (scan_id, {ref: (label, rx_frequency)}, count) of the last scan_start/scan_update
         # relayed to this agent: enriches its scan_state frames for the browser panel.
         self._scan_index = None
+        # (scan_id, state) last stored via scan.note_state: one DB write per transition.
+        self._scan_noted = None
 
         from urllib.parse import parse_qs
 
@@ -593,6 +595,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if state == "stopped":
                 await self._end_scan(station, msg.get("reason") or "stopped", scan_id)
             elif state in _SCAN_TUNED_STATES:
+                if self._scan_noted != (scan_id, state):
+                    await database_sync_to_async(scan.note_state)(station, scan_id, state)
+                    self._scan_noted = (scan_id, state)
                 slot, module = msg.get("slot"), msg.get("module")
                 if slot is None or not isinstance(module, str):
                     return  # nothing tuned yet
@@ -611,6 +616,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         if scan.current_scan_id(station) != scan_id:
             return False  # a stale/replaced scan must not move the mic
         before = audio_gate.get_state(station)
+        if before.get("ptt_active") and (
+            str(before.get("ptt_slot")),
+            before.get("ptt_module"),
+        ) != (str(slot), module):
+            return False  # never move the mic away from a keyed module (agent does the same)
         audio_gate.set_tx_route(station, slot, module)
         after = audio_gate.get_state(station)
         return (before.get("tx_slot"), before.get("tx_module")) != (
@@ -619,8 +629,28 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         )
 
     async def _end_scan(self, station, reason, scan_id=None):
+        """Drop the station's ``ActiveScan``. Without ``scan_id`` the server ends it itself
+        (agent gone/reconnected): no agent ``stopped`` will follow, so the browsers get a
+        synthetic one — otherwise their scanner panel would stay "running"."""
         try:
-            await database_sync_to_async(scan.end_scan)(station, reason, scan_id)
+            removed = await database_sync_to_async(scan.end_scan)(station, reason, scan_id)
+            if removed is not None and scan_id is None:
+                await self._broadcast(
+                    "control.scan_state",
+                    {
+                        "msg": {
+                            "v": constants.PROTOCOL_VERSION,
+                            "type": "scan_state",
+                            "scan_id": removed,
+                            "state": "stopped",
+                            "index": None,
+                            "ref": None,
+                            "slot": None,
+                            "module": None,
+                            "reason": "disconnect",
+                        }
+                    },
+                )
         except Exception:
             logger.exception("control: ending scan failed")
 
@@ -801,6 +831,34 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             )
         )
         await self._send_lock_status(station)
+        await self._send_scan_snapshot(station)
+
+    async def _send_scan_snapshot(self, station):
+        """A (re)loaded page must learn about a scan already running: one synthetic
+        ``scan_state`` with the coarse stored state (no step — the next agent frame fills
+        that in). ``starting`` is shown as ``active``."""
+        try:
+            current = await database_sync_to_async(scan.current_scan)(station)
+        except Exception:
+            logger.exception("control: reading the running scan failed")
+            return
+        if current is None:
+            return
+        scan_id, state = current
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "v": constants.PROTOCOL_VERSION,
+                    "type": "scan_state",
+                    "scan_id": scan_id,
+                    "state": state if state in scan.NOTED_STATES else "active",
+                    "index": None,
+                    "ref": None,
+                    "slot": None,
+                    "module": None,
+                }
+            )
+        )
 
     async def _reject(self, code, reason):
         """Accept-then-error reject so the browser sees a real reason."""

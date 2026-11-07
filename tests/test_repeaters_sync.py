@@ -203,3 +203,11 @@ def test_oversized_response_rejected():
     with mock.patch("apps.repeaters.oevsv.urllib.request.urlopen", return_value=big):
         with pytest.raises(OevsvError):
             fetch_oevsv()
+
+
+def test_pure_deactivation_not_also_counted_as_update():
+    sync_repeaters(_rows(), NOW)
+    rows = _rows()
+    _by_id(rows, 2119)["active"] = False
+    result = sync_repeaters(rows, NOW)
+    assert (result.deactivated, result.updated) == (1, 0)

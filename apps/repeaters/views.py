@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Count, Max
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
@@ -264,6 +265,8 @@ def _renumber(scan_list):
 class ScanListEntryAddView(ScanListMixin, View):
     http_method_names = ["post"]
 
+    # One transaction: entry signals coalesce into a single scan_update push.
+    @transaction.atomic
     def post(self, request, pk):
         scan_list = self.get_scan_list()
         if scan_list.entries.count() >= MAX_ENTRIES_PER_LIST:
@@ -289,6 +292,8 @@ class ScanListEntryAddView(ScanListMixin, View):
 class ScanListEntryDeleteView(ScanListMixin, View):
     http_method_names = ["post"]
 
+    # One transaction: entry signals coalesce into a single scan_update push.
+    @transaction.atomic
     def post(self, request, pk, entry_pk):
         scan_list = self.get_scan_list()
         get_object_or_404(ScanListEntry, pk=entry_pk, scan_list=scan_list).delete()
@@ -302,6 +307,8 @@ class ScanListEntryMoveView(ScanListMixin, View):
 
     http_method_names = ["post"]
 
+    # One transaction: entry signals coalesce into a single scan_update push.
+    @transaction.atomic
     def post(self, request, pk, entry_pk):
         scan_list = self.get_scan_list()
         direction = request.POST.get("direction")

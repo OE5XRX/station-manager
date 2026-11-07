@@ -282,3 +282,19 @@ def test_entry_cap(client, member_user, monkeypatch):
         reverse("repeaters:scanlist_entry_add", args=[sl.pk]), {"frequency": "145.6"}
     )
     assert sl.entries.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_entry_delete_pushes_one_scan_update(client, member_user, monkeypatch):
+    from apps.control import scan
+
+    pushes = []
+    monkeypatch.setattr(scan, "push_scan_updates", lambda ids: pushes.append(set(ids)))
+    sl = ScanList.objects.create(owner=member_user, name="L")
+    entries = [_entry(sl, i, frequency=Decimal("145.5") + i) for i in range(5)]
+    pushes.clear()
+    _login(client, member_user).post(
+        reverse("repeaters:scanlist_entry_delete", args=[sl.pk, entries[0].pk])
+    )
+    # Delete + renumbering of the 4 others coalesce into one push per request.
+    assert pushes == [{sl.pk}]

@@ -401,7 +401,7 @@ def test_idle_sweep_skipped_while_scanning():
     assert lock.sweep_lock(station, now=timezone.now(), idle_seconds=300) is False
     # The scan counted as activity: once it ends on its own, no immediate idle release.
     assert ControlLock.objects.get(station=station).last_activity > long_ago
-    assert scan.end_scan(station, "no_reachable_entries") is True
+    assert scan.end_scan(station, "no_reachable_entries") is not None
     assert lock.sweep_lock(station, now=timezone.now(), idle_seconds=300) is False
     ActiveScan.objects.create(station=station, user=user, scan_id="y", listen_s=2, hang_s=5)
     # Holder's browser gone: the reconnect grace still frees the lock.
@@ -643,3 +643,121 @@ def test_rolled_back_list_edit_is_not_pushed_later(monkeypatch):
         ScanListEntry.objects.create(scan_list=other, position=1, frequency=Decimal("145.4"))
         ScanListEntry.objects.create(scan_list=other, position=2, frequency=Decimal("145.45"))
     assert pushed == [{other.pk}]  # one push per commit, without the rolled-back list
+
+
+# -- review #192 round 1 -------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_only_scanning_or_fresh_start_counts_as_activity():
+    station, user = _setup("sc-act")
+    row = ActiveScan.objects.create(station=station, user=user, scan_id="x", listen_s=2, hang_s=5)
+    assert scan.scan_counts_as_activity(station)  # fresh, unconfirmed start
+    scan.note_state(station, "x", "held")
+    assert not scan.scan_counts_as_activity(station)  # parked scan idles like a radio
+    scan.note_state(station, "other", "active")  # another scan_id changes nothing
+    assert ActiveScan.objects.get(pk=row.pk).state == "held"
+    scan.note_state(station, "x", "active")
+    assert scan.scan_counts_as_activity(station)
+    scan.note_state(station, "x", "scanning")  # only active/held are stored
+    assert ActiveScan.objects.get(pk=row.pk).state == "active"
+    # An agent that never confirms (ignores scan_start) keeps the lock only briefly.
+    ActiveScan.objects.filter(pk=row.pk).update(
+        state="starting",
+        started_at=timezone.now() - timedelta(seconds=scan.START_GRACE_S + 1),
+    )
+    assert not scan.scan_counts_as_activity(station)
+
+
+@pytest.mark.django_db
+def test_held_scan_lets_the_lock_idle_out():
+    station, user = _setup("sc-heldidle")
+    lock.acquire(station, user)
+    ControlLock.objects.filter(station=station).update(
+        last_activity=timezone.now() - timedelta(hours=1)
+    )
+    ActiveScan.objects.create(
+        station=station, user=user, scan_id="x", listen_s=2, hang_s=5, state="held"
+    )
+    assert lock.sweep_lock(station, now=timezone.now(), idle_seconds=300) is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_scan_state_stores_coarse_state(control_agent_auth):
+    station, user = _setup("sc-coarse")
+    _rep()
+
+    async def scenario():
+        agent, browser = await _connect(station, user)
+        start = await _started(agent, browser, _start())
+        await agent.send_json_to(_scan_state(start["scan_id"], "held", reason="manual"))
+        await _until(browser, lambda m: m.get("type") == "scan_state")
+        state = await database_sync_to_async(
+            lambda: ActiveScan.objects.values_list("state", flat=True).get()
+        )()
+        await browser.disconnect()
+        await agent.disconnect()
+        return state
+
+    assert asyncio.run(scenario()) == "held"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_held_scan_state_never_moves_mic_off_a_keyed_module(control_agent_auth):
+    station, user = _setup("sc-keyed")
+    _rep()
+
+    async def scenario():
+        agent, browser = await _connect(station, user)
+        start = await _started(agent, browser, _start())
+        await database_sync_to_async(audio_gate.set_tx_route)(station, 2, "fm9")
+        await database_sync_to_async(audio_gate.set_ptt)(station, 2, "fm9", ttl=30)
+        await agent.send_json_to(_scan_state(start["scan_id"], "held", reason="ptt"))
+        await _until(browser, lambda m: m.get("type") == "scan_state")
+        gate = await database_sync_to_async(audio_gate.get_state)(station)
+        await database_sync_to_async(audio_gate.clear_ptt)(station)
+        await browser.disconnect()
+        await agent.disconnect()
+        return gate
+
+    gate = asyncio.run(scenario())
+    assert (gate["tx_slot"], gate["tx_module"]) == (2, "fm9")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_agent_disconnect_tells_browsers_the_scan_stopped(control_agent_auth):
+    station, user = _setup("sc-gonebc")
+    _rep()
+
+    async def scenario():
+        agent, browser = await _connect(station, user)
+        start = await _started(agent, browser, _start())
+        await agent.disconnect()
+        stopped = await _until(browser, lambda m: m.get("type") == "scan_state")
+        await browser.disconnect()
+        return start, stopped
+
+    start, stopped = asyncio.run(scenario())
+    assert stopped["scan_id"] == start["scan_id"]
+    assert (stopped["state"], stopped["reason"]) == ("stopped", "disconnect")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_browser_connect_gets_running_scan_snapshot(control_agent_auth):
+    station, user = _setup("sc-snap")
+    _rep()
+
+    async def scenario():
+        agent, browser = await _connect(station, user)
+        start = await _started(agent, browser, _start())
+        late = _browser(user, station.id)
+        assert (await late.connect())[0] is True
+        snap = await _until(late, lambda m: m.get("type") == "scan_state")
+        await late.disconnect()
+        await browser.disconnect()
+        await agent.disconnect()
+        return start, snap
+
+    start, snap = asyncio.run(scenario())
+    assert snap["scan_id"] == start["scan_id"]
+    assert snap["state"] == "active" and snap["index"] is None

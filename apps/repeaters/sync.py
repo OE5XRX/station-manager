@@ -54,13 +54,15 @@ def sync_repeaters(rows: list[dict], now: datetime) -> SyncResult:
             result.created += 1
             continue
         changed = [f for f in FIELDS if getattr(obj, f) != row[f]]
-        if obj.active and not row["active"]:
+        deactivating = obj.active and not row["active"]
+        if deactivating:
             result.deactivated += 1
         for f in changed:
             setattr(obj, f, row[f])
         obj.last_synced_at = now
         obj.save(update_fields=[*changed, "last_synced_at", "updated_at"])
-        if changed:
+        # A pure deactivation is counted once (as deactivated), not also as updated.
+        if changed and not (deactivating and changed == ["active"]):
             result.updated += 1
     gone = Repeater.objects.filter(source=Repeater.Source.OEVSV, active=True).exclude(
         external_id__in=seen

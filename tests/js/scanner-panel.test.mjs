@@ -274,4 +274,25 @@ ok("scan stop tells the audio panel to let go", () => {
   assert.deepEqual(cap.seen[0].slots, []);
 });
 
+ok("no_active_scan on a scan the page still shows running settles it as stopped", () => {
+  const c = panel();
+  c._onScanState({ state: "active", index: null, ref: null, slot: null, module: null, scan_id: "s" });
+  const cap = capture("control:send");
+  c.control("stop");
+  cap.stop();
+  c._onReply({ type: "error", request_id: cap.seen[0].request_id, error: { code: "no_active_scan" } });
+  assert.equal(c.scan, null);
+  assert.equal(c.pending, false);
+  assert.equal(c.notice, null); // nothing to explain: the operator wanted it stopped
+});
+
+ok("control panel bounds the bridged request map", () => {
+  const cp = registered.controlPanel();
+  cp._send = () => true;
+  cp._bridgeReqs = {};
+  for (let i = 0; i < 100; i++) cp._onSendEvent({ detail: { type: "scan_start", request_id: "r" + i } });
+  assert.ok(Object.keys(cp._bridgeReqs).length <= 32);
+  assert.equal(cp._bridgeReqs.r99, true);
+});
+
 console.log(`${passed} passed`);

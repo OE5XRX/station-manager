@@ -17,6 +17,8 @@ from apps.control.models import ActiveScan, StationModule
 from apps.repeaters.models import Repeater, ScanList, ScanListEntry
 from apps.stations.models import Station, StationAuditLog
 from config.asgi import application
+from station_agent import broker as agent_broker
+from station_agent import scanner as agent_scanner
 
 VHF = {"name": "vhf", "min": 134.0, "max": 174.0}
 
@@ -81,6 +83,12 @@ async def _until(comm, pred, tries=20):
     raise AssertionError("expected frame never arrived")
 
 
+def _assert_agent_accepts_preset(frame):
+    """The agent's apply_preset validation (Broker.handle_apply_preset) must accept it."""
+    assert agent_broker._valid_addr(frame["slot"], frame["module"])
+    assert frame["values"] and set(frame["values"]) <= set(agent_broker.Broker._PRESET_ORDER)
+
+
 def _of(mtype):
     return lambda m: m.get("type") == mtype
 
@@ -103,6 +111,7 @@ def test_repeater_apply_and_scan_end_to_end(control_agent_auth):
             {"type": "apply_repeater", "request_id": "a1", "repeater_id": rep.pk, "slot": "1"}
         )
         preset = await _until(agent, _of("apply_preset"))
+        _assert_agent_accepts_preset(preset)
         assert preset["request_id"] == "a1"
         assert (preset["slot"], preset["module"]) == (1, "fm0")
         assert preset["values"]["tx_frequency"] == 145.0
@@ -134,6 +143,9 @@ def test_repeater_apply_and_scan_end_to_end(control_agent_auth):
         )
         start = await _until(agent, _of("scan_start"))
         entries = start["entries"]
+        # Contract: the real agent-side validator accepts the server-built list as-is.
+        parsed = agent_scanner.parse_entries(entries)
+        assert parsed is not None and len(parsed) == len(entries)
         assert [e["label"] for e in entries][0] == "calling"
         assert [(e["rx_frequency"], e["tx_frequency"]) for e in entries] == [
             (145.5, 145.5),
