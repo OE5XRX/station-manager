@@ -53,6 +53,29 @@ Heartbeat min/max/avg, 30 d) + `MetricHourly` (min/max/avg/count, 730 d), Compos
 - PG-Verhalten wird nur im CI-Job „History tests (Postgres)" getestet (`config.settings.test_postgres`,
   `tests/test_history_*.py`, Fixture `require_postgres`).
 
+### Repeater-Liste & Scanner (`apps/repeaters`, `apps/control/scan.py`)
+Spec: `docs/superpowers/specs/2026-11-06-repeater-list-and-scanner-design.md`.
+
+- **ÖVSV-Richtungsmapping:** Das ÖVSV-Verzeichnis benennt aus **Repeater-Sicht** — `frequency_tx`
+  (Repeater sendet) = unser RX = `output_frequency`, `frequency_rx` = unser TX = `input_frequency`;
+  ebenso `ctcss_rx` = der Zugangston, den **wir** senden (`input_tone` → `tx_tone`), `ctcss_tx` =
+  `output_tone` → `rx_tone`. Das Mapping lebt nur in `oevsv.normalize`; nie woanders umdrehen.
+- **Sync:** `manage.py sync_repeaters` upsertet per `external_id`, fasst `source=manual` nie an,
+  deaktiviert verschwundene ÖVSV-Einträge (kein Delete). Betrieb als eigener Compose-Service
+  `repeater-sync` (`sync_repeaters --loop --interval 86400`) in `docker-compose.yml` und
+  `deploy/docker-compose.prod.yml`; das servers-Repo braucht ihn ebenfalls.
+- **Agent besitzt den Loop, Server besitzt die Liste:** Der Server baut die effektive Liste
+  (`apps.repeaters.scan.build_scan_entries`: Radius + eigene Listen, Band → Slot) und schickt sie
+  als `scan_start`/`scan_update`; der Agent tastet sequentiell ab und meldet `scan_state`. Eine
+  Listen-Änderung pusht per Signal (on_commit, coalesced) ein `scan_update` an laufende Scans.
+- **Scan-Schritte werden nie persistiert oder auditiert.** `ActiveScan` (1 pro Station) merkt sich
+  nur die Bauparameter; Start/Stop werden auditiert. Lock-Release/-Transfer/-Ablauf und Agent-Disconnect
+  beenden den Scan; ein laufender Scan zählt als Lock-Aktivität. `scan_state` `active`/`held` bewegt die
+  Audio-Gate-TX-Route (nur für die aktuelle `scan_id`). Der Agent-Consumer reichert `scan_state` für den
+  Browser in-memory mit `label`/`rx_frequency`/`count` aus der zuletzt durchgereichten Liste an.
+- `apply_repeater` (Browser) wird serverseitig zu **einem** `apply_preset`-Frame aufgelöst
+  (tx/rx-Frequenz + Töne + ggf. Bandbreite, nur beworbene Capabilities).
+
 ## station-agent
 
 ### Control-Device Single-Owner-Invariante

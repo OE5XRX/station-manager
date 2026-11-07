@@ -112,6 +112,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self._reapply_touched = set()
         # str(slot) -> slot exactly as the agent reports it (an int slot must go back as int).
         self._wire_slots = {}
+        # (scan_id, {ref: (label, rx_frequency)}, count) of the last scan_start/scan_update
+        # relayed to this agent: enriches its scan_state frames for the browser panel.
+        self._scan_index = None
 
         from urllib.parse import parse_qs
 
@@ -206,7 +209,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             if station is not None:
                 await self._apply_scan_state(station, msg)
-            await self._broadcast("control.scan_state", {"msg": msg})
+            await self._broadcast("control.scan_state", {"msg": self._enrich_scan_state(msg)})
         elif mtype == "event":
             updating = registry.FIRMWARE_UPDATING_EVENTS.get(msg.get("event"))
             if updating is not None:
@@ -248,10 +251,39 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         """A ControlConsumer relayed a §7 downstream frame -> send to agent."""
         frame = event["frame"]
         self._note_user_set(frame)
+        self._note_scan_entries(frame)
         await self.send(text_data=json.dumps(frame))
         if isinstance(frame, dict) and frame.get("type") == "firmware_check":
             # Target/release changed: the drain state may have changed with it.
             await self._broadcast_lock_refresh()
+
+    def _note_scan_entries(self, frame):
+        """Remember label/frequency per entry ref of a relayed scan list (in memory only)."""
+        if not isinstance(frame, dict) or frame.get("type") not in ("scan_start", "scan_update"):
+            return
+        entries = frame.get("entries")
+        if not isinstance(entries, list):
+            return
+        index = {
+            e["ref"]: (e.get("label"), e.get("rx_frequency"))
+            for e in entries
+            if isinstance(e, dict) and isinstance(e.get("ref"), str)
+        }
+        self._scan_index = (frame.get("scan_id"), index, len(entries))
+
+    def _enrich_scan_state(self, msg):
+        """Add ``label``/``rx_frequency``/``count`` from the relayed scan list to an agent
+        ``scan_state`` (the agent sends only ``ref``/``index``). Agent-sent fields win."""
+        if self._scan_index is None or not isinstance(msg, dict):
+            return msg
+        scan_id, index, count = self._scan_index
+        if msg.get("scan_id") != scan_id:
+            return msg
+        extra = {"count": count}
+        ref = msg.get("ref")
+        if isinstance(ref, str) and ref in index:
+            extra["label"], extra["rx_frequency"] = index[ref]
+        return {**extra, **msg}
 
     async def _broadcast_lock_refresh(self, drain=lock.DRAIN_UNSET):
         """Re-broadcast ``control.lock`` with a fresh drain payload (best effort).
