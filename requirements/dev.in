@@ -20,4 +20,4 @@ pyserial>=3.5,<4.0
 # propagation is inconsistent across CI runners (some resolve it, some 404),
 # making the install flaky. 1.6.0 is what Dependabot proposed and installs
 # reliably. Drop the cap once 1.7.0 has fully propagated.
-django-test-migrations>=1.4,<1.7
+django-test-migrations>=1.7.0,<1.8
