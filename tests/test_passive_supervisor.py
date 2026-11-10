@@ -664,3 +664,98 @@ def test_orphan_stops_are_capped_and_validated(env):
 
     asyncio.run(go())
     assert len(agent.sent("decoder_stop")) == 8
+
+
+def test_user_touches_do_not_leak_into_later_hand_overs(env):
+    station, sup, agent, _ = env
+    sup.note_user_set(("1", "fm-1", "frequency"))  # an earlier holder's set
+
+    async def go():
+        await started(station, sup, agent)  # run creation clears stale touches
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert ("frequency", 145.5) in agent.caps()
+
+
+def test_wildcard_touch_skips_the_whole_hand_over(env):
+    from apps.passive.supervisor import WILDCARD_TOUCH
+
+    station, sup, agent, _ = env
+
+    async def go():
+        await started(station, sup, agent)
+        sup.note_user_set(WILDCARD_TOUCH)  # user started a scan
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert [f["type"] for f in agent.frames] == ["decoder_stop"]
+
+
+def test_handover_stops_when_ptt_keys_mid_way(env, monkeypatch):
+    station, sup, agent, _ = env
+    answers = iter([False, True, True, True, True, True])
+    monkeypatch.setattr("apps.audio.gate.ptt_keyed", lambda s: next(answers))
+
+    async def go():
+        await started(station, sup, agent)
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert [f["type"] for f in agent.frames] == ["decoder_stop", "command"]
+    assert run_of(station).state == State.STOPPED
+
+
+def test_lock_grant_right_after_run_creation_stops_before_any_command(env, monkeypatch):
+    station, sup, agent, _ = env
+    calls = {"n": 0}
+
+    def free(self=None):
+        calls["n"] += 1
+        return calls["n"] == 1  # free for run creation, taken right after
+
+    monkeypatch.setattr(sup, "_lock_is_free", free)
+    asyncio.run(sup.tick())
+    assert agent.frames == []  # nothing tuned, no hand-over either
+    run = run_of(station)
+    assert (run.state, run.end_reason) == (State.STOPPED, "acquired")
+
+
+def test_preempting_an_agent_offline_run_still_stops_the_decoder(env):
+    station, sup, agent, _ = env
+    PassiveServiceRun.objects.create(
+        station=station, service="aprs", slot="1", module_id="fm-1", state=State.AGENT_OFFLINE
+    )
+    asyncio.run(sup.preempt("acquired", handover=False))
+    assert [f["type"] for f in agent.frames] == ["decoder_stop"]
+
+
+def test_cancelled_decoder_died_never_leaves_stopping(env):
+    station, sup, agent, _ = env
+
+    async def go():
+        run = await started(station, sup, agent)
+        agent.hold = True
+        dying = asyncio.create_task(sup._decoder_died(run, "boom"))
+        await agent.wait_frames(len(agent.frames) + 1)
+        dying.cancel()
+        await asyncio.gather(dying, return_exceptions=True)
+
+    asyncio.run(go())
+    run = run_of(station)
+    assert (run.state, run.end_reason) == (State.ERROR, "decoder_error")
+
+
+def test_overlong_slot_in_snapshot_is_ignored(env):
+    station, sup, agent, _ = env
+    sup._reconciled = False
+
+    async def go():
+        await sup.on_snapshot({"decoders": [{"decoder": "aprs", "slot": "1" * 5000}]})
+        await sup.drain()
+
+    asyncio.run(go())
+    assert agent.frames == []

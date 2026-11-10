@@ -18,6 +18,7 @@ from apps.accounts.permissions import (
     required_level,
 )
 from apps.passive.models import PassiveServiceRun
+from apps.passive.supervisor import WILDCARD_TOUCH
 
 from . import (
     agent_presence,
@@ -358,10 +359,23 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.exception("control: lock/drain refresh broadcast failed")
 
+    def _note_passive_takeover(self, frame):
+        """Tell the passive supervisor what a user re-tuned, so its hand-over leaves it."""
+        ftype = frame.get("type")
+        if ftype in ("scan_start", "scan_update"):
+            self.passive.note_user_set(WILDCARD_TOUCH)
+        elif ftype == "apply_preset" and isinstance(frame.get("values"), dict):
+            slot, module = frame.get("slot"), frame.get("module")
+            if (isinstance(slot, str) or type(slot) is int) and isinstance(module, str):
+                for cap in frame["values"]:
+                    self.passive.note_user_set((str(slot), module, str(cap)))
+
     def _note_user_set(self, frame):
         """Remember a relayed browser ``set`` so a deferred re-apply leaves that capability
         alone: the user's write (and its own persistence on the ok result) is authoritative,
         and neither the DB nor ``last_state`` reflects it until result/state come back."""
+        if isinstance(frame, dict) and self.passive is not None:
+            self._note_passive_takeover(frame)
         if not isinstance(frame, dict) or frame.get("op") != "set":
             return
         slot, module, cap = frame.get("slot"), frame.get("module"), frame.get("capability")
@@ -516,7 +530,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             # Re-checked per frame (after every await): a user ``set`` relayed while an
             # earlier frame was being sent/audited wins over the re-apply.
             key = (str(frame["slot"]), frame["module"], frame["capability"])
-            if key in self._reapply_touched or key in self._passive_caps():
+            if key in self._reapply_touched:
+                continue
+            if key in self._passive_caps():
+                # Owned by a running passive profile: retry once the run is closed.
+                self._reapply_pending = self._reapply_gen
                 continue
             await self.send(text_data=json.dumps(frame))
             await self._audit_reapply(

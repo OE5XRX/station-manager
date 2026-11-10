@@ -346,3 +346,52 @@ async def _group_empty(layer, channel):
     except TimeoutError:
         return True
     return False
+
+
+def test_skipped_protected_reapply_is_retried_later():
+    import asyncio as aio
+
+    from apps.control.consumers import AgentControlConsumer
+
+    c = AgentControlConsumer()
+    c._reapply_pending = None
+    c._reapply_gen = 3
+    c._reapply_touched = set()
+    sent = []
+
+    class Passive:
+        def protected_caps(self):
+            return {("1", "fm-1", "volume")}
+
+    async def send(text_data=None, bytes_data=None):
+        sent.append(text_data)
+
+    async def audit(station, message):
+        pass
+
+    c.passive = Passive()
+    c.send = send
+    c._audit_reapply = audit
+    frame = {"slot": "1", "module": "fm-1", "capability": "volume", "value": 7}
+    aio.run(c._send_reapply(object(), [frame]))
+    assert sent == [] and c._reapply_pending == 3
+
+
+def test_user_apply_preset_and_scan_count_as_takeover():
+    from apps.control.consumers import AgentControlConsumer
+    from apps.passive.supervisor import WILDCARD_TOUCH
+
+    c = AgentControlConsumer()
+    c._reapply_touched = set()
+    touched = set()
+
+    class Passive:
+        def note_user_set(self, key):
+            touched.add(key)
+
+    c.passive = Passive()
+    c._note_user_set(
+        {"type": "apply_preset", "slot": 1, "module": "fm-1", "values": {"rx_frequency": 1.0}}
+    )
+    c._note_user_set({"type": "scan_start", "entries": []})
+    assert touched == {("1", "fm-1", "rx_frequency"), WILDCARD_TOUCH}

@@ -31,7 +31,7 @@ from apps.stations.models import Station, StationAuditLog
 from . import profiles
 from .eligibility import DECODERS_FEATURE, ineligible_reason
 from .models import HandoverProfile, PassiveServiceConfig, PassiveServiceRun
-from .selection import pick_slot
+from .selection import is_slot, pick_slot
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ START_TIMEOUT_S = 60
 # Without a decoder_snapshot this long after the inventory, reconcile as if it were empty.
 SNAPSHOT_WAIT_S = 30
 MAX_ORPHAN_SLOTS = 8
+# ``note_user_set`` key meaning "a user took over the whole radio" (scan start).
+WILDCARD_TOUCH = ("*", "*", "*")
 
 State = PassiveServiceRun.State
 
@@ -72,11 +74,6 @@ class _CommandFailedError(Exception):
         self.code = code
 
 
-def _is_slot(slot) -> bool:
-    text = str(slot)
-    return text.isascii() and text.isdecimal()
-
-
 def _backoff_seconds(failures: int) -> int:
     return min(BACKOFF_BASE_S * 2 ** max(failures - 1, 0), BACKOFF_MAX_S)
 
@@ -102,7 +99,7 @@ class PassiveSupervisor:
             if command_timeout is not None
             else settings.CONTROL_COMMAND_TIMEOUT_SECONDS
         )
-        self._wire_slot = wire_slot or (lambda slot: int(slot) if _is_slot(slot) else slot)
+        self._wire_slot = wire_slot or (lambda slot: int(slot) if is_slot(slot) else slot)
         self._is_current = is_current  # async () -> bool; False = a newer agent connection won
         self._lock = asyncio.Lock()
         self._futures: dict[str, asyncio.Future] = {}
@@ -264,18 +261,18 @@ class PassiveSupervisor:
         self._protected = {
             (module.slot, module.module_id, cap) for cap in profiles.profile_caps(values, module)
         }
+        self._user_touched.clear()
         await self._publish(run_state=State.STARTING, slot=run.slot)
         try:
             self._check_abort()
+            # A grant between the eligibility check and the run row escaped the hook.
+            if await self._lock_taken(handover=False):
+                return
             for cap, value in profiles.profile_commands(values, module):
                 await self._command(run.slot, module.module_id, cap, value)
                 self._check_abort()
-            free = await database_sync_to_async(self._lock_is_free)()
-            self._check_abort()
-            if not free:
-                # A user grabbed the lock while we were tuning: never start the decoder.
-                await self._preempt_locked("acquired", handover=True)
-                return
+                if await self._lock_taken(handover=True):
+                    return  # never start the decoder on a radio a user holds
             self._decoder_start_sent = True
             await self._request(
                 {
@@ -290,6 +287,15 @@ class PassiveSupervisor:
             await self._fail_start(run, exc.code)
             return
         await self._audit(f"system:passive_services started {SERVICE} on slot {run.slot}")
+
+    async def _lock_taken(self, *, handover: bool) -> bool:
+        """True (after ending the run as preempted) when a user holds the lock now."""
+        free = await database_sync_to_async(self._lock_is_free)()
+        self._check_abort()
+        if free:
+            return False
+        await self._preempt_locked("acquired", handover=handover)
+        return True
 
     def _check_abort(self) -> None:
         if self._abort:
@@ -329,9 +335,11 @@ class PassiveSupervisor:
                 logger.info(
                     "passive: stop after decoder error failed (station %s)", self.station_id
                 )
-            await self._close(current, State.ERROR, "decoder_error", last_error=detail)
-            self._reset_run_memory()
-            self._bump_backoff()
+            finally:
+                # Also on cancellation / DB errors: never leave the run in STOPPING.
+                await self._close(current, State.ERROR, "decoder_error", last_error=detail)
+                self._reset_run_memory()
+                self._bump_backoff()
             await self._publish(reason=detail[:64])
 
     # -- preempt / hand-over ---------------------------------------------------
@@ -362,12 +370,12 @@ class PassiveSupervisor:
         run = await self._open_run()
         if run is None:
             return
-        was_running = run.state == State.RUNNING
+        decoder_may_run = run.state in (State.RUNNING, State.AGENT_OFFLINE)
         await self._set_state(run, State.STOPPING)
         await self._publish(run_state=State.STOPPING, slot=run.slot)
         self._abort = False  # our own best-effort commands below must go out
         try:
-            if (was_running or self._decoder_start_sent) and not self._gone:
+            if (decoder_may_run or self._decoder_start_sent) and not self._gone:
                 try:
                     await self._request(
                         {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(run.slot)}
@@ -392,14 +400,16 @@ class PassiveSupervisor:
         if plan is None:
             return
         module, values = plan
-        if await database_sync_to_async(self._ptt_keyed)():
-            logger.info("passive: hand-over skipped, station is keyed (%s)", self.station_id)
-            return
+        if WILDCARD_TOUCH in self._user_touched:
+            return  # the user started a scan / re-tuned the whole radio: it is theirs now
         for cap, value in profiles.profile_commands(values, module):
             if self._gone:
                 return
             if (module.slot, module.module_id, cap) in self._user_touched:
                 continue  # a user already set this since they took the lock
+            if await database_sync_to_async(self._ptt_keyed)():
+                logger.info("passive: hand-over stopped, station is keyed (%s)", self.station_id)
+                return
             try:
                 await self._command(run.slot, module.module_id, cap, value)
             except (_CommandFailedError, _AbortedError) as exc:
@@ -448,7 +458,7 @@ class PassiveSupervisor:
         listed = {
             str(d.get("slot"))
             for d in self._snapshot
-            if d.get("decoder") == SERVICE and _is_slot(str(d.get("slot")))
+            if d.get("decoder") == SERVICE and is_slot(str(d.get("slot")))
         }
         if run is None:
             for slot in sorted(listed, key=int)[:MAX_ORPHAN_SLOTS]:
@@ -533,6 +543,7 @@ class PassiveSupervisor:
         self._retry_at = self._now() + timedelta(seconds=_backoff_seconds(self._failures))
 
     def _reset_run_memory(self) -> None:
+        self._user_touched.clear()
         self._protected = set()
         self._decoder_start_sent = False
 

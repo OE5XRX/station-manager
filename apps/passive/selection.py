@@ -5,6 +5,12 @@ from decimal import Decimal
 from apps.repeaters.selection import module_band_of
 
 
+def is_slot(slot) -> bool:
+    """A decoder slot: a short ASCII decimal (frames address slots by small integers)."""
+    text = str(slot)
+    return text.isascii() and text.isdecimal() and len(text) <= 3
+
+
 def _slot_key(module):
     return int(module.slot)
 
@@ -17,6 +23,6 @@ def pick_slot(station, frequency_mhz: Decimal):
     candidates = [
         m
         for m in station.modules.filter(online=True, firmware_updating=False)
-        if m.slot.isascii() and m.slot.isdecimal() and module_band_of(m, freq) is not None
+        if is_slot(m.slot) and module_band_of(m, freq) is not None
     ]
     return min(candidates, key=_slot_key, default=None)
