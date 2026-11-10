@@ -11,7 +11,8 @@ _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _UNCOMPRESSED = re.compile(
     r"^(\d{2})([\d ]{2}\.[\d ]{2})([NS])(.)(\d{3})([\d ]{2}\.[\d ]{2})([EW])(.)"
 )
-_TIMESTAMP = re.compile(r"^[\d]{6}[zh/]|^[\d]{8}$")
+MAX_PATH = 8
+_HEADER_ELEMENT = re.compile(r"^[A-Za-z0-9]{1,9}(-[0-9]{1,2})?\*?$")
 
 
 @dataclass
@@ -156,12 +157,24 @@ def parse_info(info: bytes, destination: str) -> AprsInfo:
         return _other()
 
 
+def _valid_header(header: str) -> bool:
+    """``SRC>DST[,P1..P8]`` with plain callsign-like elements. The header is re-gated
+    verbatim, so q-constructs and anything odd (spaces, control chars) are refused."""
+    src, sep, rest = header.partition(">")
+    if not sep:
+        return False
+    elements = rest.split(",")
+    if len(elements) > 1 + MAX_PATH or not _HEADER_ELEMENT.match(src):
+        return False
+    return all(_HEADER_ELEMENT.match(e) and not e.upper().startswith("Q") for e in elements)
+
+
 def parse_thirdparty(info: bytes) -> tuple[str, str] | None:
     """``(inner "SRC>DST,PATH", inner info)`` of a ``}`` third-party packet."""
     if not info.startswith(b"}"):
         return None
     text = info[1:].decode("latin-1")
     header, sep, inner = text.partition(":")
-    if not sep or ">" not in header or header.startswith(">"):
+    if not sep or not _valid_header(header):
         return None
     return header, inner

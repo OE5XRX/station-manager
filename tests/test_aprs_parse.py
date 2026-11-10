@@ -82,3 +82,14 @@ def test_thirdparty_split():
     assert parse_thirdparty(b"}OE1X>APRS,TCPIP,OE1Y*:>hi") == ("OE1X>APRS,TCPIP,OE1Y*", ">hi")
     assert parse_thirdparty(b"}garbage") is None
     assert parse_thirdparty(b">x") is None
+
+
+def test_thirdparty_header_is_validated():
+    for bad in (
+        b"}A>B,qAR,X:>hi",  # q-construct from RF
+        b"}A>B,C D:>hi",  # space
+        b"}A>B," + b",".join([b"W1"] * 9) + b":>hi",  # too many path elements
+        b"}A B>C:>hi",
+        b"}>C:>hi",
+    ):
+        assert parse_thirdparty(bad) is None, bad

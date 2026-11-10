@@ -73,3 +73,7 @@ def test_beacon_southwest_and_rounding():
         "OE5XRX-10>APZXRX,TCPIP*:!3355.00SR07030.00W&x\r\n"
     )
     assert "!4900.00NR" in beacon_line(IG, 48.999999, 14.0, "x")
+
+
+def test_gate_thirdparty_nogate_inner_path_skipped():
+    assert gate_line(_pkt("}OE1X>APRS,NOGATE:>hi"), IG, set()) == (None, "thirdparty_inet")

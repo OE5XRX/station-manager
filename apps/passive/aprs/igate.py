@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 NOGATE_TOKENS = ("TCPIP", "TCPXX", "NOGATE", "RFONLY")
 TOCALL = "APZXRX"
-_INET_TOKENS = ("TCPIP", "TCPXX")
 
 
 def passcode(callsign: str) -> int:
@@ -61,7 +60,8 @@ def gate_line(
         if inner is None:
             return None, "thirdparty_bad"
         header, inner_info = inner
-        if any(tok in header.upper() for tok in _INET_TOKENS):
+        inner_path = header.partition(">")[2].split(",")[1:]
+        if any(_is_nogate(e) for e in inner_path):
             return None, "thirdparty_inet"
         if header.split(">", 1)[0].upper() in own_calls:
             return None, "own_call"
