@@ -959,8 +959,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         run, or else the reason it is idle — so a late-connecting browser sees it too."""
         try:
             frame = await database_sync_to_async(passive_status.browser_frame)(station)
-            if frame is not None:
-                await self.send(text_data=json.dumps(frame))
+            await self.send(text_data=json.dumps(frame))
         except Exception:
             logger.exception("control: passive snapshot failed")
 

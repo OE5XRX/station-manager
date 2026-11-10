@@ -546,6 +546,7 @@ def test_failing_liveness_stamp_does_not_close_feed(monkeypatch):
         b = await _connect(viewer, station)
         await b.receive_json_from()  # inventory
         await b.receive_json_from()  # lock
+        await b.receive_json_from()  # passive_state
         # Many ticks, well past RECHECK_MAX_FAILURES: no error frame, no close.
         assert await b.receive_nothing(timeout=0.4)
         assert len(calls) > permissions.RECHECK_MAX_FAILURES

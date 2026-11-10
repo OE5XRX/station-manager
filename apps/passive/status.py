@@ -99,11 +99,11 @@ def idle_reason(station) -> str | None:
     return None if reason in QUIET_REASONS else reason
 
 
-def browser_frame(station) -> dict | None:
-    """``passive_state`` frame for a browser that just connected (``None`` = nothing to say).
+def browser_frame(station) -> dict:
+    """``passive_state`` frame for a browser that just connected.
 
-    The panel resets its passive state itself when its socket opens, so a quiet station
-    needs no frame.
+    Always sent (``off`` with no reason for a quiet station): the panel expires a passive
+    state it held over a reconnect on exactly this frame, never on a timer.
     """
     run = PassiveServiceRun.open_for(station.pk)
     if run is not None:
@@ -116,8 +116,6 @@ def browser_frame(station) -> dict | None:
         }
     failed = recent_run_error(station.pk)
     reason = failed.last_error or "unbekannt" if failed is not None else idle_reason(station)
-    if reason is None:
-        return None
     return {
         "type": "passive_state",
         "service": SERVICE,

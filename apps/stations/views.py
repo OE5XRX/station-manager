@@ -343,6 +343,10 @@ TRACKED_FIELDS = [
 ]
 
 
+class _PassiveClashError(Exception):
+    """The iGate call/SSID is already taken (raised inside the station save transaction)."""
+
+
 class StationUpdateView(AreaPermissionMixin, UpdateView):
     area = "stations"
     verb = "manage"
@@ -394,14 +398,16 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
     def form_valid(self, form):
         old = Station.objects.get(pk=self.object.pk)
         try:
-            # One transaction: a clash on the iGate call that slipped past the form check
-            # (two concurrent edits) must not leave the station half-saved.
+            # One transaction: the station is not left half-saved if the iGate call is
+            # taken by a concurrent edit that slipped past the form's own check.
             with transaction.atomic():
                 response = super().form_valid(form)
-                self._save_passive()
-        except IntegrityError:
-            if self.passive_form is None:
-                raise
+                try:
+                    with transaction.atomic():
+                        self._save_passive()
+                except IntegrityError as exc:
+                    raise _PassiveClashError from exc
+        except _PassiveClashError:
             self.passive_form.add_error(
                 "igate_ssid", _("Rufzeichen und SSID gehören schon zu einer anderen Station.")
             )

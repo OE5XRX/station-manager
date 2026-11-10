@@ -440,20 +440,12 @@ def test_late_browser_gets_lock_held_reason(setup):
     assert (msg["state"], msg["reason"]) == ("off", "lock_held")
 
 
-def test_quiet_station_sends_no_passive_frame(setup):
-    # Agent offline: nothing worth showing (the panel resets itself on socket open).
+def test_quiet_station_sends_an_off_frame(setup):
+    # Agent offline: nothing worth showing, but the frame lets the panel drop any passive
+    # state it held from before a reconnect.
     station, user = setup
-
-    async def scenario():
-        browser = _browser(user, station.id)
-        assert (await browser.connect())[0] is True
-        seen = []
-        while not await browser.receive_nothing(timeout=0.3):
-            seen.append(json.loads((await browser.receive_output())["text"])["type"])
-        assert "passive_state" not in seen
-        await browser.disconnect()
-
-    asyncio.run(scenario())
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", None)
 
 
 def test_late_browser_sees_a_recent_start_failure(setup):

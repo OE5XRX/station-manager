@@ -146,49 +146,17 @@ ok("applies the muted gain to a live stream", () => {
   assert.equal(gain.gain.value, 1);
 });
 
-function reopen(c) {
-  c._subscribeAll = () => {};
-  c._publishControlStore = () => {};
-  const handlers = {};
-  globalThis.WebSocket = class {
-    constructor() {
-      this.addEventListener = (n, fn) => (handlers[n] = fn);
-    }
-  };
-  globalThis.WebSocket.OPEN = 1;
-  c._wsUrl = () => "ws://x";
-  c._connect();
-  handlers.open();
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-await (async () => {
-  // reconnect without a snapshot: the held state expires, deferred
+ok("the connect snapshot (off) expires a passive state held over a reconnect", () => {
   const c = factories.controlPanel();
   c._route(frame("running"));
-  reopen(c);
-  assert.equal(c.passiveRunning, true, "not reset immediately");
-  await sleep(1700);
+  const a = makeAudio();
+  a._onPassiveState(frame("running"));
+  c._route(frame("off", null)); // quiet station: the server still sends an off frame
+  a._onPassiveState(frame("off", null));
   assert.equal(c.passiveRunning, false);
   assert.equal(c.passive.level, "off");
-  passed += 1;
-  console.log("ok - a reopened socket expires a stale passive state (deferred)");
-
-  // reconnect WITH a snapshot: the audio mixer never flaps, Mithören survives
-  const a = makeAudio();
-  const c2 = factories.controlPanel();
-  events.length = 0;
-  a._onPassiveState(frame("running"));
-  a.passiveListenIn();
-  c2._route(frame("running"));
-  reopen(c2);
-  c2._route(frame("running")); // the server's snapshot
-  await sleep(1700);
-  assert.ok(!events.some((e) => e.type === "control:passive_state" && e.detail.state === "off"));
   assert.equal(a.mixer.s1.muted, false);
-  passed += 1;
-  console.log("ok - reconnect with snapshot sends no synthetic off");
-})();
+});
 
 ok("run end restores the other RX streams after one was unmuted", () => {
   const a = makeAudio();

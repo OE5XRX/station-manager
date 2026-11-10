@@ -324,4 +324,4 @@ def test_browser_frame_is_cheap_for_unconfigured_station(station, django_assert_
     station = type(station).objects.select_related("passive_config").get(pk=station.pk)
     # open run lookup + recent error lookup only: no config get_or_create, no lock queries
     with django_assert_num_queries(2):
-        assert browser_frame(station) is None
+        assert browser_frame(station)["reason"] is None
