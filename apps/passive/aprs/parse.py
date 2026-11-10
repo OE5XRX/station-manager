@@ -96,6 +96,8 @@ def _mic_e(info: str, destination: str) -> AprsInfo | None:
             digits.append(0)
         else:
             return None
+    if digits[0] * 10 + digits[1] > 90 or digits[2] * 10 + digits[3] >= 60:
+        return None  # latitude degrees/minutes out of range
     north = destination[3] >= "P"
     lon_offset = destination[4] >= "P"
     west = destination[5] >= "P"

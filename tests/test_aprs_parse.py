@@ -106,3 +106,8 @@ def test_non_ascii_digits_rejected():
 
 def test_header_trailing_newline_rejected():
     assert parse_thirdparty(b"}A>B\n:x") is None
+
+
+def test_mic_e_latitude_minutes_out_of_range_rejected():
+    info = b"`" + bytes([12 + 28, 7 + 28, 74 + 28]) + b"   >/"
+    assert parse_info(info, "4999YY").packet_type == "other"
