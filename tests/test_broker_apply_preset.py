@@ -110,13 +110,15 @@ def test_refused_while_ptt():
         fw.stop()
 
 
-def test_state_frame_contains_only_ok_caps():
+def test_state_frame_reports_applied_caps_plus_readback():
     fw, b, col = _setup()
     try:
         asyncio.run(b.handle(_frame({"tx_frequency": 145.0, "rx_frequency": 999.0})))
         states = [m for m in col.sent if m["type"] == "state"]
         assert len(states) == 1
-        assert list(states[0]["values"]) == ["tx_frequency"]
+        # The failed rx_frequency is still reported (its real, unchanged value) via readback.
+        assert states[0]["values"]["tx_frequency"] == "145.0"
+        assert {"rx_frequency", "tx_tone", "rx_tone", "bandwidth"} <= set(states[0]["values"])
     finally:
         fw.stop()
 

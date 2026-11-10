@@ -274,9 +274,10 @@ class Broker:
                 self._ptt_inflight.discard((slot, module))
         if result.get("ok"):
             await self._send(proto.build_result(request_id, True, value=result.get("value")))
-            await self._send(
-                proto.build_state(slot, module, {capability: result.get("value")}, self._ts())
-            )
+            values = {capability: result.get("value")}
+            if op == "set":
+                values = await self._settings_snapshot(slot, module, values)
+            await self._send(proto.build_state(slot, module, values, self._ts()))
         else:
             err_code = result.get("error", proto.TIMEOUT)
             await self._send(proto.build_result(request_id, False, error=(err_code, "")))
@@ -387,7 +388,46 @@ class Broker:
         await self._send(reply)
         ok_values = {n: r["value"] for n, r in results.items() if r["ok"]}
         if ok_values:
-            await self._send(proto.build_state(slot, module, ok_values, self._ts()))
+            values = await self._settings_snapshot(slot, module, ok_values)
+            await self._send(proto.build_state(slot, module, values, self._ts()))
+
+    async def _settings_snapshot(self, slot, module, fallback: dict) -> dict:
+        """Read back every ``setting`` capability of a physical module (station = truth).
+
+        One FW setting can move others (``frequency`` sets rx+tx), so reporting only what was
+        set leaves the browser stale. Per-cap ``get`` failures are logged and omitted; the
+        values the caller already knows (*fallback*) are kept for caps that could not be read.
+        No readback while the slot is keyed / being keyed (never add serial traffic or delay
+        on the PTT path) or paused for a module-firmware flash.
+        """
+        values = dict(fallback)
+        descriptor = self._descriptor(slot, module)
+        if descriptor is None or (slot, module) in self._virtual:
+            return values
+        for cap in descriptor.get("capabilities") or []:
+            if not isinstance(cap, dict) or cap.get("kind") != "setting":
+                continue
+            name = cap.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            if self.slot_busy(slot) or slot_pause.is_paused(slot):
+                break
+            try:
+                result = await self._execute(slot, module, "get", name, None)
+            except Exception:  # noqa: BLE001 — a readback failure must not break the state frame
+                logger.exception("broker: readback of %s/%s/%s raised", slot, module, name)
+                continue
+            if result.get("ok"):
+                values[name] = result.get("value")
+            else:
+                logger.warning(
+                    "broker: settings readback of %s/%s/%s failed: %s",
+                    slot,
+                    module,
+                    name,
+                    result.get("error"),
+                )
+        return values
 
     # --- scanner -------------------------------------------------------------------
     @staticmethod
