@@ -248,3 +248,30 @@ def test_integrity_clash_after_validation_rerenders_not_500(
     assert resp.status_code == 200
     b.refresh_from_db()
     assert b.name == old_name  # the station edit rolled back with it
+
+
+@pytest.mark.django_db
+def test_other_integrity_errors_are_not_reported_as_igate_clash(
+    client, admin_user, station, monkeypatch
+):
+    from django.db import IntegrityError
+    from django.views.generic import UpdateView
+
+    def boom(self, form):
+        raise IntegrityError("station name taken")
+
+    monkeypatch.setattr(UpdateView, "form_valid", boom)
+    client.force_login(admin_user)
+    client.raise_request_exception = False
+    resp = client.post(
+        _edit_url(station),
+        {
+            "name": station.name,
+            "callsign": station.callsign,
+            "passive-enabled": "on",
+            "passive-igate_callsign": "OE5XRX",
+            "passive-igate_ssid": "10",
+        },
+    )
+    assert resp.status_code == 500  # propagated, not mapped to an iGate form error
+    assert not StationPassiveConfig.objects.filter(station=station).exists()
