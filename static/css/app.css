@@ -2054,3 +2054,6 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
 @media (prefers-reduced-motion: reduce) {
   .mx-hist-chevron, .mx-hist-charts.is-loading { transition: none; }
 }
+
+/* Sub-heading inside a sidebar section (e.g. Radio > Passive Dienste). */
+.nav-sublabel { padding: 10px 14px 4px; font-size: 11px; color: var(--ink-3); }

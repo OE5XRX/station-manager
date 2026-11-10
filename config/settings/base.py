@@ -280,7 +280,7 @@ SECURE_CSP = {
     "script-src": [CSP.SELF, CSP.NONCE],
     "style-src": [CSP.SELF, CSP.NONCE, "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
     "font-src": [CSP.SELF, "https://cdn.jsdelivr.net", "https://fonts.gstatic.com"],
-    "img-src": [CSP.SELF, "data:"],
+    "img-src": [CSP.SELF, "data:", "https://tile.openstreetmap.org"],
     "connect-src": [CSP.SELF, "ws:", "wss:"],
     "worker-src": [CSP.SELF],
 }
