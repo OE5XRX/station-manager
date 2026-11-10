@@ -759,3 +759,64 @@ def test_overlong_slot_in_snapshot_is_ignored(env):
 
     asyncio.run(go())
     assert agent.frames == []
+
+
+def test_frequency_touch_covers_the_whole_frequency_family(env):
+    station, sup, agent, _ = env
+
+    async def go():
+        await started(station, sup, agent)
+        sup.note_user_set(("1", "fm-1", "rx_frequency"))  # e.g. from an apply_preset
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert "frequency" not in [c for c, _v in agent.caps()]
+    assert ("squelch", 1) in agent.caps()
+
+
+def test_scan_started_mid_handover_stops_the_remaining_sets(env):
+    from apps.passive.supervisor import WILDCARD_TOUCH
+
+    station, sup, agent, _ = env
+    original = agent.send
+
+    async def send(frame):
+        await original(frame)
+        if frame.get("capability") == "frequency":
+            sup.note_user_set(WILDCARD_TOUCH)  # user starts a scan right now
+
+    async def go():
+        await started(station, sup, agent)
+        sup._send = send
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert [c for c, _v in agent.caps()] == ["frequency"]
+
+
+def test_hook_preempt_does_not_cancel_the_in_start_handover(env, monkeypatch):
+    station, sup, agent, _ = env
+    calls = {"n": 0}
+
+    def free(self=None):
+        calls["n"] += 1
+        return calls["n"] < 3  # taken after the first profile command
+
+    monkeypatch.setattr(sup, "_lock_is_free", free)
+    original = agent.send
+
+    async def send(frame):
+        await original(frame)
+        if frame.get("capability") == "frequency" and calls["n"] == 3:
+            sup.request_preempt("acquired", handover=True)  # the hook of the same grant
+
+    sup._send = send
+
+    async def go():
+        await sup.tick()
+        await sup.drain()
+
+    asyncio.run(go())
+    assert agent.caps()[-4:] == HANDOVER

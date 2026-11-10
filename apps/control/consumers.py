@@ -102,6 +102,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     permission_exempt = "agent: ed25519"
     passive = None  # PassiveSupervisor, built in connect()
+    _reapply_blocked = False  # a drift frame was held back by a running passive profile
     _passive_task = None
 
     async def connect(self):
@@ -418,6 +419,13 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         """A user took the control lock: hand the radio back (does not block the grant)."""
         self.passive.request_preempt(str(event.get("reason") or "acquired"), handover=True)
 
+    def _rearm_blocked_reapply(self):
+        """Once no passive profile owns any cap any more, retry the drift frames it held back
+        (one re-arm per hold: a plain flag, so it cannot loop while the run is open)."""
+        if self._reapply_blocked and not self._passive_caps():
+            self._reapply_blocked = False
+            self._reapply_pending = self._reapply_gen
+
     def _kick_passive_tick(self):
         """Run the passive supervisor's tick as its own single-flight task: a start or
         hand-over awaits agent results for up to ~10 s per command and must never stall the
@@ -468,6 +476,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         await lock_hooks.on_lock_released(station, "expired")
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
+                    self._rearm_blocked_reapply()
                     await self._retry_pending_reapply(station)
                     self._kick_passive_tick()
                     await self._purge_stale_telemetry(station)
@@ -503,6 +512,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         # A fresh inventory is a fresh baseline: supersedes any pending/in-flight retry.
         self._reapply_gen += 1
         gen = self._reapply_gen
+        self._reapply_blocked = False
         self._reapply_touched.clear()
         if isinstance(slots, list):
             self._wire_slots = {
@@ -533,8 +543,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if key in self._reapply_touched:
                 continue
             if key in self._passive_caps():
-                # Owned by a running passive profile: retry once the run is closed.
-                self._reapply_pending = self._reapply_gen
+                # Owned by a running passive profile: retried once the run is closed
+                # (``_rearm_blocked_reapply``, once -- never a retry loop while it runs).
+                self._reapply_blocked = True
                 continue
             await self.send(text_data=json.dumps(frame))
             await self._audit_reapply(

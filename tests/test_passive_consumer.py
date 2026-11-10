@@ -374,7 +374,15 @@ def test_skipped_protected_reapply_is_retried_later():
     c._audit_reapply = audit
     frame = {"slot": "1", "module": "fm-1", "capability": "volume", "value": 7}
     aio.run(c._send_reapply(object(), [frame]))
-    assert sent == [] and c._reapply_pending == 3
+    assert sent == [] and c._reapply_blocked is True and c._reapply_pending is None
+    c._rearm_blocked_reapply()  # the run is still open: stays blocked, no retry loop
+    assert c._reapply_pending is None
+    c.passive = type("P", (), {"protected_caps": lambda self: set()})()
+    c._rearm_blocked_reapply()  # run closed: armed exactly once
+    assert c._reapply_pending == 3 and c._reapply_blocked is False
+    c._reapply_pending = None
+    c._rearm_blocked_reapply()
+    assert c._reapply_pending is None
 
 
 def test_user_apply_preset_and_scan_count_as_takeover():

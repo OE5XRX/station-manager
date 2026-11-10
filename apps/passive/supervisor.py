@@ -46,6 +46,7 @@ SNAPSHOT_WAIT_S = 30
 MAX_ORPHAN_SLOTS = 8
 # ``note_user_set`` key meaning "a user took over the whole radio" (scan start).
 WILDCARD_TOUCH = ("*", "*", "*")
+_FREQUENCY_CAPS = ("frequency", "rx_frequency", "tx_frequency")
 
 State = PassiveServiceRun.State
 
@@ -131,8 +132,14 @@ class PassiveSupervisor:
         self._features_at = self._now()
 
     def note_user_set(self, key: tuple[str, str, str]) -> None:
-        """A user wrote ``(slot, module, capability)``: a hand-over must not undo it."""
-        self._user_touched.add(key)
+        """A user wrote ``(slot, module, capability)``: a hand-over must not undo it.
+        ``frequency``/``rx_frequency``/``tx_frequency`` are one knob for the hand-over (the
+        combined ``frequency`` sets RX and TX), so a touch of one covers all three."""
+        slot, module, cap = key
+        if cap in _FREQUENCY_CAPS:
+            self._user_touched.update((slot, module, c) for c in _FREQUENCY_CAPS)
+        else:
+            self._user_touched.add(key)
 
     def protected_caps(self) -> set[tuple[str, str, str]]:
         """``(slot, module, capability)`` the active passive profile owns: drift re-apply
@@ -294,6 +301,9 @@ class PassiveSupervisor:
         self._check_abort()
         if free:
             return False
+        # The start sequence ends here: the lock hook's own preempt (same grant) must not
+        # cancel the hand-over commands that follow.
+        self._starting = False
         await self._preempt_locked("acquired", handover=handover)
         return True
 
@@ -400,11 +410,9 @@ class PassiveSupervisor:
         if plan is None:
             return
         module, values = plan
-        if WILDCARD_TOUCH in self._user_touched:
-            return  # the user started a scan / re-tuned the whole radio: it is theirs now
         for cap, value in profiles.profile_commands(values, module):
-            if self._gone:
-                return
+            if self._gone or WILDCARD_TOUCH in self._user_touched:
+                return  # a user started a scan / took the radio over: it is theirs now
             if (module.slot, module.module_id, cap) in self._user_touched:
                 continue  # a user already set this since they took the lock
             if await database_sync_to_async(self._ptt_keyed)():
