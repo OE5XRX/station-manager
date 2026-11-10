@@ -84,3 +84,19 @@ def test_permission_area_passive_services(applicant_user, staff_user, admin_user
     assert can(applicant_user, "passive_services", "view")
     assert not can(staff_user, "passive_services", "manage")
     assert can(admin_user, "passive_services", "manage")
+
+
+def test_station_config_normalises_and_validates(db, station):
+    from django.core.exceptions import ValidationError
+
+    c = StationPassiveConfig(station=station, igate_callsign=" oe5xrx\n", igate_ssid=10)
+    c.save()
+    assert c.igate_callsign == "OE5XRX"
+    bad = StationPassiveConfig(station=station, igate_callsign="OE5XRX", igate_ssid=16)
+    with pytest.raises(ValidationError) as exc:
+        bad.full_clean(exclude=["station"])
+    assert "igate_ssid" in exc.value.message_dict
+    bad = StationPassiveConfig(station=station, igate_callsign="NOPE!", igate_ssid=1)
+    with pytest.raises(ValidationError) as exc:
+        bad.full_clean(exclude=["station"])
+    assert "igate_callsign" in exc.value.message_dict

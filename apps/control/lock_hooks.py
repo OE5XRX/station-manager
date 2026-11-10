@@ -9,6 +9,7 @@ at the call sites: their messages are user-specific.
 ``acquired``, ``transferred``, ``preempted`` (acquire).
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -18,6 +19,9 @@ from channels.layers import get_channel_layer
 from . import scan
 
 logger = logging.getLogger(__name__)
+
+# A registered hook runs inline in the lock path (and the sweep loop): bound it.
+HOOK_TIMEOUT_S = 10
 
 # Scan-stop reason texts (kept as they were when each path inlined them).
 _SCAN_STOP_TEXT = {
@@ -58,12 +62,12 @@ async def on_lock_released(
     """The lock became free. ``stop_scan=False``: the agent is gone, the caller already
     dropped the scan row. ``clear_tx_route``: the holder lost ``control.use``."""
     if stop_scan:
-        await _stop_scan(station, _SCAN_STOP_TEXT[reason])
+        await _stop_scan(station, _SCAN_STOP_TEXT.get(reason, f"lock {reason}"))
     await database_sync_to_async(_clear_gate)(station, clear_tx_route)
     await _broadcast_gate(station)
     for hook in tuple(_release_hooks):
         try:
-            await hook(station, reason)
+            await asyncio.wait_for(hook(station, reason), HOOK_TIMEOUT_S)
         except Exception:
             logger.exception("control: release hook %r failed (reason=%s)", hook, reason)
 
@@ -74,14 +78,14 @@ async def on_lock_acquired(station, holder, reason: str, *, previous_holder_lost
     if previous_holder_lost:
         await _stop_scan(
             station,
-            _SCAN_STOP_TEXT[reason],
+            _SCAN_STOP_TEXT.get(reason, f"lock {reason}"),
             unless_user=holder if reason == "preempted" else None,
         )
         await database_sync_to_async(_clear_gate)(station, False)
         await _broadcast_gate(station)
     for hook in tuple(_acquire_hooks):
         try:
-            await hook(station, holder, reason)
+            await asyncio.wait_for(hook(station, holder, reason), HOOK_TIMEOUT_S)
         except Exception:
             logger.exception("control: acquire hook %r failed (reason=%s)", hook, reason)
 

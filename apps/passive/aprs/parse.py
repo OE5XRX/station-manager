@@ -9,10 +9,10 @@ from dataclasses import dataclass
 COMMENT_MAX = 256
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _UNCOMPRESSED = re.compile(
-    r"^(\d{2})([\d ]{2}\.[\d ]{2})([NS])(.)(\d{3})([\d ]{2}\.[\d ]{2})([EW])(.)"
+    r"(\d{2})([\d ]{2}\.[\d ]{2})([NS])(.)(\d{3})([\d ]{2}\.[\d ]{2})([EW])(.)", re.ASCII
 )
 MAX_PATH = 8
-_HEADER_ELEMENT = re.compile(r"^[A-Za-z0-9]{1,9}(-[0-9]{1,2})?\*?$")
+_HEADER_ELEMENT = re.compile(r"[A-Za-z0-9]{1,9}(-[0-9]{1,2})?\*?", re.ASCII)
 
 
 @dataclass
@@ -54,6 +54,8 @@ def _position_body(s: str) -> tuple[float, float, str, str] | None:
     """Position starting at the symbol-table/lat field: ``(lat, lon, symbol, rest)``."""
     m = _UNCOMPRESSED.match(s)
     if m:
+        if _num(m[2]) >= 60 or _num(m[6]) >= 60:
+            return None  # minutes out of range
         lat = int(m[1]) + _num(m[2]) / 60
         lon = int(m[5]) + _num(m[6]) / 60
         if m[3] == "S":
@@ -157,16 +159,16 @@ def parse_info(info: bytes, destination: str) -> AprsInfo:
         return _other()
 
 
-def _valid_header(header: str) -> bool:
+def valid_header(header: str) -> bool:
     """``SRC>DST[,P1..P8]`` with plain callsign-like elements. The header is re-gated
     verbatim, so q-constructs and anything odd (spaces, control chars) are refused."""
     src, sep, rest = header.partition(">")
     if not sep:
         return False
     elements = rest.split(",")
-    if len(elements) > 1 + MAX_PATH or not _HEADER_ELEMENT.match(src):
+    if len(elements) > 1 + MAX_PATH or not _HEADER_ELEMENT.fullmatch(src):
         return False
-    return all(_HEADER_ELEMENT.match(e) and not e.upper().startswith("Q") for e in elements)
+    return all(_HEADER_ELEMENT.fullmatch(e) and not e.upper().startswith("Q") for e in elements)
 
 
 def parse_thirdparty(info: bytes) -> tuple[str, str] | None:
@@ -175,6 +177,6 @@ def parse_thirdparty(info: bytes) -> tuple[str, str] | None:
         return None
     text = info[1:].decode("latin-1")
     header, sep, inner = text.partition(":")
-    if not sep or not _valid_header(header):
+    if not sep or not valid_header(header):
         return None
     return header, inner

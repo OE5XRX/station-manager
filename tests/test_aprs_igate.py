@@ -77,3 +77,32 @@ def test_beacon_southwest_and_rounding():
 
 def test_gate_thirdparty_nogate_inner_path_skipped():
     assert gate_line(_pkt("}OE1X>APRS,NOGATE:>hi"), IG, set()) == (None, "thirdparty_inet")
+
+
+def test_gate_refuses_unvalidated_header_fields():
+    assert gate_line(_pkt(path=["qAR"]), IG, set()) == (None, "bad_header")
+    assert gate_line(_pkt(path=["qAO", "WIDE1-1"]), IG, set()) == (None, "bad_header")
+    assert gate_line(_pkt(src="OE5 ABC"), IG, set()) == (None, "bad_header")
+    assert gate_line(_pkt(dst="AP\nRS"), IG, set()) == (None, "bad_header")
+
+
+def test_gate_non_latin1_info_is_skipped_not_raised():
+    assert gate_line(_pkt("}OE1X>APRS:>h€llo"), IG, set()) == (None, "bad_chars")
+    # plain (non third-party) non-latin-1 text is never produced by the agent path, but must
+    # not crash either
+    line, why = gate_line(_pkt(">h€llo"), IG, set())
+    assert why in ("", "bad_chars")
+
+
+def test_gate_tolerates_trailing_cr():
+    line, _ = gate_line(_pkt(">hi\r"), IG, set())
+    assert line == "OE5ABC>APRS,qAR,OE5XRX-10:>hi\r\n"
+
+
+def test_login_and_beacon_refuse_line_injection():
+    assert "\n" not in login_line(IG, "r/1/2/3\r\nuser x", "1.0")[:-2]
+    assert "\n" not in beacon_line(IG, 48.0, 14.0, "hi\r\nuser x")[:-2]
+    with pytest.raises(ValueError):
+        login_line("OE5XRX-10\r\n", "", "1.0")
+    with pytest.raises(ValueError):
+        beacon_line("OE5 XRX", 48.0, 14.0, "x")

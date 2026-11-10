@@ -93,3 +93,16 @@ def test_thirdparty_header_is_validated():
         b"}>C:>hi",
     ):
         assert parse_thirdparty(bad) is None, bad
+
+
+def test_minutes_out_of_range_rejected():
+    assert parse_info(b"!4999.99N/01412.34E>", "APRS").latitude is None
+    assert parse_info(b"!4812.34N/01460.00E>", "APRS").longitude is None
+
+
+def test_non_ascii_digits_rejected():
+    assert parse_info("!٤٨12.34N/01412.34E>".encode(), "APRS").latitude is None
+
+
+def test_header_trailing_newline_rejected():
+    assert parse_thirdparty(b"}A>B\n:x") is None

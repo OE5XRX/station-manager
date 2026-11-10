@@ -1,11 +1,12 @@
 import re
 
+from django.core.validators import MaxValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 IGATE_CALL_RE = r"^(?=.{3,6}$)[A-Z0-9]{1,3}[0-9][A-Z]{1,4}$"
-_IGATE_CALL = re.compile(IGATE_CALL_RE)
+_IGATE_CALL = re.compile(IGATE_CALL_RE, re.ASCII)
 
 
 def normalise_callsign(s: str) -> str:
@@ -13,7 +14,7 @@ def normalise_callsign(s: str) -> str:
 
 
 def is_valid_igate_callsign(s: str) -> bool:
-    return bool(_IGATE_CALL.match(s))
+    return bool(_IGATE_CALL.fullmatch(s))
 
 
 def default_aprs_profile():
@@ -97,8 +98,15 @@ class StationPassiveConfig(models.Model):
         related_name="passive_config",
     )
     enabled = models.BooleanField(_("enabled"), default=False)
-    igate_callsign = models.CharField(_("iGate callsign"), max_length=6, blank=True)
-    igate_ssid = models.PositiveSmallIntegerField(_("iGate SSID"), null=True, blank=True)
+    igate_callsign = models.CharField(
+        _("iGate callsign"),
+        max_length=6,
+        blank=True,
+        validators=[RegexValidator(IGATE_CALL_RE, _("Invalid callsign."), flags=re.ASCII)],
+    )
+    igate_ssid = models.PositiveSmallIntegerField(
+        _("iGate SSID"), null=True, blank=True, validators=[MaxValueValidator(15)]
+    )
 
     class Meta:
         verbose_name = _("station passive config")
@@ -113,6 +121,10 @@ class StationPassiveConfig(models.Model):
 
     def __str__(self):
         return f"{self.station_id}: {self.igate_call or '-'}"
+
+    def save(self, *args, **kwargs):
+        self.igate_callsign = normalise_callsign(self.igate_callsign)
+        super().save(*args, **kwargs)
 
     @property
     def igate_call(self) -> str | None:

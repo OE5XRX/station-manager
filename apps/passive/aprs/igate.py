@@ -3,9 +3,10 @@
 RX-only iGate (RF -> IS): the path gets ``qAR,<igate>`` appended; packets that already
 travelled over the internet or ask not to be gated are skipped with a reason."""
 
+import re
 from typing import TYPE_CHECKING
 
-from .parse import parse_thirdparty
+from .parse import parse_thirdparty, valid_header
 
 if TYPE_CHECKING:
     from ..models import AprsPacket
@@ -25,7 +26,23 @@ def passcode(callsign: str) -> int:
     return h & 0x7FFF
 
 
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+_CALL_SSID = re.compile(r"[A-Za-z0-9]{1,9}(-[0-9]{1,2})?", re.ASCII)
+
+
+def _text(value: str) -> str:
+    """Admin-editable free text must never break out of its APRS-IS line."""
+    return _CTRL.sub("", value)
+
+
+def _call(value: str) -> str:
+    if not _CALL_SSID.fullmatch(value):
+        raise ValueError(f"invalid iGate callsign: {value!r}")
+    return value
+
+
 def login_line(igate_call: str, filter_: str, version: str) -> str:
+    igate_call, filter_, version = _call(igate_call), _text(filter_), _text(version)
     line = f"user {igate_call} pass {passcode(igate_call)} vers OE5XRX-StationManager {version}"
     if filter_:
         line += f" filter {filter_}"
@@ -50,13 +67,22 @@ def gate_line(
     if any(_is_nogate(p) for p in packet.path):
         return None, "nogate_path"
     _, info = _split_tnc2(packet.raw_tnc2)
+    info = info.rstrip("\r\n")  # many TNCs terminate the info field with CR
     if any(c in info for c in "\r\n\0"):
         return None, "bad_chars"
+    # The header fields come from untrusted RF and are re-gated verbatim: refuse q-constructs
+    # and anything that is not a plain callsign-like element.
+    own_header = ",".join((packet.destination, *packet.path))
+    if not valid_header(f"{packet.source}>{own_header}"):
+        return None, "bad_header"
     if info.startswith("?"):
         return None, "query"
 
     if info.startswith("}"):
-        inner = parse_thirdparty(info.encode("latin-1"))
+        try:
+            inner = parse_thirdparty(info.encode("latin-1"))
+        except UnicodeEncodeError:
+            return None, "bad_chars"
         if inner is None:
             return None, "thirdparty_bad"
         header, inner_info = inner
@@ -83,6 +109,7 @@ def _ddmm(value: float, deg_width: int) -> str:
 
 
 def beacon_line(igate_call: str, lat: float, lon: float, comment: str) -> str:
+    igate_call, comment = _call(igate_call), _text(comment)
     ns = "N" if lat >= 0 else "S"
     ew = "E" if lon >= 0 else "W"
     return f"{igate_call}>{TOCALL},TCPIP*:!{_ddmm(lat, 2)}{ns}R{_ddmm(lon, 3)}{ew}&{comment}\r\n"

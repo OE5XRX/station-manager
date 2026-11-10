@@ -436,3 +436,25 @@ def test_failing_hook_does_not_break_lock_path(control_agent_auth):
             await agent.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_slow_hook_is_bounded_and_unknown_reason_is_safe(monkeypatch):
+    from apps.control import lock_hooks
+
+    monkeypatch.setattr(lock_hooks, "HOOK_TIMEOUT_S", 0.05)
+
+    async def slow(*args):
+        await asyncio.sleep(5)
+
+    lock_hooks.register_release_hook(slow)
+    station = _station("lh-slow")
+
+    async def scenario():
+        try:
+            # documented-but-scanless reasons must not KeyError either
+            await asyncio.wait_for(lock_hooks.on_lock_released(station, "agent_disconnect"), 2)
+        finally:
+            lock_hooks.unregister_hooks(slow)
+
+    asyncio.run(scenario())
