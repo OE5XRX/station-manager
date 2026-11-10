@@ -61,6 +61,13 @@ class DecoderUnits:
             if not _ENV_KEY_RE.fullmatch(str(key)) or not _ENV_VAL_RE.fullmatch(str(val)):
                 raise DecoderUnitError("bad env")
         self._write_env(self._env_path(decoder, slot), env)
+        # A start-limit hit (Restart=on-failure, StartLimitBurst) leaves the unit
+        # "failed" and systemd refuses further starts ("repeated too quickly")
+        # until reset. Best-effort: never let this block the start itself.
+        try:
+            self._systemctl("reset-failed", unit)
+        except DecoderUnitError:
+            logger.warning("reset-failed %s failed", unit, exc_info=True)
         res = self._systemctl("start", unit)
         if res.returncode != 0:
             raise DecoderUnitError((res.stderr or "").strip()[:200] or "start failed")

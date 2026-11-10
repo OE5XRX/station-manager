@@ -31,7 +31,35 @@ def test_start_writes_env_then_starts_unit(tmp_path):
     env_file = tmp_path / "d" / "aprs-slot1.env"
     assert env_file.read_text() == "OE5XRX_SLOT=1\nOE5XRX_RX_NODE=alsa_input.x\n"
     assert oct(env_file.stat().st_mode & 0o777) == "0o644"
-    assert run.calls == [["systemctl", "start", "oe5xrx-decoder@aprs-slot1.service"]]
+    assert run.calls == [
+        ["systemctl", "reset-failed", "oe5xrx-decoder@aprs-slot1.service"],
+        ["systemctl", "start", "oe5xrx-decoder@aprs-slot1.service"],
+    ]
+
+
+def test_start_ignores_reset_failed_timeout(tmp_path):
+    class Run(FakeRun):
+        def __call__(self, argv, **kw):
+            self.calls.append(argv)
+            if argv[1] == "reset-failed":
+                raise subprocess.TimeoutExpired(argv, 1)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+    run = Run()
+    DecoderUnits(run=run, env_dir=str(tmp_path)).start("aprs", 1, ENV)
+    assert [c[1] for c in run.calls] == ["reset-failed", "start"]
+
+
+def test_start_ignores_reset_failed_nonzero(tmp_path):
+    class Run(FakeRun):
+        def __call__(self, argv, **kw):
+            self.calls.append(argv)
+            rc = 1 if argv[1] == "reset-failed" else 0
+            return subprocess.CompletedProcess(argv, rc, "", "boom")
+
+    run = Run()
+    DecoderUnits(run=run, env_dir=str(tmp_path)).start("aprs", 1, ENV)
+    assert [c[1] for c in run.calls] == ["reset-failed", "start"]
 
 
 @pytest.mark.parametrize(
