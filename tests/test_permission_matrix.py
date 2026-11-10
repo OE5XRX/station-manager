@@ -81,7 +81,14 @@ UI = {
     ("sso", "manage"): ("GET", "sso:dashboard", None, None),
 }
 # control.use / control.manage live on the WS channel (WS table below).
-UI_NOT_APPLICABLE = {("control", "use"), ("control", "manage")}
+# passive_services has no endpoint yet: its views land with the central APRS page
+# (plan 2026-11-10-passive-services-aprs Task 15), which replaces these entries by UI rows.
+UI_NOT_APPLICABLE = {
+    ("control", "use"),
+    ("control", "manage"),
+    ("passive_services", "view"),
+    ("passive_services", "manage"),
+}
 
 # (area, verb) -> (method, url with {objs-key} placeholders, JSON body or None)
 API = {
