@@ -100,3 +100,26 @@ def test_station_config_normalises_and_validates(db, station):
     with pytest.raises(ValidationError) as exc:
         bad.full_clean(exclude=["station"])
     assert "igate_callsign" in exc.value.message_dict
+
+
+def test_settings_validators(db):
+    from django.core.exceptions import ValidationError
+
+    s = AprsSettings.get()
+    s.beacon_interval_min = 0
+    s.aprsis_port = 70000
+    with pytest.raises(ValidationError) as exc:
+        s.full_clean()
+    assert {"beacon_interval_min", "aprsis_port"} <= set(exc.value.message_dict)
+
+
+def test_singleton_admin_blocks_second_row_and_delete(db, rf, admin_user):
+    from django.contrib import admin
+
+    ma = admin.site._registry[AprsSettings]
+    request = rf.get("/")
+    request.user = admin_user
+    assert ma.has_add_permission(request) is True
+    AprsSettings.get()
+    assert ma.has_add_permission(request) is False
+    assert ma.has_delete_permission(request) is False

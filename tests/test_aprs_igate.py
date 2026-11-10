@@ -106,3 +106,12 @@ def test_login_and_beacon_refuse_line_injection():
         login_line("OE5XRX-10\r\n", "", "1.0")
     with pytest.raises(ValueError):
         beacon_line("OE5 XRX", 48.0, 14.0, "x")
+
+
+def test_gate_plain_non_latin1_info_is_skipped():
+    assert gate_line(_pkt(">h€llo"), IG, set()) == (None, "bad_chars")
+
+
+def test_gate_refuses_bad_igate_call():
+    with pytest.raises(ValueError):
+        gate_line(_pkt(), "OE5 XRX", set())

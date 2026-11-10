@@ -24,8 +24,18 @@ class PassiveServiceConfigAdmin(admin.ModelAdmin):
     list_display = ("service", "enabled", "idle_minutes")
 
 
-admin.site.register(HandoverProfile)
-admin.site.register(AprsSettings)
+class SingletonAdmin(admin.ModelAdmin):
+    """``get()`` uses pk=1: exactly one row, never added twice or deleted."""
+
+    def has_add_permission(self, request):
+        return not self.model.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+admin.site.register(HandoverProfile, SingletonAdmin)
+admin.site.register(AprsSettings, SingletonAdmin)
 
 
 @admin.register(StationPassiveConfig)

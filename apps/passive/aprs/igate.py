@@ -62,6 +62,7 @@ def gate_line(
     packet: "AprsPacket", igate_call: str, own_calls: set[str]
 ) -> tuple[str | None, str]:
     """``(line, "")`` to send, or ``(None, skip_reason)``."""
+    igate_call = _call(igate_call)
     if packet.source.upper() in own_calls:
         return None, "own_call"
     if any(_is_nogate(p) for p in packet.path):
@@ -69,6 +70,10 @@ def gate_line(
     _, info = _split_tnc2(packet.raw_tnc2)
     info = info.rstrip("\r\n")  # many TNCs terminate the info field with CR
     if any(c in info for c in "\r\n\0"):
+        return None, "bad_chars"
+    try:
+        info.encode("latin-1")  # AX.25 payload bytes only; anything else is not from the agent
+    except UnicodeEncodeError:
         return None, "bad_chars"
     # The header fields come from untrusted RF and are re-gated verbatim: refuse q-constructs
     # and anything that is not a plain callsign-like element.
@@ -79,10 +84,7 @@ def gate_line(
         return None, "query"
 
     if info.startswith("}"):
-        try:
-            inner = parse_thirdparty(info.encode("latin-1"))
-        except UnicodeEncodeError:
-            return None, "bad_chars"
+        inner = parse_thirdparty(info.encode("latin-1"))
         if inner is None:
             return None, "thirdparty_bad"
         header, inner_info = inner

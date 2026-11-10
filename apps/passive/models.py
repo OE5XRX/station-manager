@@ -1,6 +1,6 @@
 import re
 
-from django.core.validators import MaxValueValidator, RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
@@ -37,7 +37,9 @@ class PassiveServiceConfig(models.Model):
 
     service = models.CharField(_("service"), max_length=16, unique=True, choices=Service.choices)
     enabled = models.BooleanField(_("enabled"), default=False)
-    idle_minutes = models.PositiveIntegerField(_("idle minutes"), default=10)
+    idle_minutes = models.PositiveIntegerField(
+        _("idle minutes"), default=10, validators=[MinValueValidator(1)]
+    )
     profile = models.JSONField(_("radio profile"), default=default_aprs_profile)
 
     class Meta:
@@ -75,12 +77,24 @@ class HandoverProfile(_Singleton):
 
 class AprsSettings(_Singleton):
     aprsis_host = models.CharField(_("APRS-IS host"), max_length=255, default="rotate.aprs2.net")
-    aprsis_port = models.PositiveIntegerField(_("APRS-IS port"), default=14580)
+    aprsis_port = models.PositiveIntegerField(
+        _("APRS-IS port"),
+        default=14580,
+        validators=[MinValueValidator(1), MaxValueValidator(65535)],
+    )
     aprsis_filter = models.CharField(_("APRS-IS filter"), max_length=255, blank=True)
-    max_gate_age_s = models.PositiveIntegerField(_("max gate age (s)"), default=30)
-    retention_days = models.PositiveIntegerField(_("raw packet retention (days)"), default=30)
-    no_rx_alert_hours = models.PositiveIntegerField(_("no-RX alert after (hours)"), default=6)
-    beacon_interval_min = models.PositiveIntegerField(_("beacon interval (min)"), default=30)
+    max_gate_age_s = models.PositiveIntegerField(
+        _("max gate age (s)"), default=30, validators=[MinValueValidator(1)]
+    )
+    retention_days = models.PositiveIntegerField(
+        _("raw packet retention (days)"), default=30, validators=[MinValueValidator(1)]
+    )
+    no_rx_alert_hours = models.PositiveIntegerField(
+        _("no-RX alert after (hours)"), default=6, validators=[MinValueValidator(1)]
+    )
+    beacon_interval_min = models.PositiveIntegerField(
+        _("beacon interval (min)"), default=30, validators=[MinValueValidator(1)]
+    )
     beacon_comment = models.CharField(
         _("beacon comment"), max_length=64, default="OE5XRX Remote Station RX-iGate"
     )
