@@ -7,3 +7,10 @@ class PassiveConfig(AppConfig):
     name = "apps.passive"
     label = "passive"
     verbose_name = _("Passive services")
+
+    def ready(self):
+        from apps.control import lock_hooks
+
+        from .supervisor import preempt_hook
+
+        lock_hooks.register_acquire_hook(preempt_hook)

@@ -1,0 +1,578 @@
+"""Per-agent-connection supervisor of the passive APRS service.
+
+One instance lives in each ``AgentControlConsumer`` and is ticked from its 5 s sweep. It
+tunes the radio with system-issued ``command`` frames, starts/stops the decoder with
+``decoder_*`` frames, hands the radio back when somebody takes the control lock, and
+reconciles with what the agent reports after a (re)connect.
+
+Concurrency rules (the consumer dispatches frames one at a time):
+
+* Everything that awaits an agent ``result`` runs in the sweep task or in a task spawned by
+  :meth:`request_preempt` — never inline in ``receive`` / a group handler, because the
+  ``result`` frame arrives through that very dispatch loop.
+* ``_lock`` serialises start sequence, preempt and disconnect handling. A preempt cancels
+  the pending futures first, so a half-way start unwinds at once and releases the lock.
+"""
+
+import asyncio
+import logging
+import uuid
+from datetime import timedelta
+from decimal import Decimal
+
+from channels.db import database_sync_to_async
+from channels.layers import get_channel_layer
+from django.conf import settings
+from django.utils import timezone
+
+from apps.control.models import StationModule
+from apps.stations.models import Station, StationAuditLog
+
+from . import profiles
+from .eligibility import DECODERS_FEATURE, ineligible_reason
+from .models import HandoverProfile, PassiveServiceConfig, PassiveServiceRun
+from .selection import pick_slot
+
+logger = logging.getLogger(__name__)
+
+SERVICE = "aprs"
+REQUEST_PREFIX = "passive-"
+BACKOFF_BASE_S = 60
+BACKOFF_MAX_S = 900
+# A run that never reports ``running`` (and has no start sequence in flight) is failed.
+START_TIMEOUT_S = 60
+
+State = PassiveServiceRun.State
+
+# Ineligible reasons that end an open run, with the hand-over they imply.
+_PREEMPT_REASONS = {
+    "disabled": ("disabled", False),
+    "not_opted_in": ("not_opted_in", False),
+    "updating": ("updating", False),
+    "draining": ("draining", False),
+    "no_module": ("no_module", False),
+    "lock_held": ("acquired", True),
+}
+
+
+class _AbortedError(Exception):
+    """The start sequence was cancelled (preempt / disconnect)."""
+
+
+class _CommandFailedError(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _backoff_seconds(failures: int) -> int:
+    return min(BACKOFF_BASE_S * 2 ** max(failures - 1, 0), BACKOFF_MAX_S)
+
+
+class PassiveSupervisor:
+    def __init__(
+        self,
+        station_id,
+        send_to_agent,
+        broadcast,
+        *,
+        now=timezone.now,
+        command_timeout: float | None = None,
+        wire_slot=None,
+    ):
+        self.station_id = station_id
+        self._send = send_to_agent
+        self._broadcast = broadcast
+        self._now = now
+        self._timeout = (
+            command_timeout
+            if command_timeout is not None
+            else settings.CONTROL_COMMAND_TIMEOUT_SECONDS
+        )
+        self._wire_slot = wire_slot or (lambda slot: int(slot) if str(slot).isdigit() else slot)
+        self._lock = asyncio.Lock()
+        self._futures: dict[str, asyncio.Future] = {}
+        self._tasks: set[asyncio.Task] = set()
+        self._features: set[str] | None = None  # None until the first inventory
+        self._unsupported = False
+        self._snapshot: list[dict] | None = None
+        self._reconciled = False
+        self._abort = False
+        self._starting = False
+        self._decoder_start_sent = False
+        self._failures = 0
+        self._retry_at = None
+        self._protected: set[tuple[str, str, str]] = set()
+        self._published = None
+        self._payload = {"type": "passive_state", "service": SERVICE, "state": "off"}
+
+    # -- sync accessors -------------------------------------------------------
+
+    def set_agent_features(self, features) -> None:
+        self._features = (
+            {f for f in features if isinstance(f, str)} if isinstance(features, list) else set()
+        )
+        self._unsupported = False
+
+    def protected_caps(self) -> set[tuple[str, str, str]]:
+        """``(slot, module, capability)`` the active passive profile owns: drift re-apply
+        must not write these while a run is open."""
+        return set(self._protected)
+
+    # -- frames from the agent (never block: no awaiting of results) -----------
+
+    async def on_result(self, msg: dict) -> None:
+        fut = self._futures.pop(msg.get("request_id"), None)
+        if fut is not None and not fut.done():
+            fut.set_result(msg)
+
+    async def on_inventory(self) -> None:
+        await self._maybe_reconcile()
+
+    async def on_snapshot(self, msg: dict) -> None:
+        decoders = msg.get("decoders")
+        self._snapshot = (
+            [d for d in decoders if isinstance(d, dict)] if isinstance(decoders, list) else []
+        )
+        await self._maybe_reconcile()
+
+    async def on_decoder_state(self, msg: dict) -> None:
+        if msg.get("decoder") != SERVICE:
+            return
+        state, detail = msg.get("state"), msg.get("detail")
+        run = await self._open_run()
+        if run is None or str(msg.get("slot")) != run.slot:
+            return
+        if state == "running":
+            if run.state in (State.STARTING, State.AGENT_OFFLINE):
+                await self._set_state(run, State.RUNNING)
+                self._failures = 0
+                self._retry_at = None
+                await self._publish(run_state=State.RUNNING, slot=run.slot)
+        elif state == "error" and run.state != State.STOPPING:
+            self._spawn(self._decoder_died(run, str(detail or "decoder error")))
+        elif state == "stopped" and run.state not in (State.STOPPING,):
+            await self._close(run, State.STOPPED, "decoder_stopped")
+            self._reset_run_memory()
+            await self._publish()
+
+    # -- scheduler -------------------------------------------------------------
+
+    async def tick(self) -> None:
+        run = await self._open_run()
+        if run is None:
+            await self._tick_idle()
+        else:
+            await self._tick_open(run)
+
+    async def _tick_idle(self) -> None:
+        if self._retry_at is not None and self._now() < self._retry_at:
+            return
+        reason = await self._reason()
+        if reason is not None:
+            await self._publish(reason=reason)
+            return
+        await self._start()
+
+    async def _tick_open(self, run) -> None:
+        if run.state == State.AGENT_OFFLINE:
+            # The decoder may well still run: wait for the snapshot of this connection.
+            if self._features is not None and DECODERS_FEATURE not in self._features:
+                await self._close(run, State.STOPPED, "agent_restarted")
+                self._reset_run_memory()
+                await self._publish()
+            return
+        if run.state == State.STOPPING:
+            return
+        reason = await self._reason(ignore_idle=True)
+        decision = _PREEMPT_REASONS.get(reason)
+        if decision is not None:
+            end_reason, handover = decision
+            await self.preempt(end_reason, handover=handover)
+            return
+        if (
+            run.state == State.STARTING
+            and not self._starting
+            and (self._now() - run.started_at).total_seconds() > START_TIMEOUT_S
+        ):
+            self._spawn(self._decoder_died(run, "start_timeout"))
+
+    # -- start sequence --------------------------------------------------------
+
+    async def _start(self) -> None:
+        async with self._lock:
+            self._abort = False
+            self._starting = True
+            self._decoder_start_sent = False
+            try:
+                await self._start_locked()
+            except _AbortedError:
+                pass
+            finally:
+                self._starting = False
+
+    async def _start_locked(self) -> None:
+        plan = await database_sync_to_async(self._create_run)()
+        if plan is None:
+            return
+        run, module, values = plan
+        self._protected = {
+            (module.slot, module.module_id, cap) for cap in profiles.profile_caps(values, module)
+        }
+        await self._publish(run_state=State.STARTING, slot=run.slot)
+        try:
+            for cap, value in profiles.profile_commands(values, module):
+                await self._command(run.slot, module.module_id, cap, value)
+                self._check_abort()
+            if not await database_sync_to_async(self._lock_is_free)():
+                # A user grabbed the lock while we were tuning: never start the decoder.
+                await self._preempt_locked("acquired", handover=True)
+                return
+            self._decoder_start_sent = True
+            await self._request(
+                {
+                    "v": 1,
+                    "type": "decoder_start",
+                    "decoder": SERVICE,
+                    "slot": int(run.slot),
+                    "params": {},
+                }
+            )
+        except _CommandFailedError as exc:
+            await self._fail_start(run, exc.code)
+            return
+        await self._audit(f"system:passive_services started {SERVICE} on slot {run.slot}")
+
+    def _check_abort(self) -> None:
+        if self._abort:
+            raise _AbortedError
+
+    async def _fail_start(self, run, code: str) -> None:
+        if code == "unsupported":
+            self._unsupported = True
+        await self._close(run, State.ERROR, "start_failed", last_error=code)
+        self._reset_run_memory()
+        self._bump_backoff()
+        await self._publish(reason=code)
+
+    async def _decoder_died(self, run, detail: str) -> None:
+        async with self._lock:
+            current = await self._open_run()
+            if current is None or current.pk != run.pk:
+                return
+            try:
+                await self._request(
+                    {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(run.slot)}
+                )
+            except (_CommandFailedError, _AbortedError):
+                logger.info(
+                    "passive: stop after decoder error failed (station %s)", self.station_id
+                )
+            await self._close(current, State.ERROR, "decoder_error", last_error=detail)
+            self._reset_run_memory()
+            self._bump_backoff()
+            await self._publish(reason=detail[:64])
+
+    # -- preempt / hand-over ---------------------------------------------------
+
+    def request_preempt(self, reason: str, *, handover: bool = True) -> None:
+        """Non-blocking entry for the lock hook: flags the abort and runs the preempt in
+        its own task (the lock grant must never wait for the agent)."""
+        self._abort = True
+        self._cancel_pending()
+        self._spawn(self.preempt(reason, handover=handover))
+
+    async def preempt(self, reason: str, *, handover: bool) -> None:
+        self._abort = True
+        self._cancel_pending()
+        async with self._lock:
+            try:
+                await self._preempt_locked(reason, handover=handover)
+            finally:
+                self._abort = False
+
+    async def _preempt_locked(self, reason: str, *, handover: bool) -> None:
+        run = await self._open_run()
+        if run is None:
+            return
+        was_running = run.state == State.RUNNING
+        await self._set_state(run, State.STOPPING)
+        await self._publish(run_state=State.STOPPING, slot=run.slot)
+        self._abort = False  # our own best-effort commands below must go out
+        if was_running or self._decoder_start_sent:
+            try:
+                await self._request(
+                    {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(run.slot)}
+                )
+            except (_CommandFailedError, _AbortedError) as exc:
+                logger.info("passive: decoder_stop failed (%s), station %s", exc, self.station_id)
+        if handover:
+            await self._apply_handover(run)
+        await self._close(run, State.STOPPED, reason)
+        self._reset_run_memory()
+        await self._audit(
+            f"system:passive_services stopped {SERVICE} on slot {run.slot} ({reason})"
+        )
+        await self._publish()
+
+    async def _apply_handover(self, run) -> None:
+        plan = await database_sync_to_async(self._handover_plan)(run)
+        if plan is None:
+            return
+        module, values = plan
+        for cap, value in profiles.profile_commands(values, module):
+            try:
+                await self._command(run.slot, module.module_id, cap, value)
+            except (_CommandFailedError, _AbortedError) as exc:
+                logger.info("passive: hand-over %s failed (%s)", cap, exc)
+
+    # -- agent connection ------------------------------------------------------
+
+    async def on_agent_disconnect(self) -> None:
+        self._abort = True
+        self._cancel_pending()
+        async with self._lock:
+            try:
+                run = await self._open_run()
+                if run is not None:
+                    if run.state == State.RUNNING or self._decoder_start_sent:
+                        await self._set_state(run, State.AGENT_OFFLINE)
+                    else:
+                        await self._close(run, State.STOPPED, "agent_disconnect")
+                    self._protected = set()
+            finally:
+                self._abort = False
+                self._decoder_start_sent = False
+
+    async def shutdown(self) -> None:
+        """Cancel own tasks and futures (consumer teardown)."""
+        self._cancel_pending()
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def drain(self) -> None:
+        """Wait for spawned tasks (tests)."""
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+
+    # -- reconcile with the agent's snapshot ----------------------------------
+
+    async def _maybe_reconcile(self) -> None:
+        if self._reconciled or self._snapshot is None or self._features is None:
+            return
+        self._reconciled = True
+        run = await self._open_run()
+        listed = {str(d.get("slot")) for d in self._snapshot if d.get("decoder") == SERVICE}
+        if run is None:
+            for slot in sorted(listed):
+                self._spawn(self._stop_orphan(slot))
+            return
+        if run.slot not in listed:
+            await self._close(run, State.STOPPED, "agent_restarted")
+            self._reset_run_memory()
+            await self._publish()
+            return
+        if run.state != State.RUNNING:
+            await self._set_state(run, State.RUNNING)
+        self._protected = await database_sync_to_async(self._protected_for)(run)
+        reason = await self._reason(ignore_idle=True)
+        decision = _PREEMPT_REASONS.get(reason)
+        if decision is not None:
+            self._spawn(self.preempt(decision[0], handover=decision[1]))
+            return
+        await self._publish(run_state=State.RUNNING, slot=run.slot)
+
+    async def _stop_orphan(self, slot: str) -> None:
+        async with self._lock:
+            try:
+                await self._request(
+                    {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(slot)}
+                )
+            except (_CommandFailedError, _AbortedError) as exc:
+                logger.info("passive: stopping orphan decoder failed (%s)", exc)
+
+    # -- agent requests --------------------------------------------------------
+
+    async def _request(self, frame: dict):
+        """Send ``frame`` with a fresh ``passive-`` request id and await its ``result``."""
+        rid = REQUEST_PREFIX + uuid.uuid4().hex
+        fut = asyncio.get_running_loop().create_future()
+        self._futures[rid] = fut
+        try:
+            await self._send({**frame, "request_id": rid})
+            result = await asyncio.wait_for(fut, self._timeout)
+        except TimeoutError:
+            raise _CommandFailedError("timeout") from None
+        finally:
+            self._futures.pop(rid, None)
+        if result.get("ok") is not True:
+            error = result.get("error")
+            code = error.get("code") if isinstance(error, dict) else None
+            raise _CommandFailedError(str(code or "failed"))
+        return result
+
+    async def _command(self, slot: str, module_id: str, capability: str, value) -> None:
+        await self._request(
+            {
+                "v": 1,
+                "type": "command",
+                "slot": self._wire_slot(slot),
+                "module": module_id,
+                "capability": capability,
+                "op": "set",
+                "value": value,
+            }
+        )
+
+    def _cancel_pending(self) -> None:
+        for fut in list(self._futures.values()):
+            if not fut.done():
+                fut.set_exception(_AbortedError())
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.get_running_loop().create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._done)
+
+    def _done(self, task) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("passive: task failed", exc_info=task.exception())
+
+    def _bump_backoff(self) -> None:
+        self._failures += 1
+        self._retry_at = self._now() + timedelta(seconds=_backoff_seconds(self._failures))
+
+    def _reset_run_memory(self) -> None:
+        self._protected = set()
+        self._decoder_start_sent = False
+
+    # -- state publishing ------------------------------------------------------
+
+    async def _publish(self, *, run_state=None, slot=None, reason=None) -> None:
+        payload = {
+            "type": "passive_state",
+            "service": SERVICE,
+            "state": str(run_state) if run_state else "off",
+            "slot": slot,
+            "reason": reason,
+        }
+        self._payload = payload
+        key = (payload["state"], slot, reason)
+        if key == self._published:
+            return
+        self._published = key
+        await self._broadcast(payload)
+
+    async def republish(self) -> None:
+        """A browser connected: send the current state again (nothing while idle and
+        without a reason, so a quiet service adds no frame)."""
+        if self._payload["state"] != "off" or self._payload.get("reason"):
+            await self._broadcast(self._payload)
+
+    # -- sync DB helpers -------------------------------------------------------
+
+    async def _open_run(self):
+        return await database_sync_to_async(PassiveServiceRun.open_for)(self.station_id)
+
+    async def _set_state(self, run, state) -> None:
+        run.state = state
+        await database_sync_to_async(PassiveServiceRun.objects.filter(pk=run.pk).update)(
+            state=state
+        )
+
+    async def _close(self, run, state, end_reason: str, last_error: str = "") -> None:
+        run.state, run.end_reason = state, end_reason
+        await database_sync_to_async(
+            PassiveServiceRun.objects.filter(pk=run.pk, ended_at__isnull=True).update
+        )(
+            state=state,
+            end_reason=end_reason,
+            last_error=last_error[:256],
+            ended_at=self._now(),
+        )
+
+    async def _audit(self, message: str) -> None:
+        await database_sync_to_async(StationAuditLog.log)(
+            station_id=self.station_id, event_type="passive_service", message=message
+        )
+
+    async def _reason(self, *, ignore_idle: bool = False) -> str | None:
+        return await database_sync_to_async(self._reason_sync)(ignore_idle)
+
+    def _reason_sync(self, ignore_idle: bool) -> str | None:
+        station = Station.objects.filter(pk=self.station_id).first()
+        if station is None:
+            return "offline"
+        cfg = PassiveServiceConfig.get(SERVICE)
+        now = self._now()
+        if ignore_idle:
+            now += timedelta(minutes=cfg.idle_minutes + 1)
+        if self._unsupported:
+            return "agent_too_old"
+        return ineligible_reason(
+            station,
+            cfg,
+            now=now,
+            agent_connected=self._features is not None,
+            agent_features=self._features or set(),
+        )
+
+    def _lock_is_free(self) -> bool:
+        from apps.control.models import ControlLock
+
+        return not ControlLock.objects.filter(
+            station_id=self.station_id, scope="station", holder__isnull=False
+        ).exists()
+
+    def _create_run(self):
+        station = Station.objects.get(pk=self.station_id)
+        cfg = PassiveServiceConfig.get(SERVICE)
+        values = dict(cfg.profile)
+        module = pick_slot(station, Decimal(str(values.get("frequency"))))
+        if module is None or not self._lock_is_free():
+            return None
+        try:
+            run = PassiveServiceRun.objects.create(
+                station=station,
+                service=SERVICE,
+                slot=module.slot,
+                module_id=module.module_id,
+                state=State.STARTING,
+            )
+        except Exception:  # unique open-run constraint: somebody else got there first
+            logger.info("passive: run already open (station %s)", self.station_id, exc_info=True)
+            return None
+        return run, module, values
+
+    def _handover_plan(self, run):
+        module = self._module_of(run)
+        if module is None:
+            return None
+        station = Station.objects.get(pk=self.station_id)
+        base = HandoverProfile.get().values
+        return module, profiles.handover_values(station, module, base)
+
+    def _protected_for(self, run) -> set[tuple[str, str, str]]:
+        module = self._module_of(run)
+        if module is None:
+            return set()
+        values = PassiveServiceConfig.get(SERVICE).profile
+        return {(module.slot, module.module_id, c) for c in profiles.profile_caps(values, module)}
+
+    def _module_of(self, run):
+        return StationModule.objects.filter(
+            station_id=self.station_id, slot=run.slot, module_id=run.module_id
+        ).first()
+
+
+async def preempt_hook(station, holder, reason) -> None:
+    """Lock-acquire hook: tell the station's agent consumer to hand the radio over. Only a
+    group message — the lock grant never waits for the agent."""
+    await get_channel_layer().group_send(
+        f"control_{station.pk}_agent",
+        {"type": "control.passive_preempt", "reason": reason},
+    )
