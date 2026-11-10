@@ -219,3 +219,88 @@ def test_apply_preset_with_no_ok_cap_sends_no_state():
         assert _states(col) == []
     finally:
         fw.stop()
+
+
+def _count_gets(fw):
+    return len([ln for ln in map(bytes.decode, fw.received) if " get " in ln])
+
+
+def test_no_readback_while_slot_paused(monkeypatch):
+    from station_agent import slot_pause
+
+    fw, b, col = _setup()
+    try:
+        real = b._execute
+        paused = {"on": False}
+
+        async def pausing(slot, module, op, cap, token, **kw):
+            res = await real(slot, module, op, cap, token, **kw)
+            if op == "set":
+                paused["on"] = True  # slot gets paused right after the set succeeded
+            return res
+
+        b._execute = pausing
+        monkeypatch.setattr(slot_pause, "is_paused", lambda s: paused["on"])
+        asyncio.run(b.handle(_set("frequency", 145.5)))
+        assert _count_gets(fw) == 0
+        assert _states(col)[0]["values"] == {"frequency": "145.5"}
+    finally:
+        fw.stop()
+
+
+def test_slot_keyed_mid_snapshot_stops_readback():
+    fw, b, col = _setup()
+    try:
+        real = b._execute
+
+        async def key_after_first_get(slot, module, op, cap, token, **kw):
+            res = await real(slot, module, op, cap, token, **kw)
+            if op == "get":
+                b._ptt_inflight.add((slot, module))
+            return res
+
+        b._execute = key_after_first_get
+        asyncio.run(b.handle(_set("frequency", 145.5)))
+        assert _count_gets(fw) == 1
+    finally:
+        fw.stop()
+
+
+def test_timeout_aborts_remaining_readbacks():
+    fw, b, col = _setup()
+    try:
+        calls = []
+
+        async def dead(slot, module, op, cap, token, **kw):
+            calls.append((op, cap))
+            if op == "get":
+                return {"ok": False, "error": "timeout"}
+            return {"ok": True, "value": token}
+
+        b._execute = dead
+        asyncio.run(b.handle(_set("frequency", 145.5)))
+        assert [c for c in calls if c[0] == "get"] == [("get", "frequency")]
+        assert _states(col)[0]["values"] == {"frequency": "145.5"}
+    finally:
+        fw.stop()
+
+
+def test_readback_budget_bounds_snapshot():
+    fw, b, col = _setup()
+    try:
+        b._READBACK_BUDGET_S = 0.0
+        asyncio.run(b.handle(_set("frequency", 145.5)))
+        assert _count_gets(fw) == 0
+        assert _states(col)[0]["values"] == {"frequency": "145.5"}
+    finally:
+        fw.stop()
+
+
+def test_virtual_module_set_gets_no_readback():
+    fw, b, col = _setup()
+    try:
+        b._virtual[(1, "fm")] = object()
+        values = asyncio.run(b._settings_snapshot(1, "fm", {"x": 1}))
+        assert values == {"x": 1} and _count_gets(fw) == 0
+    finally:
+        fw.stop()

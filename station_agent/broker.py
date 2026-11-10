@@ -391,6 +391,8 @@ class Broker:
             values = await self._settings_snapshot(slot, module, ok_values)
             await self._send(proto.build_state(slot, module, values, self._ts()))
 
+    _READBACK_BUDGET_S = 3.0
+
     async def _settings_snapshot(self, slot, module, fallback: dict) -> dict:
         """Read back every ``setting`` capability of a physical module (station = truth).
 
@@ -401,6 +403,9 @@ class Broker:
         on the PTT path) or paused for a module-firmware flash.
         """
         values = dict(fallback)
+        # handle() is awaited serially by the control loop, so a readback delays any queued
+        # frame (e.g. PTT on); bound the whole snapshot.
+        deadline = time.monotonic() + self._READBACK_BUDGET_S
         descriptor = self._descriptor(slot, module)
         if descriptor is None or (slot, module) in self._virtual:
             return values
@@ -410,7 +415,7 @@ class Broker:
             name = cap.get("name")
             if not isinstance(name, str) or not name:
                 continue
-            if self.slot_busy(slot) or slot_pause.is_paused(slot):
+            if self.slot_busy(slot) or slot_pause.is_paused(slot) or time.monotonic() >= deadline:
                 break
             try:
                 result = await self._execute(slot, module, "get", name, None)
@@ -420,6 +425,10 @@ class Broker:
             if result.get("ok"):
                 values[name] = result.get("value")
             else:
+                if result.get("error") in (proto.TIMEOUT, "updating", proto.UNKNOWN_SLOT):
+                    # Whole-device failure: don't repeat it per cap (mirrors apply_preset).
+                    logger.warning("broker: readback of %s/%s aborted: %s", slot, module, result)
+                    break
                 logger.warning(
                     "broker: settings readback of %s/%s/%s failed: %s",
                     slot,
