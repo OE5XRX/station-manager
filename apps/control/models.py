@@ -97,6 +97,8 @@ class ControlLock(models.Model):
     acquired_at = models.DateTimeField(_("acquired at"), null=True, blank=True)
     last_activity = models.DateTimeField(_("last activity"), null=True, blank=True)
     pending_release_at = models.DateTimeField(_("pending release at"), null=True, blank=True)
+    # When the lock last became free (NULL = never held). Idle timer of passive services.
+    released_at = models.DateTimeField(_("released at"), null=True, blank=True)
 
     class Meta:
         verbose_name = _("control lock")

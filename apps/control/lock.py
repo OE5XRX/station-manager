@@ -268,7 +268,16 @@ def _clear(lock):
     lock.acquired_at = None
     lock.last_activity = None
     lock.pending_release_at = None
-    lock.save(update_fields=["holder", "acquired_at", "last_activity", "pending_release_at"])
+    lock.released_at = timezone.now()
+    lock.save(
+        update_fields=[
+            "holder",
+            "acquired_at",
+            "last_activity",
+            "pending_release_at",
+            "released_at",
+        ]
+    )
 
 
 DRAIN_UNSET = object()
