@@ -20,6 +20,7 @@
   var positions = [];
   var MAX_ROWS = 300;
   var lastId = 0;
+  var loaded = false;
   var timer = null;
   var inflight = null; // generation of the request in flight
   var generation = 0;
@@ -103,8 +104,8 @@
   }
 
   function pollPackets(reset) {
-    // lastId 0 = nothing loaded yet (e.g. the first load failed): load like a reset.
-    if (lastId === 0) reset = true;
+    // Nothing loaded yet (e.g. the first load failed): load like a reset.
+    if (!loaded) reset = true;
     if (inflight === generation) return;
     var gen = generation;
     inflight = gen;
@@ -127,6 +128,7 @@
           packets = data.packets.concat(packets).slice(0, MAX_KEEP);
         }
         lastId = Math.max(lastId, data.last_id || 0);
+        loaded = true;
         statusEl.textContent = "";
         renderMap();
         renderLog();
@@ -193,6 +195,7 @@
     generation += 1;
     inflight = null;
     lastId = 0;
+    loaded = false;
     pollPackets(true);
   }
 
