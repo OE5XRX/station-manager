@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from django.db import IntegrityError, transaction
+from django.db import DataError, IntegrityError, transaction
 from django.db.models import F
 
 from apps.stations.models import Station
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 MAX_SKEW = timedelta(days=7)
 _BAD_LOG_INTERVAL_S = 60.0
+MAX_SEQ = 2**63 - 1  # BigIntegerField
 _last_bad_log: dict[int, float] = {}
 
 
@@ -46,7 +47,7 @@ def ingest_output(station_id: int, msg: dict, *, recv_now: datetime) -> bool:
     epoch, seq = msg.get("epoch"), msg.get("seq")
     if not isinstance(epoch, str) or not epoch or len(epoch) > 32:
         return False
-    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+    if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= MAX_SEQ:
         return False
     if msg.get("kind") != "ax25":
         return True
@@ -65,6 +66,9 @@ def ingest_output(station_id: int, msg: dict, *, recv_now: datetime) -> bool:
         if ts is not None and agent_heard is not None
         else recv_now
     )
+    if b"\0" in frame.info:  # PostgreSQL text cannot hold NUL; such a frame is not valid APRS
+        _log_bad(station_id, "NUL byte")
+        return True
     info = parse_info(frame.info, frame.destination)
     try:
         with transaction.atomic():
@@ -93,6 +97,8 @@ def ingest_output(station_id: int, msg: dict, *, recv_now: datetime) -> bool:
                     last_packet_at=recv_now, packet_count=F("packet_count") + 1
                 )
             record_coverage(station, packet)
+    except DataError as exc:  # content the DB refuses: drop deterministically, never retry
+        _log_bad(station_id, f"rejected by DB: {exc}")
     except IntegrityError:
         return True  # duplicate (station, epoch, seq)
     except Station.DoesNotExist:

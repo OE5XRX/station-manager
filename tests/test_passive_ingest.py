@@ -145,3 +145,13 @@ def test_consumer_acks_after_ingest(control_agent_auth):
 
     asyncio.run(scenario())
     assert AprsPacket.objects.filter(station=station, seq=7).count() == 1
+
+
+def test_nul_byte_frame_acked_not_stored(db, station):
+    assert ingest_output(station.id, _msg(ax25=_frame(info=b"!x\x00y")), recv_now=NOW) is True
+    assert AprsPacket.objects.count() == 0
+
+
+def test_seq_beyond_bigint_not_acked(db, station):
+    assert ingest_output(station.id, _msg(seq=2**63), recv_now=NOW) is False
+    assert ingest_output(station.id, _msg(seq=2**63 - 1), recv_now=NOW) is True
