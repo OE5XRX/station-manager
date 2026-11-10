@@ -381,7 +381,8 @@ class ControlClient:
             self._publish_last_good(debouncer)
             if self._decoder_host is not None:
                 # Debounced data from a successful scan, every cycle (not only on change).
-                await self._decoder_host.reconcile_slots(_slot_numbers(effective))
+                # Non-blocking: the host stops absent slots in its own task.
+                self._decoder_host.observe_slots(_slot_numbers(effective))
             if effective == last_emitted and not force:
                 continue
             if effective == last_emitted:

@@ -43,6 +43,18 @@ def _as_str_list(value) -> list[str]:
     return [v for v in value if isinstance(v, str)]
 
 
+MAX_DECODER_RUNTIME_S = 7 * 86400
+
+
+def _valid_runtime(value) -> bool:
+    """Finite, positive and sane. json.loads yields huge ints / NaN / Infinity as-is, and
+    math.isfinite raises OverflowError for ints beyond float range."""
+    try:
+        return math.isfinite(value) and 0 < value <= MAX_DECODER_RUNTIME_S
+    except (OverflowError, ValueError):
+        return False
+
+
 class Broker:
     def __init__(
         self,
@@ -245,8 +257,7 @@ class Broker:
                 and (
                     isinstance(max_rt, bool)
                     or not isinstance(max_rt, (int, float))
-                    or not math.isfinite(max_rt)
-                    or max_rt <= 0
+                    or not _valid_runtime(max_rt)
                 )
             )
         ):

@@ -469,7 +469,9 @@ def test_reconnect_does_not_stop_decoder_when_first_scan_misses(tmp_path):
                 await ws.close()
                 return
             elif idx == 2 and msg["type"] == "decoder_snapshot":
-                # Module reappears right after the (empty) first scan.
+                # Module is missing for the first scan AND re-discovery cycle 1 (~0.5 s at a
+                # 0.3 s interval), then reappears: the decoder must survive both misses.
+                await asyncio.sleep(0.5)
                 _os.symlink(
                     base_holder["target"], _os.path.join(base_holder["base"], "slot1", "control")
                 )

@@ -785,16 +785,23 @@ class StationAgent:
         virtual = [audio.router_module] if audio.router_module is not None else None
 
         def _make_decoder_host():
+            # The agent alone knows the hardware node naming; the image wrapper only
+            # consumes OE5XRX_RX_NODE from the env file.
+            from concurrent.futures import ThreadPoolExecutor
+
             from .decoders.aprs import AprsDecoder
             from .decoders.host import DecoderHost
             from .decoders.units import DecoderUnits
 
-            # The agent alone knows the hardware node naming; the image wrapper only
-            # consumes OE5XRX_RX_NODE from the env file.
+            # Dedicated pool: a hung systemd must not tie up the default executor that
+            # serves serial I/O (commands, PTT, telemetry polls).
             return DecoderHost(
                 DecoderUnits(),
                 {AprsDecoder.name: AprsDecoder()},
                 lambda slot: router_backend.resolve_node(slot, "rx"),
+                loop_executor=ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="decoder-units"
+                ),
             )
 
         control_client = ControlClient(

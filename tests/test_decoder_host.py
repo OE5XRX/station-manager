@@ -84,6 +84,15 @@ def run(coro):
     return asyncio.run(coro)
 
 
+async def _wait_for(cond, timeout=3.0):
+    """Poll for a condition instead of sleeping a fixed time (executor threads involved)."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not cond():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not reached")
+        await asyncio.sleep(0.01)
+
+
 def test_host_stops_leftover_units_on_startup():
     async def go():
         host, units, _ = _host()
@@ -492,16 +501,43 @@ def test_health_inactive_is_dead_but_deactivating_is_not():
         host, units, _ = _host(health_poll_s=0)
         units.unit_state = "deactivating"  # systemd restart window (Restart=on-failure)
         await host.start("aprs", 1, {}, "r1")
-        await _settle()
+        await asyncio.sleep(0.1)
         assert host.running() != []
         units.unit_state = "inactive"
-        await _settle()
-        assert host.running() == []
+        await _wait_for(lambda: host.running() == [])
 
     run(go())
 
 
-def test_max_runtime_racing_explicit_stop_stops_once():
+def test_max_runtime_wins_race_and_explicit_stop_answers_ok():
+    async def go():
+        gate = asyncio.Event()
+
+        async def fake_sleep(s):
+            if s == 60:
+                await gate.wait()
+            else:
+                await asyncio.Event().wait()
+
+        host, units, _ = _host(sleep=fake_sleep)
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r1", max_runtime_s=60)
+        c.sent.clear()
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)  # _max_runtime now holds the lock
+        await host.stop("aprs", 1, "r2")
+        await _wait_for(lambda: host.running() == [])
+        stopped = [m for m in c.sent if m.get("state") == "stopped"]
+        assert [m["detail"] for m in stopped] == ["max_runtime"]
+        assert [m["ok"] for m in c.sent if m["type"] == "result"] == [True]
+        assert len(units.named("stop")) == 1
+
+    run(go())
+
+
+def test_explicit_stop_wins_race_with_max_runtime():
     async def go():
         gate = asyncio.Event()
 
@@ -515,7 +551,7 @@ def test_max_runtime_racing_explicit_stop_stops_once():
         await host.start("aprs", 1, {}, "r1", max_runtime_s=60)
         gate.set()
         await host.stop("aprs", 1, "r2")
-        await _settle()
+        await asyncio.sleep(0.05)
         assert len(units.named("stop")) == 1 and host.running() == []
 
     run(go())
@@ -523,13 +559,15 @@ def test_max_runtime_racing_explicit_stop_stops_once():
 
 def test_snapshot_waits_for_in_flight_start():
     async def go():
+        import threading
+        import time
+
         host, units, _ = _host()
-        release = asyncio.Event()
+        entered = threading.Event()
         orig = units.start
 
         def slow_start(decoder, slot, env):
-            import time
-
+            entered.set()
             time.sleep(0.2)
             return orig(decoder, slot, env)
 
@@ -537,12 +575,124 @@ def test_snapshot_waits_for_in_flight_start():
         c = Collector()
         host.attach(c)
         starter = asyncio.create_task(host.start("aprs", 1, {}, "r1"))
-        await asyncio.sleep(0.05)  # start holds the lock, unit still starting
+        await _wait_for(entered.is_set)  # start holds the lock, unit still starting
         await host.on_connected()
         await starter
-        release.set()
         snap = [m for m in c.sent if m["type"] == "decoder_snapshot"][0]
         assert snap["decoders"] == [{"decoder": "aprs", "slot": 1, "state": "running"}]
+        await host.shutdown()
+
+    run(go())
+
+
+# --- review round 2 regressions ------------------------------------------------------
+
+
+class _SlowStop(FakeUnits):
+    def __init__(self):
+        super().__init__()
+        import threading
+
+        self.stop_entered = threading.Event()
+
+    def stop(self, decoder, slot):
+        import time
+
+        self.calls.append(("stop", decoder, slot))
+        self.stop_entered.set()
+        time.sleep(0.3)
+
+
+def test_cancelled_stop_leaves_error_instance_not_zombie_running():
+    async def go():
+        units = _SlowStop()
+        host, _, _ = _host(units=units)
+        await host.start("aprs", 1, {}, "r1")
+        task = asyncio.create_task(host.reconcile_slots(set()))
+        await _wait_for(units.stop_entered.is_set)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert host.running() == [{"decoder": "aprs", "slot": 1, "state": "error"}]
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r2")  # must not be the idempotent ok path
+        await _wait_for(lambda: len(units.named("start")) == 2)
+
+    run(go())
+
+
+def test_fail_with_failed_stop_keeps_error_instance_and_shutdown_retries():
+    async def go():
+        units = _StopFailsOnce()
+        host, _, _ = _host(units=units, health_poll_s=0)
+        await host.start("aprs", 1, {}, "r1")
+        units.unit_state = "failed"
+        await _wait_for(
+            lambda: host.running() == [{"decoder": "aprs", "slot": 1, "state": "error"}]
+        )
+        units.unit_state = "active"
+        units.stop_fail = False
+        n = len(units.named("stop"))
+        await host.shutdown()
+        assert len(units.named("stop")) == n + 1 and host.running() == []
+
+    run(go())
+
+
+def test_other_decoder_replaces_error_instance_and_stop_failure_rejects():
+    async def go():
+        units = _StopFailsOnce()
+        a, b = FakePlugin("aprs"), FakePlugin("other")
+        host = DecoderHost(units, {"aprs": a, "other": b}, lambda s: "n", spool=Spool())
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r1")
+        await host.stop("aprs", 1, "r2")  # fails -> error instance
+        c.sent.clear()
+        await host.start("other", 1, {}, "r3")  # old unit still cannot be stopped
+        res = [m for m in c.sent if m["type"] == "result"][0]
+        assert res["ok"] is False and res["error"]["code"] == "unit_failed"
+        units.stop_fail = False
+        await host.start("other", 1, {}, "r4")
+        assert host.running() == [{"decoder": "other", "slot": 1, "state": "running"}]
+        await host.shutdown()
+
+    run(go())
+
+
+def test_observe_slots_stops_only_after_consecutive_absences():
+    async def go():
+        host, units, _ = _host()
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r1")
+        host.observe_slots(set())
+        host.observe_slots(set())
+        host.observe_slots({1})  # back: counter resets
+        host.observe_slots(set())
+        host.observe_slots(set())
+        await asyncio.sleep(0.05)
+        assert units.named("stop") == []
+        host.observe_slots(set())  # third consecutive absence
+        await _wait_for(lambda: host.running() == [])
+        stopped = [m for m in c.sent if m.get("state") == "stopped"]
+        assert stopped[-1]["detail"] == "module_gone"
+
+    run(go())
+
+
+def test_observe_slots_does_not_block_and_survives_errors():
+    async def go():
+        units = _SlowStop()
+        host, _, _ = _host(units=units)
+        await host.start("aprs", 1, {}, "r1")
+        for _ in range(3):
+            host.observe_slots(set())  # returns immediately although stop takes 0.3 s
+        assert units.named("stop") == []
+        await _wait_for(units.stop_entered.is_set)
         await host.shutdown()
 
     run(go())

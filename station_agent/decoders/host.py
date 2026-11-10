@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # / "activating" are transient (Restart=on-failure passes through them) and count as alive.
 _DEAD_STATES = {"failed", "inactive"}
 
+# A slot must be reported absent this many consecutive times (on top of the control client's
+# own inventory debouncing) before its decoder is stopped with "module_gone".
+ABSENT_POLLS_BEFORE_STOP = 3
+
 
 @dataclass
 class _Instance:
@@ -60,6 +64,8 @@ class DecoderHost:
         self._send_fn: Callable[[dict], Awaitable[None]] | None = None
         self._instances: dict[int, _Instance] = {}  # one decoder per slot
         self._lock = asyncio.Lock()
+        self._absent: dict[int, int] = {}
+        self._reconcile_task: asyncio.Task | None = None
 
     # -- connection binding -------------------------------------------------
 
@@ -189,6 +195,38 @@ class DecoderHost:
         for slot in [s for s in list(self._instances) if s not in present]:
             await self.stop_slot(slot, "module_gone")
 
+    def observe_slots(self, present: set[int]) -> None:
+        """Non-blocking slot reconcile for the re-discovery loop.
+
+        Counts consecutive absences per decoder slot and stops only after
+        ``ABSENT_POLLS_BEFORE_STOP`` of them; the stop runs in a host-owned task so neither
+        the host lock nor a slow ``systemctl`` delays the caller, and a connection teardown
+        cannot cancel it halfway.
+        """
+        doomed: list[int] = []
+        for slot in list(self._instances):
+            if slot in present:
+                self._absent.pop(slot, None)
+                continue
+            self._absent[slot] = self._absent.get(slot, 0) + 1
+            if self._absent[slot] >= ABSENT_POLLS_BEFORE_STOP:
+                doomed.append(slot)
+        for slot in [s for s in self._absent if s not in self._instances]:
+            del self._absent[slot]
+        if doomed and (self._reconcile_task is None or self._reconcile_task.done()):
+            self._reconcile_task = asyncio.get_running_loop().create_task(
+                self._stop_absent(doomed)
+            )
+
+    async def _stop_absent(self, slots: list[int]) -> None:
+        for slot in slots:
+            try:
+                await self.stop_slot(slot, "module_gone")
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - must not end silently or kill the caller
+                logger.exception("stopping decoder on missing slot %s failed", slot)
+
     async def _stop_locked(self, slot: int, reason: str, *, announce: bool = True) -> str | None:
         inst = self._instances.get(slot)
         if inst is None:
@@ -202,16 +240,21 @@ class DecoderHost:
         ]
         for task in tasks:
             task.cancel()
-        if tasks:
-            # wait() (unlike awaiting each task) never swallows a cancellation aimed at
-            # the task doing the stopping.
-            await asyncio.wait(tasks)
         err = None
         try:
+            if tasks:
+                # wait() (unlike awaiting each task) never swallows a cancellation aimed at
+                # the task doing the stopping.
+                await asyncio.wait(tasks)
             await self._blocking(self._units.stop, inst.decoder, inst.slot)
         except DecoderUnitError as exc:
             err = str(exc)
             logger.warning("stopping decoder %s slot %s failed: %s", inst.decoder, slot, exc)
+        except asyncio.CancelledError:
+            # Cancelled halfway: the unit may still run and our tasks are gone. Keep the
+            # instance as 'error' (never a zombie 'running') so a retry stops it.
+            inst.state = "error"
+            raise
         if err:
             # Keep tracking the instance (tasks are gone): the unit may still run, so a
             # retried stop must re-issue systemctl and the snapshot must not hide it.
@@ -227,6 +270,9 @@ class DecoderHost:
         return err
 
     async def shutdown(self) -> None:
+        if self._reconcile_task is not None:
+            self._reconcile_task.cancel()
+            await asyncio.wait([self._reconcile_task])
         async with self._lock:
             for slot in list(self._instances):
                 await self._stop_locked(slot, "shutdown", announce=False)

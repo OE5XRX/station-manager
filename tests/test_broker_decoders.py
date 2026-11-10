@@ -106,3 +106,24 @@ def test_broker_does_not_stop_decoders_on_disconnect():
         return host.calls
 
     assert _run(go()) == []
+
+
+def test_broker_rejects_huge_and_overlong_max_runtime_without_raising():
+    async def go():
+        host, col = FakeHost(), Collector()
+        b = Broker(col, decoder_host=host)
+        for i, bad in enumerate((10**400, 8 * 86400)):
+            await b.handle(
+                _frame(
+                    "decoder_start", slot=1, decoder="aprs", request_id=f"h{i}", max_runtime_s=bad
+                )
+            )
+        await b.handle(
+            _frame("decoder_start", slot=1, decoder="aprs", request_id="ok", max_runtime_s=3600)
+        )
+        await b.drain_decoder_tasks()
+        return host.calls, col.sent
+
+    calls, sent = _run(go())
+    assert [m["request_id"] for m in sent] == ["h0", "h1"]
+    assert [c[4] for c in calls] == ["ok"]
