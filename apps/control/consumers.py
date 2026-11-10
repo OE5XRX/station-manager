@@ -100,6 +100,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     """
 
     permission_exempt = "agent: ed25519"
+    passive = None  # PassiveSupervisor, built in connect()
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -394,8 +395,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         """A user took the control lock: hand the radio back (does not block the grant)."""
         self.passive.request_preempt(str(event.get("reason") or "acquired"), handover=True)
 
-    async def control_passive_republish(self, event):
-        await self.passive.republish()
+    def _passive_caps(self):
+        return self.passive.protected_caps() if self.passive is not None else set()
 
     async def _send_json(self, frame):
         await self.send(text_data=json.dumps(frame))
@@ -481,7 +482,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             # Re-checked per frame (after every await): a user ``set`` relayed while an
             # earlier frame was being sent/audited wins over the re-apply.
             key = (str(frame["slot"]), frame["module"], frame["capability"])
-            if key in self._reapply_touched or key in self.passive.protected_caps():
+            if key in self._reapply_touched or key in self._passive_caps():
                 continue
             await self.send(text_data=json.dumps(frame))
             await self._audit_reapply(
@@ -891,8 +892,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._send_passive_snapshot(station)
 
     async def _send_passive_snapshot(self, station):
-        """State of the passive service from the DB (works while the agent is offline), then
-        ask the connected agent consumer to republish its fresher view (ineligible reason)."""
+        """State of the passive service from the DB (works while the agent is offline)."""
         try:
             run = await database_sync_to_async(PassiveServiceRun.open_for)(station.pk)
             if run is not None:  # nothing to say about an idle service: no extra frame
@@ -907,9 +907,6 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                         }
                     )
                 )
-            await self.channel_layer.group_send(
-                self.agent_group_name, {"type": "control.passive_republish"}
-            )
         except Exception:
             logger.exception("control: passive snapshot failed")
 

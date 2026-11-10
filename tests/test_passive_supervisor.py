@@ -128,7 +128,7 @@ def test_tick_ineligible_does_nothing(env):
     asyncio.run(go())
     assert agent.frames == []
     assert run_of(station) is None
-    assert agent.published[-1]["reason"] == "disabled"
+    assert agent.published == []  # an unconfigured service stays silent
 
 
 def test_tick_starts_profile_then_decoder(env):

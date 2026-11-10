@@ -55,6 +55,10 @@ _PREEMPT_REASONS = {
 }
 
 
+# Idle reasons that mean "not configured / not reachable": never worth a browser frame.
+_QUIET_REASONS = frozenset({"disabled", "not_opted_in", "offline"})
+
+
 class _AbortedError(Exception):
     """The start sequence was cancelled (preempt / disconnect)."""
 
@@ -104,7 +108,6 @@ class PassiveSupervisor:
         self._retry_at = None
         self._protected: set[tuple[str, str, str]] = set()
         self._published = None
-        self._payload = {"type": "passive_state", "service": SERVICE, "state": "off"}
 
     # -- sync accessors -------------------------------------------------------
 
@@ -453,6 +456,8 @@ class PassiveSupervisor:
     # -- state publishing ------------------------------------------------------
 
     async def _publish(self, *, run_state=None, slot=None, reason=None) -> None:
+        if run_state is None and reason in _QUIET_REASONS:
+            reason = None  # a service nobody set up for this station stays silent
         payload = {
             "type": "passive_state",
             "service": SERVICE,
@@ -460,18 +465,11 @@ class PassiveSupervisor:
             "slot": slot,
             "reason": reason,
         }
-        self._payload = payload
         key = (payload["state"], slot, reason)
-        if key == self._published:
+        if key == self._published or (self._published is None and key[0] == "off" and not reason):
             return
         self._published = key
         await self._broadcast(payload)
-
-    async def republish(self) -> None:
-        """A browser connected: send the current state again (nothing while idle and
-        without a reason, so a quiet service adds no frame)."""
-        if self._payload["state"] != "off" or self._payload.get("reason"):
-            await self._broadcast(self._payload)
 
     # -- sync DB helpers -------------------------------------------------------
 
@@ -571,7 +569,10 @@ class PassiveSupervisor:
 
 async def preempt_hook(station, holder, reason) -> None:
     """Lock-acquire hook: tell the station's agent consumer to hand the radio over. Only a
-    group message — the lock grant never waits for the agent."""
+    group message — the lock grant never waits for the agent. Sent only while a run is open
+    (a start sequence creates its run first and re-checks the lock before the decoder)."""
+    if not await database_sync_to_async(PassiveServiceRun.open_for)(station.pk):
+        return
     await get_channel_layer().group_send(
         f"control_{station.pk}_agent",
         {"type": "control.passive_preempt", "reason": reason},
