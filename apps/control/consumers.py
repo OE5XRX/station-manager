@@ -22,6 +22,7 @@ from . import (
     capability_policy,
     constants,
     lock,
+    lock_hooks,
     persistence,
     registry,
     scan,
@@ -163,8 +164,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 freed = await self._force_free(station)
                 if freed:
                     # Agent disconnect clears any held lock -> PTT must die too.
-                    await self._do_clear_ptt(station)
-                    await self._bridge_gate(station)
+                    await lock_hooks.on_lock_released(station, "agent_disconnect", stop_scan=False)
                 await self._broadcast("control.agent_offline", {})
                 if freed:
                     status = await self._lock_status(station)
@@ -350,9 +350,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                     freed = await self._sweep(station)
                     if freed:
                         # Lock swept (idle/grace) -> PTT and the holder's scan must die.
-                        await self._stop_scan(station, "lock expired")
-                        await self._do_clear_ptt(station)
-                        await self._bridge_gate(station)
+                        await lock_hooks.on_lock_released(station, "expired")
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
                     await self._retry_pending_reapply(station)
@@ -656,12 +654,6 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.exception("control: ending scan failed")
 
-    async def _stop_scan(self, station, reason):
-        try:
-            await database_sync_to_async(scan.stop_active_scan)(station, reason)
-        except Exception:
-            logger.exception("control: stopping scan failed")
-
     async def _bridge_gate(self, station):
         """Read gate state and broadcast audio.gate to browser + agent audio groups.
 
@@ -684,12 +676,6 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         from apps.audio import gate as audio_gate
 
         return audio_gate.get_wire_state(station)
-
-    @database_sync_to_async
-    def _do_clear_ptt(self, station):
-        from apps.audio import gate as audio_gate
-
-        audio_gate.clear_ptt(station)
 
 
 def _resolve_repeater(station, repeater_id, slot, module_id=None):
@@ -1286,6 +1272,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._audit(
                 station, "control_lock_acquired", f"{self.user.username} acquired control"
             )
+            await lock_hooks.on_lock_acquired(
+                station, self.user, "acquired", previous_holder_lost=False
+            )
         if acquired is lock.DRAIN_REFUSED:
             await self._send_drain_refusal()
         await self._broadcast_lock(station)
@@ -1301,10 +1290,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             "control_lock_released",
             f"{self.user.username} lost control (requires control.use)",
         )
-        await self._stop_scan(station, "lock released")
-        await self._audio_clear_ptt(station)
-        await self._audio_clear_tx_route(station)
-        await self._bridge_gate(station)
+        await lock_hooks.on_lock_released(station, "revoked", clear_tx_route=True)
         await self._broadcast_lock(station)
 
     async def _lock_release(self, station):
@@ -1313,10 +1299,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._audit(
                 station, "control_lock_released", f"{self.user.username} released control"
             )
-            await self._stop_scan(station, "lock released")
-            # Lock loss -> clear PTT and notify audio consumers.
-            await self._audio_clear_ptt(station)
-            await self._bridge_gate(station)
+            # Lock loss -> scan, PTT and the audio gate (see lock_hooks).
+            await lock_hooks.on_lock_released(station, "released")
         await self._broadcast_lock(station)
 
     async def _lock_request(self, station):
@@ -1343,9 +1327,10 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 f"{self.user.username} -> user {to_user_id}",
             )
             # Holder changed -> old holder can no longer key TX nor scan.
-            await self._stop_scan(station, "lock transferred")
-            await self._audio_clear_ptt(station)
-            await self._bridge_gate(station)
+            to_user = await self._get_user(to_user_id)
+            await lock_hooks.on_lock_acquired(
+                station, to_user, "transferred", previous_holder_lost=True
+            )
         if transferred is lock.DRAIN_REFUSED:
             await self._send_drain_refusal()
         await self._broadcast_lock(station)
@@ -1371,9 +1356,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             station, "control_lock_preempted", f"{self.user.username} preempted control"
         )
         # Holder changed by preempt -> PTT and the previous holder's scan die.
-        await self._stop_scan(station, "lock preempted", unless_user=self.user)
-        await self._audio_clear_ptt(station)
-        await self._bridge_gate(station)
+        await lock_hooks.on_lock_acquired(
+            station, self.user, "preempted", previous_holder_lost=True
+        )
         await self._broadcast_lock(station)
 
     async def _send_drain_refusal(self):
@@ -1566,6 +1551,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         except Exception:
             logger.exception("control: stopping scan failed")
             return None
+
+    @database_sync_to_async
+    def _get_user(self, user_id):
+        from apps.accounts.models import User
+
+        return User.objects.filter(pk=user_id).first()
 
     @database_sync_to_async
     def _acquire(self, station):
