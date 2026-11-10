@@ -120,11 +120,25 @@ class _SlotInventoryDebouncer:
         return copy.deepcopy(self._last_good)
 
 
+def _slot_numbers(effective: list) -> set[int]:
+    return {e["slot"] for e in effective if isinstance(e, dict) and isinstance(e.get("slot"), int)}
+
+
 class ControlClient:
     def __init__(
-        self, config: AgentConfig, *, virtual_modules=None, on_firmware_check=None, on_rescan=None
+        self,
+        config: AgentConfig,
+        *,
+        virtual_modules=None,
+        on_firmware_check=None,
+        on_rescan=None,
+        decoder_host_factory=None,
     ):
         self._config = config
+        # Passive decoder host: built once on the control loop (process lifetime) and shared
+        # by every connection's Broker, so decoders survive a WebSocket outage.
+        self._decoder_host_factory = decoder_host_factory
+        self._decoder_host = None
         # Called (non-blocking, on the control loop) after each slot scan — connect and every
         # re-discovery cycle — so the audio supervisor re-checks the audio slots on the same
         # cadence instead of running its own poller.
@@ -210,6 +224,7 @@ class ControlClient:
                 trace_serial=getattr(self._config, "trace_serial", False),
                 virtual_modules=self._virtual_modules,
                 on_firmware_check=self._on_firmware_check,
+                decoder_host=self._decoder_host,
             )
             self._refresh_event = asyncio.Event()
             self._broker = broker
@@ -243,6 +258,15 @@ class ControlClient:
             broker.set_inventory(effective)
             await broker.emit_inventory()
             logger.info("Control: connected, inventory sent")
+            host = self._decoder_host
+            host_task = None
+            if host is not None:
+                # Not reconciled here: this first scan is not debounced (a transient probe
+                # miss must not stop a running decoder). The re-discovery loop reconciles
+                # from debounced data. Runs as a task so a slow host lock / big spool resend
+                # never delays the receive loop below.
+                host.attach(self._ws_send)
+                host_task = loop.create_task(host.on_connected())
             self._notify_rescan()
 
             rediscovery = loop.create_task(
@@ -261,6 +285,8 @@ class ControlClient:
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.info("Control: WebSocket closed: %s", exc)
             finally:
+                if host_task is not None:
+                    host_task.cancel()
                 rediscovery.cancel()
                 try:
                     await rediscovery
@@ -272,6 +298,8 @@ class ControlClient:
                 # Cleared only after on_disconnect's fail-safe unkey, so slot_busy() keeps
                 # answering from the live broker until PTT is really down.
                 await broker.on_disconnect()
+                if self._decoder_host is not None:
+                    self._decoder_host.detach()
                 self._broker = None
                 self._ws = None
 
@@ -351,6 +379,10 @@ class ControlClient:
             self._apply_forgets(debouncer)
             effective = debouncer.update(discovered)
             self._publish_last_good(debouncer)
+            if self._decoder_host is not None:
+                # Debounced data from a successful scan, every cycle (not only on change).
+                # Non-blocking: the host stops absent slots in its own task.
+                self._decoder_host.observe_slots(_slot_numbers(effective))
             if effective == last_emitted and not force:
                 continue
             if effective == last_emitted:
@@ -466,6 +498,23 @@ class ControlClient:
             pass
 
     async def _run_async(self) -> None:
+        if self._decoder_host_factory is not None and self._decoder_host is None:
+            try:
+                self._decoder_host = self._decoder_host_factory()
+                await self._decoder_host.startup()  # stop units left by a previous agent process
+            except Exception:  # noqa: BLE001 — decoders are optional; never block control
+                logger.exception("Control: decoder host setup failed; decoders disabled")
+                self._decoder_host = None
+        try:
+            await self._run_loop()
+        finally:
+            if self._decoder_host is not None:
+                try:
+                    await self._decoder_host.shutdown()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Control: decoder host shutdown failed")
+
+    async def _run_loop(self) -> None:
         backoff = BACKOFF_INITIAL
         while not self._shutdown.is_set():
             try:
