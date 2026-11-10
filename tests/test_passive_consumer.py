@@ -462,3 +462,15 @@ def test_late_browser_sees_a_recent_start_failure(setup):
     )
     msg = asyncio.run(_first_passive_frame(user, station.id))
     assert (msg["state"], msg["reason"]) == ("off", "no_rx_node")
+
+
+def test_failing_snapshot_still_sends_an_off_frame(setup, monkeypatch):
+    from apps.passive import status
+
+    def boom(station):
+        raise RuntimeError("db hiccup")
+
+    monkeypatch.setattr(status, "browser_frame", boom)
+    station, user = setup
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", None)

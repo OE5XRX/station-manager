@@ -962,6 +962,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps(frame))
         except Exception:
             logger.exception("control: passive snapshot failed")
+            # The panel expires a held passive state on this frame: still send a minimal one.
+            await self.send(
+                text_data=json.dumps(
+                    {"type": "passive_state", "service": "aprs", "state": "off", "reason": None}
+                )
+            )
 
     async def _send_scan_snapshot(self, station):
         """A (re)loaded page must learn about a scan already running: one synthetic
