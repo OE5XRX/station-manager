@@ -251,3 +251,12 @@ def test_packets_api_untrusted_payload_round_trips_as_data(client, applicant_use
 def test_aprs_map_js_never_uses_innerhtml():
     src = (Path(__file__).resolve().parent.parent / "static/js/aprs-map.js").read_text()
     assert "innerHTML" not in src and "insertAdjacentHTML" not in src
+
+
+@pytest.mark.django_db
+def test_igates_last_packet_not_limited_to_24h(client, applicant_user, station):
+    old = timezone.now() - timedelta(days=3)
+    _packet(station, 1, heard_at=old)
+    rows = _login(client, applicant_user).get(reverse("passive:aprs_igates")).json()
+    assert rows[0]["packets_24h"] == 0
+    assert rows[0]["last_packet_at"] is not None

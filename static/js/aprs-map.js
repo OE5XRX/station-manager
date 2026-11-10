@@ -66,11 +66,13 @@
       var tag = el("div", "aprs-tag" + (old ? " is-old" : ""), source);
       var icon = L.divIcon({ className: "", html: tag, iconSize: null });
       var m = L.marker([p.latitude, p.longitude], { icon: icon, title: source, keyboard: false });
-      var pop = el("div");
-      pop.appendChild(el("strong", "", source));
-      pop.appendChild(el("div", "", Logic.formatAge(ageS(p.heard_at)) + " · " + p.station_name));
-      if (p.comment) pop.appendChild(el("div", "", p.comment));
-      m.bindPopup(pop);
+      m.bindPopup(function () {
+        var pop = el("div");
+        pop.appendChild(el("strong", "", source));
+        pop.appendChild(el("div", "", Logic.formatAge(ageS(p.heard_at)) + " · " + p.station_name));
+        if (p.comment) pop.appendChild(el("div", "", p.comment));
+        return pop;
+      });
       markers.addLayer(m);
       markerBySource[source] = { marker: m, id: p.id, old: old };
     });
@@ -101,6 +103,8 @@
   }
 
   function pollPackets(reset) {
+    // lastId 0 = nothing loaded yet (e.g. the first load failed): load like a reset.
+    if (lastId === 0) reset = true;
     if (inflight === generation) return;
     var gen = generation;
     inflight = gen;

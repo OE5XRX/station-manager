@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -191,7 +191,7 @@ class AprsIgatesView(AreaPermissionMixin, View):
             row["station_id"]: row
             for row in AprsPacket.objects.filter(heard_at__gte=since)
             .values("station_id")
-            .annotate(last=Max("heard_at"), n24=Count("id"))
+            .annotate(n24=Count("id"))
         }
         configs = {c.station_id: c for c in StationPassiveConfig.objects.all()}
         runs = {r.station_id: r for r in PassiveServiceRun.objects.filter(ended_at__isnull=True)}
@@ -205,6 +205,12 @@ class AprsIgatesView(AreaPermissionMixin, View):
             cfg = configs.get(st.id)
             state, reason = igate_state(st, cfg, runs.get(st.id), st.id in held)
             row = counts.get(st.id)
+            last = (
+                AprsPacket.objects.filter(station=st)
+                .order_by("-heard_at")
+                .values_list("heard_at", flat=True)
+                .first()
+            )
             out.append(
                 {
                     "station_id": st.id,
@@ -213,7 +219,7 @@ class AprsIgatesView(AreaPermissionMixin, View):
                     "state": state,
                     "reason": reason,
                     "warning": igate_warning(st, cfg),
-                    "last_packet_at": row["last"].isoformat() if row and row["last"] else None,
+                    "last_packet_at": last.isoformat() if last else None,
                     "packets_24h": row["n24"] if row else 0,
                 }
             )
