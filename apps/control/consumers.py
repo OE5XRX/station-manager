@@ -101,6 +101,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
 
     permission_exempt = "agent: ed25519"
     passive = None  # PassiveSupervisor, built in connect()
+    _passive_task = None
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -132,7 +133,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             send_to_agent=self._send_json,
             broadcast=self._broadcast_passive,
             wire_slot=lambda slot: self._wire_slots.get(str(slot), slot),
+            is_current=self._is_current_connection,
         )
+        self._passive_task = None
 
         from urllib.parse import parse_qs
 
@@ -167,6 +170,11 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             except asyncio.CancelledError:
                 pass
             self.sweep_task = None
+
+        task, self._passive_task = getattr(self, "_passive_task", None), None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
         try:
             station = self.station if getattr(self, "_claimed", False) else None
@@ -204,6 +212,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             drain_changed, drain_after = False, None
             if station is not None:
+                await self.passive.prepare()  # protect a surviving run's profile first
                 drain_changed, drain_after = await self._apply_inventory(
                     station, msg.get("slots", [])
                 )
@@ -359,6 +368,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         if (isinstance(slot, str) or type(slot) is int) and isinstance(module, str):
             if isinstance(cap, str):
                 self._reapply_touched.add((str(slot), module, cap))
+                if self.passive is not None:
+                    self.passive.note_user_set((str(slot), module, cap))
 
     # -- broadcasts we must ignore when echoed back to our own group ----------
 
@@ -393,6 +404,31 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         """A user took the control lock: hand the radio back (does not block the grant)."""
         self.passive.request_preempt(str(event.get("reason") or "acquired"), handover=True)
 
+    def _kick_passive_tick(self):
+        """Run the passive supervisor's tick as its own single-flight task: a start or
+        hand-over awaits agent results for up to ~10 s per command and must never stall the
+        lock sweep, drift re-apply and telemetry purge."""
+        if self._passive_task is not None and not self._passive_task.done():
+            return
+        self._passive_task = asyncio.create_task(self._passive_tick())
+
+    async def _passive_tick(self):
+        try:
+            await self.passive.tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("control: passive supervisor tick failed")
+
+    async def _is_current_connection(self):
+        return await database_sync_to_async(
+            AgentConnection.objects.filter(
+                station_id=self.station_id,
+                kind=AgentConnection.Kind.CONTROL,
+                channel_name=self.channel_name,
+            ).exists
+        )()
+
     def _passive_caps(self):
         return self.passive.protected_caps() if self.passive is not None else set()
 
@@ -419,7 +455,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
                     await self._retry_pending_reapply(station)
-                    await self.passive.tick()
+                    self._kick_passive_tick()
                     await self._purge_stale_telemetry(station)
                 except asyncio.CancelledError:
                     raise
@@ -984,6 +1020,16 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 # A holder who lost control.use must not keep the lock (and TX path).
                 await self._revoke_if_holder(station)
                 return
+
+        rid = msg.get("request_id")
+        if (
+            mtype in ("command", "apply_repeater")
+            and isinstance(rid, str)
+            and rid.startswith(_PASSIVE_REQUEST_PREFIX)
+        ):
+            # Reserved for system commands: their results never reach a browser.
+            await self._error(rid, "invalid_request_id", "request_id prefix is reserved")
+            return
 
         if mtype == "command":
             await self._handle_command(station, msg)

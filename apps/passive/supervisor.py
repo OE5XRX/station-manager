@@ -41,6 +41,9 @@ BACKOFF_BASE_S = 60
 BACKOFF_MAX_S = 900
 # A run that never reports ``running`` (and has no start sequence in flight) is failed.
 START_TIMEOUT_S = 60
+# Without a decoder_snapshot this long after the inventory, reconcile as if it were empty.
+SNAPSHOT_WAIT_S = 30
+MAX_ORPHAN_SLOTS = 8
 
 State = PassiveServiceRun.State
 
@@ -69,6 +72,11 @@ class _CommandFailedError(Exception):
         self.code = code
 
 
+def _is_slot(slot) -> bool:
+    text = str(slot)
+    return text.isascii() and text.isdecimal()
+
+
 def _backoff_seconds(failures: int) -> int:
     return min(BACKOFF_BASE_S * 2 ** max(failures - 1, 0), BACKOFF_MAX_S)
 
@@ -83,6 +91,7 @@ class PassiveSupervisor:
         now=timezone.now,
         command_timeout: float | None = None,
         wire_slot=None,
+        is_current=None,
     ):
         self.station_id = station_id
         self._send = send_to_agent
@@ -93,7 +102,8 @@ class PassiveSupervisor:
             if command_timeout is not None
             else settings.CONTROL_COMMAND_TIMEOUT_SECONDS
         )
-        self._wire_slot = wire_slot or (lambda slot: int(slot) if str(slot).isdigit() else slot)
+        self._wire_slot = wire_slot or (lambda slot: int(slot) if _is_slot(slot) else slot)
+        self._is_current = is_current  # async () -> bool; False = a newer agent connection won
         self._lock = asyncio.Lock()
         self._futures: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -108,6 +118,11 @@ class PassiveSupervisor:
         self._retry_at = None
         self._protected: set[tuple[str, str, str]] = set()
         self._published = None
+        self._gone = False  # sticky: the agent connection is closed
+        self._features_at = None
+        self._seeded = False
+        self._dying: set[int] = set()
+        self._user_touched: set[tuple[str, str, str]] = set()
 
     # -- sync accessors -------------------------------------------------------
 
@@ -116,6 +131,11 @@ class PassiveSupervisor:
             {f for f in features if isinstance(f, str)} if isinstance(features, list) else set()
         )
         self._unsupported = False
+        self._features_at = self._now()
+
+    def note_user_set(self, key: tuple[str, str, str]) -> None:
+        """A user wrote ``(slot, module, capability)``: a hand-over must not undo it."""
+        self._user_touched.add(key)
 
     def protected_caps(self) -> set[tuple[str, str, str]]:
         """``(slot, module, capability)`` the active passive profile owns: drift re-apply
@@ -128,6 +148,16 @@ class PassiveSupervisor:
         fut = self._futures.pop(msg.get("request_id"), None)
         if fut is not None and not fut.done():
             fut.set_result(msg)
+
+    async def prepare(self) -> None:
+        """Seed the protected caps from an open run, before the first drift re-apply of a
+        (re)connection can overwrite the profile of a decoder that survived the outage."""
+        if self._seeded:
+            return
+        self._seeded = True
+        run = await self._open_run()
+        if run is not None:
+            self._protected = await database_sync_to_async(self._protected_for)(run)
 
     async def on_inventory(self) -> None:
         await self._maybe_reconcile()
@@ -153,7 +183,7 @@ class PassiveSupervisor:
                 self._retry_at = None
                 await self._publish(run_state=State.RUNNING, slot=run.slot)
         elif state == "error" and run.state != State.STOPPING:
-            self._spawn(self._decoder_died(run, str(detail or "decoder error")))
+            self._spawn_died(run, str(detail or "decoder error"))
         elif state == "stopped" and run.state not in (State.STOPPING,):
             await self._close(run, State.STOPPED, "decoder_stopped")
             self._reset_run_memory()
@@ -161,7 +191,19 @@ class PassiveSupervisor:
 
     # -- scheduler -------------------------------------------------------------
 
+    async def _current(self) -> bool:
+        return self._is_current is None or await self._is_current()
+
     async def tick(self) -> None:
+        if self._gone or not await self._current():
+            return
+        if self._features is not None and DECODERS_FEATURE in self._features:
+            if not self._reconciled:
+                waited = (self._now() - self._features_at).total_seconds()
+                if waited < SNAPSHOT_WAIT_S:
+                    return  # the agent's decoder_snapshot is on its way: no start before it
+                self._snapshot = [] if self._snapshot is None else self._snapshot
+                await self._maybe_reconcile()
         run = await self._open_run()
         if run is None:
             await self._tick_idle()
@@ -198,7 +240,7 @@ class PassiveSupervisor:
             and not self._starting
             and (self._now() - run.started_at).total_seconds() > START_TIMEOUT_S
         ):
-            self._spawn(self._decoder_died(run, "start_timeout"))
+            self._spawn_died(run, "start_timeout")
 
     # -- start sequence --------------------------------------------------------
 
@@ -224,10 +266,13 @@ class PassiveSupervisor:
         }
         await self._publish(run_state=State.STARTING, slot=run.slot)
         try:
+            self._check_abort()
             for cap, value in profiles.profile_commands(values, module):
                 await self._command(run.slot, module.module_id, cap, value)
                 self._check_abort()
-            if not await database_sync_to_async(self._lock_is_free)():
+            free = await database_sync_to_async(self._lock_is_free)()
+            self._check_abort()
+            if not free:
                 # A user grabbed the lock while we were tuning: never start the decoder.
                 await self._preempt_locked("acquired", handover=True)
                 return
@@ -253,16 +298,29 @@ class PassiveSupervisor:
     async def _fail_start(self, run, code: str) -> None:
         if code == "unsupported":
             self._unsupported = True
+        if code not in ("timeout", "unsupported"):
+            await self._apply_handover(run)  # the radio may be half-way on the APRS profile
         await self._close(run, State.ERROR, "start_failed", last_error=code)
         self._reset_run_memory()
         self._bump_backoff()
         await self._publish(reason=code)
 
+    def _spawn_died(self, run, detail: str) -> None:
+        """Single-flight per run: repeated error frames / ticks must not pile up tasks."""
+        if run.pk in self._dying:
+            return
+        self._dying.add(run.pk)
+        self._spawn(self._decoder_died(run, detail))
+
     async def _decoder_died(self, run, detail: str) -> None:
         async with self._lock:
+            self._dying.discard(run.pk)
             current = await self._open_run()
             if current is None or current.pk != run.pk:
                 return
+            # STOPPING first: the agent announces ``stopped`` before it acks decoder_stop,
+            # and that frame must not close the run as a plain "decoder_stopped".
+            await self._set_state(current, State.STOPPING)
             try:
                 await self._request(
                     {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(run.slot)}
@@ -281,13 +339,19 @@ class PassiveSupervisor:
     def request_preempt(self, reason: str, *, handover: bool = True) -> None:
         """Non-blocking entry for the lock hook: flags the abort and runs the preempt in
         its own task (the lock grant must never wait for the agent)."""
-        self._abort = True
-        self._cancel_pending()
+        self._signal_abort()
         self._spawn(self.preempt(reason, handover=handover))
 
+    def _signal_abort(self) -> None:
+        """Abort a start sequence in flight. A running preempt/hand-over is left alone."""
+        if self._starting:
+            self._abort = True
+            self._cancel_pending()
+
     async def preempt(self, reason: str, *, handover: bool) -> None:
-        self._abort = True
-        self._cancel_pending()
+        if self._gone or not await self._current():
+            return
+        self._signal_abort()
         async with self._lock:
             try:
                 await self._preempt_locked(reason, handover=handover)
@@ -302,17 +366,22 @@ class PassiveSupervisor:
         await self._set_state(run, State.STOPPING)
         await self._publish(run_state=State.STOPPING, slot=run.slot)
         self._abort = False  # our own best-effort commands below must go out
-        if was_running or self._decoder_start_sent:
-            try:
-                await self._request(
-                    {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(run.slot)}
-                )
-            except (_CommandFailedError, _AbortedError) as exc:
-                logger.info("passive: decoder_stop failed (%s), station %s", exc, self.station_id)
-        if handover:
-            await self._apply_handover(run)
-        await self._close(run, State.STOPPED, reason)
-        self._reset_run_memory()
+        try:
+            if (was_running or self._decoder_start_sent) and not self._gone:
+                try:
+                    await self._request(
+                        {"v": 1, "type": "decoder_stop", "decoder": SERVICE, "slot": int(run.slot)}
+                    )
+                except (_CommandFailedError, _AbortedError) as exc:
+                    logger.info(
+                        "passive: decoder_stop failed (%s), station %s", exc, self.station_id
+                    )
+            if handover:
+                await self._apply_handover(run)
+        finally:
+            # Whatever went wrong above: never leave the run in STOPPING.
+            await self._close(run, State.STOPPED, reason)
+            self._reset_run_memory()
         await self._audit(
             f"system:passive_services stopped {SERVICE} on slot {run.slot} ({reason})"
         )
@@ -323,7 +392,14 @@ class PassiveSupervisor:
         if plan is None:
             return
         module, values = plan
+        if await database_sync_to_async(self._ptt_keyed)():
+            logger.info("passive: hand-over skipped, station is keyed (%s)", self.station_id)
+            return
         for cap, value in profiles.profile_commands(values, module):
+            if self._gone:
+                return
+            if (module.slot, module.module_id, cap) in self._user_touched:
+                continue  # a user already set this since they took the lock
             try:
                 await self._command(run.slot, module.module_id, cap, value)
             except (_CommandFailedError, _AbortedError) as exc:
@@ -332,6 +408,7 @@ class PassiveSupervisor:
     # -- agent connection ------------------------------------------------------
 
     async def on_agent_disconnect(self) -> None:
+        self._gone = True
         self._abort = True
         self._cancel_pending()
         async with self._lock:
@@ -368,9 +445,13 @@ class PassiveSupervisor:
             return
         self._reconciled = True
         run = await self._open_run()
-        listed = {str(d.get("slot")) for d in self._snapshot if d.get("decoder") == SERVICE}
+        listed = {
+            str(d.get("slot"))
+            for d in self._snapshot
+            if d.get("decoder") == SERVICE and _is_slot(str(d.get("slot")))
+        }
         if run is None:
-            for slot in sorted(listed):
+            for slot in sorted(listed, key=int)[:MAX_ORPHAN_SLOTS]:
                 self._spawn(self._stop_orphan(slot))
             return
         if run.slot not in listed:
@@ -401,6 +482,8 @@ class PassiveSupervisor:
 
     async def _request(self, frame: dict):
         """Send ``frame`` with a fresh ``passive-`` request id and await its ``result``."""
+        if self._gone:
+            raise _AbortedError
         rid = REQUEST_PREFIX + uuid.uuid4().hex
         fut = asyncio.get_running_loop().create_future()
         self._futures[rid] = fut
@@ -502,10 +585,12 @@ class PassiveSupervisor:
         return await database_sync_to_async(self._reason_sync)(ignore_idle)
 
     def _reason_sync(self, ignore_idle: bool) -> str | None:
+        cfg = PassiveServiceConfig.get(SERVICE)
+        if not cfg.enabled:
+            return "disabled"
         station = Station.objects.filter(pk=self.station_id).first()
         if station is None:
             return "offline"
-        cfg = PassiveServiceConfig.get(SERVICE)
         now = self._now()
         if ignore_idle:
             now += timedelta(minutes=cfg.idle_minutes + 1)
@@ -518,6 +603,12 @@ class PassiveSupervisor:
             agent_connected=self._features is not None,
             agent_features=self._features or set(),
         )
+
+    def _ptt_keyed(self) -> bool:
+        from apps.audio import gate
+
+        station = Station.objects.filter(pk=self.station_id).first()
+        return station is not None and gate.ptt_keyed(station)
 
     def _lock_is_free(self) -> bool:
         from apps.control.models import ControlLock

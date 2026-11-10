@@ -39,7 +39,15 @@ class FakeAgent:
         if not self.hold:
             await self.reply(frame)
 
+    async def stopped_before_ack(self, frame):
+        """Like the real host: ``decoder_state stopped`` goes out before the stop result."""
+        if frame["type"] == "decoder_stop":
+            await self.sup.on_decoder_state(
+                {"decoder": "aprs", "slot": frame["slot"], "state": "stopped"}
+            )
+
     async def reply(self, frame):
+        await self.stopped_before_ack(frame)
         key = frame.get("capability") or frame["type"]
         code = self.fail.get(key)
         result = {"type": "result", "request_id": frame["request_id"], "ok": code is None}
@@ -104,6 +112,7 @@ def env(station):
     )
     agent.sup = sup
     sup.set_agent_features(["decoders"])
+    sup._reconciled = True  # the snapshot gate has its own tests
     return station, sup, agent, clock
 
 
@@ -367,6 +376,7 @@ def test_decoder_error_closes_run_and_backs_off(env):
 
 def test_snapshot_empty_closes_open_run(env):
     station, sup, agent, _ = env
+    sup._reconciled = False
     PassiveServiceRun.objects.create(
         station=station, service="aprs", slot="1", module_id="fm-1", state=State.AGENT_OFFLINE
     )
@@ -381,6 +391,7 @@ def test_snapshot_empty_closes_open_run(env):
 
 def test_snapshot_running_without_run_sends_stop(env):
     station, sup, agent, _ = env
+    sup._reconciled = False
 
     async def go():
         await sup.on_snapshot({"decoders": [{"decoder": "aprs", "slot": 1, "state": "running"}]})
@@ -488,3 +499,168 @@ def test_stale_starting_run_is_failed(env):
     asyncio.run(go())
     run.refresh_from_db()
     assert (run.state, run.last_error) == (State.ERROR, "start_timeout")
+
+
+def test_no_start_before_the_snapshot_then_fallback_after_wait(env):
+    station, sup, agent, clock = env
+    sup._reconciled = False
+    clock.advance(seconds=0)
+    sup._features_at = clock()
+
+    async def go():
+        await sup.tick()
+        assert agent.frames == []
+        assert await database_sync_to_async(run_of)(station) is None
+        clock.advance(seconds=31)  # snapshot never came: reconcile as empty, then start
+        await sup.tick()
+        await sup.tick()
+
+    asyncio.run(go())
+    assert agent.sent("decoder_start")
+
+
+def test_snapshot_during_wait_unblocks_start(env):
+    station, sup, agent, clock = env
+    sup._reconciled = False
+    sup._features_at = clock()
+
+    async def go():
+        await sup.on_snapshot({"decoders": []})
+        await sup.tick()
+
+    asyncio.run(go())
+    assert agent.sent("decoder_start")
+
+
+def test_prepare_seeds_protected_caps_from_open_run(env):
+    station, sup, agent, _ = env
+    PassiveServiceRun.objects.create(
+        station=station, service="aprs", slot="1", module_id="fm-1", state=State.AGENT_OFFLINE
+    )
+    asyncio.run(sup.prepare())
+    assert ("1", "fm-1", "squelch") in sup.protected_caps()
+
+
+def test_handover_skipped_while_keyed(env, monkeypatch):
+    station, sup, agent, _ = env
+    monkeypatch.setattr("apps.audio.gate.ptt_keyed", lambda s: True)
+
+    async def go():
+        await started(station, sup, agent)
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert [f["type"] for f in agent.frames] == ["decoder_stop"]
+    assert run_of(station).end_reason == "acquired"
+
+
+def test_handover_leaves_caps_the_user_set(env):
+    station, sup, agent, _ = env
+
+    async def go():
+        await started(station, sup, agent)
+        sup.note_user_set(("1", "fm-1", "frequency"))
+        agent.frames.clear()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert ("frequency", 145.5) not in agent.caps()
+    assert ("squelch", 1) in agent.caps()
+
+
+def test_disconnect_during_handover_does_not_wait_for_timeouts(env):
+    station, sup, agent, _ = env
+
+    async def go():
+        await started(station, sup, agent)
+        agent.hold = True
+        agent.frames.clear()
+        preempting = asyncio.create_task(sup.preempt("acquired", handover=True))
+        await agent.wait_frames(1)  # decoder_stop in flight
+        begin = asyncio.get_running_loop().time()
+        await sup.on_agent_disconnect()
+        await preempting
+        return asyncio.get_running_loop().time() - begin
+
+    elapsed = asyncio.run(go())
+    assert elapsed < 0.4  # command_timeout is 0.5 s per command
+    assert len(agent.frames) == 1
+    assert run_of(station).end_reason == "acquired"
+
+
+def test_run_never_left_stopping_when_handover_blows_up(env, monkeypatch):
+    station, sup, agent, _ = env
+
+    def boom(run):
+        raise RuntimeError("db gone")
+
+    async def go():
+        await started(station, sup, agent)
+        monkeypatch.setattr(sup, "_handover_plan", boom)
+        with pytest.raises(RuntimeError):
+            await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert run_of(station).state == State.STOPPED
+
+
+def test_decoder_error_detail_survives_stop_announcement(env):
+    station, sup, agent, _ = env
+
+    async def go():
+        await started(station, sup, agent)
+        await sup.on_decoder_state(
+            {"decoder": "aprs", "slot": 1, "state": "error", "detail": "unit_failed: x"}
+        )
+        await sup.on_decoder_state(  # a second error frame must not pile up a second task
+            {"decoder": "aprs", "slot": 1, "state": "error", "detail": "unit_failed: x"}
+        )
+        await sup.drain()
+
+    asyncio.run(go())
+    run = run_of(station)
+    assert (run.state, run.end_reason, run.last_error) == (
+        State.ERROR,
+        "decoder_error",
+        "unit_failed: x",
+    )
+    assert len(agent.sent("decoder_stop")) == 1
+
+
+def test_superseded_connection_does_nothing(env):
+    station, sup, agent, _ = env
+
+    async def stale():
+        return False
+
+    sup._is_current = stale
+
+    async def go():
+        await sup.tick()
+        await sup.preempt("acquired", handover=True)
+
+    asyncio.run(go())
+    assert agent.frames == [] and run_of(station) is None
+
+
+def test_start_failure_applies_handover_profile(env):
+    station, sup, agent, _ = env
+    agent.fail["squelch"] = "validation_failed"
+    asyncio.run(sup.tick())
+    assert agent.caps()[-4:] == HANDOVER
+    assert run_of(station).state == State.ERROR
+
+
+def test_orphan_stops_are_capped_and_validated(env):
+    station, sup, agent, _ = env
+    sup._reconciled = False
+    listed = [{"decoder": "aprs", "slot": n} for n in range(20)]
+    listed.append({"decoder": "aprs", "slot": "\u00b2"})
+
+    async def go():
+        await sup.on_snapshot({"decoders": listed})
+        await sup.drain()
+
+    asyncio.run(go())
+    assert len(agent.sent("decoder_stop")) == 8

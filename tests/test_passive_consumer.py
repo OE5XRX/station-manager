@@ -18,7 +18,7 @@ from apps.passive.models import (
 from apps.passive.supervisor import PassiveSupervisor
 from apps.stations.models import Station
 from config.asgi import application
-from tests.test_passive_profiles import make_descriptor
+from tests.test_passive_profiles import make_descriptor, make_module
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -251,3 +251,98 @@ def test_agent_disconnect_keeps_running_run_as_agent_offline(setup):
         await _wait_run_state(station, State.AGENT_OFFLINE)
 
     asyncio.run(scenario())
+
+
+def test_reconnect_does_not_reapply_over_a_surviving_runs_profile(setup):
+    """The inventory of a reconnect arrives before the snapshot: the persisted volume must
+    not overwrite the profile volume of an agent_offline run whose decoder survived."""
+    station, user = setup
+    PassiveServiceConfig.objects.update(
+        profile={"frequency": 144.8, "squelch": 0, "volume": 3, "rx_tone": "none"}
+    )
+    PersistedCapability.objects.create(
+        station=station, slot="1", module_id="fm-1", capability="volume", value=7
+    )
+    make_module(station)  # module rows persist across connections
+    PassiveServiceRun.objects.create(
+        station=station, service="aprs", slot="1", module_id="fm-1", state=State.AGENT_OFFLINE
+    )
+
+    async def scenario():
+        agent = _agent(station.id)
+        assert (await agent.connect())[0] is True
+        await agent.send_json_to(_inventory(volume=3))
+        stray = []
+        while not await agent.receive_nothing(timeout=0.5):
+            stray.append(json.loads((await agent.receive_output())["text"]))
+        await agent.disconnect()
+        return stray
+
+    frames = asyncio.run(scenario())
+    assert not [f for f in frames if f.get("capability") == "volume"]
+
+
+def test_browser_command_with_reserved_request_id_is_rejected(setup):
+    station, user = setup
+
+    async def scenario():
+        agent = _agent(station.id)
+        assert (await agent.connect())[0] is True
+        browser = _browser(user, station.id)
+        assert (await browser.connect())[0] is True
+        while (await browser.receive_json_from(timeout=2))["type"] != "lock":
+            pass
+        await browser.send_json_to({"type": "lock_acquire"})
+        while (await browser.receive_json_from(timeout=2)).get("state") != "held":
+            pass
+        await browser.send_json_to(
+            {
+                "type": "command",
+                "request_id": "passive-evil",
+                "slot": 1,
+                "module": "fm-1",
+                "capability": "volume",
+                "op": "set",
+                "value": 3,
+            }
+        )
+        while True:
+            msg = await browser.receive_json_from(timeout=2)
+            if msg.get("type") == "error":
+                break
+        assert msg["error"]["code"] == "invalid_request_id"
+        assert await agent.receive_nothing(timeout=0.3)  # nothing relayed to the agent
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(scenario())
+
+
+def test_preempt_hook_is_silent_without_an_open_run(setup):
+    from channels.layers import get_channel_layer
+
+    from apps.passive.supervisor import preempt_hook
+
+    station, user = setup
+
+    async def scenario():
+        layer = get_channel_layer()
+        await layer.group_add(f"control_{station.id}_agent", "spy-pa")
+        await preempt_hook(station, user, "acquired")
+        assert await _group_empty(layer, "spy-pa")
+        await database_sync_to_async(PassiveServiceRun.objects.create)(
+            station=station, service="aprs", slot="1", module_id="fm-1", state=State.RUNNING
+        )
+        await preempt_hook(station, user, "acquired")
+        msg = await layer.receive("spy-pa")
+        assert msg == {"type": "control.passive_preempt", "reason": "acquired"}
+
+    asyncio.run(scenario())
+
+
+async def _group_empty(layer, channel):
+    try:
+        await asyncio.wait_for(layer.receive(channel), 0.2)
+    except TimeoutError:
+        return True
+    return False

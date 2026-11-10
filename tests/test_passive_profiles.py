@@ -123,3 +123,8 @@ def test_released_at_set_by_every_free_path(station, member_user):
     later = timezone.now() + timedelta(hours=1)
     assert lock.sweep_lock(station, later, idle_seconds=60) is True
     assert ControlLock.objects.get(pk=rec.pk).released_at > second
+
+
+def test_pick_slot_ignores_non_ascii_digit_slots(station):
+    make_module(station, slot="\u00b2", module_id="x")
+    assert pick_slot(station, Decimal("144.8")) is None

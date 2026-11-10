@@ -17,6 +17,6 @@ def pick_slot(station, frequency_mhz: Decimal):
     candidates = [
         m
         for m in station.modules.filter(online=True, firmware_updating=False)
-        if m.slot.isdigit() and module_band_of(m, freq) is not None
+        if m.slot.isascii() and m.slot.isdecimal() and module_band_of(m, freq) is not None
     ]
     return min(candidates, key=_slot_key, default=None)
