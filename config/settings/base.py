@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "apps.webpush",
     "apps.history",
     "apps.repeaters",
+    "apps.passive",
     "apps.images",
     "apps.module_firmware",
     "apps.provisioning",

@@ -22,6 +22,7 @@ Ein nicht definiertes niedrigeres Verb erbt die Stufe des nächsthöheren.
 | `alert_rules` | Alarm-Regeln | A | Ad | Ad |
 | `modules` | Module & Firmware | A | S | S |
 | `repeaters` | Repeater | A | S | S |
+| `passive_services` | Passive Dienste | A | Ad | Ad |
 | `users` | Benutzer | M | Ad | Ad |
 | `api_tokens` | API-Tokens | M | M | – |
 | `audit` | Audit-Log | Ad | – | – |
