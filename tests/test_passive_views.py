@@ -194,3 +194,60 @@ def test_igate_warning_no_coordinates(client, applicant_user, station_factory):
 def test_template_no_multiline_hash_comments():
     tpl = Path(__file__).resolve().parent.parent / "apps/passive/templates/passive/aprs.html"
     assert not re.search(r"\{#(?:(?!#\}).)*\n", tpl.read_text(), re.S)
+
+
+@pytest.mark.django_db
+def test_packets_api_cap_initial_newest_and_after_id_no_gap(
+    client, applicant_user, station, monkeypatch
+):
+    monkeypatch.setattr("apps.passive.views.MAX_PACKETS", 3)
+    ids = [_packet(station, i).id for i in range(1, 8)]
+    _login(client, applicant_user)
+    url = reverse("passive:aprs_packets")
+    first = client.get(url).json()
+    assert [p["id"] for p in first["packets"]] == ids[:-4:-1]  # newest 3
+    assert first["last_id"] == ids[-1]
+    # a burst bigger than the cap is consumed oldest-first: last_id never skips rows
+    page = client.get(url, {"after_id": ids[0]}).json()
+    assert [p["id"] for p in page["packets"]] == [ids[3], ids[2], ids[1]]
+    assert page["last_id"] == ids[3]
+    nxt = client.get(url, {"after_id": page["last_id"]}).json()
+    assert [p["id"] for p in nxt["packets"]] == [ids[6], ids[5], ids[4]]
+
+
+@pytest.mark.django_db
+def test_packets_api_initial_includes_latest_position_per_source(
+    client, applicant_user, station, monkeypatch
+):
+    monkeypatch.setattr("apps.passive.views.MAX_PACKETS", 1)
+    _packet(station, 1, source="OE5POS-1", latitude="48.1", longitude="14.1")
+    _packet(station, 2, source="OE5POS-1", latitude="48.2", longitude="14.2")
+    _packet(station, 3, source="OE5NOP-1")
+    data = _login(client, applicant_user).get(reverse("passive:aprs_packets")).json()
+    assert len(data["packets"]) == 1
+    assert [(p["source"], p["latitude"]) for p in data["positions"]] == [("OE5POS-1", 48.2)]
+    assert "positions" not in client.get(reverse("passive:aprs_packets"), {"after_id": 1}).json()
+
+
+@pytest.mark.django_db
+def test_packets_api_hours_clamped_and_garbage_params_ignored(client, applicant_user, station):
+    old = _packet(station, 1, heard_at=timezone.now() - timedelta(days=40))
+    _login(client, applicant_user)
+    url = reverse("passive:aprs_packets")
+    assert client.get(url, {"hours": "99999"}).json()["packets"] == []  # clamped to 30 d
+    assert client.get(url, {"hours": "x", "after_id": "y", "station": "z"}).json()["packets"] == []
+    assert old.id  # row exists, only outside the window
+
+
+@pytest.mark.django_db
+def test_packets_api_untrusted_payload_round_trips_as_data(client, applicant_user, station):
+    evil = "<img src=x onerror=alert(1)>"
+    _packet(station, 1, comment=evil, raw_tnc2=f"X>APRS:>{evil}")
+    data = _login(client, applicant_user).get(reverse("passive:aprs_packets")).json()
+    assert data["packets"][0]["comment"] == evil
+    assert data["packets"][0]["raw_tnc2"].endswith(evil)
+
+
+def test_aprs_map_js_never_uses_innerhtml():
+    src = (Path(__file__).resolve().parent.parent / "static/js/aprs-map.js").read_text()
+    assert "innerHTML" not in src and "insertAdjacentHTML" not in src

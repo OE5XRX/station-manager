@@ -1,5 +1,5 @@
 /* OE5XRX APRS page — DOM + Leaflet glue. Pure logic lives in aprs-logic.js.
-   Every packet field is untrusted radio data: only textContent, never innerHTML. */
+   Every packet field is untrusted radio data: only textContent and DOM nodes. */
 (function () {
   "use strict";
   var root = document.getElementById("aprs-root");
@@ -17,9 +17,11 @@
   var igatesBody = document.getElementById("aprs-igates");
 
   var packets = [];
+  var positions = [];
+  var MAX_ROWS = 300;
   var lastId = 0;
   var timer = null;
-  var inflight = false;
+  var inflight = null; // generation of the request in flight
   var generation = 0;
 
   var map = L.map("aprs-map", { worldCopyJump: true }).setView([47.6, 14.1], 7);
@@ -45,10 +47,22 @@
     return Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
   }
 
+  var markerBySource = {};
+
+  // Diff against existing markers so an open popup survives a poll.
   function renderMap() {
-    markers.clearLayers();
-    Logic.latestPositions(packets).forEach(function (p, source) {
+    var latest = Logic.latestPositions(packets.concat(positions));
+    Object.keys(markerBySource).forEach(function (src) {
+      if (!latest.has(src)) {
+        markers.removeLayer(markerBySource[src].marker);
+        delete markerBySource[src];
+      }
+    });
+    latest.forEach(function (p, source) {
       var old = ageS(p.heard_at) > OLD_S;
+      var cur = markerBySource[source];
+      if (cur && cur.id === p.id && cur.old === old) return;
+      if (cur) markers.removeLayer(cur.marker);
       var tag = el("div", "aprs-tag" + (old ? " is-old" : ""), source);
       var icon = L.divIcon({ className: "", html: tag, iconSize: null });
       var m = L.marker([p.latitude, p.longitude], { icon: icon, title: source, keyboard: false });
@@ -58,11 +72,12 @@
       if (p.comment) pop.appendChild(el("div", "", p.comment));
       m.bindPopup(pop);
       markers.addLayer(m);
+      markerBySource[source] = { marker: m, id: p.id, old: old };
     });
   }
 
   function renderLog() {
-    var groups = Logic.groupDuplicates(packets);
+    var groups = Logic.groupDuplicates(packets.slice(0, MAX_ROWS * 2)).slice(0, MAX_ROWS);
     logBody.textContent = "";
     groups.forEach(function (g) {
       var p = g.packet;
@@ -86,9 +101,9 @@
   }
 
   function pollPackets(reset) {
-    if (inflight) return;
-    inflight = true;
+    if (inflight === generation) return;
     var gen = generation;
+    inflight = gen;
     fetch(buildUrl(reset ? 0 : lastId), { credentials: "same-origin" })
       .then(function (r) {
         if (!r.ok) throw new Error(String(r.status));
@@ -96,7 +111,14 @@
       })
       .then(function (data) {
         if (gen !== generation) return;
-        if (reset) packets = [];
+        if (reset) {
+          packets = [];
+          positions = data.positions || [];
+          Object.keys(markerBySource).forEach(function (k) {
+            markers.removeLayer(markerBySource[k].marker);
+          });
+          markerBySource = {};
+        }
         if (data.packets.length) {
           packets = data.packets.concat(packets).slice(0, MAX_KEEP);
         }
@@ -108,7 +130,7 @@
       .catch(function () {
         statusEl.textContent = "Aktualisierung fehlgeschlagen, neuer Versuch folgt.";
       })
-      .then(function () { inflight = false; });
+      .then(function () { if (inflight === gen) inflight = null; });
   }
 
   var STATE_LABEL = {
@@ -165,7 +187,7 @@
 
   function reload() {
     generation += 1;
-    inflight = false;
+    inflight = null;
     lastId = 0;
     pollPackets(true);
   }

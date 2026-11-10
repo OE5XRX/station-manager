@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -27,6 +27,7 @@ from .models import (
 )
 
 MAX_PACKETS = 500
+POSITION_SCAN = 5000
 DEFAULT_HOURS = 24
 MAX_HOURS = 24 * 30
 
@@ -101,6 +102,23 @@ class AprsSettingsView(AreaPermissionMixin, View):
         return redirect(reverse("passive:aprs") + "#einstellungen")
 
 
+def _packet_json(p):
+    return {
+        "id": p.id,
+        "station_id": p.station_id,
+        "station_name": p.station.name,
+        "heard_at": p.heard_at.isoformat(),
+        "source": p.source,
+        "packet_type": p.packet_type,
+        "latitude": float(p.latitude) if p.latitude is not None else None,
+        "longitude": float(p.longitude) if p.longitude is not None else None,
+        "symbol": p.symbol,
+        "comment": p.comment,
+        "raw_tnc2": p.raw_tnc2,
+        "gated": p.gated_at is not None,
+    }
+
+
 class AprsPacketsView(AreaPermissionMixin, View):
     area = "passive_services"
 
@@ -114,25 +132,27 @@ class AprsPacketsView(AreaPermissionMixin, View):
         station = _int_param(request.GET.get("station"), 0, 0, 2**62)
         if station:
             qs = qs.filter(station_id=station)
-        rows = list(qs.order_by("-id")[:MAX_PACKETS])
-        packets = [
-            {
-                "id": p.id,
-                "station_id": p.station_id,
-                "station_name": p.station.name,
-                "heard_at": p.heard_at.isoformat(),
-                "source": p.source,
-                "packet_type": p.packet_type,
-                "latitude": float(p.latitude) if p.latitude is not None else None,
-                "longitude": float(p.longitude) if p.longitude is not None else None,
-                "symbol": p.symbol,
-                "comment": p.comment,
-                "raw_tnc2": p.raw_tnc2,
-                "gated": p.gated_at is not None,
-            }
-            for p in rows
-        ]
-        return JsonResponse({"packets": packets, "last_id": rows[0].id if rows else after_id})
+        if after_id:
+            # Oldest first so a burst larger than the cap is consumed in order
+            # (last_id advances only as far as what was returned: no gap).
+            rows = list(qs.order_by("id")[:MAX_PACKETS])[::-1]
+        else:
+            rows = list(qs.order_by("-id")[:MAX_PACKETS])
+        packets = [_packet_json(p) for p in rows]
+        payload = {"packets": packets, "last_id": rows[0].id if rows else after_id}
+        if not after_id:
+            payload["positions"] = [_packet_json(p) for p in self._latest_positions(qs)]
+        return JsonResponse(payload)
+
+    @staticmethod
+    def _latest_positions(qs):
+        """Newest positioned packet per source, so the map is not limited by the log cap."""
+        seen = {}
+        for p in qs.filter(latitude__isnull=False, longitude__isnull=False).order_by("-id")[
+            :POSITION_SCAN
+        ]:
+            seen.setdefault(p.source, p)
+        return list(seen.values())
 
 
 def igate_state(station, config, run, lock_held) -> tuple[str, str]:
@@ -169,9 +189,9 @@ class AprsIgatesView(AreaPermissionMixin, View):
         since = timezone.now() - timedelta(hours=24)
         counts = {
             row["station_id"]: row
-            for row in AprsPacket.objects.values("station_id").annotate(
-                last=Max("heard_at"), n24=Count("id", filter=Q(heard_at__gte=since))
-            )
+            for row in AprsPacket.objects.filter(heard_at__gte=since)
+            .values("station_id")
+            .annotate(last=Max("heard_at"), n24=Count("id"))
         }
         configs = {c.station_id: c for c in StationPassiveConfig.objects.all()}
         runs = {r.station_id: r for r in PassiveServiceRun.objects.filter(ended_at__isnull=True)}
