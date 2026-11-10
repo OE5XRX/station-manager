@@ -234,8 +234,6 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             await self.passive.on_decoder_state(msg)
         elif mtype == "decoder_snapshot":
             await self.passive.on_snapshot(msg)
-        elif mtype == "decoder_output":
-            pass  # ingest: apps.passive.ingest (packet ingest task)
         elif mtype == "scan_state":
             station = await self._cached_station()
             if station is not None:
