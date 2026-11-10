@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Exists, OuterRef
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -39,9 +39,6 @@ def _int_param(raw, default, lo, hi):
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, value))
-
-
-passive_badge = status.passive_badge
 
 
 class AprsPageView(AreaPermissionMixin, TemplateView):
@@ -209,15 +206,16 @@ class AprsIgatesView(AreaPermissionMixin, View):
         }
         configs = {c.station_id: c for c in StationPassiveConfig.objects.all()}
         runs = {r.station_id: r for r in PassiveServiceRun.objects.filter(ended_at__isnull=True)}
-        recent = PassiveServiceRun.objects.filter(
-            ended_at__isnull=False, ended_at__gte=timezone.now() - status.ERROR_VISIBLE
-        ).order_by("-started_at")
-        latest_closed = {}
-        for r in recent:
-            latest_closed.setdefault(r.station_id, r)
-        for station_id, r in latest_closed.items():
-            if station_id not in runs and r.state == PassiveServiceRun.State.ERROR:
-                runs[station_id] = r
+        # A recent errored run only counts while no newer run superseded it.
+        newer = PassiveServiceRun.objects.filter(
+            station_id=OuterRef("station_id"), started_at__gt=OuterRef("started_at")
+        )
+        errored = PassiveServiceRun.objects.filter(
+            state=PassiveServiceRun.State.ERROR,
+            ended_at__gte=timezone.now() - status.ERROR_VISIBLE,
+        ).filter(~Exists(newer))
+        for r in errored.order_by("started_at"):
+            runs.setdefault(r.station_id, r)
         held = set(
             ControlLock.objects.filter(scope="station", holder__isnull=False).values_list(
                 "station_id", flat=True

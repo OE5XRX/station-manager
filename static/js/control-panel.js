@@ -35,6 +35,9 @@
   // Frame types a sibling panel may send through the bridge (everything else
   // has its own path: commands via the widgets / store.sendCommand, lock UX here).
   var BRIDGE_TYPES = { apply_repeater: true, scan_start: true, scan_control: true };
+  // How long after (re)connect the server's passive snapshot may take before the panel
+  // treats a held passive state as expired.
+  var PASSIVE_SNAPSHOT_WAIT_MS = 1500;
   var EMIT_TYPES = { inventory: true, state: true, result: true, error: true, scan_state: true, passive_state: true };
 
   function emitFrame(msg) {
@@ -244,9 +247,7 @@
           self.conn = "open";
           self.agentOffline = false;
           self._lastDenial = null; // a stale action denial must not explain a later 4403
-          // The server's connect snapshot only speaks when the passive service has
-          // something to say: start from "off" so a state held over a reconnect expires.
-          self._route({ type: "passive_state", service: "aprs", state: "off", reason: null });
+          self._expirePassiveAfterConnect();
           self._subscribeAll();
           self._publishControlStore();
         });
@@ -380,7 +381,23 @@
 
       // Passive APRS service: the status badge, and (via the re-emitted
       // control:passive_state event) the audio panel's muted-RX start.
+      // The server's connect snapshot only speaks when the passive service has something
+      // to say. If none arrives shortly after the socket opened, the state held over the
+      // reconnect is stale: expire it with a synthetic "off". (Deferred, so a snapshot
+      // that follows never flaps the audio mixer.)
+      _expirePassiveAfterConnect: function () {
+        var self = this;
+        this._passiveSeen = false;
+        clearTimeout(this._passiveTimer);
+        this._passiveTimer = setTimeout(function () {
+          if (!self._passiveSeen) {
+            self._route({ type: "passive_state", service: "aprs", state: "off", reason: null });
+          }
+        }, PASSIVE_SNAPSHOT_WAIT_MS);
+      },
+
       _onPassive: function (msg) {
+        this._passiveSeen = true;
         this.passive = L.passiveBadge(msg);
         this.passiveRunning = msg.state === "running";
       },

@@ -146,9 +146,7 @@ ok("applies the muted gain to a live stream", () => {
   assert.equal(gain.gain.value, 1);
 });
 
-ok("a (re)opened socket resets a stale passive state", () => {
-  const c = factories.controlPanel();
-  c._route(frame("running"));
+function reopen(c) {
   c._subscribeAll = () => {};
   c._publishControlStore = () => {};
   const handlers = {};
@@ -161,8 +159,83 @@ ok("a (re)opened socket resets a stale passive state", () => {
   c._wsUrl = () => "ws://x";
   c._connect();
   handlers.open();
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await (async () => {
+  // reconnect without a snapshot: the held state expires, deferred
+  const c = factories.controlPanel();
+  c._route(frame("running"));
+  reopen(c);
+  assert.equal(c.passiveRunning, true, "not reset immediately");
+  await sleep(1700);
   assert.equal(c.passiveRunning, false);
   assert.equal(c.passive.level, "off");
+  passed += 1;
+  console.log("ok - a reopened socket expires a stale passive state (deferred)");
+
+  // reconnect WITH a snapshot: the audio mixer never flaps, Mithören survives
+  const a = makeAudio();
+  const c2 = factories.controlPanel();
+  events.length = 0;
+  a._onPassiveState(frame("running"));
+  a.passiveListenIn();
+  c2._route(frame("running"));
+  reopen(c2);
+  c2._route(frame("running")); // the server's snapshot
+  await sleep(1700);
+  assert.ok(!events.some((e) => e.type === "control:passive_state" && e.detail.state === "off"));
+  assert.equal(a.mixer.s1.muted, false);
+  passed += 1;
+  console.log("ok - reconnect with snapshot sends no synthetic off");
+})();
+
+ok("run end restores the other RX streams after one was unmuted", () => {
+  const a = makeAudio();
+  a._onPassiveState(frame("running"));
+  a.toggleMute("s1"); // operator listens in on s1 only
+  a._onPassiveState(frame("off"));
+  assert.equal(a.mixer.s1.muted, false);
+  assert.equal(a.mixer.s2.muted, false);
+});
+
+ok("a stream that appears during the run starts muted", () => {
+  const a = makeAudio();
+  a._onPassiveState(frame("running"));
+  a._teardownStreamCtx = () => {};
+  a._resubscribe = () => {};
+  a._sendJSON = () => {};
+  a._saveState = () => {};
+  try {
+    a._onStreams({
+      streams: [
+        { stream_id: "s3", stream_ref: "r3", direction: "rx", slot: 3, module: "x" },
+        { stream_id: "op.mic", stream_ref: "mic", direction: "tx", module: "operator" },
+      ],
+    });
+  } catch (_) {
+    // the rest of the handler touches WebAudio; the mixer entries are created first
+  }
+  assert.equal(a.mixer.s3.muted, true);
+  assert.equal(a.mixer.s3.passiveMuted, true);
+});
+
+ok("a passive mute is not persisted", () => {
+  const store = {};
+  globalThis.localStorage = { setItem: (k, v) => (store[k] = v), getItem: (k) => store[k] };
+  const a = makeAudio();
+  a._storageKey = () => "k";
+  a.mixer.s2.muted = true; // the operator's own mute
+  a._onPassiveState(frame("running"));
+  a._saveState();
+  const saved = JSON.parse(store.k).mixer;
+  assert.equal(saved.s1.muted, false, "passive mute not saved");
+  assert.equal(saved.s2.muted, true, "operator mute kept");
+  assert.equal(saved.s1.passiveMuted, undefined);
+  const b = makeAudio();
+  b._storageKey = () => "k";
+  b._loadState();
+  assert.equal(b.mixer.s1.muted, false);
 });
 
 console.log("\n" + passed + " assertions passed");

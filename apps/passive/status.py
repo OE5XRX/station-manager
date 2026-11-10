@@ -82,7 +82,12 @@ def idle_reason(station) -> str | None:
     agent consumer's memory, so ``decoders`` is assumed present here (``agent_too_old``
     reaches a browser that was already connected, via the live frame).
     """
-    cfg = PassiveServiceConfig.get(SERVICE)
+    station_cfg = getattr(station, "passive_config", None)
+    if station_cfg is None or not station_cfg.enabled:
+        return None  # the common case on connect: nothing set up, skip the other queries
+    cfg = PassiveServiceConfig.objects.filter(service=SERVICE).first()
+    if cfg is None:
+        return None
     connected = AgentConnection.objects.filter(station=station, kind="control").exists()
     reason = ineligible_reason(
         station,
@@ -109,7 +114,8 @@ def browser_frame(station) -> dict | None:
             "slot": run.slot,
             "reason": run.last_error or None,
         }
-    reason = idle_reason(station)
+    failed = recent_run_error(station.pk)
+    reason = failed.last_error or "unbekannt" if failed is not None else idle_reason(station)
     if reason is None:
         return None
     return {

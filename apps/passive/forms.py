@@ -189,7 +189,6 @@ class StationPassiveForm(forms.ModelForm):
         # The model allows blank/NULL (opted out); "enabled" decides in clean().
         self.fields["igate_callsign"].required = False
         self.fields["igate_ssid"].required = False
-        self.fields["igate_ssid"].min_value = 0
 
     def clean_igate_callsign(self):
         return normalise_callsign(self.cleaned_data.get("igate_callsign") or "")

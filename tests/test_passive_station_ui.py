@@ -201,3 +201,50 @@ def test_control_page_has_passive_badge_and_mute_notice(client, admin_user, stat
     ).content.decode()
     assert "data-passive-strip" in body
     assert "Passiv: APRS läuft, Audio stumm" in body
+
+
+@pytest.mark.django_db
+def test_untouched_default_passive_form_creates_no_config(client, admin_user, station):
+    client.force_login(admin_user)
+    resp = client.post(_edit_url(station), {"name": station.name, "callsign": station.callsign})
+    assert resp.status_code == 302
+    assert not StationPassiveConfig.objects.filter(station=station).exists()
+
+
+@pytest.mark.django_db
+def test_edit_rerenders_with_clash_error_and_saves_nothing(client, admin_user, station_factory):
+    a, b = station_factory(), station_factory()
+    StationPassiveConfig.objects.create(
+        station=a, enabled=True, igate_callsign="OE5XRX", igate_ssid=10
+    )
+    resp = _post(client, admin_user, b, enabled="on", igate_callsign="OE5XRX", igate_ssid="10")
+    assert resp.status_code == 200
+    assert "gehört schon zur Station" in resp.content.decode()
+    assert not StationPassiveConfig.objects.filter(station=b).exists()
+
+
+@pytest.mark.django_db
+def test_integrity_clash_after_validation_rerenders_not_500(
+    client, admin_user, station_factory, monkeypatch
+):
+    a, b = station_factory(), station_factory()
+    StationPassiveConfig.objects.create(
+        station=a, enabled=True, igate_callsign="OE5XRX", igate_ssid=10
+    )
+    # Simulate the race: the form's own clash check passes, the DB constraint then fires.
+    monkeypatch.setattr(StationPassiveForm, "clean", lambda self: self.cleaned_data)
+    old_name = b.name
+    client.force_login(admin_user)
+    resp = client.post(
+        _edit_url(b),
+        {
+            "name": "Renamed",
+            "callsign": b.callsign,
+            "passive-enabled": "on",
+            "passive-igate_callsign": "OE5XRX",
+            "passive-igate_ssid": "10",
+        },
+    )
+    assert resp.status_code == 200
+    b.refresh_from_db()
+    assert b.name == old_name  # the station edit rolled back with it

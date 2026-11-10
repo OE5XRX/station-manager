@@ -793,6 +793,7 @@
 
       // A passive_state frame (re-emitted by the control panel).
       _onPassiveState: function (frame) {
+        var wasActive = this.passiveActive;
         var d = window.OE5XRXControlLogic.passiveMuteDecision(
           { active: this.passiveActive, userUnmuted: this.passiveUserUnmuted },
           frame
@@ -800,10 +801,9 @@
         this.passiveActive = d.active;
         this.passiveUserUnmuted = d.userUnmuted;
         if (d.muteNow) this.setPassiveMute(true);
-        else if (d.unmuteNow) this.setPassiveMute(false);
-        if (!d.active) {
-          for (var id in this.mixer) delete this.mixer[id].passiveMuted;
-        }
+        // At the end of the run restore every stream still carrying the passive mute: a
+        // stream the operator touched dropped that flag, so it is left alone.
+        else if (wasActive && !d.active) this.setPassiveMute(false);
       },
 
       // "Mithören": unmute the RX streams the passive run muted and keep them that way.
@@ -881,10 +881,18 @@
               subs[sid] = this.subs[sid];
             }
           }
+          // A passive-imposed mute is not the operator's choice: persisting it would
+          // resurrect it as a permanent mute after the run ended.
+          var mixer = {};
+          for (var mid in this.mixer) {
+            if (!Object.prototype.hasOwnProperty.call(this.mixer, mid)) continue;
+            var m = this.mixer[mid];
+            mixer[mid] = { gainDb: m.gainDb, muted: !!m.muted && !m.passiveMuted };
+          }
           var data = {
             preset: this.preset,
             subs: subs,
-            mixer: this.mixer,
+            mixer: mixer,
           };
           localStorage.setItem(this._storageKey(), JSON.stringify(data));
         } catch (_) {}

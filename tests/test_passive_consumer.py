@@ -454,3 +454,19 @@ def test_quiet_station_sends_no_passive_frame(setup):
         await browser.disconnect()
 
     asyncio.run(scenario())
+
+
+def test_late_browser_sees_a_recent_start_failure(setup):
+    from django.utils import timezone
+
+    station, user = setup
+    PassiveServiceRun.objects.create(
+        station=station,
+        service="aprs",
+        slot="1",
+        state=State.ERROR,
+        last_error="no_rx_node",
+        ended_at=timezone.now(),
+    )
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", "no_rx_node")

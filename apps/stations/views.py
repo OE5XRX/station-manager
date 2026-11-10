@@ -378,8 +378,7 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
         pf = self.passive_form
         if pf is None or not pf.has_changed():
             return
-        with transaction.atomic():
-            pf.save()
+        pf.save()
         AccountAuditLog.log(
             event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
             actor=self.request.user,
@@ -394,8 +393,19 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
 
     def form_valid(self, form):
         old = Station.objects.get(pk=self.object.pk)
-        response = super().form_valid(form)
-        self._save_passive()
+        try:
+            # One transaction: a clash on the iGate call that slipped past the form check
+            # (two concurrent edits) must not leave the station half-saved.
+            with transaction.atomic():
+                response = super().form_valid(form)
+                self._save_passive()
+        except IntegrityError:
+            if self.passive_form is None:
+                raise
+            self.passive_form.add_error(
+                "igate_ssid", _("Rufzeichen und SSID gehören schon zu einer anderen Station.")
+            )
+            return self.form_invalid(form)
         changes = _track_changes(old, self.object, TRACKED_FIELDS)
         if changes:
             field_names = ", ".join(changes.keys())
