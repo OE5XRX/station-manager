@@ -68,7 +68,9 @@ def test_run_retries_then_connects():
             pass
 
         with pytest.raises(asyncio.CancelledError):
-            await AprsDecoder().run(1, emit, connect=connect, now=lambda: t[0], sleep=sleep)
+            await AprsDecoder().run(
+                1, emit, connect=connect, now=lambda: t[0], monotonic=lambda: t[0], sleep=sleep
+            )
         return attempts
 
     assert asyncio.run(scenario())[:3] == [0.0, 0.5, 1.0]
@@ -87,7 +89,59 @@ def test_run_gives_up_after_20s_without_listener():
         async def emit(*a):
             pass
 
-        await AprsDecoder().run(1, emit, connect=connect, now=lambda: t[0], sleep=sleep)
+        await AprsDecoder().run(
+            1, emit, connect=connect, now=lambda: t[0], monotonic=lambda: t[0], sleep=sleep
+        )
 
     with pytest.raises(ConnectionError):
         asyncio.run(scenario())
+
+
+def test_run_backs_off_after_eof_and_gives_up_on_silent_listener():
+    async def scenario():
+        sleeps = []
+
+        async def sleep(s):
+            sleeps.append(s)
+
+        async def connect(host, port):
+            r = asyncio.StreamReader()
+            r.feed_eof()
+            return r, _Writer()
+
+        async def emit(*a):
+            pass
+
+        with pytest.raises(ConnectionError):
+            await AprsDecoder().run(1, emit, connect=connect, sleep=sleep)
+        return sleeps
+
+    sleeps = asyncio.run(scenario())
+    assert len(sleeps) == 4 and all(s > 0 for s in sleeps)
+
+
+def test_run_reconnects_on_connection_reset():
+    async def scenario():
+        calls = []
+
+        class Reset:
+            async def read(self, n):
+                raise ConnectionResetError
+
+        async def connect(host, port):
+            calls.append(1)
+            if len(calls) > 1:
+                raise asyncio.CancelledError
+            return Reset(), _Writer()
+
+        async def emit(*a):
+            pass
+
+        async def sleep(s):
+            pass
+
+        with pytest.raises(asyncio.CancelledError):
+            await AprsDecoder().run(1, emit, connect=connect, sleep=sleep)
+        return len(calls)
+
+    assert asyncio.run(scenario()) == 2

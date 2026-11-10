@@ -20,6 +20,12 @@ def test_kiss_drops_oversized():
     assert KissDeframer().feed(b"\xc0\x00" + b"a" * 1025 + b"\xc0") == []
 
 
+def test_kiss_keeps_escape_heavy_valid_frame():
+    payload = b"\xc0\xdb" * 300  # 600 decoded bytes, 1200 escaped
+    raw = payload.replace(b"\xdb", b"\xdb\xdd").replace(b"\xc0", b"\xdb\xdc")
+    assert KissDeframer().feed(b"\xc0\x00" + raw + b"\xc0") == [payload]
+
+
 def test_kiss_recovers_after_oversized():
     d = KissDeframer()
     assert d.feed(b"\xc0\x00" + b"a" * 2000 + b"\xc0\x00ok\xc0") == [b"ok"]
@@ -29,4 +35,4 @@ def test_kiss_oversized_across_calls_does_not_grow_unbounded():
     d = KissDeframer()
     for _ in range(10):
         d.feed(b"a" * 1000)
-    assert len(d._buf) <= 1100
+    assert len(d._buf) <= 2100

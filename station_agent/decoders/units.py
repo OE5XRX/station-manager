@@ -33,7 +33,7 @@ class DecoderUnits:
         self._timeout = timeout_s
 
     def instance(self, decoder: str, slot: int) -> str:
-        if not isinstance(decoder, str) or not _DECODER_RE.match(decoder):
+        if not isinstance(decoder, str) or not _DECODER_RE.fullmatch(decoder):
             raise DecoderUnitError("bad decoder name")
         return f"{decoder}-slot{int(slot)}"
 
@@ -58,7 +58,7 @@ class DecoderUnits:
     def start(self, decoder: str, slot: int, env: dict[str, str]) -> None:
         unit = self._unit(decoder, slot)
         for key, val in env.items():
-            if not _ENV_KEY_RE.match(str(key)) or not _ENV_VAL_RE.match(str(val)):
+            if not _ENV_KEY_RE.fullmatch(str(key)) or not _ENV_VAL_RE.fullmatch(str(val)):
                 raise DecoderUnitError("bad env")
         self._write_env(self._env_path(decoder, slot), env)
         res = self._systemctl("start", unit)

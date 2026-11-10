@@ -409,3 +409,140 @@ def test_stop_slot():
         assert host.running() == [] and units.named("stop") == [("stop", "aprs", 1)]
 
     run(go())
+
+
+# --- review round 1 regressions ------------------------------------------------------
+
+
+class _StopFailsOnce(FakeUnits):
+    def __init__(self):
+        super().__init__()
+        self.stop_fail = True
+
+    def stop(self, decoder, slot):
+        self.calls.append(("stop", decoder, slot))
+        if self.stop_fail:
+            raise DecoderUnitError("stuck")
+
+
+def test_failed_stop_keeps_instance_and_retry_reissues_stop():
+    async def go():
+        units = _StopFailsOnce()
+        host, _, _ = _host(units=units)
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r1")
+        c.sent.clear()
+        await host.stop("aprs", 1, "r2")
+        res = [m for m in c.sent if m["type"] == "result"][0]
+        assert res["ok"] is False and res["error"]["code"] == "unit_failed"
+        assert [m["state"] for m in c.sent if m["type"] == "decoder_state"] == ["error"]
+        assert host.running() == [{"decoder": "aprs", "slot": 1, "state": "error"}]
+        units.stop_fail = False
+        c.sent.clear()
+        await host.stop("aprs", 1, "r3")
+        assert c.sent[-1]["ok"] is True and host.running() == []
+        assert len(units.named("stop")) == 2
+
+    run(go())
+
+
+def test_start_after_failed_stop_does_not_report_idempotent_ok():
+    async def go():
+        units = _StopFailsOnce()
+        host, _, _ = _host(units=units)
+        await host.start("aprs", 1, {}, "r1")
+        await host.stop("aprs", 1, "r2")
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r3")
+        res = [m for m in c.sent if m["type"] == "result"][0]
+        assert res["ok"] is False and res["error"]["code"] == "unit_failed"
+
+    run(go())
+
+
+def test_failed_start_cleans_up_unit():
+    async def go():
+        host, units, _ = _host()
+        units.fail_start = True
+        await host.start("aprs", 1, {}, "r1")
+        assert ("stop", "aprs", 1) in units.calls
+
+    run(go())
+
+
+def test_reader_crash_reports_error():
+    async def go():
+        plugin = FakePlugin()
+        plugin.raise_exc = RuntimeError("kaboom")
+        host, units, _ = _host(plugin=plugin)
+        c = Collector()
+        host.attach(c)
+        await host.start("aprs", 1, {}, "r1")
+        await _settle()
+        assert c.sent[-1]["state"] == "error" and "reader crashed" in c.sent[-1]["detail"]
+        assert host.running() == []
+
+    run(go())
+
+
+def test_health_inactive_is_dead_but_deactivating_is_not():
+    async def go():
+        host, units, _ = _host(health_poll_s=0)
+        units.unit_state = "deactivating"  # systemd restart window (Restart=on-failure)
+        await host.start("aprs", 1, {}, "r1")
+        await _settle()
+        assert host.running() != []
+        units.unit_state = "inactive"
+        await _settle()
+        assert host.running() == []
+
+    run(go())
+
+
+def test_max_runtime_racing_explicit_stop_stops_once():
+    async def go():
+        gate = asyncio.Event()
+
+        async def fake_sleep(s):
+            if s == 60:
+                await gate.wait()
+            else:
+                await asyncio.Event().wait()
+
+        host, units, _ = _host(sleep=fake_sleep)
+        await host.start("aprs", 1, {}, "r1", max_runtime_s=60)
+        gate.set()
+        await host.stop("aprs", 1, "r2")
+        await _settle()
+        assert len(units.named("stop")) == 1 and host.running() == []
+
+    run(go())
+
+
+def test_snapshot_waits_for_in_flight_start():
+    async def go():
+        host, units, _ = _host()
+        release = asyncio.Event()
+        orig = units.start
+
+        def slow_start(decoder, slot, env):
+            import time
+
+            time.sleep(0.2)
+            return orig(decoder, slot, env)
+
+        units.start = slow_start
+        c = Collector()
+        host.attach(c)
+        starter = asyncio.create_task(host.start("aprs", 1, {}, "r1"))
+        await asyncio.sleep(0.05)  # start holds the lock, unit still starting
+        await host.on_connected()
+        await starter
+        release.set()
+        snap = [m for m in c.sent if m["type"] == "decoder_snapshot"][0]
+        assert snap["decoders"] == [{"decoder": "aprs", "slot": 1, "state": "running"}]
+        await host.shutdown()
+
+    run(go())

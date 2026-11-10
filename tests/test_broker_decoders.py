@@ -55,7 +55,7 @@ def test_broker_routes_decoder_frames_to_host():
     calls = _run(go())
     assert ("start", "aprs", 1, {"x": 1}, "r1", 60) in calls
     assert ("stop", "aprs", 1, "r2") in calls
-    assert ("ack", "E", [1, 2, True]) in calls or ("ack", "E", [1, 2]) in calls
+    assert ("ack", "E", [1, 2]) in calls
 
 
 def test_broker_without_host_rejects_start_unsupported():
@@ -68,9 +68,8 @@ def test_broker_without_host_rejects_start_unsupported():
         return col.sent
 
     sent = _run(go())
-    assert len(sent) == 1
-    assert sent[0]["request_id"] == "r1" and sent[0]["ok"] is False
-    assert sent[0]["error"]["code"] == "unsupported"
+    assert [m["request_id"] for m in sent] == ["r1", "r2"]
+    assert all(m["ok"] is False and m["error"]["code"] == "unsupported" for m in sent)
 
 
 def test_broker_ignores_malformed_decoder_start():
@@ -84,12 +83,18 @@ def test_broker_ignores_malformed_decoder_start():
         await b.handle(
             _frame("decoder_start", slot=1, decoder="aprs", request_id="r5", max_runtime_s=-1)
         )
+        for i, bad in enumerate((float("nan"), float("inf"))):
+            await b.handle(
+                _frame(
+                    "decoder_start", slot=1, decoder="aprs", request_id=f"n{i}", max_runtime_s=bad
+                )
+            )
         await b.drain_decoder_tasks()
         return host.calls, col.sent
 
     calls, sent = _run(go())
     assert calls == []
-    assert [m["request_id"] for m in sent] == ["r1", "r3", "r4", "r5"]
+    assert [m["request_id"] for m in sent] == ["r1", "r3", "r4", "r5", "n0", "n1"]
     assert all(m["error"]["code"] == "validation_failed" for m in sent)
 
 

@@ -51,6 +51,15 @@ def test_start_rejects_bad_env(tmp_path, env):
     assert run.calls == [] and list(tmp_path.iterdir()) == []
 
 
+def test_trailing_newline_rejected(tmp_path):
+    run = FakeRun()
+    with pytest.raises(DecoderUnitError, match="bad env"):
+        DecoderUnits(run=run, env_dir=str(tmp_path)).start("aprs", 1, {"OE5XRX_X": "node\n"})
+    with pytest.raises(DecoderUnitError):
+        DecoderUnits(run=run, env_dir=str(tmp_path)).instance("aprs\n", 1)
+    assert run.calls == []
+
+
 def test_start_nonzero_raises(tmp_path):
     with pytest.raises(DecoderUnitError, match="no such unit"):
         DecoderUnits(run=FakeRun(rc=5, stderr="no such unit\n"), env_dir=str(tmp_path)).start(

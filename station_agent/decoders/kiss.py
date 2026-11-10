@@ -31,8 +31,10 @@ class KissDeframer:
             if self._overflow:
                 continue
             self._buf.append(b)
-            # Escapes only shrink; the raw buffer bounds the decoded frame (+ command byte).
-            if len(self._buf) > MAX_FRAME + 1:
+            # Escapes at most double the size (command byte + 2 raw bytes per decoded one),
+            # so this bounds the buffer without dropping a valid escape-heavy frame; the
+            # decoded length is checked against MAX_FRAME in _decode.
+            if len(self._buf) > 2 * MAX_FRAME + 1:
                 self._buf.clear()
                 self._overflow = True
         return out

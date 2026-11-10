@@ -221,6 +221,7 @@ class _TriggerPlugin:
         return {"OE5XRX_SLOT": str(slot)}
 
     async def run(self, slot, emit):
+        self.loop = asyncio.get_running_loop()
         self.trigger = self.trigger or asyncio.Event()
         await self.trigger.wait()
         await emit("ax25", True, {"ax25": "AA=="})
@@ -334,7 +335,8 @@ def test_decoders_survive_ws_reconnect_and_resend(tmp_path):
     async def trigger_after_close():
         await first_closed.wait()
         await asyncio.sleep(0.2)
-        plugin.trigger.set()  # emitted while the WS is down -> spooled
+        # Thread-safe: the plugin lives on the client's loop (executor thread).
+        plugin.loop.call_soon_threadsafe(plugin.trigger.set)  # WS is down -> spooled
 
     fw = FakeFirmware({"fm": FM})
     fw.start()
@@ -427,3 +429,81 @@ def test_rediscovery_module_gone_stops_slot_decoder(tmp_path):
     finally:
         fw.stop()
     assert ("stop", "aprs", 1) in units.calls
+
+
+def test_reconnect_does_not_stop_decoder_when_first_scan_misses(tmp_path):
+    """A reconnect's first (undebounced) scan may miss a slot; decoders must survive."""
+    import os as _os
+
+    plugin = _TriggerPlugin()
+    units = _FakeUnits()
+    conns = []
+    done = asyncio.Event()
+    base_holder = {}
+
+    async def server(ws):
+        conn = {"msgs": []}
+        conns.append(conn)
+        idx = len(conns)
+        async for raw in ws:
+            msg = json.loads(raw)
+            conn["msgs"].append(msg)
+            if idx == 1 and msg["type"] == "decoder_snapshot":
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "decoder_start",
+                            "decoder": "aprs",
+                            "slot": 1,
+                            "params": {},
+                            "request_id": "d1",
+                        }
+                    )
+                )
+            elif idx == 1 and msg["type"] == "decoder_state" and msg["state"] == "running":
+                # Hide the module only for the next connection's first scan, then close.
+                ctl = _os.path.join(base_holder["base"], "slot1", "control")
+                base_holder["target"] = _os.readlink(ctl)
+                _os.unlink(ctl)
+                await ws.close()
+                return
+            elif idx == 2 and msg["type"] == "decoder_snapshot":
+                # Module reappears right after the (empty) first scan.
+                _os.symlink(
+                    base_holder["target"], _os.path.join(base_holder["base"], "slot1", "control")
+                )
+                await asyncio.sleep(1.5)
+                done.set()
+
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    base = make_slot_tree(tmp_path, {1: fw})
+    base_holder["base"] = base
+    key_path = _gen_key(tmp_path)
+
+    async def scenario():
+        async with websockets.serve(server, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            cfg = _FakeConfig(f"http://127.0.0.1:{port}", 1, key_path, base)
+            cfg.control_rediscovery_interval = 0.3
+            client = ControlClient(cfg, decoder_host_factory=_host_factory(units, plugin))
+            loop = asyncio.get_running_loop()
+            t = loop.run_in_executor(None, client.run)
+            try:
+                await asyncio.wait_for(done.wait(), timeout=25.0)
+            finally:
+                client.stop()
+                await asyncio.wait_for(t, timeout=8.0)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        fw.stop()
+
+    second = conns[1]["msgs"]
+    assert second[0]["type"] == "inventory" and second[0]["slots"] == []  # scan missed
+    assert second[1]["decoders"] == [{"decoder": "aprs", "slot": 1, "state": "running"}]
+    states = [m["state"] for m in second if m["type"] == "decoder_state"]
+    assert "stopped" not in states
+    assert units.calls.count(("start", "aprs", 1)) == 1

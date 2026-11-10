@@ -20,8 +20,9 @@ from .units import DecoderUnitError, DecoderUnits
 
 logger = logging.getLogger(__name__)
 
-# systemd is-active values that mean the unit is not (or no longer) running.
-_DEAD_STATES = {"failed", "inactive", "deactivating"}
+# systemd is-active values that mean the unit is not (or no longer) running. "deactivating"
+# / "activating" are transient (Restart=on-failure passes through them) and count as alive.
+_DEAD_STATES = {"failed", "inactive"}
 
 
 @dataclass
@@ -116,7 +117,7 @@ class DecoderHost:
             await self._reject(request_id, decoder, slot, "unknown_decoder", str(decoder))
             return
         existing = self._instances.get(slot)
-        if existing is not None and existing.decoder == decoder:
+        if existing is not None and existing.decoder == decoder and existing.state != "error":
             await self._send(protocol.build_result(request_id, True))
             return
         try:
@@ -128,13 +129,22 @@ class DecoderHost:
             await self._reject(request_id, decoder, slot, "no_rx_node", f"slot {slot}")
             return
         if existing is not None:
-            await self._stop_locked(slot, "replaced")
+            err = await self._stop_locked(slot, "replaced")
+            if err:  # the old unit could not be stopped: it still holds the RX node
+                await self._reject(request_id, decoder, slot, "unit_failed", err)
+                return
         inst = _Instance(decoder, slot)
         await self._state(inst, "starting")
         try:
             env = plugin.env(slot, params or {}, rx_node)
             await self._blocking(self._units.start, decoder, slot, env)
         except DecoderUnitError as exc:
+            # systemctl may have timed out while the job still completes: make sure no
+            # untracked unit (or stale env file) is left behind.
+            try:
+                await self._blocking(self._units.stop, decoder, slot)
+            except DecoderUnitError:
+                logger.debug("cleanup after failed start also failed", exc_info=True)
             await self._send(
                 protocol.build_result(request_id, False, error=("unit_failed", str(exc)))
             )
@@ -180,29 +190,35 @@ class DecoderHost:
             await self.stop_slot(slot, "module_gone")
 
     async def _stop_locked(self, slot: int, reason: str, *, announce: bool = True) -> str | None:
-        inst = self._instances.pop(slot, None)
+        inst = self._instances.get(slot)
         if inst is None:
             return None
         inst.stopping = True
         current = asyncio.current_task()
-        for task in (inst.reader_task, inst.health_task, inst.runtime_task):
-            if task is not None and task is not current:
-                task.cancel()
-        for task in (inst.reader_task, inst.health_task, inst.runtime_task):
-            if task is not None and task is not current:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:  # noqa: BLE001
-                    logger.debug("decoder task ended with error", exc_info=True)
+        tasks = [
+            t
+            for t in (inst.reader_task, inst.health_task, inst.runtime_task)
+            if t is not None and t is not current
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            # wait() (unlike awaiting each task) never swallows a cancellation aimed at
+            # the task doing the stopping.
+            await asyncio.wait(tasks)
         err = None
         try:
             await self._blocking(self._units.stop, inst.decoder, inst.slot)
         except DecoderUnitError as exc:
             err = str(exc)
             logger.warning("stopping decoder %s slot %s failed: %s", inst.decoder, slot, exc)
-        inst.state = "stopped"
+        if err:
+            # Keep tracking the instance (tasks are gone): the unit may still run, so a
+            # retried stop must re-issue systemctl and the snapshot must not hide it.
+            inst.state = "error"
+        else:
+            self._instances.pop(slot, None)
+            inst.state = "stopped"
         if announce:
             if err:
                 await self._state(inst, "error", f"stop_failed: {err}")
@@ -221,7 +237,11 @@ class DecoderHost:
         self._spool.ack(epoch, seqs)
 
     async def on_connected(self) -> None:
-        await self._send(protocol.build_decoder_snapshot(self.running()))
+        # Under the lock so an in-flight start/stop of the previous connection is complete
+        # (and therefore reflected) before the server sees the snapshot.
+        async with self._lock:
+            snapshot = self.running()
+        await self._send(protocol.build_decoder_snapshot(snapshot))
         for frame in self._spool.pending():
             await self._send(frame)
 
@@ -243,6 +263,7 @@ class DecoderHost:
             if inst.stopping or self._instances.get(inst.slot) is not inst:
                 return
             await self._stop_locked(inst.slot, detail, announce=False)
+            inst.state = "error"
             await self._state(inst, "error", detail)
 
     async def _reader(self, inst: _Instance, plugin) -> None:

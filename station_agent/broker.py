@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import math
 import time
 from collections.abc import Callable
 
@@ -242,7 +243,10 @@ class Broker:
             or (
                 max_rt is not None
                 and (
-                    isinstance(max_rt, bool) or not isinstance(max_rt, (int, float)) or max_rt <= 0
+                    isinstance(max_rt, bool)
+                    or not isinstance(max_rt, (int, float))
+                    or not math.isfinite(max_rt)
+                    or max_rt <= 0
                 )
             )
         ):
@@ -270,6 +274,8 @@ class Broker:
                 )
             return
         if self._decoder_host is None:
+            if self._valid_rid(rid):
+                await self._send(proto.build_result(rid, False, error=("unsupported", "")))
             return
         self._spawn_decoder_task(
             self._decoder_host.stop(decoder, slot, rid if self._valid_rid(rid) else None)
@@ -279,7 +285,9 @@ class Broker:
         epoch, seqs = msg.get("epoch"), msg.get("seqs")
         if self._decoder_host is None or not isinstance(epoch, str) or not isinstance(seqs, list):
             return
-        await self._decoder_host.ack(epoch, [q for q in seqs if isinstance(q, int)])
+        await self._decoder_host.ack(
+            epoch, [q for q in seqs if isinstance(q, int) and not isinstance(q, bool)]
+        )
 
     async def handle_command(self, msg: dict) -> None:
         request_id = msg.get("request_id")

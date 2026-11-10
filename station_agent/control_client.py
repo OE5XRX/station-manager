@@ -259,10 +259,14 @@ class ControlClient:
             await broker.emit_inventory()
             logger.info("Control: connected, inventory sent")
             host = self._decoder_host
+            host_task = None
             if host is not None:
+                # Not reconciled here: this first scan is not debounced (a transient probe
+                # miss must not stop a running decoder). The re-discovery loop reconciles
+                # from debounced data. Runs as a task so a slow host lock / big spool resend
+                # never delays the receive loop below.
                 host.attach(self._ws_send)
-                await host.on_connected()
-                await host.reconcile_slots(_slot_numbers(effective))
+                host_task = loop.create_task(host.on_connected())
             self._notify_rescan()
 
             rediscovery = loop.create_task(
@@ -281,6 +285,8 @@ class ControlClient:
             except websockets.exceptions.ConnectionClosed as exc:
                 logger.info("Control: WebSocket closed: %s", exc)
             finally:
+                if host_task is not None:
+                    host_task.cancel()
                 rediscovery.cancel()
                 try:
                     await rediscovery
@@ -373,6 +379,9 @@ class ControlClient:
             self._apply_forgets(debouncer)
             effective = debouncer.update(discovered)
             self._publish_last_good(debouncer)
+            if self._decoder_host is not None:
+                # Debounced data from a successful scan, every cycle (not only on change).
+                await self._decoder_host.reconcile_slots(_slot_numbers(effective))
             if effective == last_emitted and not force:
                 continue
             if effective == last_emitted:
@@ -382,8 +391,6 @@ class ControlClient:
             last_emitted = effective
             broker.set_inventory(effective)
             await broker.emit_inventory()
-            if self._decoder_host is not None:
-                await self._decoder_host.reconcile_slots(_slot_numbers(effective))
 
     def _notify_rescan(self) -> None:
         if self._on_rescan is None:
