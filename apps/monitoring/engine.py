@@ -309,6 +309,58 @@ def _check_station_offline():
     return new_alerts
 
 
+def _check_passive_no_rx():
+    """Passive APRS run that is up but silent for too long: antenna or RX problem."""
+    from apps.passive.models import AprsSettings, PassiveServiceRun
+
+    new_alerts = []
+    rule = _get_active_rule(AlertRule.AlertType.PASSIVE_NO_RX)
+    if not rule:
+        return new_alerts
+
+    now = timezone.now()
+    limit = timedelta(hours=AprsSettings.get().no_rx_alert_hours)
+    runs = PassiveServiceRun.objects.filter(
+        ended_at__isnull=True,
+        service="aprs",
+        state__in=PassiveServiceRun.RUNNING_STATES,
+    ).select_related("station")
+    open_runs = {run.station_id: run for run in runs}
+
+    for run in open_runs.values():
+        station = run.station
+        last = max(run.last_packet_at or run.started_at, run.started_at)
+        if now - last < limit:
+            continue
+        if _has_unresolved_alert(station, AlertRule.AlertType.PASSIVE_NO_RX):
+            continue
+        hours = int((now - last).total_seconds() // 3600)
+        new_alerts.append(
+            _create_alert(
+                station=station,
+                rule=rule,
+                title=f"APRS RX still: {station.name}",
+                message=(
+                    f"Passive APRS receive on {station.name} has heard no packets "
+                    f"for {hours} h - possible antenna/RX problem."
+                ),
+            )
+        )
+
+    # Auto-resolve: a packet newer than the alert arrived in the current run.
+    open_alerts = Alert.objects.filter(
+        alert_rule__alert_type=AlertRule.AlertType.PASSIVE_NO_RX, is_resolved=False
+    )
+    for alert in open_alerts:
+        run = open_runs.get(alert.station_id)
+        if run and run.last_packet_at and run.last_packet_at > alert.created_at:
+            alert.is_resolved = True
+            alert.resolved_at = now
+            alert.save(update_fields=["is_resolved", "resolved_at"])
+
+    return new_alerts
+
+
 def _check_ota_failed():
     """Check for recent failed/rolled-back OTA deployments."""
     new_alerts = []
@@ -571,6 +623,7 @@ def check_alerts():
     new_alerts.extend(_check_power_warning())
     new_alerts.extend(_check_storage_health())
     new_alerts.extend(_check_thresholds())
+    new_alerts.extend(_check_passive_no_rx())
 
     if new_alerts:
         logger.info("Alert check complete: %d new alert(s) created.", len(new_alerts))
