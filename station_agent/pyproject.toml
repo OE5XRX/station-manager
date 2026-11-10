@@ -27,5 +27,5 @@ Homepage = "https://github.com/OE5XRX/station-manager"
 # station_agent.audio (the Session B audio engine) was exactly such a miss — caught by
 # the Session E QEMU E2E gate. Add every new subpackage here + its package-dir mapping.
 [tool.setuptools]
-packages = ["station_agent", "station_agent.audio"]
-package-dir = { "station_agent" = ".", "station_agent.audio" = "audio" }
+packages = ["station_agent", "station_agent.audio", "station_agent.decoders"]
+package-dir = { "station_agent" = ".", "station_agent.audio" = "audio", "station_agent.decoders" = "decoders" }
