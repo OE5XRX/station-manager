@@ -7,6 +7,7 @@ import logging
 import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils import timezone
 from django.utils.translation import gettext
 
 from apps.accounts.permissions import (
@@ -212,6 +213,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             if station is not None:
                 await self._apply_scan_state(station, msg)
             await self._broadcast("control.scan_state", {"msg": self._enrich_scan_state(msg)})
+        elif mtype == "decoder_output":
+            await self._ingest_decoder_output(msg)
         elif mtype == "event":
             updating = registry.FIRMWARE_UPDATING_EVENTS.get(msg.get("event"))
             if updating is not None:
@@ -233,6 +236,26 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             if station is not None:
                 await self._retry_pending_reapply(station)
+
+    async def _ingest_decoder_output(self, msg):
+        """Store a decoder packet, then ack it so the agent can drop it from its spool."""
+        from apps.passive.ingest import ingest_output
+
+        try:
+            ack = await database_sync_to_async(ingest_output)(
+                self.station_id, msg, recv_now=timezone.now()
+            )
+        except Exception:
+            logger.exception("decoder_output ingest failed (station %s)", self.station_id)
+            return  # unacked: the agent resends
+        if ack:
+            ack_frame = {
+                "v": 1,
+                "type": "decoder_ack",
+                "epoch": msg["epoch"],
+                "seqs": [msg["seq"]],
+            }
+            await self.send(text_data=json.dumps(ack_frame))
 
     async def _replay_telemetry(self, station):
         """Re-arm the agent with the browsers' aggregated telemetry demand: a
