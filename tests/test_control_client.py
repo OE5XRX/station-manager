@@ -187,3 +187,243 @@ def test_ws_send_on_closed_connection_does_not_raise(tmp_path):
         assert client._ws is None
 
     asyncio.run(scenario())
+
+
+# --- passive decoder host wiring ------------------------------------------------------
+
+
+class _FakeUnits:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, decoder, slot, env):
+        self.calls.append(("start", decoder, slot))
+
+    def stop(self, decoder, slot):
+        self.calls.append(("stop", decoder, slot))
+
+    def state(self, decoder, slot):
+        return "active"
+
+    def stop_all(self):
+        self.calls.append(("stop_all",))
+
+
+class _TriggerPlugin:
+    """Emits one reliable output each time ``trigger`` is set (from the test)."""
+
+    name = "aprs"
+
+    def __init__(self):
+        self.trigger = None
+
+    def env(self, slot, params, rx_node):
+        return {"OE5XRX_SLOT": str(slot)}
+
+    async def run(self, slot, emit):
+        self.trigger = self.trigger or asyncio.Event()
+        await self.trigger.wait()
+        await emit("ax25", True, {"ax25": "AA=="})
+        await asyncio.Event().wait()
+
+
+def _host_factory(units, plugin):
+    from station_agent.decoders.host import DecoderHost
+
+    return lambda: DecoderHost(units, {"aprs": plugin}, lambda slot: "node.rx")
+
+
+def _run_client(tmp_path, server, cfg_mut, client_kw, until, fw_setup=None):
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    base = make_slot_tree(tmp_path, {1: fw})
+    key_path = _gen_key(tmp_path)
+
+    async def scenario():
+        async with websockets.serve(server, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            cfg = _FakeConfig(f"http://127.0.0.1:{port}", 1, key_path, base)
+            cfg_mut(cfg)
+            client = ControlClient(cfg, **client_kw)
+            loop = asyncio.get_running_loop()
+            t = loop.run_in_executor(None, client.run)
+            try:
+                await asyncio.wait_for(until.wait(), timeout=15.0)
+            finally:
+                client.stop()
+                await asyncio.wait_for(t, timeout=8.0)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        fw.stop()
+    return base
+
+
+def test_inventory_advertises_decoders_feature_and_snapshot(tmp_path):
+    msgs = []
+    done = asyncio.Event()
+
+    async def server(ws):
+        async for raw in ws:
+            msg = json.loads(raw)
+            msgs.append(msg)
+            if msg["type"] == "decoder_snapshot":
+                done.set()
+
+    units = _FakeUnits()
+    _run_client(
+        tmp_path,
+        server,
+        lambda cfg: None,
+        {"decoder_host_factory": _host_factory(units, _TriggerPlugin())},
+        done,
+    )
+    assert msgs[0]["type"] == "inventory" and msgs[0]["features"] == ["decoders"]
+    assert msgs[1] == {"v": 1, "type": "decoder_snapshot", "decoders": []}
+    assert units.calls[0] == ("stop_all",)
+
+
+def test_no_features_without_host(tmp_path):
+    msgs = []
+    done = asyncio.Event()
+
+    async def server(ws):
+        async for raw in ws:
+            msgs.append(json.loads(raw))
+            done.set()
+
+    _run_client(tmp_path, server, lambda cfg: None, {}, done)
+    assert msgs[0]["type"] == "inventory" and "features" not in msgs[0]
+
+
+def test_decoders_survive_ws_reconnect_and_resend(tmp_path):
+    plugin = _TriggerPlugin()
+    units = _FakeUnits()
+    conns = []
+    done = asyncio.Event()
+    first_closed = asyncio.Event()
+
+    async def server(ws):
+        conn = {"msgs": []}
+        conns.append(conn)
+        idx = len(conns)
+        async for raw in ws:
+            msg = json.loads(raw)
+            conn["msgs"].append(msg)
+            if idx == 1 and msg["type"] == "decoder_snapshot":
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "decoder_start",
+                            "decoder": "aprs",
+                            "slot": 1,
+                            "params": {},
+                            "request_id": "d1",
+                        }
+                    )
+                )
+            elif idx == 1 and msg["type"] == "decoder_state" and msg["state"] == "running":
+                await ws.close()
+                first_closed.set()
+                return
+            elif idx == 2 and msg["type"] == "decoder_output":
+                done.set()
+
+    async def trigger_after_close():
+        await first_closed.wait()
+        await asyncio.sleep(0.2)
+        plugin.trigger.set()  # emitted while the WS is down -> spooled
+
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    base = make_slot_tree(tmp_path, {1: fw})
+    key_path = _gen_key(tmp_path)
+
+    async def scenario():
+        async with websockets.serve(server, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            cfg = _FakeConfig(f"http://127.0.0.1:{port}", 1, key_path, base)
+            client = ControlClient(cfg, decoder_host_factory=_host_factory(units, plugin))
+            loop = asyncio.get_running_loop()
+            t = loop.run_in_executor(None, client.run)
+            trig = asyncio.create_task(trigger_after_close())
+            try:
+                await asyncio.wait_for(done.wait(), timeout=20.0)
+            finally:
+                trig.cancel()
+                client.stop()
+                await asyncio.wait_for(t, timeout=8.0)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        fw.stop()
+
+    second = [m["type"] for m in conns[1]["msgs"]]
+    assert second[:2] == ["inventory", "decoder_snapshot"]
+    snap = conns[1]["msgs"][1]
+    assert snap["decoders"] == [{"decoder": "aprs", "slot": 1, "state": "running"}]
+    out = [m for m in conns[1]["msgs"] if m["type"] == "decoder_output"][0]
+    assert out["seq"] == 1 and out["reliable"] is True
+    assert ("stop", "aprs", 1) in units.calls  # stopped only by the final client shutdown
+    assert units.calls.count(("start", "aprs", 1)) == 1
+
+
+def test_rediscovery_module_gone_stops_slot_decoder(tmp_path):
+    import os as _os
+
+    plugin = _TriggerPlugin()
+    units = _FakeUnits()
+    done = asyncio.Event()
+    base_holder = {}
+
+    async def server(ws):
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg["type"] == "decoder_snapshot":
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "decoder_start",
+                            "decoder": "aprs",
+                            "slot": 1,
+                            "params": {},
+                            "request_id": "d1",
+                        }
+                    )
+                )
+            elif msg["type"] == "decoder_state" and msg["state"] == "running":
+                # Unplug the module: control symlink disappears -> probe misses.
+                _os.unlink(_os.path.join(base_holder["base"], "slot1", "control"))
+            elif msg["type"] == "decoder_state" and msg["state"] == "stopped":
+                assert msg["detail"] == "module_gone"
+                done.set()
+
+    fw = FakeFirmware({"fm": FM})
+    fw.start()
+    base = make_slot_tree(tmp_path, {1: fw})
+    base_holder["base"] = base
+    key_path = _gen_key(tmp_path)
+
+    async def scenario():
+        async with websockets.serve(server, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            cfg = _FakeConfig(f"http://127.0.0.1:{port}", 1, key_path, base)
+            cfg.control_rediscovery_interval = 0.3
+            client = ControlClient(cfg, decoder_host_factory=_host_factory(units, plugin))
+            loop = asyncio.get_running_loop()
+            t = loop.run_in_executor(None, client.run)
+            try:
+                await asyncio.wait_for(done.wait(), timeout=20.0)
+            finally:
+                client.stop()
+                await asyncio.wait_for(t, timeout=8.0)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        fw.stop()
+    assert ("stop", "aprs", 1) in units.calls

@@ -16,10 +16,10 @@ import logging
 import time
 from collections.abc import Callable
 
+from station_agent import decoders, slot_pause
 from station_agent import descriptor as desc
 from station_agent import protocol as proto
 from station_agent import scanner as scan
-from station_agent import slot_pause
 from station_agent.audio.router_module import MODULE_ID as AUDIO_ROUTER_ID
 from station_agent.slot_control import SlotControl
 
@@ -57,8 +57,14 @@ class Broker:
         now=time.monotonic,
         on_firmware_check: Callable[[], None] | None = None,
         scan_poll_s: float = 0.1,
+        decoder_host=None,
     ):
         self._send = send
+        # Passive decoder host (process-lifetime, owned by ControlClient). None => decoder
+        # frames are unsupported. The Broker never stops decoders on disconnect: they keep
+        # running while the control WebSocket is down.
+        self._decoder_host = decoder_host
+        self._decoder_tasks: set = set()
         # Server `firmware_check` nudge -> module_ota cycle (runs on the main thread; the
         # callback only signals it, it must not block the control loop).
         self._on_firmware_check = on_firmware_check
@@ -184,6 +190,12 @@ class Broker:
             await self.handle_scan_update(msg)
         elif mtype == "scan_control":
             await self.handle_scan_control(msg)
+        elif mtype == "decoder_start":
+            await self.handle_decoder_start(msg)
+        elif mtype == "decoder_stop":
+            await self.handle_decoder_stop(msg)
+        elif mtype == "decoder_ack":
+            await self.handle_decoder_ack(msg)
         elif mtype == "firmware_check":
             if self._on_firmware_check is not None:
                 try:
@@ -192,6 +204,82 @@ class Broker:
                     logger.exception("broker: firmware_check callback raised")
         else:
             logger.debug("broker: ignoring message type %r", mtype)
+
+    # --- passive decoders ---------------------------------------------------
+    @staticmethod
+    def _valid_rid(rid) -> bool:
+        return (isinstance(rid, str) and bool(rid)) or (
+            isinstance(rid, int) and not isinstance(rid, bool)
+        )
+
+    @staticmethod
+    def _valid_slot(slot) -> bool:
+        return isinstance(slot, int) and not isinstance(slot, bool) and slot >= 0
+
+    def _spawn_decoder_task(self, coro) -> None:
+        # Own task: a slow systemctl must not stall the control receive loop (PTT
+        # keepalives share it). The host serialises start/stop with its own lock.
+        task = asyncio.get_running_loop().create_task(coro)
+        self._decoder_tasks.add(task)
+        task.add_done_callback(self._decoder_tasks.discard)
+
+    async def drain_decoder_tasks(self) -> None:
+        """Wait for in-flight decoder start/stop tasks (tests; orderly shutdown)."""
+        if self._decoder_tasks:
+            await asyncio.gather(*list(self._decoder_tasks), return_exceptions=True)
+
+    async def handle_decoder_start(self, msg: dict) -> None:
+        rid = msg.get("request_id")
+        decoder, slot = msg.get("decoder"), msg.get("slot")
+        max_rt = msg.get("max_runtime_s")
+        params = msg.get("params", {})
+        if (
+            not isinstance(decoder, str)
+            or not decoder
+            or not self._valid_slot(slot)
+            or not self._valid_rid(rid)
+            or not isinstance(params, dict)
+            or (
+                max_rt is not None
+                and (
+                    isinstance(max_rt, bool) or not isinstance(max_rt, (int, float)) or max_rt <= 0
+                )
+            )
+        ):
+            if self._valid_rid(rid):
+                await self._send(
+                    proto.build_result(
+                        rid, False, error=(proto.VALIDATION_FAILED, "decoder_start")
+                    )
+                )
+            else:
+                logger.warning("broker: dropping malformed decoder_start")
+            return
+        if self._decoder_host is None:
+            await self._send(proto.build_result(rid, False, error=("unsupported", "")))
+            return
+        self._spawn_decoder_task(self._decoder_host.start(decoder, slot, params, rid, max_rt))
+
+    async def handle_decoder_stop(self, msg: dict) -> None:
+        rid = msg.get("request_id")
+        decoder, slot = msg.get("decoder"), msg.get("slot")
+        if not isinstance(decoder, str) or not decoder or not self._valid_slot(slot):
+            if self._valid_rid(rid):
+                await self._send(
+                    proto.build_result(rid, False, error=(proto.VALIDATION_FAILED, "decoder_stop"))
+                )
+            return
+        if self._decoder_host is None:
+            return
+        self._spawn_decoder_task(
+            self._decoder_host.stop(decoder, slot, rid if self._valid_rid(rid) else None)
+        )
+
+    async def handle_decoder_ack(self, msg: dict) -> None:
+        epoch, seqs = msg.get("epoch"), msg.get("seqs")
+        if self._decoder_host is None or not isinstance(epoch, str) or not isinstance(seqs, list):
+            return
+        await self._decoder_host.ack(epoch, [q for q in seqs if isinstance(q, int)])
 
     async def handle_command(self, msg: dict) -> None:
         request_id = msg.get("request_id")
@@ -569,7 +657,8 @@ class Broker:
                     module_out["status"] = descriptor["status"]
                 modules_out.append(module_out)
             slots_out.append({"slot": slot, "modules": modules_out})
-        await self._send(proto.build_inventory(slots_out))
+        features = [decoders.FEATURE] if self._decoder_host is not None else None
+        await self._send(proto.build_inventory(slots_out, features=features))
 
     async def _execute(self, slot, module, op, capability, token, *, failsafe=False) -> dict:
         """Run one command on the slot's control device.
