@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 MAX_SKEW = timedelta(days=7)
 _BAD_LOG_INTERVAL_S = 60.0
 MAX_SEQ = 2**63 - 1  # BigIntegerField
+MAX_FRAME_BYTES = 1024  # an APRS UI frame is far smaller; refuse oversized junk
 _last_bad_log: dict[int, float] = {}
 
 
@@ -54,6 +55,10 @@ def ingest_output(station_id: int, msg: dict, *, recv_now: datetime) -> bool:
     data = msg.get("data")
     if not isinstance(data, dict):
         _log_bad(station_id, "no data")
+        return True
+    raw = data.get("ax25", "")
+    if not isinstance(raw, str) or len(raw) > MAX_FRAME_BYTES * 2:
+        _log_bad(station_id, "oversized frame")
         return True
     try:
         frame = decode_ax25(base64.b64decode(data.get("ax25", ""), validate=True))
@@ -100,7 +105,9 @@ def ingest_output(station_id: int, msg: dict, *, recv_now: datetime) -> bool:
     except DataError as exc:  # content the DB refuses: drop deterministically, never retry
         _log_bad(station_id, f"rejected by DB: {exc}")
     except IntegrityError:
-        return True  # duplicate (station, epoch, seq)
+        if AprsPacket.objects.filter(station_id=station_id, epoch=epoch, seq=seq).exists():
+            return True  # duplicate (station, epoch, seq)
+        raise  # anything else (FK, coverage race): unacked, the agent resends
     except Station.DoesNotExist:
         return False
     return True

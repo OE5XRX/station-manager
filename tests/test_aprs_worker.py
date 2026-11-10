@@ -313,6 +313,18 @@ def test_housekeeping_respects_setting(worker):
     assert _run(worker.housekeeping(T0)) == 1
 
 
+async def _mk_old(st, run):
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(_packet)(st, run, heard_at=T0 - timedelta(days=40))
+
+
+async def _count():
+    from asgiref.sync import sync_to_async
+
+    return await sync_to_async(AprsPacket.objects.count)()
+
+
 def test_step_runs_housekeeping_once_per_day(worker, clock):
     st, run = _station("a", running=False)
     _packet(st, run, heard_at=T0 - timedelta(days=40))
@@ -320,10 +332,37 @@ def test_step_runs_housekeeping_once_per_day(worker, clock):
     async def go():
         await worker.step()
         assert await worker.housekeeping(T0) == 0
+        await _mk_old(st, run)
+        clock.t += timedelta(hours=1)
+        await worker.step()  # within 24 h: not run again
+        assert await _count() == 1
+        clock.t += timedelta(hours=24)
+        await worker.step()
+        assert await _count() == 0
 
     _run(go())
-    assert AprsPacket.objects.count() == 0
 
 
 def test_command_once(db_station=None):
     call_command("aprs_igate", "--once")
+
+
+def test_beacon_not_repeated_on_reconnect(worker, net, clock):
+    _station("a")
+
+    async def go():
+        await worker.step()
+        net.writers[0].fail = True
+        from asgiref.sync import sync_to_async
+
+        st = await sync_to_async(Station.objects.get)(name="a")
+        await sync_to_async(_packet)(st, None)
+        await worker.step()  # write error -> conn dropped, backoff
+        clock.t += timedelta(seconds=40)
+        await worker.step()  # reconnect
+        await worker.shutdown()
+
+    _run(go())
+    assert len(net.writers) == 2
+    beacons = [ln for w in net.writers for ln in w.lines if ln.startswith("OE5XRX-10>APZXRX")]
+    assert len(beacons) == 1

@@ -92,3 +92,12 @@ def test_inactive_rule_disables(station):
     AlertRule.objects.filter(alert_type="passive_no_rx").update(is_active=False)
     _run(station, started_ago_h=7)
     assert engine.check_alerts() == []
+
+
+def test_open_alert_resolved_even_if_rule_disabled(station):
+    run = _run(station, started_ago_h=7)
+    engine.check_alerts()
+    AlertRule.objects.filter(alert_type="passive_no_rx").update(is_active=False)
+    PassiveServiceRun.objects.filter(pk=run.pk).update(last_packet_at=timezone.now())
+    engine.check_alerts()
+    assert _alerts().get().is_resolved is True

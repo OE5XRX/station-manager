@@ -315,8 +315,6 @@ def _check_passive_no_rx():
 
     new_alerts = []
     rule = _get_active_rule(AlertRule.AlertType.PASSIVE_NO_RX)
-    if not rule:
-        return new_alerts
 
     now = timezone.now()
     limit = timedelta(hours=AprsSettings.get().no_rx_alert_hours)
@@ -327,7 +325,7 @@ def _check_passive_no_rx():
     ).select_related("station")
     open_runs = {run.station_id: run for run in runs}
 
-    for run in open_runs.values():
+    for run in open_runs.values() if rule else ():
         station = run.station
         last = max(run.last_packet_at or run.started_at, run.started_at)
         if now - last < limit:

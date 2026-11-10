@@ -23,6 +23,7 @@ BACKOFF_START_S = 30.0
 BACKOFF_MAX_S = 600.0
 HOUSEKEEPING_INTERVAL = timedelta(hours=24)
 HOUSEKEEPING_BATCH = 5000
+STABLE_AFTER = timedelta(seconds=60)
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,8 @@ class _Conn:
     target: IgateTarget
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
-    last_beacon: datetime | None = None
     closed: bool = False
+    connected_at: datetime | None = None
     drain_task: asyncio.Task | None = field(default=None, repr=False)
 
 
@@ -96,6 +97,7 @@ class IgateWorker:
         self._conns: dict[str, _Conn] = {}
         self._backoff: dict[str, tuple[datetime, float]] = {}
         self._last_housekeeping: datetime | None = None
+        self._last_beacon: dict[str, datetime] = {}
 
     # -- DB helpers (sync, thread-sensitive) -------------------------------------------
 
@@ -191,19 +193,18 @@ class IgateWorker:
         ):
             return
         conn.drain_task = asyncio.ensure_future(self._drain(conn))
-        self._backoff.pop(target.call, None)
+        conn.connected_at = now
 
     async def _beacon(self, conn: _Conn, settings: AprsSettings, now: datetime) -> None:
         t = conn.target
         if t.lat is None or t.lon is None:
             return
-        due = conn.last_beacon is None or now - conn.last_beacon >= timedelta(
-            minutes=settings.beacon_interval_min
-        )
+        last = self._last_beacon.get(t.call)
+        due = last is None or now - last >= timedelta(minutes=settings.beacon_interval_min)
         if due and await self._write(
             conn, beacon_line(t.call, t.lat, t.lon, settings.beacon_comment)
         ):
-            conn.last_beacon = now
+            self._last_beacon[t.call] = now
 
     # -- main loop ---------------------------------------------------------------------
 
@@ -224,6 +225,9 @@ class IgateWorker:
         for call in list(self._backoff):
             if call not in desired:
                 del self._backoff[call]
+        for conn in self._conns.values():  # a login that held for a while is stable again
+            if conn.connected_at and now - conn.connected_at >= STABLE_AFTER:
+                self._backoff.pop(conn.target.call, None)
 
         for conn in list(self._conns.values()):
             await self._beacon(conn, settings, now)

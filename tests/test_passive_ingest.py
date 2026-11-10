@@ -155,3 +155,30 @@ def test_nul_byte_frame_acked_not_stored(db, station):
 def test_seq_beyond_bigint_not_acked(db, station):
     assert ingest_output(station.id, _msg(seq=2**63), recv_now=NOW) is False
     assert ingest_output(station.id, _msg(seq=2**63 - 1), recv_now=NOW) is True
+
+
+def test_db_data_error_acked_not_stored(db, station, monkeypatch):
+    from django.db import DataError
+
+    def boom(*a, **k):
+        raise DataError("value too long")
+
+    monkeypatch.setattr(AprsPacket.objects, "create", boom)
+    assert ingest_output(station.id, _msg(), recv_now=NOW) is True
+
+
+def test_non_duplicate_integrity_error_reraised(db, station, monkeypatch):
+    from django.db import IntegrityError
+
+    def boom(*a, **k):
+        raise IntegrityError("fk")
+
+    monkeypatch.setattr(AprsPacket.objects, "create", boom)
+    with pytest.raises(IntegrityError):
+        ingest_output(station.id, _msg(), recv_now=NOW)
+
+
+def test_oversized_frame_acked_not_stored(db, station):
+    big = base64.b64encode(b"x" * 5000).decode()
+    assert ingest_output(station.id, _msg(ax25=big), recv_now=NOW) is True
+    assert AprsPacket.objects.count() == 0
