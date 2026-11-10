@@ -236,6 +236,11 @@ class AprsPacket(models.Model):
             models.Index(fields=["heard_at"], name="aprs_pkt_heard_idx"),
             models.Index(fields=["station", "heard_at"], name="aprs_pkt_st_heard_idx"),
             models.Index(fields=["source", "heard_at"], name="aprs_pkt_src_heard_idx"),
+            models.Index(
+                fields=["id"],
+                condition=Q(gated_at__isnull=True, gate_skip=""),
+                name="aprs_pkt_pending_idx",
+            ),
         ]
 
     def __str__(self):

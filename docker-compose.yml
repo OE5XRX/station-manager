@@ -69,6 +69,23 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  aprs-igate:
+    build:
+      context: .
+      args:
+        DEV: "true"
+    command: python manage.py aprs_igate
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   history-maintainer:
     build:
       context: .

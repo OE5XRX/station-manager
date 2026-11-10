@@ -61,6 +61,20 @@ services:
       redis:
         condition: service_started
 
+  aprs-igate:
+    image: ghcr.io/oe5xrx/station-manager:latest
+    restart: unless-stopped
+    command: python manage.py aprs_igate
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   history-maintainer:
     image: ghcr.io/oe5xrx/station-manager:latest
     restart: unless-stopped
