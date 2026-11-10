@@ -260,3 +260,58 @@ def test_igates_last_packet_not_limited_to_24h(client, applicant_user, station):
     rows = _login(client, applicant_user).get(reverse("passive:aprs_igates")).json()
     assert rows[0]["packets_24h"] == 0
     assert rows[0]["last_packet_at"] is not None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "run_state,lock,expected",
+    [
+        ("starting", False, ("running", "startet")),
+        ("stopping", True, ("in_use", "")),
+        ("stopping", False, ("idle", "beendet")),
+        ("agent_offline", True, ("agent_offline", "")),
+        ("running", True, ("running", "")),
+        (None, True, ("in_use", "")),
+        (None, False, ("idle", "")),
+    ],
+)
+def test_igate_state_follows_the_run_state(
+    client, applicant_user, admin_user, station_factory, run_state, lock, expected
+):
+    st = station_factory(last_seen=timezone.now(), latitude="48.1", longitude="14.1")
+    StationPassiveConfig.objects.create(
+        station=st, enabled=True, igate_callsign="OE5AAA", igate_ssid=10
+    )
+    if run_state:
+        PassiveServiceRun.objects.create(station=st, service="aprs", slot="1", state=run_state)
+    if lock:
+        ControlLock.objects.create(station=st, holder=admin_user, acquired_at=timezone.now())
+    rows = _login(client, applicant_user).get(reverse("passive:aprs_igates")).json()
+    row = next(r for r in rows if r["station_id"] == st.id)
+    assert (row["state"], row["reason"]) == expected
+
+
+@pytest.mark.django_db
+def test_igate_state_shows_a_closed_error_run(client, applicant_user, station_factory):
+    st = station_factory(last_seen=timezone.now())
+    StationPassiveConfig.objects.create(
+        station=st, enabled=True, igate_callsign="OE5AAA", igate_ssid=10
+    )
+    PassiveServiceRun.objects.create(
+        station=st,
+        service="aprs",
+        slot="1",
+        state="error",
+        last_error="no_rx_node",
+        ended_at=timezone.now(),
+    )
+    rows = _login(client, applicant_user).get(reverse("passive:aprs_igates")).json()
+    row = next(r for r in rows if r["station_id"] == st.id)
+    assert (row["state"], row["reason"]) == ("error", "no_rx_node")
+    # a later, clean run supersedes the old error
+    PassiveServiceRun.objects.create(
+        station=st, service="aprs", slot="1", state="stopped", ended_at=timezone.now()
+    )
+    rows = _login(client, applicant_user).get(reverse("passive:aprs_igates")).json()
+    row = next(r for r in rows if r["station_id"] == st.id)
+    assert row["state"] == "idle"

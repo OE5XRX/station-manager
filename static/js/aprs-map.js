@@ -9,12 +9,17 @@
   var MAX_KEEP = 2000;
   var OLD_S = 3600;
 
-  var stationSel = document.getElementById("aprs-station");
-  var hoursSel = document.getElementById("aprs-hours");
+  // Embedded on a station page (data-station-id): fixed station, last 24 h, no filters and
+  // no iGates table; the surrounding tab panel decides when to poll.
+  var fixedStation = root.dataset.stationId || "";
+  var embeddedPanel = fixedStation ? root.closest("[data-tab-panel]") : null;
+  var stationSel = document.getElementById("aprs-station") || { value: fixedStation, addEventListener: function () {} };
+  var hoursSel = document.getElementById("aprs-hours") || { value: "24", addEventListener: function () {} };
   var statusEl = document.getElementById("aprs-status");
   var logBody = document.getElementById("aprs-log");
   var logEmpty = document.getElementById("aprs-log-empty");
   var igatesBody = document.getElementById("aprs-igates");
+  var embeddedTab = embeddedPanel ? embeddedPanel.getAttribute("data-tab-panel") : null;
 
   var packets = [];
   var positions = [];
@@ -40,6 +45,7 @@
   }
 
   function panelVisible(name) {
+    if (embeddedPanel) return name === "karte" && !embeddedPanel.hidden;
     var p = root.querySelector('[data-tab-panel="' + name + '"]');
     return !!p && !p.hidden;
   }
@@ -174,6 +180,7 @@
   }
 
   function pollIgates() {
+    if (!igatesBody) return;
     fetch(root.dataset.igatesUrl, { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
       .then(renderIgates)
@@ -204,12 +211,12 @@
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden) tick();
   });
-  root.addEventListener("click", function (e) {
+  (embeddedPanel ? document : root).addEventListener("click", function (e) {
     var tab = e.target.closest("[data-tab]");
     if (!tab) return;
     // app.js flips panel visibility first (same click); run after it.
     setTimeout(function () {
-      if (tab.dataset.tab === "karte") { map.invalidateSize(); pollPackets(false); }
+      if (tab.dataset.tab === (embeddedTab || "karte")) { map.invalidateSize(); pollPackets(false); }
       if (tab.dataset.tab === "igates") pollIgates();
     }, 0);
   });
@@ -219,6 +226,6 @@
     var t = root.querySelector('[data-tab="' + hash + '"]');
     if (t) t.click();
   }
-  pollPackets(true);
+  if (!embeddedPanel || !embeddedPanel.hidden) pollPackets(true);
   start();
 })();

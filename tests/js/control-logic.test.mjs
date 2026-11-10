@@ -246,4 +246,59 @@ ok("formatLocalDateTime returns empty for missing/invalid input", () => {
   assert.equal(L.formatLocalDateTime("not a date"), "");
 });
 
+// -- passive services ----------------------------------------------------
+ok("passiveMuteDecision: entering passive mutes", () => {
+  const d = L.passiveMuteDecision({ active: false, userUnmuted: false }, { state: "running" });
+  assert.deepEqual(d, { active: true, userUnmuted: false, muteNow: true, unmuteNow: false });
+});
+ok("passiveMuteDecision: entering again forgets an earlier unmute", () => {
+  const d = L.passiveMuteDecision({ active: false, userUnmuted: true }, { state: "running" });
+  assert.equal(d.muteNow, true);
+  assert.equal(d.userUnmuted, false);
+});
+ok("passiveMuteDecision: user unmute is respected while running", () => {
+  const d = L.passiveMuteDecision({ active: true, userUnmuted: true }, { state: "running" });
+  assert.equal(d.muteNow, false);
+  assert.equal(d.unmuteNow, false);
+  assert.equal(d.active, true);
+  assert.equal(d.userUnmuted, true);
+});
+ok("passiveMuteDecision: repeated running frame does not re-mute", () => {
+  const d = L.passiveMuteDecision({ active: true, userUnmuted: false }, { state: "running" });
+  assert.equal(d.muteNow, false);
+});
+ok("passiveMuteDecision: leaving restores a passive-imposed mute", () => {
+  const d = L.passiveMuteDecision({ active: true, userUnmuted: false }, { state: "stopping" });
+  assert.deepEqual(d, { active: false, userUnmuted: false, muteNow: false, unmuteNow: true });
+});
+ok("passiveMuteDecision: leaving leaves a user-touched mixer alone", () => {
+  const d = L.passiveMuteDecision({ active: true, userUnmuted: true }, { state: "off", reason: null });
+  assert.equal(d.unmuteNow, false);
+  assert.equal(d.active, false);
+});
+ok("passiveMuteDecision: non-running frames while idle do nothing", () => {
+  for (const state of ["starting", "off", "agent_offline", "error"]) {
+    const d = L.passiveMuteDecision({ active: false, userUnmuted: false }, { state });
+    assert.equal(d.muteNow, false);
+    assert.equal(d.unmuteNow, false);
+  }
+});
+ok("passiveBadge: labels match the server-rendered badge", () => {
+  assert.deepEqual(L.passiveBadge({ state: "running" }), { label: "Passiv: APRS aktiv", level: "ok", detail: "" });
+  assert.equal(L.passiveBadge({ state: "starting" }).label, "Passiv: APRS startet");
+  assert.equal(L.passiveBadge({ state: "stopping" }).label, "Passiv: in Benutzung");
+  assert.equal(L.passiveBadge({ state: "agent_offline" }).level, "off");
+  assert.equal(L.passiveBadge({ state: "error", reason: "sa818 timeout" }).label, "Passiv: Fehler: sa818 timeout");
+});
+ok("passiveBadge: idle reasons explain themselves, unknown codes are errors", () => {
+  assert.equal(L.passiveBadge({ state: "off", reason: null }).label, "Passiv: aus");
+  const wait = L.passiveBadge({ state: "off", reason: "idle_wait" });
+  assert.equal(wait.label, "Passiv: aus");
+  assert.equal(wait.detail, "Wartet auf Leerlauf");
+  assert.equal(L.passiveBadge({ state: "off", reason: "lock_held" }).label, "Passiv: in Benutzung");
+  const err = L.passiveBadge({ state: "off", reason: "no_rx_node" });
+  assert.equal(err.level, "error");
+  assert.equal(err.label, "Passiv: Fehler: no_rx_node");
+});
+
 console.log("\n" + passed + " assertions passed");

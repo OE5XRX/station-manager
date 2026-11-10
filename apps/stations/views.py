@@ -16,12 +16,16 @@ from django.views.generic import (
     UpdateView,
 )
 
+from apps.accounts.models import AccountAuditLog
 from apps.accounts.permissions import AreaPermissionMixin, can
 from apps.api.models import DeviceKey
 from apps.deployments.models import DeploymentResult
 from apps.history.query import max_span as history_max_span
 from apps.images.models import ImageRelease
 from apps.module_firmware import drain as module_drain
+from apps.passive.forms import StationPassiveForm
+from apps.passive.models import StationPassiveConfig
+from apps.passive.status import passive_badge
 from apps.provisioning.models import ProvisioningJob
 from apps.rollouts import services as rollout_services
 from apps.rollouts.targeting import reason_message, resolve_upgrade
@@ -189,7 +193,12 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             super()
             .get_queryset()
             .select_related(
-                "device_key", "inventory", "telemetry", "current_image_release", "rollout_group"
+                "device_key",
+                "inventory",
+                "telemetry",
+                "current_image_release",
+                "rollout_group",
+                "passive_config",
             )
             .prefetch_related(*prefetch)
         )
@@ -206,6 +215,14 @@ class StationDetailView(AreaPermissionMixin, DetailView):
             context["raw_private_key"] = raw_private_key
         user = self.request.user
         context["drain"] = module_drain.drain_status(self.object)
+        passive_cfg = getattr(self.object, "passive_config", None)
+        if (
+            passive_cfg is not None
+            and passive_cfg.enabled
+            and can(user, "passive_services", "view")
+        ):
+            context["passive_badge"] = passive_badge(self.object)
+            context["passive_call"] = passive_cfg.igate_call
         groups = metric_groups(self.object)
         context["metric_groups"] = groups
         context["metric_count"] = sum(len(rows) for _label, rows in groups)
@@ -339,9 +356,46 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
     def get_success_url(self):
         return reverse("stations:station_detail", kwargs={"pk": self.object.pk})
 
+    def _passive_form(self, data=None):
+        """Opt-in + iGate call: only for passive_services:manage, otherwise neither rendered
+        nor processed (a forged ``passive-*`` POST is ignored)."""
+        if not can(self.request.user, "passive_services", "manage"):
+            return None
+        instance = getattr(self.object, "passive_config", None) or StationPassiveConfig(
+            station=self.object
+        )
+        return StationPassiveForm(data, instance=instance)
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        form = self.get_form()
+        self.passive_form = self._passive_form(request.POST)
+        if form.is_valid() and (self.passive_form is None or self.passive_form.is_valid()):
+            return self.form_valid(form)
+        return self.form_invalid(form)
+
+    def _save_passive(self):
+        pf = self.passive_form
+        if pf is None or not pf.has_changed():
+            return
+        with transaction.atomic():
+            pf.save()
+        AccountAuditLog.log(
+            event_type=AccountAuditLog.EventType.CONFIG_CHANGED,
+            actor=self.request.user,
+            message=f"Passive APRS settings of station {self.object.name} changed",
+            ip_address=_get_client_ip(self.request),
+            details={
+                "area": "passive_services",
+                "station": self.object.pk,
+                "fields": sorted(pf.changed_data),
+            },
+        )
+
     def form_valid(self, form):
         old = Station.objects.get(pk=self.object.pk)
         response = super().form_valid(form)
+        self._save_passive()
         changes = _track_changes(old, self.object, TRACKED_FIELDS)
         if changes:
             field_names = ", ".join(changes.keys())
@@ -370,6 +424,9 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["form_title"] = _("Edit Station")
+        context["passive_form"] = (
+            self.passive_form if hasattr(self, "passive_form") else self._passive_form()
+        )
         return context
 
 

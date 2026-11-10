@@ -17,7 +17,7 @@ from apps.accounts.permissions import (
     level_label,
     required_level,
 )
-from apps.passive.models import PassiveServiceRun
+from apps.passive import status as passive_status
 from apps.passive.supervisor import WILDCARD_TOUCH
 
 from . import (
@@ -955,21 +955,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._send_passive_snapshot(station)
 
     async def _send_passive_snapshot(self, station):
-        """State of the passive service from the DB (works while the agent is offline)."""
+        """Passive-service state from the DB (works while the agent is offline): the open
+        run, or else the reason it is idle — so a late-connecting browser sees it too."""
         try:
-            run = await database_sync_to_async(PassiveServiceRun.open_for)(station.pk)
-            if run is not None:  # nothing to say about an idle service: no extra frame
-                await self.send(
-                    text_data=json.dumps(
-                        {
-                            "type": "passive_state",
-                            "service": "aprs",
-                            "state": run.state,
-                            "slot": run.slot,
-                            "reason": run.last_error or None,
-                        }
-                    )
-                )
+            frame = await database_sync_to_async(passive_status.browser_frame)(station)
+            if frame is not None:
+                await self.send(text_data=json.dumps(frame))
         except Exception:
             logger.exception("control: passive snapshot failed")
 

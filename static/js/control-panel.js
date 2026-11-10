@@ -35,7 +35,7 @@
   // Frame types a sibling panel may send through the bridge (everything else
   // has its own path: commands via the widgets / store.sendCommand, lock UX here).
   var BRIDGE_TYPES = { apply_repeater: true, scan_start: true, scan_control: true };
-  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true, scan_state: true };
+  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true, scan_state: true, passive_state: true };
 
   function emitFrame(msg) {
     if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
@@ -54,6 +54,8 @@
       // -- reactive state ----------------------------------------------------
       conn: "connecting", // 'connecting' | 'open' | 'closed'
       agentOffline: false,
+      passive: null, // {label, level, detail} from the latest passive_state frame
+      passiveRunning: false,
       connError: null, // terminal connection-error reason (4401/4403/4404 deny)
       values: {}, // "slot module cap" -> setting value
       telemetry: {}, // "slot module cap" -> telemetry value
@@ -242,6 +244,9 @@
           self.conn = "open";
           self.agentOffline = false;
           self._lastDenial = null; // a stale action denial must not explain a later 4403
+          // The server's connect snapshot only speaks when the passive service has
+          // something to say: start from "off" so a state held over a reconnect expires.
+          self._route({ type: "passive_state", service: "aprs", state: "off", reason: null });
           self._subscribeAll();
           self._publishControlStore();
         });
@@ -353,6 +358,9 @@
           case "lock":
             this._onLock(msg);
             break;
+          case "passive_state":
+            this._onPassive(msg);
+            break;
           case "agent_offline":
             this.agentOffline = true;
             this._unkeyAll(true);
@@ -368,6 +376,13 @@
           default:
             break; // forward-compat: ignore unknown types
         }
+      },
+
+      // Passive APRS service: the status badge, and (via the re-emitted
+      // control:passive_state event) the audio panel's muted-RX start.
+      _onPassive: function (msg) {
+        this.passive = L.passiveBadge(msg);
+        this.passiveRunning = msg.state === "running";
       },
 
       _onState: function (msg) {
