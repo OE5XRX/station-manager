@@ -17,6 +17,8 @@ from apps.accounts.permissions import (
     level_label,
     required_level,
 )
+from apps.passive.models import PassiveServiceRun
+from apps.passive.supervisor import WILDCARD_TOUCH
 
 from . import (
     agent_presence,
@@ -30,6 +32,10 @@ from . import (
     telemetry_subscriptions,
 )
 from .models import AgentConnection, StationModule
+
+# Prefix of request ids the passive-services supervisor puts on its system commands: their
+# results go to the supervisor, never to the browsers (apps.passive.supervisor).
+_PASSIVE_REQUEST_PREFIX = "passive-"
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +101,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     """
 
     permission_exempt = "agent: ed25519"
+    passive = None  # PassiveSupervisor, built in connect()
+    _reapply_blocked = False  # a drift frame was held back by a running passive profile
+    _passive_task = None
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]
@@ -119,6 +128,16 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         self._scan_index = None
         # (scan_id, state) last stored via scan.note_state: one DB write per transition.
         self._scan_noted = None
+        from apps.passive.supervisor import PassiveSupervisor
+
+        self.passive = PassiveSupervisor(
+            self.station_id,
+            send_to_agent=self._send_json,
+            broadcast=self._broadcast_passive,
+            wire_slot=lambda slot: self._wire_slots.get(str(slot), slot),
+            is_current=self._is_current_connection,
+        )
+        self._passive_task = None
 
         from urllib.parse import parse_qs
 
@@ -154,12 +173,18 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 pass
             self.sweep_task = None
 
+        task, self._passive_task = getattr(self, "_passive_task", None), None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
         try:
             station = self.station if getattr(self, "_claimed", False) else None
             # Stale (superseded by a reconnect) or never authenticated: tear down only
             # this channel, never the station state the live connection owns.
             if station is not None and await self._release(station):
                 await self._mark_offline(station)
+                await self.passive.on_agent_disconnect()
                 # The agent stops its scan on disconnect (dead-man): only drop the row.
                 await self._end_scan(station, "disconnect")
                 freed = await self._force_free(station)
@@ -173,6 +198,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         finally:
             # Always release group membership for this dead channel, even if
             # the offline/free/broadcast steps above raise (e.g. channel layer down).
+            await self.passive.shutdown()
             await self.channel_layer.group_discard(self.agent_group_name, self.channel_name)
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
@@ -188,11 +214,14 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             station = await self._cached_station()
             drain_changed, drain_after = False, None
             if station is not None:
+                await self.passive.prepare()  # protect a surviving run's profile first
                 drain_changed, drain_after = await self._apply_inventory(
                     station, msg.get("slots", [])
                 )
                 await self._reapply_persisted(station, msg.get("slots", []))
                 await self._replay_telemetry(station)
+            self.passive.set_agent_features(msg.get("features"))
+            await self.passive.on_inventory()
             await self._broadcast("control.inventory", {"msg": msg})
             if drain_changed:
                 # E.g. the post-flash inventory reports the target version: the row
@@ -207,7 +236,15 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 )
             await self._broadcast("control.state", {"msg": msg})
         elif mtype == "result":
-            await self._broadcast("control.result", {"msg": msg})
+            rid = msg.get("request_id")
+            if isinstance(rid, str) and rid.startswith(_PASSIVE_REQUEST_PREFIX):
+                await self.passive.on_result(msg)
+            else:
+                await self._broadcast("control.result", {"msg": msg})
+        elif mtype == "decoder_state":
+            await self.passive.on_decoder_state(msg)
+        elif mtype == "decoder_snapshot":
+            await self.passive.on_snapshot(msg)
         elif mtype == "scan_state":
             station = await self._cached_station()
             if station is not None:
@@ -323,16 +360,31 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.exception("control: lock/drain refresh broadcast failed")
 
+    def _note_passive_takeover(self, frame):
+        """Tell the passive supervisor what a user re-tuned, so its hand-over leaves it."""
+        ftype = frame.get("type")
+        if ftype in ("scan_start", "scan_update"):
+            self.passive.note_user_set(WILDCARD_TOUCH)
+        elif ftype == "apply_preset" and isinstance(frame.get("values"), dict):
+            slot, module = frame.get("slot"), frame.get("module")
+            if (isinstance(slot, str) or type(slot) is int) and isinstance(module, str):
+                for cap in frame["values"]:
+                    self.passive.note_user_set((str(slot), module, str(cap)))
+
     def _note_user_set(self, frame):
         """Remember a relayed browser ``set`` so a deferred re-apply leaves that capability
         alone: the user's write (and its own persistence on the ok result) is authoritative,
         and neither the DB nor ``last_state`` reflects it until result/state come back."""
+        if isinstance(frame, dict) and self.passive is not None:
+            self._note_passive_takeover(frame)
         if not isinstance(frame, dict) or frame.get("op") != "set":
             return
         slot, module, cap = frame.get("slot"), frame.get("module"), frame.get("capability")
         if (isinstance(slot, str) or type(slot) is int) and isinstance(module, str):
             if isinstance(cap, str):
                 self._reapply_touched.add((str(slot), module, cap))
+                if self.passive is not None:
+                    self.passive.note_user_set((str(slot), module, cap))
 
     # -- broadcasts we must ignore when echoed back to our own group ----------
 
@@ -360,6 +412,54 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
     async def control_control_requested(self, event):
         pass
 
+    async def control_passive(self, event):
+        pass
+
+    async def control_passive_preempt(self, event):
+        """A user took the control lock: hand the radio back (does not block the grant)."""
+        self.passive.request_preempt(str(event.get("reason") or "acquired"), handover=True)
+
+    def _rearm_blocked_reapply(self):
+        """Once no passive profile owns any cap any more, retry the drift frames it held back
+        (one re-arm per hold: a plain flag, so it cannot loop while the run is open)."""
+        if self._reapply_blocked and not self._passive_caps():
+            self._reapply_blocked = False
+            self._reapply_pending = self._reapply_gen
+
+    def _kick_passive_tick(self):
+        """Run the passive supervisor's tick as its own single-flight task: a start or
+        hand-over awaits agent results for up to ~10 s per command and must never stall the
+        lock sweep, drift re-apply and telemetry purge."""
+        if self._passive_task is not None and not self._passive_task.done():
+            return
+        self._passive_task = asyncio.create_task(self._passive_tick())
+
+    async def _passive_tick(self):
+        try:
+            await self.passive.tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("control: passive supervisor tick failed")
+
+    async def _is_current_connection(self):
+        return await database_sync_to_async(
+            AgentConnection.objects.filter(
+                station_id=self.station_id,
+                kind=AgentConnection.Kind.CONTROL,
+                channel_name=self.channel_name,
+            ).exists
+        )()
+
+    def _passive_caps(self):
+        return self.passive.protected_caps() if self.passive is not None else set()
+
+    async def _send_json(self, frame):
+        await self.send(text_data=json.dumps(frame))
+
+    async def _broadcast_passive(self, payload):
+        await self._broadcast("control.passive", {"msg": payload})
+
     # -- sweep loop -----------------------------------------------------------
 
     async def _sweep_loop(self):
@@ -376,7 +476,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                         await lock_hooks.on_lock_released(station, "expired")
                         status = await self._lock_status(station)
                         await self._broadcast("control.lock", {"lock": status})
+                    self._rearm_blocked_reapply()
                     await self._retry_pending_reapply(station)
+                    self._kick_passive_tick()
                     await self._purge_stale_telemetry(station)
                 except asyncio.CancelledError:
                     raise
@@ -410,6 +512,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         # A fresh inventory is a fresh baseline: supersedes any pending/in-flight retry.
         self._reapply_gen += 1
         gen = self._reapply_gen
+        self._reapply_blocked = False
         self._reapply_touched.clear()
         if isinstance(slots, list):
             self._wire_slots = {
@@ -436,7 +539,13 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         for frame in frames:
             # Re-checked per frame (after every await): a user ``set`` relayed while an
             # earlier frame was being sent/audited wins over the re-apply.
-            if (str(frame["slot"]), frame["module"], frame["capability"]) in self._reapply_touched:
+            key = (str(frame["slot"]), frame["module"], frame["capability"])
+            if key in self._reapply_touched:
+                continue
+            if key in self._passive_caps():
+                # Owned by a running passive profile: retried once the run is closed
+                # (``_rearm_blocked_reapply``, once -- never a retry loop while it runs).
+                self._reapply_blocked = True
                 continue
             await self.send(text_data=json.dumps(frame))
             await self._audit_reapply(
@@ -843,6 +952,26 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         )
         await self._send_lock_status(station)
         await self._send_scan_snapshot(station)
+        await self._send_passive_snapshot(station)
+
+    async def _send_passive_snapshot(self, station):
+        """State of the passive service from the DB (works while the agent is offline)."""
+        try:
+            run = await database_sync_to_async(PassiveServiceRun.open_for)(station.pk)
+            if run is not None:  # nothing to say about an idle service: no extra frame
+                await self.send(
+                    text_data=json.dumps(
+                        {
+                            "type": "passive_state",
+                            "service": "aprs",
+                            "state": run.state,
+                            "slot": run.slot,
+                            "reason": run.last_error or None,
+                        }
+                    )
+                )
+        except Exception:
+            logger.exception("control: passive snapshot failed")
 
     async def _send_scan_snapshot(self, station):
         """A (re)loaded page must learn about a scan already running: one synthetic
@@ -920,6 +1049,16 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 # A holder who lost control.use must not keep the lock (and TX path).
                 await self._revoke_if_holder(station)
                 return
+
+        rid = msg.get("request_id")
+        if (
+            mtype in ("command", "apply_repeater")
+            and isinstance(rid, str)
+            and rid.startswith(_PASSIVE_REQUEST_PREFIX)
+        ):
+            # Reserved for system commands: their results never reach a browser.
+            await self._error(rid, "invalid_request_id", "request_id prefix is reserved")
+            return
 
         if mtype == "command":
             await self._handle_command(station, msg)
@@ -1422,6 +1561,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_scan_state(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_passive(self, event):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_result(self, event):
