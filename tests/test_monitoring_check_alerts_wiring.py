@@ -13,7 +13,6 @@ def test_check_alerts_calls_new_checks():
         mock.patch.object(engine, "_check_thresholds", return_value=[]) as t,
         mock.patch.object(engine, "_check_station_offline", return_value=[]),
         mock.patch.object(engine, "_check_ota_failed", return_value=[]),
-        mock.patch.object(engine, "_check_passive_no_rx", return_value=[]) as n,
         mock.patch.object(engine, "_build_unresolved_cache"),
     ):
         engine.check_alerts()
@@ -21,4 +20,3 @@ def test_check_alerts_calls_new_checks():
     p.assert_called_once()
     s.assert_called_once()
     t.assert_called_once()
-    n.assert_called_once()

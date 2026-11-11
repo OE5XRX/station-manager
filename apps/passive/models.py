@@ -89,9 +89,6 @@ class AprsSettings(_Singleton):
     retention_days = models.PositiveIntegerField(
         _("raw packet retention (days)"), default=30, validators=[MinValueValidator(1)]
     )
-    no_rx_alert_hours = models.PositiveIntegerField(
-        _("no-RX alert after (hours)"), default=6, validators=[MinValueValidator(1)]
-    )
     beacon_interval_min = models.PositiveIntegerField(
         _("beacon interval (min)"), default=30, validators=[MinValueValidator(1)]
     )

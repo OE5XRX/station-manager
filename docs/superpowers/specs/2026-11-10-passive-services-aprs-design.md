@@ -159,6 +159,8 @@ The agent runs as root, and decoders parse **untrusted RF input** (anyone can tr
 
 ### 6.5 RX health alert
 
+> **Superseded (2026-11-11):** no special alert type or `no_rx_alert_hours` setting any more. The agent's `AprsDecoder` reports the generic metric `aprs.rx_packets_1h` (packets in a sliding 60-min window, summed over running decoders; key omitted while no decoder runs or one has run < 60 min, which freezes the threshold rule). Migration `monitoring.0008` seeds the generic rule `aprs.rx_packets_1h < 1` for 5 h and resolves/removes the old `passive_no_rx` alerts and rule. The text below is historical.
+
 - A station in a passive APRS run that has received **zero** packets for `no_rx_alert_hours` (global, default 6 h **(call)**) raises an alert through the existing monitoring/alert routing ("possible antenna/RX problem"). The alert resolves on the next packet. Runs shorter than the threshold never alert.
 
 ### 6.6 Live frequency/state in the browser
@@ -173,7 +175,7 @@ Layout **variant C** (user decision):
 - **APRS page** (central):
   - Tab **Karte & Log**: a map of heard stations across all iGates (default last 24 h), and a live log, newest first, with a station filter and grouped duplicates.
   - Tab **iGates**: our stations with their state (running/idle/in use/error/not opted-in), last packet, and packets per 24 h.
-  - Tab **Einstellungen** (admin only): global switch, `idle_minutes`, service radio profile, hand-over profile, APRS-IS server/filter, `max_gate_age`, retention, `no_rx_alert_hours`.
+  - Tab **Einstellungen** (admin only): global switch, `idle_minutes`, service radio profile, hand-over profile, APRS-IS server/filter, `max_gate_age`, retention (`no_rx_alert_hours` removed 2026-11-11, see 6.5).
 - **Station detail**: a new tab **APRS** for opted-in stations. It is the same map and log, pre-filtered to this station. The station's opt-in checkbox plus iGate callsign and SSID live in the station edit form (admin).
 - **Status badge** (station detail and control page): `Passiv: APRS aktiv` / `in Benutzung` / `aus` / `Fehler: …`.
 - Map library: whatever the project already uses or a light one, e.g. Leaflet with OSM tiles. Builder's choice, follow existing static-asset/CSP conventions.

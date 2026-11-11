@@ -28,9 +28,8 @@ def test_config_defaults(db):
         s.aprsis_port,
         s.max_gate_age_s,
         s.retention_days,
-        s.no_rx_alert_hours,
         s.beacon_interval_min,
-    ) == ("rotate.aprs2.net", 14580, 30, 30, 6, 30)
+    ) == ("rotate.aprs2.net", 14580, 30, 30, 30)
     assert s.beacon_comment == "OE5XRX Remote Station RX-iGate"
 
 
