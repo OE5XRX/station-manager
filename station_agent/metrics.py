@@ -73,6 +73,7 @@ _DESCRIPTORS = (
     ("pwr.5v.power_w", "5 V rail power", "W", "power", 2, -300, 300),
     ("boot.stage2_ok", "Boot stage 2 OK", "", "system", 0, 0, 1),
     ("boot.overlays_failed", "Failed DT overlays", "", "system", 0, 0, None),
+    ("aprs.rx_packets_1h", "APRS packets heard (1 h)", "pkts", "other", 0, 0, None),
 )
 
 
@@ -151,6 +152,9 @@ class MetricsCollector:
         # The kernel cmdline is fixed for the whole boot: read once, then cache.
         self._boot_values: dict[str, float] | None = None
 
+        # Externally registered snapshot sources (callables returning {key: value}).
+        self._extra_sources: list = []
+
         self._logged: set[str] = set()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -170,6 +174,13 @@ class MetricsCollector:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout)
+
+    def add_source(self, fn) -> None:
+        """Register a per-snapshot source ``fn() -> {key: value}`` (e.g. the APRS decoder).
+
+        Runs in the heartbeat thread; a failing source only omits its keys.
+        """
+        self._extra_sources.append(fn)
 
     def record_server_rtt(self, ms: float) -> None:
         """Remember the last heartbeat POST duration (reported next snapshot)."""
@@ -196,6 +207,8 @@ class MetricsCollector:
             ("boot", self._read_boot_markers),
         ):
             values.update(self._safe(label, fn) or {})
+        for idx, fn in enumerate(list(self._extra_sources)):
+            values.update(self._safe(f"extra{idx}", fn) or {})
         with self._snap_lock:
             values.update(self._safe("net", self._read_net) or {})
 

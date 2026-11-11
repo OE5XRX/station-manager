@@ -82,6 +82,7 @@ class FakeAprsPlugin(AprsDecoder):
     """The real plugin (env + KISS reader) with the TCP socket and clock injected."""
 
     def __init__(self, direwolf):
+        super().__init__()
         self._dw = direwolf
 
     async def run(self, slot, emit):

@@ -49,7 +49,6 @@ def _settings_post(**over):
         "aprs-aprsis_filter": "",
         "aprs-max_gate_age_s": "30",
         "aprs-retention_days": "30",
-        "aprs-no_rx_alert_hours": "6",
         "aprs-beacon_interval_min": "30",
         "aprs-beacon_comment": "OE5XRX RX-iGate",
     }

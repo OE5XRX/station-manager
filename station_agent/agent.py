@@ -795,9 +795,12 @@ class StationAgent:
 
             # Dedicated pool: a hung systemd must not tie up the default executor that
             # serves serial I/O (commands, PTT, telemetry polls).
+            aprs = AprsDecoder()
+            if self._metrics is not None:
+                self._metrics.add_source(aprs.metric_values)
             return DecoderHost(
                 DecoderUnits(),
-                {AprsDecoder.name: AprsDecoder()},
+                {AprsDecoder.name: aprs},
                 lambda slot: router_backend.resolve_node(slot, "rx"),
                 loop_executor=ThreadPoolExecutor(
                     max_workers=2, thread_name_prefix="decoder-units"

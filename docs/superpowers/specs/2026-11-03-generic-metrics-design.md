@@ -304,3 +304,11 @@ als ein Heartbeat-Intervall verhalten sich wie 0.
 - UI/API: Rechte (nur `alert_rules.manage` schreibt), Validierung `metric_key`.
 - Agent: jede Quelle fehlt → Key fehlt, kein Crash; hwmon-Zuordnung über Device-Pfad;
   CPU-%/Netz-Deltas; Descriptor-Hash stabil, volle Liste nur bei Start/Änderung/Anforderung.
+
+## Nachtrag 2026-11-11: APRS-RX-Health als generische Metrik
+
+`aprs.rx_packets_1h` (Einheit `pkts`, Gruppe `other`, 0..∞) kommt aus einer extern
+registrierten Quelle (`MetricsCollector.add_source`) im `AprsDecoder`; eine Metrik pro Station
+(Summe über Slots, kein Instanz-Segment). Der Key wird **weggelassen**, solange kein APRS-Decoder
+läuft oder einer < 60 min läuft — "fehlender Wert friert die Regel ein" ersetzt den früheren
+Sonder-Alarm `passive_no_rx`. Seed-Regel: `lt 1`, 5 h Dauer, Warnung.

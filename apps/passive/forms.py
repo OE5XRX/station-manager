@@ -130,7 +130,6 @@ class AprsSettingsForm(forms.ModelForm):
             "aprsis_filter",
             "max_gate_age_s",
             "retention_days",
-            "no_rx_alert_hours",
             "beacon_interval_min",
             "beacon_comment",
         ]
@@ -140,7 +139,6 @@ class AprsSettingsForm(forms.ModelForm):
             "aprsis_filter": forms.TextInput(attrs={"class": "form-control"}),
             "max_gate_age_s": _number(min="1", max="300"),
             "retention_days": _number(min="1"),
-            "no_rx_alert_hours": _number(min="1"),
             "beacon_interval_min": _number(min="10", max="120"),
             "beacon_comment": forms.TextInput(attrs={"class": "form-control"}),
         }

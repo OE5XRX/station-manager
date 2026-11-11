@@ -39,7 +39,6 @@ class AlertRule(models.Model):
         POWER_WARNING = "power_warning", _("Power Warning")
         STORAGE_HEALTH = "storage_health", _("Storage Health")
         THRESHOLD = "threshold", _("Threshold")
-        PASSIVE_NO_RX = "passive_no_rx", _("Passive RX silent")
 
     class Operator(models.TextChoices):
         GT = "gt", ">"

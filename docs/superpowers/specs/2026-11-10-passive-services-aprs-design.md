@@ -159,6 +159,8 @@ The agent runs as root, and decoders parse **untrusted RF input** (anyone can tr
 
 ### 6.5 RX health alert
 
+> **Superseded (2026-11-11):** no special alert type or `no_rx_alert_hours` setting any more. The agent's `AprsDecoder` reports the generic metric `aprs.rx_packets_1h` (packets in a sliding 60-min window, summed over running decoders; key omitted while no decoder runs or one has run < 60 min, which freezes the threshold rule). Migration `monitoring.0008` seeds the generic rule `aprs.rx_packets_1h < 1` for 5 h and resolves/removes the old `passive_no_rx` alerts and rule. The text below is historical.
+
 - A station in a passive APRS run that has received **zero** packets for `no_rx_alert_hours` (global, default 6 h **(call)**) raises an alert through the existing monitoring/alert routing ("possible antenna/RX problem"). The alert resolves on the next packet. Runs shorter than the threshold never alert.
 
 ### 6.6 Live frequency/state in the browser
