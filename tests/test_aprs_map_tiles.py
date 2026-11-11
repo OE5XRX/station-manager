@@ -24,18 +24,24 @@ def test_tile_layer_sets_referrer_policy():
     assert "OpenStreetMap" in match.group(0), "attribution must stay"
 
 
-def test_symbol_sheet_attributes_are_read_the_way_the_templates_write_them():
-    """Regression: the pins had no symbols because JS read ``dataset.symbols0``.
+def test_symbol_sheet_attributes_match_the_templates():
+    """Regression: pins had no symbols because JS read ``dataset.symbols0``.
 
-    ``data-symbols-0`` is ``dataset["symbols-0"]`` (the hyphen before a digit is kept),
-    so the sprite URL was ``url(undefined)`` and only the callsign chips rendered.
+    ``data-symbols-0`` is ``dataset["symbols-0"]`` (no camelCase before a digit), so the
+    sprite URL was ``url(undefined)`` and only the callsign chips rendered.
     """
     assert not re.search(r"dataset\.symbols\d", MAP_JS)
-    assert 'getAttribute("data-symbols-" + i)' in MAP_JS
+    keys = re.findall(r"root\.dataset\.(symbolsSheet[A-C])", MAP_JS)
+    assert keys == ["symbolsSheetA", "symbolsSheetB", "symbolsSheetC"]
     for tpl in (
         "apps/passive/templates/passive/aprs.html",
         "apps/passive/templates/passive/_station_aprs_tab.html",
     ):
         html = (REPO_ROOT / tpl).read_text()
-        for i in range(3):
-            assert f'data-symbols-{i}="{{% static ' in html, (tpl, i)
+        for letter in "abc":
+            assert f'data-symbols-sheet-{letter}="{{% static ' in html, (tpl, letter)
+        assert not re.search(r"data-symbols-\d", html)
+
+
+def test_symbol_node_falls_back_when_a_sheet_url_is_missing():
+    assert "!SHEETS[info.sheet]" in MAP_JS

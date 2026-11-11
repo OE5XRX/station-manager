@@ -66,9 +66,9 @@
   var routeLayer = L.layerGroup().addTo(map);
   var selectedSource = null;
   // Sprite sheet URLs come from {% static %} (hashed names under WhiteNoise manifest storage).
-  // getAttribute, not dataset: "data-symbols-0" maps to dataset["symbols-0"] (no camelCase
-  // before a digit), so the camelCase lookup comes back undefined.
-  var SHEETS = [0, 1, 2].map(function (i) { return root.getAttribute("data-symbols-" + i); });
+  // Attribute names end in a letter: dataset camelCases "-<lowercase>" only, so "data-symbols-0"
+  // would be dataset["symbols-0"] and the camelCase lookup undefined (-> url(undefined), no symbols).
+  var SHEETS = [root.dataset.symbolsSheetA, root.dataset.symbolsSheetB, root.dataset.symbolsSheetC];
 
   function directOnly() {
     return !!(directOnlyEl && directOnlyEl.checked);
@@ -85,7 +85,8 @@
   // Standard APRS symbol with overlay character; unknown symbol -> plain dot.
   function symbolNode(symbol) {
     var info = Logic.symbolInfo(symbol);
-    if (!info) return el("span", "aprs-sym aprs-sym-unknown");
+    // A missing sheet URL must never become url(undefined): fall back to the plain dot.
+    if (!info || !SHEETS[info.sheet] || (info.overlay && !SHEETS[2])) return el("span", "aprs-sym aprs-sym-unknown");
     var n = spriteLayer("aprs-sym", info.sheet, info.col, info.row);
     if (info.overlay) n.appendChild(spriteLayer("aprs-sym-overlay", 2, info.overlay.col, info.overlay.row));
     return n;
