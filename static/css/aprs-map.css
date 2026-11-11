@@ -8,7 +8,7 @@
 .aprs-pin { display: flex; align-items: center; gap: 4px; width: max-content; transform: translate(-12px, -12px); }
 .aprs-sym { position: relative; flex: none; width: 24px; height: 24px;
   background-repeat: no-repeat; background-size: 384px 144px;
-  filter: drop-shadow(0 0 1px #fff) drop-shadow(0 1px 2px rgba(0, 0, 0, .55)); }
+  filter: drop-shadow(0 0 1px var(--sheen-color)) drop-shadow(0 1px 2px color-mix(in srgb, var(--shadow-color) 55%, transparent)); }
 .aprs-sym-overlay { position: absolute; inset: 0; background-repeat: no-repeat; background-size: 384px 144px; }
 .aprs-sym-unknown { border-radius: 50%; border: 2px solid var(--accent-deep); background: var(--accent); }
 .aprs-call { font: 600 11px/1 var(--font-mono); color: var(--ink-0); background: color-mix(in srgb, var(--bg-1) 88%, transparent);
@@ -17,7 +17,7 @@
 /* Heard directly = solid and strong; relayed by a digipeater = faded with a dashed label. */
 .aprs-pin.is-digi { opacity: .62; }
 .aprs-pin.is-digi .aprs-call { border-style: dashed; border-color: var(--line-hot); color: var(--ink-1); }
-.aprs-pin.is-digi .aprs-sym { filter: grayscale(.35) drop-shadow(0 0 1px #fff); }
+.aprs-pin.is-digi .aprs-sym { filter: grayscale(.35) drop-shadow(0 0 1px var(--sheen-color)); }
 .aprs-pin.is-old { opacity: .45; }
 .aprs-pin.is-old .aprs-call { border-color: var(--line-bright); color: var(--ink-2); }
 .aprs-pin.is-selected .aprs-call { background: var(--accent); color: var(--on-accent-ink); }

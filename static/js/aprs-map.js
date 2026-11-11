@@ -155,21 +155,27 @@
     return Object.assign({}, h, { latitude: p.latitude, longitude: p.longitude, source: p.source });
   }
 
+  // Route colors come from the design tokens (theme-aware), never raw literals.
+  function token(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
   function drawRoutes(p) {
+    var cDirect = token("--accent"), cDigi = token("--warn"), cGate = token("--signal"), cRim = token("--on-accent-ink");
     routeLayer.clearLayers();
     Logic.hearings(p, packets.concat(positions)).forEach(function (h) {
       var r = Logic.buildRoute(routeInput(p, h), digiPositions);
       if (!r.drawable) return;
       L.polyline(r.points, {
-        color: r.direct ? "#3AC6D6" : "#FFB84D", weight: 3, opacity: 0.9,
+        color: r.direct ? cDirect : cDigi, weight: 3, opacity: 0.9,
         dashArray: r.direct ? null : "8 6", interactive: false,
       }).addTo(routeLayer);
       r.points.forEach(function (pt, i) {
         var stop = r.stops[i];
         if (stop.kind === "station") return;
         var dot = L.circleMarker(pt, {
-          radius: stop.kind === "digi" ? 5 : 6, weight: 2, color: "#08131A",
-          fillColor: stop.kind === "digi" ? "#FFB84D" : "#4DB870", fillOpacity: 1,
+          radius: stop.kind === "digi" ? 5 : 6, weight: 2, color: cRim,
+          fillColor: stop.kind === "digi" ? cDigi : cGate, fillOpacity: 1,
         }).addTo(routeLayer);
         dot.bindTooltip(el("span", "", (stop.kind === "digi" ? "Digi " : "iGate ") + stop.label));
       });
