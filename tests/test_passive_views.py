@@ -490,3 +490,16 @@ def test_aprs_map_attribution_keeps_osm_and_credits_symbol_set():
     assert "APRS symbols:" in js
     assert 'target="_blank" rel="noopener noreferrer"' in js
     assert "attributionControl" in js
+
+
+def test_alias_regex_python_and_js_stay_in_sync():
+    from apps.passive.views import _ALIAS
+
+    js = (_REPO / "static/js/aprs-logic.js").read_text()
+    m = re.search(r"var ALIAS = /\^\((.*?)\)\\d\*\(-\\d\+\)\?\$/i;", js)
+    assert m, "ALIAS regex not found in aprs-logic.js"
+    assert _ALIAS.pattern == f"({m.group(1)})\\d*(-\\d+)?"  # identical alternation + tail
+    for alias in ("WIDE2-1", "wide1", "TRACE3-3", "RELAY", "TCPIP", "qAR", "CQ"):
+        assert _ALIAS.fullmatch(alias), alias
+    for call in ("DB0ABC", "OE5XRX-5", "WIDEX1"):
+        assert not _ALIAS.fullmatch(call), call
