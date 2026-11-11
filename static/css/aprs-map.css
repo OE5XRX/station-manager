@@ -14,6 +14,9 @@
 .aprs-call { font: 600 11px/1 var(--font-mono); color: var(--ink-0); background: color-mix(in srgb, var(--bg-1) 88%, transparent);
   padding: 3px 5px; border-radius: var(--radius-xs); border: 1px solid var(--accent-deep); white-space: nowrap; }
 
+/* Crowded map: chip hidden, the call shows as a hover/tap tooltip instead. */
+.aprs-pin.is-nolabel .aprs-call { display: none; }
+
 /* Heard directly = solid and strong; relayed by a digipeater = faded with a dashed label. */
 .aprs-pin.is-digi { opacity: .62; }
 .aprs-pin.is-digi .aprs-call { border-style: dashed; border-color: var(--line-hot); color: var(--ink-1); }

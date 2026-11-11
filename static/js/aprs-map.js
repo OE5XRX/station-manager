@@ -33,6 +33,8 @@
   var map = L.map("aprs-map", { worldCopyJump: true }).setView([47.6, 14.1], 7);
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
+    // OSM's tile policy requires a Referer; Django's same-origin policy would suppress it.
+    referrerPolicy: "strict-origin-when-cross-origin",
     attribution: "© OpenStreetMap contributors",
   }).addTo(map);
   // Static, trusted constant (never packet data). The OSM attribution above must stay.
@@ -218,7 +220,7 @@
         }, 0);
       });
       markers.addLayer(m);
-      markerBySource[source] = { marker: m, id: p.id, old: old };
+      markerBySource[source] = { marker: m, id: p.id, old: old, direct: Logic.isDirect(p), labeled: null };
       if (reopen) {
         // Carried over from the replaced marker: no map jump on every poll.
         var pop = m.getPopup();
@@ -226,6 +228,30 @@
         m.openPopup();
         pop.options.autoPan = true;
       }
+    });
+    applyLabels();
+  }
+  map.on("zoomend moveend", applyLabels);
+
+  // Crowded map: drop the callsign chips (they overlap) and show the call as a tooltip on
+  // hover/tap instead. Directly heard stations keep their label first.
+  function applyLabels() {
+    var bounds = map.getBounds();
+    var items = Object.keys(markerBySource).map(function (src) {
+      var c = markerBySource[src];
+      return { source: src, direct: c.direct, inView: bounds.contains(c.marker.getLatLng()) };
+    });
+    var plan = Logic.labelPlan(items, map.getZoom());
+    items.forEach(function (it) {
+      var c = markerBySource[it.source];
+      var show = plan.has(it.source);
+      if (c.labeled === show) return;
+      c.labeled = show;
+      var node = c.marker.getElement && c.marker.getElement();
+      var pin = node && node.querySelector(".aprs-pin");
+      if (pin) pin.classList.toggle("is-nolabel", !show);
+      if (show) c.marker.unbindTooltip();
+      else c.marker.bindTooltip(el("span", "", it.source), { direction: "top", offset: [0, -12] });
     });
   }
 
