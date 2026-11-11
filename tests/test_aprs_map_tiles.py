@@ -22,3 +22,20 @@ def test_tile_layer_sets_referrer_policy():
     assert match, "tile layer call not found"
     assert 'referrerPolicy: "strict-origin-when-cross-origin"' in match.group(0)
     assert "OpenStreetMap" in match.group(0), "attribution must stay"
+
+
+def test_symbol_sheet_attributes_are_read_the_way_the_templates_write_them():
+    """Regression: the pins had no symbols because JS read ``dataset.symbols0``.
+
+    ``data-symbols-0`` is ``dataset["symbols-0"]`` (the hyphen before a digit is kept),
+    so the sprite URL was ``url(undefined)`` and only the callsign chips rendered.
+    """
+    assert not re.search(r"dataset\.symbols\d", MAP_JS)
+    assert 'getAttribute("data-symbols-" + i)' in MAP_JS
+    for tpl in (
+        "apps/passive/templates/passive/aprs.html",
+        "apps/passive/templates/passive/_station_aprs_tab.html",
+    ):
+        html = (REPO_ROOT / tpl).read_text()
+        for i in range(3):
+            assert f'data-symbols-{i}="{{% static ' in html, (tpl, i)

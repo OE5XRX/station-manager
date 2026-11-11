@@ -66,7 +66,9 @@
   var routeLayer = L.layerGroup().addTo(map);
   var selectedSource = null;
   // Sprite sheet URLs come from {% static %} (hashed names under WhiteNoise manifest storage).
-  var SHEETS = [root.dataset.symbols0, root.dataset.symbols1, root.dataset.symbols2];
+  // getAttribute, not dataset: "data-symbols-0" maps to dataset["symbols-0"] (no camelCase
+  // before a digit), so the camelCase lookup comes back undefined.
+  var SHEETS = [0, 1, 2].map(function (i) { return root.getAttribute("data-symbols-" + i); });
 
   function directOnly() {
     return !!(directOnlyEl && directOnlyEl.checked);
