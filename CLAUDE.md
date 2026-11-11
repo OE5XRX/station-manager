@@ -79,6 +79,34 @@ Spec: `docs/superpowers/specs/2026-11-06-repeater-list-and-scanner-design.md`.
 - `apply_repeater` (Browser) wird serverseitig zu **einem** `apply_preset`-Frame aufgelöst
   (tx/rx-Frequenz + Töne + ggf. Bandbreite, nur beworbene Capabilities).
 
+### Passive Dienste / APRS (`apps/passive`, `station_agent/decoders`)
+Spec: `docs/superpowers/specs/2026-11-10-passive-services-aprs-design.md`. Eine idle Station hört auf
+144.800 MHz APRS mit (Direwolf) und gated frische Pakete als RX-only-iGate nach APRS-IS.
+
+- **Funk-Besitzregel:** Der Funk gehört immer einem Menschen. Der `PassiveSupervisor` (je Agent-Consumer)
+  startet nur bei freiem Lock + `idle_minutes` seit `ControlLock.released_at`; jeder Lock-Erwerb gibt
+  den Funk ab (Decoder stop, dann Hand-over-Profil, Squelch zu). Lock-Seiteneffekte hängen **nur** am
+  Hook-Paar `lock_hooks.register_acquire_hook`/`register_release_hook` — nie eine zweite Lock-Logik.
+- **System-Writes nie persistiert/auditiert wie User-Writes:** Supervisor-Kommandos tragen die
+  Request-ID-Präfix `passive-` (Result geht an den Supervisor, nie an Browser) und landen nicht in
+  `PersistedCapability`. Drift-Re-Apply überspringt Caps, die ein laufendes Profil besitzt.
+- **Nur direkt gehörte Pakete in `CoverageCell`:** Digipeatete (`*` im Pfad), Objekte/Items und Pakete
+  ohne Position zählen nicht (`coverage.record_coverage`).
+- **Freshness-Gate auf der Server-Uhr:** `heard_at` = Empfangszeit − (Agent-`ts` − Agent-`heard_at`),
+  nie die absolute Agent-Uhr. Der Worker gated nur Pakete jünger als `max_gate_age_s` (sonst
+  `gate_skip="stale"`) und ist der **einzige** APRS-IS-Sprecher (`manage.py aprs_igate`, eigener
+  Compose-Service `aprs-igate` — das servers-Repo braucht ihn ebenfalls).
+- **Reliable Output = Epoch/Seq/Ack:** Der `DecoderHost` lebt im `ControlClient` (nicht im Broker);
+  Decoder laufen bei WS-Abbruch weiter, Frames werden gespoolt und nach Reconnect erneut gesendet,
+  `(station, epoch, seq)` dedupliziert. Beim Agent-Start stoppt `startup()` übrig gebliebene Units.
+- **Decoder = systemd-Template-Unit** `oe5xrx-decoder@<decoder>-slot<N>` (Env aus
+  `/run/oe5xrx/decoder/<instance>.env`). Die Image-Seite zieht per `pw-record --raw` (Default ist
+  ein AU-Header) und `node.dont-fallback=true` — ohne das fällt `--target` bei fehlendem Node
+  **still** auf die Default-Quelle zurück. `DecoderUnits.start` ruft vor `start` immer
+  `systemctl reset-failed` (sonst „start request repeated too quickly“ nach Start-Limit-Hit).
+- E2E-Referenz: `tests/test_passive_e2e.py` (echter Broker + DecoderHost + AprsDecoder mit Fake-KISS,
+  echter Consumer/Supervisor/Ingest, echter `IgateWorker` gegen Fake-APRS-IS).
+
 ## station-agent
 
 ### Control-Device Single-Owner-Invariante
