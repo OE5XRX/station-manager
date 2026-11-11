@@ -398,6 +398,31 @@ def test_packets_api_digi_positions_respect_window_and_cap(
 
 
 @pytest.mark.django_db
+def test_digi_calls_only_used_real_hops():
+    from apps.passive.views import _digi_calls
+
+    p = AprsPacket(path=["WIDE1-1", "DB0AAA", "DB0BBB*", "DB0UNUSED", "WIDE2-1", "qAR"])
+    assert _digi_calls([p]) == ["DB0AAA", "DB0BBB"]  # aliases + hops after the * are skipped
+    assert _digi_calls([AprsPacket(path=["WIDE1-1", "DB0X"])]) == []  # heard directly
+
+
+@pytest.mark.django_db
+def test_digi_position_not_crowded_out_by_chatty_digis(
+    client, applicant_user, station, monkeypatch, django_assert_max_num_queries
+):
+    monkeypatch.setattr("apps.passive.views.POSITION_SCAN", 3)
+    _packet(station, 1, source="DB0QUIET", latitude="48.0", longitude="14.0")
+    for i in range(2, 12):  # a chatty digi floods the newest rows
+        _packet(station, i, source="DB0CHATTY", latitude="48.5", longitude="14.5")
+    _packet(station, 20, path=["DB0QUIET*", "DB0CHATTY"], digipeated=True, source="OE5X-1")
+    _login(client, applicant_user)
+    with django_assert_max_num_queries(12):  # constant, not per digi
+        data = client.get(reverse("passive:aprs_packets")).json()
+    assert data["digi_positions"]["DB0QUIET"]["latitude"] == 48.0
+    assert data["digi_positions"]["DB0QUIET"]["heard_at"]
+
+
+@pytest.mark.django_db
 def test_packets_api_direct_param_limits_positions_to_directly_heard(
     client, applicant_user, station
 ):

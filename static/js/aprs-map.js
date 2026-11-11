@@ -213,7 +213,13 @@
       });
       markers.addLayer(m);
       markerBySource[source] = { marker: m, id: p.id, old: old };
-      if (reopen) m.openPopup();
+      if (reopen) {
+        // Carried over from the replaced marker: no map jump on every poll.
+        var pop = m.getPopup();
+        pop.options.autoPan = false;
+        m.openPopup();
+        pop.options.autoPan = true;
+      }
     });
   }
 
@@ -275,7 +281,11 @@
         if (data.packets.length) {
           packets = data.packets.concat(packets).slice(0, MAX_KEEP);
         }
-        Object.assign(digiPositions, data.digi_positions || {});
+        var dp = data.digi_positions || {};
+        Object.keys(dp).forEach(function (call) {
+          var cur = digiPositions[call];
+          if (!cur || Date.parse(dp[call].heard_at) >= Date.parse(cur.heard_at)) digiPositions[call] = dp[call];
+        });
         lastId = Math.max(lastId, data.last_id || 0);
         loaded = true;
         statusEl.textContent = "";

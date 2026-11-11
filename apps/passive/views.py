@@ -1,8 +1,9 @@
+import re
 from datetime import timedelta
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef
+from django.db.models import Count, Exists, Max, OuterRef
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -108,14 +109,24 @@ def _coord(value):
     return float(value) if value is not None else None
 
 
+# Generic path aliases are not stations (keep in sync with ALIAS in static/js/aprs-logic.js).
+_ALIAS = re.compile(
+    r"(WIDE|TRACE|RELAY|ECHO|GATE|TCPIP|TCPXX|NOGATE|RFONLY|TEMP|SGATE|CQ|Q[A-Z]{2})\d*(-\d+)?",
+    re.IGNORECASE,
+)
+
+
 def _digi_calls(packets):
-    """Distinct digipeater callsigns (``*`` stripped) in the paths of ``packets``, capped."""
+    """Distinct digipeater callsigns that actually repeated a packet (hops up to the last
+    ``*``, aliases skipped; only those can get a route vertex), capped."""
     calls = []
     seen = set()
     for p in packets:
-        for hop in p.path if isinstance(p.path, list) else []:
-            call = str(hop).rstrip("*")
-            if call and call not in seen:
+        path = [str(h) for h in p.path] if isinstance(p.path, list) else []
+        used = max((i for i, h in enumerate(path) if h.endswith("*")), default=-1)
+        for hop in path[: used + 1]:
+            call = hop.rstrip("*")
+            if call and call not in seen and not _ALIAS.fullmatch(call):
                 seen.add(call)
                 calls.append(call)
                 if len(calls) >= MAX_DIGI_CALLS:
@@ -127,11 +138,11 @@ def _digi_positions(calls, since):
     """Latest own-beacon position per digipeater callsign within the window.
 
     Only packets *sourced* by the digipeater count (never a position the digi merely relayed),
-    and objects/items are skipped: they place something else, not the digi itself."""
+    and objects/items are skipped: they place something else, not the digi itself. The newest
+    row per source is resolved in SQL, so a chatty digi cannot crowd out the others."""
     if not calls:
         return {}
-    found = {}
-    rows = (
+    newest = (
         AprsPacket.objects.filter(
             source__in=calls,
             heard_at__gte=since,
@@ -139,18 +150,18 @@ def _digi_positions(calls, since):
             longitude__isnull=False,
         )
         .exclude(packet_type__in=("object", "item"))
-        .order_by("-id")[:POSITION_SCAN]
+        .values("source")
+        .annotate(newest_id=Max("id"))
+        .values("newest_id")
     )
-    for p in rows:
-        found.setdefault(
-            p.source,
-            {
-                "latitude": float(p.latitude),
-                "longitude": float(p.longitude),
-                "heard_at": p.heard_at.isoformat(),
-            },
-        )
-    return found
+    return {
+        p.source: {
+            "latitude": float(p.latitude),
+            "longitude": float(p.longitude),
+            "heard_at": p.heard_at.isoformat(),
+        }
+        for p in AprsPacket.objects.filter(id__in=newest)
+    }
 
 
 def _packet_json(p):
