@@ -320,7 +320,8 @@ def test_ws_drop_resend_dedup(setup):
             assert (
                 await database_sync_to_async(PassiveServiceRun.objects.get)(station=station)
             ).pk == run.pk
-            assert "decoder_stop" not in agent.types()[mark:]  # no orphan stop, no restart
+            after = agent.types()[mark:]  # no orphan stop, no restart, no second start
+            assert "decoder_stop" not in after and "decoder_start" not in after
             assert agent.units.calls.count(("start", "aprs", 1)) == 1
         finally:
             await agent.close()
