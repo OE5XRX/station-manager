@@ -29,6 +29,7 @@ from .models import (
 
 MAX_PACKETS = 500
 POSITION_SCAN = 5000
+MAX_DIGI_CALLS = 300
 DEFAULT_HOURS = 24
 MAX_HOURS = 24 * 30
 
@@ -103,11 +104,62 @@ class AprsSettingsView(AreaPermissionMixin, View):
         return redirect(reverse("passive:aprs") + "#einstellungen")
 
 
+def _coord(value):
+    return float(value) if value is not None else None
+
+
+def _digi_calls(packets):
+    """Distinct digipeater callsigns (``*`` stripped) in the paths of ``packets``, capped."""
+    calls = []
+    seen = set()
+    for p in packets:
+        for hop in p.path if isinstance(p.path, list) else []:
+            call = str(hop).rstrip("*")
+            if call and call not in seen:
+                seen.add(call)
+                calls.append(call)
+                if len(calls) >= MAX_DIGI_CALLS:
+                    return calls
+    return calls
+
+
+def _digi_positions(calls, since):
+    """Latest own-beacon position per digipeater callsign within the window.
+
+    Only packets *sourced* by the digipeater count (never a position the digi merely relayed),
+    and objects/items are skipped: they place something else, not the digi itself."""
+    if not calls:
+        return {}
+    found = {}
+    rows = (
+        AprsPacket.objects.filter(
+            source__in=calls,
+            heard_at__gte=since,
+            latitude__isnull=False,
+            longitude__isnull=False,
+        )
+        .exclude(packet_type__in=("object", "item"))
+        .order_by("-id")[:POSITION_SCAN]
+    )
+    for p in rows:
+        found.setdefault(
+            p.source,
+            {
+                "latitude": float(p.latitude),
+                "longitude": float(p.longitude),
+                "heard_at": p.heard_at.isoformat(),
+            },
+        )
+    return found
+
+
 def _packet_json(p):
     return {
         "id": p.id,
         "station_id": p.station_id,
         "station_name": p.station.name,
+        "station_latitude": _coord(p.station.latitude),
+        "station_longitude": _coord(p.station.longitude),
         "heard_at": p.heard_at.isoformat(),
         "source": p.source,
         "packet_type": p.packet_type,
@@ -115,6 +167,8 @@ def _packet_json(p):
         "longitude": float(p.longitude) if p.longitude is not None else None,
         "symbol": p.symbol,
         "comment": p.comment,
+        "path": p.path if isinstance(p.path, list) else [],
+        "digipeated": p.digipeated,
         "raw_tnc2": p.raw_tnc2,
         "gated": p.gated_at is not None,
     }
@@ -141,8 +195,17 @@ class AprsPacketsView(AreaPermissionMixin, View):
             rows = list(qs.order_by("-id")[:MAX_PACKETS])
         packets = [_packet_json(p) for p in rows]
         payload = {"packets": packets, "last_id": rows[0].id if rows else after_id}
+        shown = list(rows)
         if not after_id:
-            payload["positions"] = [_packet_json(p) for p in self._latest_positions(qs)]
+            # ``direct=1``: the map only wants stations heard without a digipeater.
+            pos_qs = qs.filter(digipeated=False) if request.GET.get("direct") == "1" else qs
+            latest = self._latest_positions(pos_qs)
+            payload["positions"] = [_packet_json(p) for p in latest]
+            shown = latest + shown
+        # Digi lookup spans every station (a digi's beacon may be heard elsewhere), window only.
+        payload["digi_positions"] = _digi_positions(
+            _digi_calls(shown), timezone.now() - timedelta(hours=hours)
+        )
         return JsonResponse(payload)
 
     @staticmethod

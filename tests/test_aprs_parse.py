@@ -111,3 +111,9 @@ def test_header_trailing_newline_rejected():
 def test_mic_e_latitude_minutes_out_of_range_rejected():
     info = b"`" + bytes([12 + 28, 7 + 28, 74 + 28]) + b"   >/"
     assert parse_info(info, "4999YY").packet_type == "other"
+
+
+def test_symbol_table_and_code_survive_for_alternate_table_and_overlay():
+    # symbol = "<table-or-overlay><code>", which the map turns into sprite + overlay char
+    assert parse_info(b"!4812.34N\\01412.34E#x", "APRS").symbol == "\\#"
+    assert parse_info(b"!4812.34ND01412.34E#x", "APRS").symbol == "D#"

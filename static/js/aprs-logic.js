@@ -62,14 +62,128 @@
   }
 
   // Newest position per source callsign (packets without coordinates are ignored).
-  function latestPositions(packets) {
+  // opts.directOnly: only packets heard without a digipeater count.
+  function latestPositions(packets, opts) {
+    var directOnly = !!(opts && opts.directOnly);
     var map = new Map();
     (packets || []).forEach(function (p) {
       if (!hasPosition(p)) return;
+      if (directOnly && !isDirect(p)) return;
       var cur = map.get(p.source);
       if (!cur || ts(p) > ts(cur)) map.set(p.source, p);
     });
     return map;
+  }
+
+  // Generic path aliases are not stations: they never have a position of their own.
+  var ALIAS = /^(WIDE|TRACE|RELAY|ECHO|GATE|TCPIP|TCPXX|NOGATE|RFONLY|TEMP|SGATE|CQ|Q[A-Z]{2})\d*(-\d+)?$/i;
+
+  function isAlias(call) {
+    return ALIAS.test(String(call || ""));
+  }
+
+  // path: ["DB0ABC*", "WIDE2-1"]. The element carrying "*" is the last digipeater that
+  // repeated the packet; everything up to and including it was used, the rest is unused.
+  function parsePath(path) {
+    var hops = [];
+    var star = -1;
+    (Array.isArray(path) ? path : []).forEach(function (raw, i) {
+      var s = String(raw);
+      var starred = s.charAt(s.length - 1) === "*";
+      var call = starred ? s.slice(0, -1) : s;
+      if (starred) star = i;
+      hops.push({ call: call, starred: starred, used: false, alias: isAlias(call) });
+    });
+    hops.forEach(function (h, i) { h.used = i <= star; });
+    var usedReal = hops.filter(function (h) { return h.used && !h.alias; });
+    return {
+      hops: hops,
+      direct: star < 0,
+      // Station named in "über <DIGI>": the last real digipeater, else the alias that was used.
+      via: star < 0 ? null : (usedReal.length ? usedReal[usedReal.length - 1].call : hops[star].call),
+    };
+  }
+
+  function isDirect(p) {
+    return parsePath(p.path).direct;
+  }
+
+  // Station -> used digipeaters with a known position (path order) -> our hearing iGate.
+  // digiPositions: { CALL: {latitude, longitude} }. Digis without a position of their own
+  // beacon are left out of the line and reported in `missing`.
+  function buildRoute(p, digiPositions) {
+    var info = parsePath(p.path);
+    var pos = digiPositions || {};
+    var points = [];
+    var stops = []; // same order as points: what sits at each vertex
+    var missing = [];
+    function push(lat, lon, kind, label) {
+      var last = points[points.length - 1];
+      if (last && last[0] === lat && last[1] === lon) return;
+      points.push([lat, lon]);
+      stops.push({ kind: kind, label: label });
+    }
+    if (hasPosition(p)) push(Number(p.latitude), Number(p.longitude), "station", p.source);
+    info.hops.forEach(function (h) {
+      if (!h.used || h.alias) return;
+      var d = Object.prototype.hasOwnProperty.call(pos, h.call) ? pos[h.call] : null;
+      if (d && hasPosition(d)) push(Number(d.latitude), Number(d.longitude), "digi", h.call);
+      else if (missing.indexOf(h.call) < 0) missing.push(h.call);
+    });
+    var hasIgate = p.station_latitude !== null && p.station_latitude !== undefined &&
+      p.station_longitude !== null && p.station_longitude !== undefined;
+    if (hasIgate) push(Number(p.station_latitude), Number(p.station_longitude), "igate", p.station_name);
+    return {
+      points: points,
+      stops: stops,
+      missing: missing,
+      direct: info.direct,
+      via: info.via,
+      hasIgate: hasIgate,
+      drawable: hasPosition(p) && hasIgate && points.length >= 2,
+    };
+  }
+
+  // Every packet copy of the same transmission (same source, same payload, within 30 s of
+  // `p`): one entry per hearing iGate, newest copy per station.
+  function hearings(p, packets) {
+    var key = pathlessKey(p.raw_tnc2);
+    var byStation = {};
+    (packets || []).concat([p]).forEach(function (q) {
+      if (q.source !== p.source || pathlessKey(q.raw_tnc2) !== key) return;
+      if (Math.abs(ts(q) - ts(p)) > WINDOW_MS) return;
+      var cur = byStation[q.station_name];
+      if (!cur || ts(q) > ts(cur) || (ts(q) === ts(cur) && q.id === p.id)) byStation[q.station_name] = q;
+    });
+    return Object.keys(byStation).sort().map(function (k) { return byStation[k]; });
+  }
+
+  // APRS symbol "<table><code>" -> sprite cell. Table "/" primary, "\\" secondary,
+  // [0-9A-Z] secondary with that overlay character (a-j are the compressed-format
+  // spelling of 0-9). Anything else is unknown -> caller draws a fallback marker.
+  function symbolInfo(symbol) {
+    var s = String(symbol || "");
+    if (s.length !== 2) return null;
+    var table = s.charAt(0);
+    var code = s.charCodeAt(1);
+    if (code < 33 || code > 126) return null;
+    var overlay = null;
+    var sheet;
+    if (table === "/") sheet = 0;
+    else if (table === "\\") sheet = 1;
+    else {
+      if (table >= "a" && table <= "j") table = String.fromCharCode(table.charCodeAt(0) - 49);
+      if (!/^[0-9A-Z]$/.test(table)) return null;
+      sheet = 1;
+      overlay = table;
+    }
+    var idx = code - 33;
+    var cell = { sheet: sheet, col: idx % 16, row: Math.floor(idx / 16), overlay: null };
+    if (overlay !== null) {
+      var o = overlay.charCodeAt(0) - 33;
+      cell.overlay = { col: o % 16, row: Math.floor(o / 16) };
+    }
+    return cell;
   }
 
   function formatAge(seconds) {
@@ -84,6 +198,12 @@
     groupDuplicates: groupDuplicates,
     latestPositions: latestPositions,
     formatAge: formatAge,
+    parsePath: parsePath,
+    isDirect: isDirect,
+    isAlias: isAlias,
+    buildRoute: buildRoute,
+    hearings: hearings,
+    symbolInfo: symbolInfo,
     pathlessKey: pathlessKey,
   };
 });
