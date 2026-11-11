@@ -403,3 +403,74 @@ def test_user_apply_preset_and_scan_count_as_takeover():
     )
     c._note_user_set({"type": "scan_start", "entries": []})
     assert touched == {("1", "fm-1", "rx_frequency"), WILDCARD_TOUCH}
+
+
+async def _first_passive_frame(user, station_id):
+    browser = _browser(user, station_id)
+    assert (await browser.connect())[0] is True
+    try:
+        while True:
+            msg = await browser.receive_json_from(timeout=2)
+            if msg["type"] == "passive_state":
+                return msg
+    finally:
+        await browser.disconnect()
+
+
+def test_late_browser_gets_the_idle_reason_while_the_agent_is_connected(setup):
+    from apps.control.models import AgentConnection
+
+    station, user = setup
+    AgentConnection.objects.create(station=station, kind="control", channel_name="x")
+    # Opted in, agent connected, no module in the inventory: idle for a reason the
+    # operator should see even though this browser missed the live frame.
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", "no_module")
+
+
+def test_late_browser_gets_lock_held_reason(setup):
+    from django.utils import timezone
+
+    from apps.control.models import AgentConnection, ControlLock
+
+    station, user = setup
+    AgentConnection.objects.create(station=station, kind="control", channel_name="x")
+    ControlLock.objects.create(station=station, holder=user, acquired_at=timezone.now())
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", "lock_held")
+
+
+def test_quiet_station_sends_an_off_frame(setup):
+    # Agent offline: nothing worth showing, but the frame lets the panel drop any passive
+    # state it held from before a reconnect.
+    station, user = setup
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", None)
+
+
+def test_late_browser_sees_a_recent_start_failure(setup):
+    from django.utils import timezone
+
+    station, user = setup
+    PassiveServiceRun.objects.create(
+        station=station,
+        service="aprs",
+        slot="1",
+        state=State.ERROR,
+        last_error="no_rx_node",
+        ended_at=timezone.now(),
+    )
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", "no_rx_node")
+
+
+def test_failing_snapshot_still_sends_an_off_frame(setup, monkeypatch):
+    from apps.passive import status
+
+    def boom(station):
+        raise RuntimeError("db hiccup")
+
+    monkeypatch.setattr(status, "browser_frame", boom)
+    station, user = setup
+    msg = asyncio.run(_first_passive_frame(user, station.id))
+    assert (msg["state"], msg["reason"]) == ("off", None)

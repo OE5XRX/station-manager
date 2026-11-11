@@ -5,7 +5,13 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.repeaters.forms import normalize_tone
 
-from .models import AprsSettings, PassiveServiceConfig
+from .models import (
+    AprsSettings,
+    PassiveServiceConfig,
+    StationPassiveConfig,
+    is_valid_igate_callsign,
+    normalise_callsign,
+)
 
 
 def _number(**attrs):
@@ -150,3 +156,64 @@ class AprsSettingsForm(forms.ModelForm):
         if not 10 <= v <= 120:
             raise forms.ValidationError(_("Enter a value between 10 and 120."))
         return v
+
+
+class StationPassiveForm(forms.ModelForm):
+    """Per-station opt-in and iGate identity (shown on the station edit page, ``manage`` only)."""
+
+    class Meta:
+        model = StationPassiveConfig
+        fields = ["enabled", "igate_callsign", "igate_ssid"]
+        labels = {
+            "enabled": _("Passiv APRS mithören und gaten"),
+            "igate_callsign": _("iGate-Rufzeichen"),
+            "igate_ssid": _("SSID"),
+        }
+        widgets = {
+            "igate_callsign": forms.TextInput(
+                attrs={
+                    "class": "form-control mono",
+                    "placeholder": "OE5XRX",
+                    "maxlength": 6,
+                    "autocapitalize": "characters",
+                    "spellcheck": "false",
+                }
+            ),
+            # 10 is the usual iGate SSID: a hint only, never filled in for the user.
+            "igate_ssid": _number(min="0", max="15", step="1", placeholder="10"),
+        }
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("prefix", "passive")
+        super().__init__(*args, **kwargs)
+        # The model allows blank/NULL (opted out); "enabled" decides in clean().
+        self.fields["igate_callsign"].required = False
+        self.fields["igate_ssid"].required = False
+
+    def clean_igate_callsign(self):
+        return normalise_callsign(self.cleaned_data.get("igate_callsign") or "")
+
+    def clean(self):
+        cleaned = super().clean()
+        call = cleaned.get("igate_callsign") or ""
+        ssid = cleaned.get("igate_ssid")
+        if call and not is_valid_igate_callsign(call):
+            self.add_error("igate_callsign", _("Ungültiges Rufzeichen (ohne SSID, z. B. OE5XRX)."))
+            return cleaned
+        if cleaned.get("enabled"):
+            if not call and "igate_callsign" not in self.errors:
+                self.add_error("igate_callsign", _("Zum Aktivieren ist ein Rufzeichen nötig."))
+            if ssid is None and "igate_ssid" not in self.errors:
+                self.add_error("igate_ssid", _("Zum Aktivieren ist eine SSID nötig (0–15)."))
+        if call and ssid is not None and not self.errors:
+            clash = StationPassiveConfig.objects.filter(igate_callsign=call, igate_ssid=ssid)
+            if self.instance.pk:
+                clash = clash.exclude(pk=self.instance.pk)
+            other = clash.select_related("station").first()
+            if other is not None:
+                self.add_error(
+                    "igate_ssid",
+                    _("%(call)s-%(ssid)s gehört schon zur Station %(station)s.")
+                    % {"call": call, "ssid": ssid, "station": other.station.name},
+                )
+        return cleaned

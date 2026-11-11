@@ -17,6 +17,7 @@ TEST_FILES = [
     REPO_ROOT / "tests" / "js" / "control-logic.test.mjs",
     REPO_ROOT / "tests" / "js" / "control-panel-readonly.test.mjs",
     REPO_ROOT / "tests" / "js" / "control-panel-firmware.test.mjs",
+    REPO_ROOT / "tests" / "js" / "control-panel-passive.test.mjs",
 ]
 
 

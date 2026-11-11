@@ -104,6 +104,9 @@
       <button type="button" class="tab" data-tab="metrics" aria-selected="false">{% trans "Metrics" %}{% if metric_count %} <span class="count">{{ metric_count }}</span>{% endif %}</button>
       <button type="button" class="tab" data-tab="inventory" aria-selected="false">{% trans "Inventory" %}</button>
       <button type="button" class="tab" data-tab="telemetry" aria-selected="false">{% trans "Telemetry" %}</button>
+      {% if passive_badge %}
+      <button type="button" class="tab" data-tab="aprs" aria-selected="false">{% trans "APRS" %}</button>
+      {% endif %}
       {% if can.stations.manage %}
       <button type="button" class="tab" data-tab="audit" aria-selected="false">{% trans "Audit" %} <span class="count">{{ station.audit_logs.count }}</span></button>
       {% endif %}
@@ -363,6 +366,12 @@
     </section>
   </div>
 
+  {% if passive_badge %}
+  <div data-tab-panel="aprs" hidden>
+    {% include "passive/_station_aprs_tab.html" %}
+  </div>
+  {% endif %}
+
   <div data-tab-panel="telemetry" hidden>
     {% comment %} Telemetry: boot/power/slot/storage reported by the agent {% endcomment %}
     {% with tel=station.telemetry %}
@@ -547,11 +556,17 @@
 {% endblock %}
 
 {% block extra_head %}
+{% if passive_badge %}<link rel="stylesheet" href="{% static 'vendor/leaflet/leaflet.css' %}" nonce="{{ csp_nonce }}">{% endif %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" nonce="{{ csp_nonce }}">
 {% if metric_groups %}<link rel="stylesheet" href="{% static 'vendor/uplot/uPlot.min.css' %}" nonce="{{ csp_nonce }}">{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
+{% if passive_badge %}
+<script src="{% static 'vendor/leaflet/leaflet.js' %}" nonce="{{ csp_nonce }}"></script>
+<script src="{% static 'js/aprs-logic.js' %}" nonce="{{ csp_nonce }}"></script>
+<script src="{% static 'js/aprs-map.js' %}" nonce="{{ csp_nonce }}"></script>
+{% endif %}
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" nonce="{{ csp_nonce }}"></script>
 {% if metric_groups %}
 <script src="{% static 'vendor/uplot/uPlot.iife.min.js' %}" nonce="{{ csp_nonce }}" defer></script>

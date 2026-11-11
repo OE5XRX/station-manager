@@ -77,6 +77,11 @@
 
       txRoute: null,            // {slot, module} | null — mirrors store
 
+      // Passive APRS decoder running on the station: the RX mixer starts muted so
+      // the operator is not blasted with packet noise; the user may unmute.
+      passiveActive: false,
+      passiveUserUnmuted: false,
+
       levels: {},               // {[stream_id]: 0..1} for meters
       streamState: {},          // {[stream_id]: 'live'|'idle'|'error'} for badges
 
@@ -374,6 +379,11 @@
           var id = this.streams[i].stream_id;
           if (!this.mixer[id]) {
             this.mixer[id] = A.defaultMixerEntry();
+            // A stream that shows up while the passive run is on starts muted too.
+            if (this.passiveActive && !this.passiveUserUnmuted && A.isRxSource(this.streams[i])) {
+              this.mixer[id].muted = true;
+              this.mixer[id].passiveMuted = true;
+            }
           }
         }
 
@@ -772,8 +782,54 @@
 
       toggleMute: function (streamId) {
         if (!this.mixer[streamId]) this.mixer[streamId] = A.defaultMixerEntry();
-        this.mixer[streamId].muted = !this.mixer[streamId].muted;
+        var nowMuted = !this.mixer[streamId].muted;
+        this.mixer[streamId].muted = nowMuted;
+        delete this.mixer[streamId].passiveMuted; // the operator owns this mute now
+        // Unmuting during a passive run is a deliberate "let me listen in": the end of
+        // the run must not touch the mixer again.
+        if (this.passiveActive && !nowMuted) this.passiveUserUnmuted = true;
         this._applyGain(streamId);
+      },
+
+      // A passive_state frame (re-emitted by the control panel).
+      _onPassiveState: function (frame) {
+        var wasActive = this.passiveActive;
+        var d = window.OE5XRXControlLogic.passiveMuteDecision(
+          { active: this.passiveActive, userUnmuted: this.passiveUserUnmuted },
+          frame
+        );
+        this.passiveActive = d.active;
+        this.passiveUserUnmuted = d.userUnmuted;
+        if (d.muteNow) this.setPassiveMute(true);
+        // At the end of the run restore every stream still carrying the passive mute: a
+        // stream the operator touched dropped that flag, so it is left alone.
+        else if (wasActive && !d.active) this.setPassiveMute(false);
+      },
+
+      // "Mithören": unmute the RX streams the passive run muted and keep them that way.
+      passiveListenIn: function () {
+        this.passiveUserUnmuted = true;
+        this.setPassiveMute(false);
+      },
+
+      // Mute (or restore) every RX stream. Only streams the passive run muted itself
+      // are restored: a stream the operator had muted before stays muted.
+      setPassiveMute: function (active) {
+        for (var id in this.mixer) {
+          if (!Object.prototype.hasOwnProperty.call(this.mixer, id)) continue;
+          var entry = this._index.byId[id];
+          if (entry && !A.isRxSource(entry)) continue;
+          var m = this.mixer[id];
+          if (active) {
+            if (m.muted) continue;
+            m.muted = true;
+            m.passiveMuted = true;
+          } else if (m.passiveMuted) {
+            m.muted = false;
+          }
+          if (!active) delete m.passiveMuted;
+          this._applyGain(id);
+        }
       },
 
       _applyGain: function (streamId) {
@@ -825,10 +881,18 @@
               subs[sid] = this.subs[sid];
             }
           }
+          // A passive-imposed mute is not the operator's choice: persisting it would
+          // resurrect it as a permanent mute after the run ended.
+          var mixer = {};
+          for (var mid in this.mixer) {
+            if (!Object.prototype.hasOwnProperty.call(this.mixer, mid)) continue;
+            var m = this.mixer[mid];
+            mixer[mid] = { gainDb: m.gainDb, muted: !!m.muted && !m.passiveMuted };
+          }
           var data = {
             preset: this.preset,
             subs: subs,
-            mixer: this.mixer,
+            mixer: mixer,
           };
           localStorage.setItem(this._storageKey(), JSON.stringify(data));
         } catch (_) {}
@@ -857,6 +921,9 @@
         // Scanner panel: a scan listens on several slots at once, so follow it
         // with the RX streams of the slots it names (detail: {slots: ["1", ...]});
         // an empty list (scan over) takes them down again.
+        this._addListener(window, "control:passive_state", function (e) {
+          self._onPassiveState(e.detail);
+        });
         this._addListener(window, "scan:audio", function (e) {
           self._followScan((e.detail && e.detail.slots) || []);
         });

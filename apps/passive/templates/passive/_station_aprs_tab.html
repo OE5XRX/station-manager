@@ -1,0 +1,58 @@
+{% load i18n static %}
+{% comment %}
+  APRS tab of the station page: what this station heard while idle. aprs-map.js runs in its
+  embedded mode (data-station-id) and polls only while the panel is visible.
+{% endcomment %}
+<style nonce="{{ csp_nonce }}">
+  .aprs-station-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin-bottom:14px; }
+  .aprs-station-head .callsign { font-size:14px; }
+  .aprs-map { height:360px; border-radius:var(--radius-md); border:1px solid var(--line); background:var(--bg-2); }
+  .aprs-tag { font:600 11px/1 var(--font-mono); color:var(--on-accent-ink); background:var(--accent);
+    padding:3px 6px; border-radius:var(--radius-xs); white-space:nowrap; border:1px solid var(--accent-deep);
+    box-shadow:0 1px 3px color-mix(in srgb, var(--shadow-color) 55%, transparent); width:max-content; }
+  .aprs-tag.is-old { background:var(--bg-3); color:var(--ink-1); border-color:var(--line-bright); }
+  .aprs-log-raw { font:12px/1.4 var(--font-mono); color:var(--ink-1); word-break:break-all; }
+  .aprs-heard { font-size:12px; color:var(--ink-2); }
+  .aprs-empty { padding:28px 16px; text-align:center; color:var(--ink-2); }
+  .leaflet-container a { color:var(--accent-deep); }
+</style>
+<div id="aprs-root"
+     data-station-id="{{ station.pk }}"
+     data-packets-url="{% url 'passive:aprs_packets' %}">
+  <div class="aprs-station-head">
+    {% include "passive/_badge.html" with badge=passive_badge %}
+    {% if passive_call %}<span class="callsign" title="{% trans 'iGate-Rufzeichen' %}">{{ passive_call }}</span>
+    {% else %}<span class="aprs-heard">{% trans "Kein iGate-Rufzeichen: die Pakete werden gesammelt, aber nicht ins APRS-IS gegated." %}</span>{% endif %}
+    <span class="t-mono-sm t-muted" id="aprs-status" role="status" aria-live="polite"></span>
+  </div>
+
+  <section class="panel" style="margin-bottom:14px;">
+    <div class="panel-body flush">
+      <div id="aprs-map" class="aprs-map" role="region" aria-label="{% trans 'Karte der zuletzt gehörten Positionen' %}"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span><span>{% trans "Zuletzt gehört (24 Stunden)" %}</span></div>
+      <a class="t-label" href="{% url 'passive:aprs' %}">{% trans "Alle Stationen" %}</a>
+    </div>
+    <div class="panel-body flush">
+      <div class="table-wrap" style="border:none;border-radius:0;">
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>{% trans "Zeit" %}</th>
+              <th>{% trans "Quelle" %}</th>
+              <th>{% trans "Typ" %}</th>
+              <th>{% trans "Paket" %}</th>
+              <th>{% trans "Gehört von" %}</th>
+            </tr>
+          </thead>
+          <tbody id="aprs-log"></tbody>
+        </table>
+      </div>
+      <div id="aprs-log-empty" class="aprs-empty">{% trans "Seit 24 Stunden wurde nichts gehört. Der Dienst startet erst, wenn die Station im Leerlauf ist." %}</div>
+    </div>
+  </section>
+</div>

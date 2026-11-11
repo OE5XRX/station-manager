@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Exists, OuterRef
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -16,6 +16,7 @@ from apps.accounts.permissions import AreaPermissionMixin
 from apps.control.models import ControlLock
 from apps.stations.models import Station
 
+from . import status
 from .forms import AprsSettingsForm, HandoverProfileForm, PassiveServiceConfigForm
 from .models import (
     AprsPacket,
@@ -156,19 +157,29 @@ class AprsPacketsView(AreaPermissionMixin, View):
 
 
 def igate_state(station, config, run, lock_held) -> tuple[str, str]:
-    """(state, reason) for the iGates tab."""
+    """(state, reason) for the iGates tab.
+
+    ``run`` is the open ``PassiveServiceRun`` or, failing that, a recent errored one; the run
+    state decides first, the control lock only speaks for a station without a live run.
+    """
+    run_states = PassiveServiceRun.State
     if config is None or not config.enabled:
         return "not_opted_in", ""
     if not station.is_online:
         return "agent_offline", ""
-    if run is not None and run.state == PassiveServiceRun.State.RUNNING:
-        return "running", ""
+    if run is not None:
+        if run.state == run_states.RUNNING:
+            return "running", ""
+        if run.state == run_states.STARTING:
+            return "running", "startet"
+        if run.state == run_states.AGENT_OFFLINE:
+            return "agent_offline", ""
+        if run.state == run_states.STOPPING:
+            return ("in_use", "") if lock_held else ("idle", "beendet")
+        if run.state == run_states.ERROR and not lock_held:
+            return "error", run.last_error
     if lock_held:
         return "in_use", ""
-    if run is not None and run.state == PassiveServiceRun.State.ERROR:
-        return "error", run.last_error
-    if run is not None and run.state == PassiveServiceRun.State.AGENT_OFFLINE:
-        return "agent_offline", ""
     return "idle", ""
 
 
@@ -195,6 +206,16 @@ class AprsIgatesView(AreaPermissionMixin, View):
         }
         configs = {c.station_id: c for c in StationPassiveConfig.objects.all()}
         runs = {r.station_id: r for r in PassiveServiceRun.objects.filter(ended_at__isnull=True)}
+        # A recent errored run only counts while no newer run superseded it.
+        newer = PassiveServiceRun.objects.filter(
+            station_id=OuterRef("station_id"), started_at__gt=OuterRef("started_at")
+        )
+        errored = PassiveServiceRun.objects.filter(
+            state=PassiveServiceRun.State.ERROR,
+            ended_at__gte=timezone.now() - status.ERROR_VISIBLE,
+        ).filter(~Exists(newer))
+        for r in errored.order_by("started_at"):
+            runs.setdefault(r.station_id, r)
         held = set(
             ControlLock.objects.filter(scope="station", holder__isnull=False).values_list(
                 "station_id", flat=True

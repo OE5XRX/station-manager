@@ -283,8 +283,58 @@
     return String(slot) + " " + String(module);
   }
 
+  // -- Passive services (APRS decoder while the station idles) ---------------
+  // Reasons the supervisor publishes for a station that is set up but not running.
+  var PASSIVE_IDLE_TEXT = {
+    agent_too_old: "Agent unterstützt keine Decoder",
+    updating: "Station wird aktualisiert",
+    draining: "Station wird entleert",
+    lock_held: "Station in Benutzung",
+    idle_wait: "Wartet auf Leerlauf",
+    no_module: "Kein passendes Funkmodul",
+  };
+
+  // Badge for a `passive_state` frame: {label, level: ok|muted|off|error, detail}.
+  // Same wording as the server-rendered badge (apps/passive/status.py).
+  function passiveBadge(frame) {
+    var state = frame && frame.state;
+    var reason = (frame && frame.reason) || "";
+    if (state === "running") return { label: "Passiv: APRS aktiv", level: "ok", detail: "" };
+    if (state === "starting") return { label: "Passiv: APRS startet", level: "ok", detail: "" };
+    if (state === "stopping") return { label: "Passiv: in Benutzung", level: "muted", detail: "" };
+    if (state === "agent_offline") return { label: "Passiv: Agent offline", level: "off", detail: "" };
+    if (state === "error") {
+      return { label: "Passiv: Fehler: " + (reason || "unbekannt"), level: "error", detail: "" };
+    }
+    if (reason === "lock_held") return { label: "Passiv: in Benutzung", level: "muted", detail: "" };
+    // Idle ("off"): a known wait reason explains itself, any other code is a failed start.
+    if (reason && !PASSIVE_IDLE_TEXT[reason]) {
+      return { label: "Passiv: Fehler: " + reason, level: "error", detail: "" };
+    }
+    return { label: "Passiv: aus", level: "off", detail: PASSIVE_IDLE_TEXT[reason] || "" };
+  }
+
+  // Should the browser RX mixer be muted for this frame?
+  //   prev = {active, userUnmuted}; returns {active, userUnmuted, muteNow, unmuteNow}.
+  // Entering "running" mutes (and forgets an earlier unmute); while running the user's
+  // unmute is respected; leaving "running" restores only a mute the user never touched.
+  function passiveMuteDecision(prev, frame) {
+    var wasActive = !!(prev && prev.active);
+    var userUnmuted = !!(prev && prev.userUnmuted);
+    var running = !!frame && frame.state === "running";
+    if (running && !wasActive) {
+      return { active: true, userUnmuted: false, muteNow: true, unmuteNow: false };
+    }
+    if (!running && wasActive) {
+      return { active: false, userUnmuted: false, muteNow: false, unmuteNow: !userUnmuted };
+    }
+    return { active: wasActive, userUnmuted: userUnmuted, muteNow: false, unmuteNow: false };
+  }
+
   return {
     PROTOCOL_VERSION: PROTOCOL_VERSION,
+    passiveBadge: passiveBadge,
+    passiveMuteDecision: passiveMuteDecision,
     envelope: envelope,
     slotAddr: slotAddr,
     parseNumber: parseNumber,
