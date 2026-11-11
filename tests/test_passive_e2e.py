@@ -139,18 +139,32 @@ class Agent:
     def types(self):
         return [f["type"] for f in self.seen]
 
+    def check_pump(self):
+        """A crashed pump must fail the test loudly, not as a later 'never happened'."""
+        task = self._pump_task
+        if task is not None and task.done() and not task.cancelled() and task.exception():
+            raise task.exception()
+
     async def disconnect(self):
+        """Drop the WebSocket only; the host (and its decoders) live on. Idempotent."""
         self.host.detach()
-        self._pump_task.cancel()
-        await asyncio.gather(self._pump_task, return_exceptions=True)
-        await self.comm.disconnect()
+        if self._pump_task is not None:
+            self._pump_task.cancel()
+            await asyncio.gather(self._pump_task, return_exceptions=True)
+            self._pump_task = None
+        if self.comm is not None:
+            comm, self.comm = self.comm, None
+            await comm.disconnect()
 
     async def close(self):
+        await self.disconnect()
         await self.host.shutdown()
 
 
-async def until(pred, what, tries=200):
+async def until(pred, what, agent=None, tries=200):
     for _ in range(tries):
+        if agent is not None:
+            agent.check_pump()
         if await database_sync_to_async(pred)():
             return
         await asyncio.sleep(0.05)
@@ -194,59 +208,73 @@ def test_idle_station_runs_aprs_end_to_end(setup):
 
     async def scenario():
         agent = Agent(station.id)
-        await agent.connect()
-        # idle for longer than idle_minutes: profile commands -> decoder_start -> running
-        await until(run_state(station, State.RUNNING), "run running")
-        first = next(f for f in agent.seen if f.get("type") == "command")
-        assert (first["capability"], first["value"]) == ("frequency", 144.8)
-        assert agent.types().index("command") < agent.types().index("decoder_start")
-        assert agent.units.calls[-1] == ("start", "aprs", 1)
+        browsers = []
+        try:
+            await agent.connect()
+            # idle for longer than idle_minutes: profile commands -> decoder_start -> running
+            await until(run_state(station, State.RUNNING), "run running", agent)
+            first = next(f for f in agent.seen if f.get("type") == "command")
+            assert (first["capability"], first["value"]) == ("frequency", 144.8)
+            assert agent.types().index("command") < agent.types().index("decoder_start")
+            assert agent.units.calls[-1] == ("start", "aprs", 1)
 
-        agent.feed(direct, heard_at=agent.AGENT_NOW)
-        agent.feed(digi, heard_at=agent.AGENT_NOW)
-        agent.feed(old, heard_at=agent.AGENT_NOW - OLD_AGE_S)
-        await until(lambda: AprsPacket.objects.count() == 3, "3 packets stored")
-        await until(lambda: not agent.host._spool.pending(), "all 3 seqs acked")
-        assert sorted(f["seqs"][0] for f in agent.seen if f["type"] == "decoder_ack") == [1, 2, 3]
+            agent.feed(direct, heard_at=agent.AGENT_NOW)
+            agent.feed(digi, heard_at=agent.AGENT_NOW)
+            agent.feed(old, heard_at=agent.AGENT_NOW - OLD_AGE_S)
+            await until(lambda: AprsPacket.objects.count() == 3, "3 packets stored", agent)
+            await until(lambda: not agent.host._spool.pending(), "all 3 seqs acked", agent)
+            assert sorted(f["seqs"][0] for f in agent.seen if f["type"] == "decoder_ack") == [
+                1,
+                2,
+                3,
+            ]
 
-        # coverage: direct packets only (digipeated excluded), one cell
-        (cell,) = await database_sync_to_async(list)(CoverageCell.objects.filter(station=station))
-        assert cell.count == 2
+            # coverage: direct packets only (digipeated excluded), one cell
+            (cell,) = await database_sync_to_async(list)(
+                CoverageCell.objects.filter(station=station)
+            )
+            assert cell.count == 2
 
-        # the worker logs in once and gates exactly the two fresh packets
-        await worker.step()
-        (writer,) = net.writers
-        login, *rest = writer.lines
-        assert login.startswith("user OE5XRX-10 pass ")
-        gated = [ln for ln in rest if not ln.startswith("OE5XRX-10>")]  # drop the beacon
-        assert gated == [
-            "OE1ABC-9>APRS,qAR,OE5XRX-10:" + POSITION.decode(),
-            "OE1DEF>APRS,OE5XBL-10*,WIDE2-1,qAR,OE5XRX-10:" + POSITION.decode(),
-        ]
-        rows = {p.source: p for p in await database_sync_to_async(list)(AprsPacket.objects.all())}
-        assert rows["OE1GHI"].gate_skip == "stale" and rows["OE1GHI"].gated_at is None
-        assert rows["OE1ABC-9"].gated_at and rows["OE1DEF"].gated_at
-        await worker.step()  # nothing is gated twice
-        assert len(writer.lines) == len(login.splitlines()) + len(rest)
+            # the worker logs in once and gates exactly the two fresh packets
+            await worker.step()
+            (writer,) = net.writers
+            login, *rest = writer.lines
+            assert login.startswith("user OE5XRX-10 pass ")
+            gated = [ln for ln in rest if not ln.startswith("OE5XRX-10>")]  # drop the beacon
+            assert gated == [
+                "OE1ABC-9>APRS,qAR,OE5XRX-10:" + POSITION.decode(),
+                "OE1DEF>APRS,OE5XBL-10*,WIDE2-1,qAR,OE5XRX-10:" + POSITION.decode(),
+            ]
+            rows = {
+                p.source: p for p in await database_sync_to_async(list)(AprsPacket.objects.all())
+            }
+            assert rows["OE1GHI"].gate_skip == "stale" and rows["OE1GHI"].gated_at is None
+            assert rows["OE1ABC-9"].gated_at and rows["OE1DEF"].gated_at
+            before = len(writer.lines)
+            await worker.step()  # nothing is gated twice
+            assert len(writer.lines) == before and net.writers == [writer]
 
-        # a member takes the radio: decoder_stop first, then the hand-over profile
-        browser = _browser(user, station.id)
-        assert (await browser.connect())[0] is True
-        await browser.send_json_to({"type": "lock_acquire"})
-        await until(run_state(station, State.STOPPED), "run stopped")
-        types = agent.types()
-        stop_at = types.index("decoder_stop")
-        handover = [
-            (f["capability"], f["value"])
-            for f in agent.seen[stop_at:]
-            if f.get("type") == "command"
-        ]
-        assert handover[0] == ("frequency", 145.5) and ("squelch", 1) in handover
-        assert agent.units.calls[-1] == ("stop", "aprs", 1)
-        await browser.disconnect()
-        await agent.disconnect()
-        await agent.close()
-        await worker.shutdown()
+            # a member takes the radio: decoder_stop first, then the hand-over profile
+            browser = _browser(user, station.id)
+            browsers.append(browser)
+            assert (await browser.connect())[0] is True
+            await browser.send_json_to({"type": "lock_acquire"})
+            await until(run_state(station, State.STOPPED), "run stopped", agent)
+            types = agent.types()
+            stop_at = types.index("decoder_stop")
+            handover = [
+                (f["capability"], f["value"])
+                for f in agent.seen[stop_at:]
+                if f.get("type") == "command"
+            ]
+            assert handover[0] == ("frequency", 145.5) and ("squelch", 1) in handover
+            assert agent.units.calls[-1] == ("stop", "aprs", 1)
+
+        finally:
+            for browser in browsers:
+                await browser.disconnect()
+            await agent.close()
+            await worker.shutdown()
 
     asyncio.run(scenario())
     assert PassiveServiceRun.objects.get(station=station).end_reason == "acquired"
@@ -257,29 +285,45 @@ def test_ws_drop_resend_dedup(setup):
 
     async def scenario():
         agent = Agent(station.id)
-        # The decoder runs while there is no WebSocket: output is spooled, not lost.
-        await agent.host.start("aprs", 1, {}, "r1")
-        for i, who in enumerate(("OE1AAA", "OE1BBB")):
-            agent.feed(_ax25(who, "APRS", [], POSITION), heard_at=agent.AGENT_NOW - i)
-        await until(lambda: len(agent.host._spool.pending()) == 2, "2 frames spooled")
-        # One of them had already reached the server before the drop (ack lost).
-        await database_sync_to_async(AprsPacket.objects.create)(
-            station=station,
-            epoch="e2e",
-            seq=1,
-            heard_at=timezone.now(),
-            received_at=timezone.now(),
-            raw_tnc2="OE1AAA>APRS:" + POSITION.decode(),
-            source="OE1AAA",
-            destination="APRS",
-            path=[],
-            packet_type="position",
-        )
-        await agent.connect()  # on_connected resends the spool
-        await until(lambda: not agent.host._spool.pending(), "both resent frames acked")
-        assert sorted(f["seqs"][0] for f in agent.seen if f["type"] == "decoder_ack") == [1, 2]
-        await agent.disconnect()
-        await agent.close()
+        try:
+            await agent.connect()
+            await until(run_state(station, State.RUNNING), "run running", agent)
+            run = await database_sync_to_async(PassiveServiceRun.objects.get)(station=station)
+
+            # The WebSocket drops; the decoder keeps running and hears two packets.
+            await agent.disconnect()
+            await until(run_state(station, State.AGENT_OFFLINE), "run agent_offline")
+            for i, who in enumerate(("OE1AAA", "OE1BBB")):
+                agent.feed(_ax25(who, "APRS", [], POSITION), heard_at=agent.AGENT_NOW - i)
+            await until(lambda: len(agent.host._spool.pending()) == 2, "2 frames spooled")
+            # One of them had reached the server before the drop (its ack got lost).
+            await database_sync_to_async(AprsPacket.objects.create)(
+                station=station,
+                epoch="e2e",
+                seq=1,
+                heard_at=timezone.now(),
+                received_at=timezone.now(),
+                raw_tnc2="OE1AAA>APRS:" + POSITION.decode(),
+                source="OE1AAA",
+                destination="APRS",
+                path=[],
+                packet_type="position",
+            )
+
+            # Reconnect: snapshot, spool resend, both acked, the SAME run is running again.
+            mark = len(agent.seen)
+            await agent.connect()
+            await until(lambda: not agent.host._spool.pending(), "resent frames acked", agent)
+            await until(run_state(station, State.RUNNING), "run running again", agent)
+            acks = [f["seqs"][0] for f in agent.seen[mark:] if f["type"] == "decoder_ack"]
+            assert sorted(acks) == [1, 2]
+            assert (
+                await database_sync_to_async(PassiveServiceRun.objects.get)(station=station)
+            ).pk == run.pk
+            assert "decoder_stop" not in agent.types()[mark:]  # no orphan stop, no restart
+            assert agent.units.calls.count(("start", "aprs", 1)) == 1
+        finally:
+            await agent.close()
 
     asyncio.run(scenario())
     assert sorted(AprsPacket.objects.values_list("seq", flat=True)) == [1, 2]
