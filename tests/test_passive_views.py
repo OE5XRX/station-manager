@@ -131,7 +131,7 @@ def test_packets_api_after_id_and_station_filter(client, applicant_user, station
     assert [p["id"] for p in client.get(url, {"after_id": p1.id}).json()["packets"]] == [p2.id]
     assert [p["id"] for p in client.get(url, {"station": s1.id}).json()["packets"]] == [p1.id]
     empty = client.get(url, {"after_id": p2.id}).json()
-    assert empty == {"packets": [], "last_id": p2.id}
+    assert empty == {"packets": [], "last_id": p2.id, "digi_positions": {}}
 
 
 @pytest.mark.django_db
@@ -324,3 +324,182 @@ def test_browser_frame_is_cheap_for_unconfigured_station(station, django_assert_
     # open run lookup + recent error lookup only: no config get_or_create, no lock queries
     with django_assert_num_queries(2):
         assert browser_frame(station)["reason"] is None
+
+
+@pytest.mark.django_db
+def test_packets_api_exposes_path_symbol_and_igate_coordinates(client, applicant_user, station):
+    station.latitude, station.longitude = "47.5", "13.25"
+    station.save()
+    _packet(
+        station,
+        1,
+        path=["DB0ABC*", "WIDE2-1"],
+        digipeated=True,
+        symbol="/>",
+        latitude="48.1",
+        longitude="14.1",
+    )
+    row = _login(client, applicant_user).get(reverse("passive:aprs_packets")).json()["packets"][0]
+    assert row["path"] == ["DB0ABC*", "WIDE2-1"]
+    assert row["digipeated"] is True
+    assert row["symbol"] == "/>"
+    assert (row["station_latitude"], row["station_longitude"]) == (47.5, 13.25)
+
+
+@pytest.mark.django_db
+def test_packets_api_digi_positions_from_own_beacons_only(client, applicant_user, station_factory):
+    heard_by, other = station_factory(), station_factory()
+    # the digi's own beacon was heard by a *different* station than the one filtered on
+    _packet(other, 1, source="DB0ABC", latitude="48.0", longitude="14.0", packet_type="position")
+    # an object *named* like the digi but sent by someone else does not count (source differs)
+    _packet(other, 2, source="OE5OBJ", latitude="10.0", longitude="10.0", packet_type="object")
+    # an object sourced by the digi places something else, never the digi itself
+    _packet(other, 3, source="DB0ABC", latitude="1.0", longitude="1.0", packet_type="object")
+    _packet(
+        heard_by,
+        4,
+        source="OE5POS-1",
+        path=["DB0ABC*", "DB0NOPOS", "WIDE2-1"],
+        digipeated=True,
+        latitude="48.2",
+        longitude="14.2",
+        packet_type="position",
+    )
+    data = (
+        _login(client, applicant_user)
+        .get(reverse("passive:aprs_packets"), {"station": heard_by.pk})
+        .json()
+    )
+    assert set(data["digi_positions"]) == {"DB0ABC"}  # DB0NOPOS never beaconed a position
+    assert data["digi_positions"]["DB0ABC"]["latitude"] == 48.0
+    # incremental polls carry it too, for the new packets' paths
+    inc = client.get(reverse("passive:aprs_packets"), {"after_id": 3}).json()
+    assert "DB0ABC" in inc["digi_positions"]
+
+
+@pytest.mark.django_db
+def test_packets_api_digi_positions_respect_window_and_cap(
+    client, applicant_user, station, monkeypatch
+):
+    old = timezone.now() - timedelta(hours=5)
+    _packet(station, 1, source="DB0OLD", latitude="48.0", longitude="14.0", heard_at=old)
+    _packet(station, 2, path=["DB0OLD*"], digipeated=True)
+    assert (
+        _login(client, applicant_user)
+        .get(reverse("passive:aprs_packets"), {"hours": 1})
+        .json()["digi_positions"]
+        == {}
+    )
+    monkeypatch.setattr("apps.passive.views.MAX_DIGI_CALLS", 1)
+    _packet(station, 3, path=["A1*", "B2"], digipeated=True)
+    from apps.passive.views import _digi_calls
+
+    assert _digi_calls(AprsPacket.objects.filter(seq=3)) == ["A1"]
+
+
+@pytest.mark.django_db
+def test_digi_calls_only_used_real_hops():
+    from apps.passive.views import _digi_calls
+
+    p = AprsPacket(path=["WIDE1-1", "DB0AAA", "DB0BBB*", "DB0UNUSED", "WIDE2-1", "qAR"])
+    assert _digi_calls([p]) == ["DB0AAA", "DB0BBB"]  # aliases + hops after the * are skipped
+    assert _digi_calls([AprsPacket(path=["WIDE1-1", "DB0X"])]) == []  # heard directly
+
+
+@pytest.mark.django_db
+def test_digi_position_not_crowded_out_by_chatty_digis(
+    client, applicant_user, station, monkeypatch, django_assert_max_num_queries
+):
+    monkeypatch.setattr("apps.passive.views.POSITION_SCAN", 3)
+    _packet(station, 1, source="DB0QUIET", latitude="48.0", longitude="14.0")
+    for i in range(2, 12):  # a chatty digi floods the newest rows
+        _packet(station, i, source="DB0CHATTY", latitude="48.5", longitude="14.5")
+    _packet(station, 20, path=["DB0QUIET*", "DB0CHATTY"], digipeated=True, source="OE5X-1")
+    _login(client, applicant_user)
+    with django_assert_max_num_queries(12):  # constant, not per digi
+        data = client.get(reverse("passive:aprs_packets")).json()
+    assert data["digi_positions"]["DB0QUIET"]["latitude"] == 48.0
+    assert data["digi_positions"]["DB0QUIET"]["heard_at"]
+
+
+@pytest.mark.django_db
+def test_packets_api_direct_param_limits_positions_to_directly_heard(
+    client, applicant_user, station
+):
+    _packet(station, 1, source="OE5DIR", latitude="48.1", longitude="14.1")
+    _packet(
+        station,
+        2,
+        source="OE5VIA",
+        latitude="48.2",
+        longitude="14.2",
+        path=["D*"],
+        digipeated=True,
+    )
+    _login(client, applicant_user)
+    url = reverse("passive:aprs_packets")
+    both = client.get(url).json()["positions"]
+    assert {p["source"] for p in both} == {"OE5DIR", "OE5VIA"}
+    direct = client.get(url, {"direct": "1"}).json()
+    assert {p["source"] for p in direct["positions"]} == {"OE5DIR"}
+    assert len(direct["packets"]) == 2  # the log itself is not filtered
+
+
+_REPO = Path(__file__).resolve().parent.parent
+
+
+def test_aprs_map_container_is_isolated_from_sidebar_stacking():
+    """Leaflet panes use z-index 400-1000; the mobile sidebar drawer is z 200 (backdrop 150).
+    The map must be its own stacking context or it paints over the open drawer on iOS."""
+    css = (_REPO / "static/css/aprs-map.css").read_text()
+    rule = re.search(r"\.aprs-map\s*\{([^}]*)\}", css)
+    assert rule and "isolation: isolate" in rule.group(1)
+    assert re.search(r"z-index:\s*0", rule.group(1))
+    for tpl in (
+        "apps/passive/templates/passive/aprs.html",
+        "apps/stations/templates/stations/station_detail.html",
+    ):
+        assert "css/aprs-map.css" in (_REPO / tpl).read_text(), tpl
+
+
+def test_aprs_symbol_sheets_vendored_with_license():
+    d = _REPO / "static/vendor/aprs-symbols"
+    for i in range(3):
+        assert (d / f"aprs-symbols-24-{i}@2x.png").stat().st_size > 1000
+    assert (d / "COPYRIGHT.md").exists()
+    for tpl in ("aprs.html", "_station_aprs_tab.html"):
+        text = (_REPO / "apps/passive/templates/passive" / tpl).read_text()
+        for i in range(3):
+            assert f"aprs-symbols-24-{i}@2x.png" in text
+
+
+def test_aprs_map_js_has_no_external_requests_beyond_tiles():
+    js = (_REPO / "static/js/aprs-map.js").read_text()
+    urls = set(re.findall(r"https?://[^\s\"')]+", js))
+    # tiles are fetched; the GitHub URL is only the attribution link, never requested
+    assert urls <= {
+        "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://github.com/hessu/aprs-symbols",
+    }
+
+
+def test_aprs_map_attribution_keeps_osm_and_credits_symbol_set():
+    js = (_REPO / "static/js/aprs-map.js").read_text()
+    assert "© OpenStreetMap contributors" in js  # tile usage policy
+    assert 'href="https://github.com/hessu/aprs-symbols"' in js
+    assert "APRS symbols:" in js
+    assert 'target="_blank" rel="noopener noreferrer"' in js
+    assert "attributionControl" in js
+
+
+def test_alias_regex_python_and_js_stay_in_sync():
+    from apps.passive.views import _ALIAS
+
+    js = (_REPO / "static/js/aprs-logic.js").read_text()
+    m = re.search(r"var ALIAS = /\^\((.*?)\)\\d\*\(-\\d\+\)\?\$/i;", js)
+    assert m, "ALIAS regex not found in aprs-logic.js"
+    assert _ALIAS.pattern == f"({m.group(1)})\\d*(-\\d+)?"  # identical alternation + tail
+    for alias in ("WIDE2-1", "wide1", "TRACE3-3", "RELAY", "TCPIP", "qAR", "CQ"):
+        assert _ALIAS.fullmatch(alias), alias
+    for call in ("DB0ABC", "OE5XRX-5", "WIDEX1"):
+        assert not _ALIAS.fullmatch(call), call

@@ -1,0 +1,48 @@
+/* APRS map (central page + station tab). Loaded next to vendor/leaflet/leaflet.css. */
+
+/* Leaflet panes/controls use z-index 400-1000. Without their own stacking context they
+   paint over the mobile sidebar drawer (z 200) and its backdrop (z 150) on iOS. */
+.aprs-map { position: relative; z-index: 0; isolation: isolate; }
+
+/* Marker: 24 px symbol sprite (48 px @2x sheet scaled down) + callsign label to its right. */
+.aprs-pin { display: flex; align-items: center; gap: 4px; width: max-content; transform: translate(-12px, -12px); }
+.aprs-sym { position: relative; flex: none; width: 24px; height: 24px;
+  background-repeat: no-repeat; background-size: 384px 144px;
+  filter: drop-shadow(0 0 1px var(--sheen-color)) drop-shadow(0 1px 2px color-mix(in srgb, var(--shadow-color) 55%, transparent)); }
+.aprs-sym-overlay { position: absolute; inset: 0; background-repeat: no-repeat; background-size: 384px 144px; }
+.aprs-sym-unknown { border-radius: 50%; border: 2px solid var(--accent-deep); background: var(--accent); }
+.aprs-call { font: 600 11px/1 var(--font-mono); color: var(--ink-0); background: color-mix(in srgb, var(--bg-1) 88%, transparent);
+  padding: 3px 5px; border-radius: var(--radius-xs); border: 1px solid var(--accent-deep); white-space: nowrap; }
+
+/* Heard directly = solid and strong; relayed by a digipeater = faded with a dashed label. */
+.aprs-pin.is-digi { opacity: .62; }
+.aprs-pin.is-digi .aprs-call { border-style: dashed; border-color: var(--line-hot); color: var(--ink-1); }
+.aprs-pin.is-digi .aprs-sym { filter: grayscale(.35) drop-shadow(0 0 1px var(--sheen-color)); }
+.aprs-pin.is-old { opacity: .45; }
+.aprs-pin.is-old .aprs-call { border-color: var(--line-bright); color: var(--ink-2); }
+.aprs-pin.is-selected .aprs-call { background: var(--accent); color: var(--on-accent-ink); }
+
+.aprs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.aprs-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-1); cursor: pointer; }
+
+/* Popup (all content is built with textContent). */
+.aprs-pop { min-width: 220px; max-width: 300px; font-size: 12px; line-height: 1.45; color: var(--ink-0); }
+.aprs-pop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.aprs-pop-head .aprs-sym { filter: none; }
+.aprs-pop-call { font: 600 14px/1.2 var(--font-mono); }
+.aprs-pop-sub { color: var(--ink-2); font-size: 11px; }
+.aprs-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; }
+.aprs-pop dt { color: var(--ink-2); }
+.aprs-pop dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.aprs-pop-path { font-family: var(--font-mono); }
+.aprs-pop-path .is-used { color: var(--ink-0); }
+.aprs-pop-path .is-unused { color: var(--ink-3); }
+.aprs-pop-path .is-star { font-weight: 700; color: var(--accent-deep); background: var(--accent-tint);
+  border-radius: var(--radius-xs); padding: 0 2px; }
+.aprs-pop-via { display: block; margin-top: 2px; font-family: var(--font-body); color: var(--ink-1); }
+.aprs-pop-note { margin-top: 6px; color: var(--warn); }
+.aprs-pop details { margin-top: 8px; }
+.aprs-pop summary { cursor: pointer; color: var(--ink-1); }
+.aprs-pop pre { margin: 4px 0 0; padding: 6px; max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 11px/1.4 var(--font-mono); background: var(--bg-2); border-radius: var(--radius-xs); color: var(--ink-1); }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--bg-1); color: var(--ink-0); }

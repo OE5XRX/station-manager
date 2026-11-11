@@ -35,6 +35,10 @@
     maxZoom: 18,
     attribution: "© OpenStreetMap contributors",
   }).addTo(map);
+  // Static, trusted constant (never packet data). The OSM attribution above must stay.
+  map.attributionControl.addAttribution(
+    'APRS symbols: <a href="https://github.com/hessu/aprs-symbols" target="_blank" rel="noopener noreferrer">hessu/aprs-symbols</a>'
+  );
   var markers = L.layerGroup().addTo(map);
 
   function el(tag, cls, text) {
@@ -55,34 +59,180 @@
   }
 
   var markerBySource = {};
+  var digiPositions = {};
+  var directOnlyEl = document.getElementById("aprs-direct-only");
+  var routeLayer = L.layerGroup().addTo(map);
+  var selectedSource = null;
+  // Sprite sheet URLs come from {% static %} (hashed names under WhiteNoise manifest storage).
+  var SHEETS = [root.dataset.symbols0, root.dataset.symbols1, root.dataset.symbols2];
+
+  function directOnly() {
+    return !!(directOnlyEl && directOnlyEl.checked);
+  }
+
+  // 24 px cell of a 48 px/cell @2x sprite sheet (background-size is set in CSS).
+  function spriteLayer(cls, sheet, col, row) {
+    var n = el("span", cls);
+    n.style.backgroundImage = "url(" + SHEETS[sheet] + ")";
+    n.style.backgroundPosition = (-col * 24) + "px " + (-row * 24) + "px";
+    return n;
+  }
+
+  // Standard APRS symbol with overlay character; unknown symbol -> plain dot.
+  function symbolNode(symbol) {
+    var info = Logic.symbolInfo(symbol);
+    if (!info) return el("span", "aprs-sym aprs-sym-unknown");
+    var n = spriteLayer("aprs-sym", info.sheet, info.col, info.row);
+    if (info.overlay) n.appendChild(spriteLayer("aprs-sym-overlay", 2, info.overlay.col, info.overlay.row));
+    return n;
+  }
+
+  function pinNode(p, source, old, selected) {
+    var pin = el("div", "aprs-pin" + (Logic.isDirect(p) ? "" : " is-digi") + (old ? " is-old" : "") + (selected ? " is-selected" : ""));
+    pin.appendChild(symbolNode(p.symbol));
+    pin.appendChild(el("span", "aprs-call", source));
+    return pin;
+  }
+
+  function row(dl, label, value) {
+    dl.appendChild(el("dt", "", label));
+    var dd = el("dd");
+    if (value instanceof Node) dd.appendChild(value);
+    else dd.textContent = value;
+    dl.appendChild(dd);
+  }
+
+  function pathNode(p) {
+    var info = Logic.parsePath(p.path);
+    var wrap = el("span");
+    var box = el("span", "aprs-pop-path");
+    if (!info.hops.length) box.textContent = "–";
+    info.hops.forEach(function (h, i) {
+      if (i) box.appendChild(document.createTextNode(","));
+      var cls = h.starred ? "is-star" : (h.used ? "is-used" : "is-unused");
+      box.appendChild(el("span", cls, h.call + (h.starred ? "*" : "")));
+    });
+    wrap.appendChild(box);
+    wrap.appendChild(el("span", "aprs-pop-via", info.direct ? "direkt gehört" : "über " + info.via));
+    return wrap;
+  }
+
+  function popupContent(p, source) {
+    var pop = el("div", "aprs-pop");
+    var head = el("div", "aprs-pop-head");
+    head.appendChild(symbolNode(p.symbol));
+    var title = el("div");
+    title.appendChild(el("div", "aprs-pop-call", source));
+    title.appendChild(el("div", "aprs-pop-sub", p.symbol ? "Symbol " + p.symbol : "Kein Symbol"));
+    head.appendChild(title);
+    pop.appendChild(head);
+
+    var hear = Logic.hearings(p, packets.concat(positions));
+    var dl = el("dl");
+    row(dl, "Zuletzt", new Date(p.heard_at).toLocaleString("de-AT") + " (vor " + Logic.formatAge(ageS(p.heard_at)) + ")");
+    row(dl, "Gehört von", hear.map(function (h) { return h.station_name; }).join(", "));
+    row(dl, "Pfad", pathNode(p));
+    if (p.comment) row(dl, "Kommentar", p.comment);
+    pop.appendChild(dl);
+
+    var notes = [];
+    hear.forEach(function (h) {
+      var r = Logic.buildRoute(routeInput(p, h), digiPositions);
+      if (r.missing.length) notes.push(h.station_name + ": Position unbekannt für " + r.missing.join(", ") + " – Linie ohne diese Hops.");
+      if (!r.hasIgate) notes.push(h.station_name + " hat keine Koordinaten – keine Linie.");
+    });
+    notes.forEach(function (t) { pop.appendChild(el("div", "aprs-pop-note", t)); });
+
+    var det = el("details");
+    det.appendChild(el("summary", "", "Rohpaket (TNC2)"));
+    det.appendChild(el("pre", "", p.raw_tnc2));
+    pop.appendChild(det);
+    return pop;
+  }
+
+  // One transmission, one iGate copy: position from the newest packet, path from the copy.
+  function routeInput(p, h) {
+    return Object.assign({}, h, { latitude: p.latitude, longitude: p.longitude, source: p.source });
+  }
+
+  // Route colors come from the design tokens (theme-aware), never raw literals.
+  function token(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function drawRoutes(p) {
+    var cDirect = token("--accent"), cDigi = token("--warn"), cGate = token("--signal"), cRim = token("--on-accent-ink");
+    routeLayer.clearLayers();
+    Logic.hearings(p, packets.concat(positions)).forEach(function (h) {
+      var r = Logic.buildRoute(routeInput(p, h), digiPositions);
+      if (!r.drawable) return;
+      L.polyline(r.points, {
+        color: r.direct ? cDirect : cDigi, weight: 3, opacity: 0.9,
+        dashArray: r.direct ? null : "8 6", interactive: false,
+      }).addTo(routeLayer);
+      r.points.forEach(function (pt, i) {
+        var stop = r.stops[i];
+        if (stop.kind === "station") return;
+        var dot = L.circleMarker(pt, {
+          radius: stop.kind === "digi" ? 5 : 6, weight: 2, color: cRim,
+          fillColor: stop.kind === "digi" ? cDigi : cGate, fillOpacity: 1,
+        }).addTo(routeLayer);
+        dot.bindTooltip(el("span", "", (stop.kind === "digi" ? "Digi " : "iGate ") + stop.label));
+      });
+    });
+  }
 
   // Diff against existing markers so an open popup survives a poll.
   function renderMap() {
-    var latest = Logic.latestPositions(packets.concat(positions));
+    var latest = Logic.latestPositions(packets.concat(positions), { directOnly: directOnly() });
     Object.keys(markerBySource).forEach(function (src) {
       if (!latest.has(src)) {
         markers.removeLayer(markerBySource[src].marker);
         delete markerBySource[src];
+        if (selectedSource === src) { selectedSource = null; routeLayer.clearLayers(); }
       }
     });
     latest.forEach(function (p, source) {
       var old = ageS(p.heard_at) > OLD_S;
       var cur = markerBySource[source];
       if (cur && cur.id === p.id && cur.old === old) return;
+      var reopen = !!(cur && cur.marker.isPopupOpen());
       if (cur) markers.removeLayer(cur.marker);
-      var tag = el("div", "aprs-tag" + (old ? " is-old" : ""), source);
-      var icon = L.divIcon({ className: "", html: tag, iconSize: null });
-      var m = L.marker([p.latitude, p.longitude], { icon: icon, title: source, keyboard: false });
-      m.bindPopup(function () {
-        var pop = el("div");
-        pop.appendChild(el("strong", "", source));
-        pop.appendChild(el("div", "", Logic.formatAge(ageS(p.heard_at)) + " · " + p.station_name));
-        if (p.comment) pop.appendChild(el("div", "", p.comment));
-        return pop;
+      var icon = L.divIcon({ className: "", html: pinNode(p, source, old, selectedSource === source), iconSize: null });
+      var m = L.marker([p.latitude, p.longitude], { icon: icon, title: source, keyboard: true });
+      m.bindPopup(function () { return popupContent(p, source); }, { maxWidth: 320 });
+      m.on("popupopen", function () {
+        selectedSource = source;
+        setSelected(m, true);
+        drawRoutes(p);
+      });
+      m.on("popupclose", function () {
+        setSelected(m, false);
+        // Replacing a marker closes its popup right before it is reopened on the new one.
+        setTimeout(function () {
+          var c = markerBySource[source];
+          if (selectedSource === source && !(c && c.marker.isPopupOpen())) {
+            selectedSource = null;
+            routeLayer.clearLayers();
+          }
+        }, 0);
       });
       markers.addLayer(m);
       markerBySource[source] = { marker: m, id: p.id, old: old };
+      if (reopen) {
+        // Carried over from the replaced marker: no map jump on every poll.
+        var pop = m.getPopup();
+        pop.options.autoPan = false;
+        m.openPopup();
+        pop.options.autoPan = true;
+      }
     });
+  }
+
+  function setSelected(m, on) {
+    var node = m.getElement && m.getElement();
+    var pin = node && node.querySelector(".aprs-pin");
+    if (pin) pin.classList.toggle("is-selected", on);
   }
 
   function renderLog() {
@@ -106,6 +256,7 @@
     var q = "?hours=" + encodeURIComponent(hoursSel.value);
     if (stationSel.value) q += "&station=" + encodeURIComponent(stationSel.value);
     if (afterId) q += "&after_id=" + afterId;
+    if (directOnly()) q += "&direct=1";
     return root.dataset.packetsUrl + q;
   }
 
@@ -125,6 +276,9 @@
         if (reset) {
           packets = [];
           positions = data.positions || [];
+          digiPositions = {};
+          selectedSource = null;
+          routeLayer.clearLayers();
           Object.keys(markerBySource).forEach(function (k) {
             markers.removeLayer(markerBySource[k].marker);
           });
@@ -133,6 +287,11 @@
         if (data.packets.length) {
           packets = data.packets.concat(packets).slice(0, MAX_KEEP);
         }
+        var dp = data.digi_positions || {};
+        Object.keys(dp).forEach(function (call) {
+          var cur = digiPositions[call];
+          if (!cur || Date.parse(dp[call].heard_at) >= Date.parse(cur.heard_at)) digiPositions[call] = dp[call];
+        });
         lastId = Math.max(lastId, data.last_id || 0);
         loaded = true;
         statusEl.textContent = "";
@@ -208,6 +367,7 @@
 
   stationSel.addEventListener("change", reload);
   hoursSel.addEventListener("change", reload);
+  if (directOnlyEl) directOnlyEl.addEventListener("change", reload);
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden) tick();
   });

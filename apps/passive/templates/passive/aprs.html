@@ -13,14 +13,11 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{% static 'vendor/leaflet/leaflet.css' %}" nonce="{{ csp_nonce }}">
+<link rel="stylesheet" href="{% static 'css/aprs-map.css' %}" nonce="{{ csp_nonce }}">
 <style nonce="{{ csp_nonce }}">
+  .aprs-map { height:460px; border-radius:var(--radius-md); border:1px solid var(--line); background:var(--bg-2); }
   .aprs-toolbar { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:14px; }
   .aprs-toolbar .form-group { margin:0; min-width:150px; }
-  .aprs-map { height:460px; border-radius:var(--radius-md); border:1px solid var(--line); background:var(--bg-2); }
-  .aprs-tag { font:600 11px/1 var(--font-mono); color:var(--on-accent-ink); background:var(--accent);
-    padding:3px 6px; border-radius:var(--radius-xs); white-space:nowrap; border:1px solid var(--accent-deep);
-    box-shadow:0 1px 3px color-mix(in srgb, var(--shadow-color) 55%, transparent); width:max-content; }
-  .aprs-tag.is-old { background:var(--bg-3); color:var(--ink-1); border-color:var(--line-bright); }
   .aprs-log-raw { font:12px/1.4 var(--font-mono); color:var(--ink-1); word-break:break-all; }
   .aprs-heard { font-size:12px; color:var(--ink-2); }
   .aprs-empty { padding:28px 16px; text-align:center; color:var(--ink-2); }
@@ -41,6 +38,9 @@
 </div>
 
 <div id="aprs-root"
+     data-symbols-0="{% static 'vendor/aprs-symbols/aprs-symbols-24-0@2x.png' %}"
+     data-symbols-1="{% static 'vendor/aprs-symbols/aprs-symbols-24-1@2x.png' %}"
+     data-symbols-2="{% static 'vendor/aprs-symbols/aprs-symbols-24-2@2x.png' %}"
      data-packets-url="{% url 'passive:aprs_packets' %}"
      data-igates-url="{% url 'passive:aprs_igates' %}"
      data-initial-tab="{{ active_tab }}">
@@ -72,6 +72,7 @@
           <option value="168">{% trans "Letzte 7 Tage" %}</option>
         </select>
       </div>
+      <label class="aprs-check"><input type="checkbox" id="aprs-direct-only"> {% trans "Nur direkt gehört" %}</label>
       <span class="t-mono-sm t-muted" id="aprs-status" role="status" aria-live="polite"></span>
     </div>
 

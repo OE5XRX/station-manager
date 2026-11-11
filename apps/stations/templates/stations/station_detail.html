@@ -556,7 +556,8 @@
 {% endblock %}
 
 {% block extra_head %}
-{% if passive_badge %}<link rel="stylesheet" href="{% static 'vendor/leaflet/leaflet.css' %}" nonce="{{ csp_nonce }}">{% endif %}
+{% if passive_badge %}<link rel="stylesheet" href="{% static 'vendor/leaflet/leaflet.css' %}" nonce="{{ csp_nonce }}">
+<link rel="stylesheet" href="{% static 'css/aprs-map.css' %}" nonce="{{ csp_nonce }}">{% endif %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" nonce="{{ csp_nonce }}">
 {% if metric_groups %}<link rel="stylesheet" href="{% static 'vendor/uplot/uPlot.min.css' %}" nonce="{{ csp_nonce }}">{% endif %}
 {% endblock %}
