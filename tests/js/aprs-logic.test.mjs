@@ -136,3 +136,21 @@ console.log("aprs-logic: ok");
   assert.equal(L.symbolInfo("/ "), null);
 }
 console.log("aprs-logic route/symbol tests ok");
+
+{
+  const mk = (n, directEvery) => Array.from({ length: n }, (_, i) => ({ source: "S" + i, direct: i % directEvery === 0, inView: true }));
+  assert.equal(L.labelPlan(mk(200, 2), 11).size, 200, "zoom >= 11: every label");
+  assert.equal(L.labelPlan(mk(30, 2), 7).size, 30, "<= 30 in view: every label");
+  const crowded = L.labelPlan(mk(60, 2), 7);
+  assert.equal(crowded.size, 12, "crowded: capped at 12 priority labels");
+  assert.ok([...crowded].every((s) => Number(s.slice(1)) % 2 === 0), "crowded: direct stations win");
+  assert.equal(L.labelPlan(mk(60, 1000).map((e, i) => ({ ...e, direct: i === 5 })), 7).size, 1, "single direct kept");
+  assert.equal(L.labelPlan(mk(60, 2).map((e) => ({ ...e, direct: false })), 7).size, 0, "crowded, all digi: none");
+  const hidden = mk(60, 1).map((e, i) => ({ ...e, inView: i < 10 }));
+  assert.equal(L.labelPlan(hidden, 7).size, 60, "off-screen markers do not count toward crowding (all labeled)");
+  assert.equal(L.labelPlan([], 5).size, 0);
+  assert.equal(L.labelPlan(mk(31, 2), 10).size, 12, "31 in view at zoom 10: crowded");
+  assert.equal(L.labelPlan(mk(30, 2), 10).size, 30, "30 in view at zoom 10: all");
+  assert.equal(L.labelPlan(mk(31, 2), 11).size, 31, "zoom 11 boundary: all");
+}
+console.log("aprs-logic label tests ok");

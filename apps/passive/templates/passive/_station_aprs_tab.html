@@ -13,9 +13,9 @@
   .leaflet-container a { color:var(--accent-deep); }
 </style>
 <div id="aprs-root"
-     data-symbols-0="{% static 'vendor/aprs-symbols/aprs-symbols-24-0@2x.png' %}"
-     data-symbols-1="{% static 'vendor/aprs-symbols/aprs-symbols-24-1@2x.png' %}"
-     data-symbols-2="{% static 'vendor/aprs-symbols/aprs-symbols-24-2@2x.png' %}"
+     data-symbols-sheet-a="{% static 'vendor/aprs-symbols/aprs-symbols-24-0@2x.png' %}"
+     data-symbols-sheet-b="{% static 'vendor/aprs-symbols/aprs-symbols-24-1@2x.png' %}"
+     data-symbols-sheet-c="{% static 'vendor/aprs-symbols/aprs-symbols-24-2@2x.png' %}"
      data-station-id="{{ station.pk }}"
      data-packets-url="{% url 'passive:aprs_packets' %}">
   <div class="aprs-station-head">

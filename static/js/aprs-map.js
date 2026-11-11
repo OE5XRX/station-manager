@@ -33,6 +33,8 @@
   var map = L.map("aprs-map", { worldCopyJump: true }).setView([47.6, 14.1], 7);
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
+    // OSM's tile policy requires a Referer; Django's same-origin policy would suppress it.
+    referrerPolicy: "strict-origin-when-cross-origin",
     attribution: "© OpenStreetMap contributors",
   }).addTo(map);
   // Static, trusted constant (never packet data). The OSM attribution above must stay.
@@ -64,7 +66,9 @@
   var routeLayer = L.layerGroup().addTo(map);
   var selectedSource = null;
   // Sprite sheet URLs come from {% static %} (hashed names under WhiteNoise manifest storage).
-  var SHEETS = [root.dataset.symbols0, root.dataset.symbols1, root.dataset.symbols2];
+  // Attribute names end in a letter: dataset camelCases "-<lowercase>" only, so "data-symbols-0"
+  // would be dataset["symbols-0"] and the camelCase lookup undefined (-> url(undefined), no symbols).
+  var SHEETS = [root.dataset.symbolsSheetA, root.dataset.symbolsSheetB, root.dataset.symbolsSheetC];
 
   function directOnly() {
     return !!(directOnlyEl && directOnlyEl.checked);
@@ -81,14 +85,17 @@
   // Standard APRS symbol with overlay character; unknown symbol -> plain dot.
   function symbolNode(symbol) {
     var info = Logic.symbolInfo(symbol);
-    if (!info) return el("span", "aprs-sym aprs-sym-unknown");
+    // A missing sheet URL must never become url(undefined): fall back to the plain dot.
+    if (!info || !SHEETS[info.sheet] || (info.overlay && !SHEETS[2])) return el("span", "aprs-sym aprs-sym-unknown");
     var n = spriteLayer("aprs-sym", info.sheet, info.col, info.row);
     if (info.overlay) n.appendChild(spriteLayer("aprs-sym-overlay", 2, info.overlay.col, info.overlay.row));
     return n;
   }
 
   function pinNode(p, source, old, selected) {
+    // No native title (it would double the hover tooltip); the aria-label survives .is-nolabel.
     var pin = el("div", "aprs-pin" + (Logic.isDirect(p) ? "" : " is-digi") + (old ? " is-old" : "") + (selected ? " is-selected" : ""));
+    pin.setAttribute("aria-label", source);
     pin.appendChild(symbolNode(p.symbol));
     pin.appendChild(el("span", "aprs-call", source));
     return pin;
@@ -199,7 +206,7 @@
       var reopen = !!(cur && cur.marker.isPopupOpen());
       if (cur) markers.removeLayer(cur.marker);
       var icon = L.divIcon({ className: "", html: pinNode(p, source, old, selectedSource === source), iconSize: null });
-      var m = L.marker([p.latitude, p.longitude], { icon: icon, title: source, keyboard: true });
+      var m = L.marker([p.latitude, p.longitude], { icon: icon, keyboard: true });
       m.bindPopup(function () { return popupContent(p, source); }, { maxWidth: 320 });
       m.on("popupopen", function () {
         selectedSource = source;
@@ -218,7 +225,7 @@
         }, 0);
       });
       markers.addLayer(m);
-      markerBySource[source] = { marker: m, id: p.id, old: old };
+      markerBySource[source] = { marker: m, id: p.id, old: old, direct: Logic.isDirect(p), labeled: null };
       if (reopen) {
         // Carried over from the replaced marker: no map jump on every poll.
         var pop = m.getPopup();
@@ -226,6 +233,30 @@
         m.openPopup();
         pop.options.autoPan = true;
       }
+    });
+    applyLabels();
+  }
+  map.on("zoomend moveend", applyLabels);
+
+  // Crowded map: drop the callsign chips (they overlap) and show the call as a tooltip on
+  // hover/tap instead. Directly heard stations keep their label first.
+  function applyLabels() {
+    var bounds = map.getBounds();
+    var items = Object.keys(markerBySource).map(function (src) {
+      var c = markerBySource[src];
+      return { source: src, direct: c.direct, inView: bounds.contains(c.marker.getLatLng()) };
+    });
+    var plan = Logic.labelPlan(items, map.getZoom());
+    items.forEach(function (it) {
+      var c = markerBySource[it.source];
+      var show = plan.has(it.source);
+      if (c.labeled === show) return;
+      c.labeled = show;
+      var node = c.marker.getElement && c.marker.getElement();
+      var pin = node && node.querySelector(".aprs-pin");
+      if (pin) pin.classList.toggle("is-nolabel", !show);
+      if (show) c.marker.unbindTooltip();
+      else c.marker.bindTooltip(el("span", "", it.source), { direction: "top", offset: [0, -12] });
     });
   }
 

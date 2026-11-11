@@ -194,7 +194,28 @@
     return Math.floor(s / 86400) + " d";
   }
 
+  // Which callsign labels to draw. items: [{source, direct, inView}]. Zoomed in far enough, or
+  // few markers on screen -> all labels. Crowded -> only directly heard stations (up to
+  // MAX_PRIORITY_LABELS, in list order); the rest fall back to a hover/tap tooltip.
+  var LABEL_ZOOM = 11;
+  var LABEL_MAX_VISIBLE = 30;
+  var MAX_PRIORITY_LABELS = 12;
+  function labelPlan(items, zoom) {
+    var all = items || [];
+    var visible = all.filter(function (e) { return e.inView; });
+    var out = new Set();
+    if (zoom >= LABEL_ZOOM || visible.length <= LABEL_MAX_VISIBLE) {
+      all.forEach(function (e) { out.add(e.source); });
+      return out;
+    }
+    visible.forEach(function (e) {
+      if (e.direct && out.size < MAX_PRIORITY_LABELS) out.add(e.source);
+    });
+    return out;
+  }
+
   return {
+    labelPlan: labelPlan,
     groupDuplicates: groupDuplicates,
     latestPositions: latestPositions,
     formatAge: formatAge,
