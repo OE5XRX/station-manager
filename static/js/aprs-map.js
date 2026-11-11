@@ -93,7 +93,9 @@
   }
 
   function pinNode(p, source, old, selected) {
+    // No native title (it would double the hover tooltip); the aria-label survives .is-nolabel.
     var pin = el("div", "aprs-pin" + (Logic.isDirect(p) ? "" : " is-digi") + (old ? " is-old" : "") + (selected ? " is-selected" : ""));
+    pin.setAttribute("aria-label", source);
     pin.appendChild(symbolNode(p.symbol));
     pin.appendChild(el("span", "aprs-call", source));
     return pin;
@@ -204,7 +206,7 @@
       var reopen = !!(cur && cur.marker.isPopupOpen());
       if (cur) markers.removeLayer(cur.marker);
       var icon = L.divIcon({ className: "", html: pinNode(p, source, old, selectedSource === source), iconSize: null });
-      var m = L.marker([p.latitude, p.longitude], { icon: icon, title: source, keyboard: true });
+      var m = L.marker([p.latitude, p.longitude], { icon: icon, keyboard: true });
       m.bindPopup(function () { return popupContent(p, source); }, { maxWidth: 320 });
       m.on("popupopen", function () {
         selectedSource = source;
