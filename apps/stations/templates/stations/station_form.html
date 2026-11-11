@@ -101,6 +101,33 @@
     </div>
   </section>
 
+  {% if passive_form %}
+  <section class="panel">
+    <div class="panel-head"><div class="panel-title"><span class="dot" style="background:var(--signal)"></span>{% trans "Passive Dienste" %}</div></div>
+    <div class="panel-body">
+      {{ passive_form.non_field_errors }}
+      <div class="form-group">
+        <label class="form-label" for="{{ passive_form.enabled.id_for_label }}">{{ passive_form.enabled.label }}</label>
+        <div>{{ passive_form.enabled }}</div>
+        <span class="form-hint">{% trans "Im Leerlauf hört die Station auf der APRS-Frequenz mit und reicht gehörte Pakete über das iGate-Rufzeichen ins APRS-IS weiter. Sobald jemand die Station benutzt, wird der Dienst beendet." %}</span>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="{{ passive_form.igate_callsign.id_for_label }}">{{ passive_form.igate_callsign.label }}</label>
+          {{ passive_form.igate_callsign }}
+          {% if passive_form.igate_callsign.errors %}<div class="form-error">{{ passive_form.igate_callsign.errors|join:", " }}</div>{% endif %}
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="{{ passive_form.igate_ssid.id_for_label }}">{{ passive_form.igate_ssid.label }}</label>
+          {{ passive_form.igate_ssid }}
+          <span class="form-hint">{% trans "0–15, üblich ist 10. Rufzeichen und SSID gehören genau einer Station." %}</span>
+          {% if passive_form.igate_ssid.errors %}<div class="form-error">{{ passive_form.igate_ssid.errors|join:", " }}</div>{% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
   <div class="row-gap-8">
     <button type="submit" class="btn btn-primary btn-lg">{% trans "Save station" %}</button>
     <a href="{% if object %}{% url 'stations:station_detail' object.pk %}{% else %}{% url 'stations:station_list' %}{% endif %}" class="btn btn-ghost">{% trans "Cancel" %}</a>

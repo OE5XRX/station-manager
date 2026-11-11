@@ -81,3 +81,39 @@ def test_parse_message_rejects_missing_type():
 def test_parse_message_accepts_string_type():
     out = p.parse_message(json.dumps({"v": 1, "type": "command", "request_id": "x"}))
     assert out["type"] == "command"
+
+
+def test_inventory_features_only_when_given():
+    assert "features" not in p.build_inventory([])
+    assert p.build_inventory([], features=["decoders"])["features"] == ["decoders"]
+
+
+def test_decoder_output_envelope():
+    f = p.build_decoder_output("aprs", 1, "e1", 7, "ax25", True, {"ax25": "AA=="}, 12.5)
+    assert f == {
+        "v": 1,
+        "type": "decoder_output",
+        "decoder": "aprs",
+        "slot": 1,
+        "epoch": "e1",
+        "seq": 7,
+        "kind": "ax25",
+        "reliable": True,
+        "data": {"ax25": "AA=="},
+        "ts": 12.5,
+    }
+
+
+def test_decoder_state_and_snapshot_envelopes():
+    assert p.build_decoder_state("aprs", 1, "running") == {
+        "v": 1,
+        "type": "decoder_state",
+        "decoder": "aprs",
+        "slot": 1,
+        "state": "running",
+        "detail": None,
+    }
+    assert p.build_decoder_state("aprs", 1, "error", "boom")["detail"] == "boom"
+    snap = p.build_decoder_snapshot([{"decoder": "aprs", "slot": 1, "state": "running"}])
+    assert snap["type"] == "decoder_snapshot" and snap["decoders"][0]["slot"] == 1
+    assert p.DECODER_STATES == ("starting", "running", "stopped", "error")

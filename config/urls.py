@@ -57,6 +57,7 @@ urlpatterns += i18n_patterns(
     path("provisioning/", include("apps.provisioning.urls")),
     path("rollouts/", include("apps.rollouts.urls")),
     path("repeaters/", include("apps.repeaters.urls")),
+    path("passive/", include("apps.passive.urls")),
     path("", include("apps.dashboard.urls")),
 )
 

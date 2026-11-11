@@ -74,8 +74,45 @@ def build_scan_state(
     return msg
 
 
-def build_inventory(slots: list) -> dict:
-    return _envelope("inventory", slots=slots)
+def build_inventory(slots: list, features: list[str] | None = None) -> dict:
+    msg = _envelope("inventory", slots=slots)
+    if features:
+        msg["features"] = list(features)
+    return msg
+
+
+DECODER_STATES = ("starting", "running", "stopped", "error")
+
+
+def build_decoder_state(decoder: str, slot: int, state: str, detail: str | None = None) -> dict:
+    return _envelope("decoder_state", decoder=decoder, slot=slot, state=state, detail=detail)
+
+
+def build_decoder_snapshot(decoders: list[dict]) -> dict:
+    return _envelope("decoder_snapshot", decoders=decoders)
+
+
+def build_decoder_output(
+    decoder: str,
+    slot: int,
+    epoch: str,
+    seq: int,
+    kind: str,
+    reliable: bool,
+    data: dict,
+    ts: float,
+) -> dict:
+    return _envelope(
+        "decoder_output",
+        decoder=decoder,
+        slot=slot,
+        epoch=epoch,
+        seq=seq,
+        kind=kind,
+        reliable=reliable,
+        data=data,
+        ts=ts,
+    )
 
 
 def parse_message(text: str) -> dict:

@@ -1,0 +1,5 @@
+{% comment %}
+  Passive-service status pill. Expects `badge` ({label, level}); the control page rewrites
+  it live from `passive_state` frames (data-passive-badge, data-level).
+{% endcomment %}
+<span class="pill {% if badge.level == 'ok' %}pill-online{% elif badge.level == 'error' %}pill-error{% else %}pill-muted{% endif %}" data-passive-badge data-level="{{ badge.level }}" role="status"><span class="dot"></span><span data-passive-badge-label>{{ badge.label }}</span></span>

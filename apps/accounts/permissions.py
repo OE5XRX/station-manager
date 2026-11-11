@@ -129,6 +129,12 @@ AREAS: dict[str, Area] = {
         manage=S,
         verb_labels={"manage": _("Repeater anlegen/bearbeiten")},
     ),
+    "passive_services": Area(
+        _("Passive Dienste"),
+        view=A,
+        manage=AD,
+        verb_labels={"manage": _("Passive Dienste verwalten")},
+    ),
     "users": Area(
         _("Benutzer"), view=M, manage=AD, verb_labels={"manage": _("Benutzer verwalten")}
     ),

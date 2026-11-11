@@ -63,6 +63,16 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
       <span x-text="unsupportedReason" style="font-family:var(--font-mono);font-size:11px;"></span>
     </div>
 
+    {% comment %}Passive APRS run: the RX mixer starts muted; the operator may listen in.{% endcomment %}
+    <div x-show="passiveActive"
+         x-cloak
+         class="cp-passive-notice"
+         role="status"
+         data-passive-notice>
+      <span class="cp-passive-notice-text">{% trans "Passiv: APRS läuft, Audio stumm" %}</span>
+      <button type="button" class="cp-btn" @click="passiveListenIn()" style="font-size:10px;padding:4px 10px;min-height:28px;">{% trans "Mithören" %}</button>
+    </div>
+
     {% comment %}Mic permission error{% endcomment %}
     <div x-show="micError"
          x-cloak

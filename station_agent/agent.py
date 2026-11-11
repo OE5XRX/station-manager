@@ -783,11 +783,33 @@ class StationAgent:
 
         logger.info("Control channel enabled")
         virtual = [audio.router_module] if audio.router_module is not None else None
+
+        def _make_decoder_host():
+            # The agent alone knows the hardware node naming; the image wrapper only
+            # consumes OE5XRX_RX_NODE from the env file.
+            from concurrent.futures import ThreadPoolExecutor
+
+            from .decoders.aprs import AprsDecoder
+            from .decoders.host import DecoderHost
+            from .decoders.units import DecoderUnits
+
+            # Dedicated pool: a hung systemd must not tie up the default executor that
+            # serves serial I/O (commands, PTT, telemetry polls).
+            return DecoderHost(
+                DecoderUnits(),
+                {AprsDecoder.name: AprsDecoder()},
+                lambda slot: router_backend.resolve_node(slot, "rx"),
+                loop_executor=ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="decoder-units"
+                ),
+            )
+
         control_client = ControlClient(
             config,
             virtual_modules=virtual,
             on_firmware_check=self._wake.set,
             on_rescan=audio.kick,
+            decoder_host_factory=_make_decoder_host,
         )
         control_thread = threading.Thread(
             target=control_client.run, name="control-client", daemon=True

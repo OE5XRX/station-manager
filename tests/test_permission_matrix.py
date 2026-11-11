@@ -79,9 +79,15 @@ UI = {
     # Also open to region managers via can_manage_repeaters (not a level thing).
     ("repeaters", "manage"): ("GET", "repeaters:create", None, None),
     ("sso", "manage"): ("GET", "sso:dashboard", None, None),
+    ("passive_services", "view"): ("GET", "passive:aprs", None, None),
+    # POST-only; manage is enforced before the body is read (an empty form just re-renders).
+    ("passive_services", "manage"): ("POST", "passive:aprs_settings", None, {}),
 }
 # control.use / control.manage live on the WS channel (WS table below).
-UI_NOT_APPLICABLE = {("control", "use"), ("control", "manage")}
+UI_NOT_APPLICABLE = {
+    ("control", "use"),
+    ("control", "manage"),
+}
 
 # (area, verb) -> (method, url with {objs-key} placeholders, JSON body or None)
 API = {

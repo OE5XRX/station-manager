@@ -418,6 +418,7 @@ class StationAuditLog(models.Model):
         MODULE_FLASH_RETRY = "module_flash_retry", _("Module Flash Retry")
         REBOOT = "reboot", _("Reboot")
         ROLLOUT_GROUP_CHANGED = "rollout_group_changed", _("Rollout Group Changed")
+        PASSIVE_SERVICE = "passive_service", _("Passive Service")
 
     station = models.ForeignKey(
         Station,

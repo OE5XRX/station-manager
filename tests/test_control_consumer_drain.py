@@ -87,9 +87,11 @@ def test_request_and_transfer_while_draining():
             hc = _browser_comm(holder, station.id)
             assert (await hc.connect())[0] is True
             await _drain_until(hc, "lock")
+            await _drain_until(hc, "passive_state")
             oc = _browser_comm(other, station.id)
             assert (await oc.connect())[0] is True
             await _drain_until(oc, "lock")
+            await _drain_until(oc, "passive_state")
 
             await oc.send_json_to({"type": "lock_request"})
             req = await _drain_until(hc, "control_requested")
@@ -124,6 +126,7 @@ def test_acquire_of_held_lock_while_draining_sends_no_drain_error():
             oc = _browser_comm(other, station.id)
             assert (await oc.connect())[0] is True
             await _drain_until(oc, "lock")
+            await _drain_until(oc, "passive_state")
             await oc.send_json_to({"type": "lock_acquire"})
             evt = await oc.receive_json_from()
             assert evt["type"] == "lock"

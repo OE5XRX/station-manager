@@ -1441,3 +1441,28 @@
 .sp-start { margin-left: auto; }
 .sp-panel .rp-notice { margin: 10px 0 0; }
 .sp-panel[x-cloak] { display: none; }
+
+/* Passive APRS service: status pill above the module cards, mute notice in the audio panel.
+   The notice borrows the cyan "in transit" channel: informational, not a warning. */
+.cp-passive {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.cp-passive-detail {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.cp-passive-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  font-size: 12px;
+}

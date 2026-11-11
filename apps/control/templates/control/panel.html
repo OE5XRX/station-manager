@@ -13,6 +13,19 @@
        data-drain-label="{% trans "Station wartet auf Firmware-Update seit" %}">
     {% include "control/_lock_banner.html" %}
     {% include "module_firmware/_drain_banner.html" with live=True %}
+    {% comment %}Passive APRS status: filled from passive_state frames (control-panel.js _onPassive).{% endcomment %}
+    <div class="cp-passive"
+         x-show="passive && (passive.level !== 'off' || passive.detail)"
+         x-cloak
+         data-passive-strip>
+      <span class="pill"
+            :class="passive && passive.level === 'ok' ? 'pill-online' : (passive && passive.level === 'error' ? 'pill-error' : 'pill-muted')"
+            role="status">
+        <span class="dot" aria-hidden="true"></span>
+        <span x-text="passive ? passive.label : ''" data-passive-label></span>
+      </span>
+      <span class="cp-passive-detail" x-show="passive && passive.detail" x-text="passive ? passive.detail : ''"></span>
+    </div>
     <div class="cp-modules">
       {% for m in modules %}{% include "control/_module_card.html" %}{% empty %}
         <p class="cp-empty">{% trans "No modules discovered on this station yet." %}</p>
