@@ -110,7 +110,7 @@ Spec: `docs/superpowers/specs/2026-11-10-passive-services-aprs-design.md`. Eine 
   Decoder läuft oder irgendeiner < 60 min läuft — der Server friert die Schwellwert-Regel dann ein (keine
   Fehlalarme bei Benutzung/Stopp/Start). Der Key hat einen Punkt (`KEY_RE` verlangt `<gruppe>.<name>`).
   Vorbelegte Regel (Migration `monitoring.0008`): `< 1` für 5 h (+ 1-h-Fenster ≈ 6 h ohne Paket), danach
-  per Admin-UI editierbar. `AprsSettings.no_rx_alert_hours` und `AlertType.PASSIVE_NO_RX` gibt es nicht mehr.
+  per Admin-UI editierbar. Die Dauer gilt auch fürs Auflösen (Hysterese): der Alarm klärt sich erst nach 5 h mit ≥ 1 Paket je Fenster, nicht beim nächsten Paket. `AprsSettings.no_rx_alert_hours` und `AlertType.PASSIVE_NO_RX` gibt es nicht mehr.
 - E2E-Referenz: `tests/test_passive_e2e.py` (echter Broker + DecoderHost + AprsDecoder mit Fake-KISS,
   echter Consumer/Supervisor/Ingest, echter `IgateWorker` gegen Fake-APRS-IS).
 

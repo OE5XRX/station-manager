@@ -24,7 +24,7 @@ APRS_RULE = {
     "duration_seconds": 5 * 3600,
     "severity": "warning",
     "name": "APRS RX silent",
-    "description": "No APRS packet heard for about 6 h (1 h window + 5 h): antenna/RX problem.",
+    "description": "No APRS packet for ~6 h (antenna/RX problem). Resolves only after 5 h of packets in every hour.",
 }
 
 

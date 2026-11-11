@@ -32,6 +32,12 @@ from .terminal import TerminalClient
 logger = logging.getLogger("station_agent")
 
 
+def register_aprs_metric(metrics, aprs) -> None:
+    """Feed the APRS decoder's ``aprs.rx_packets_1h`` into the heartbeat metrics."""
+    if metrics is not None:
+        metrics.add_source(aprs.metric_values)
+
+
 class StationAgent:
     """Main agent that runs the heartbeat loop with OTA updates."""
 
@@ -796,8 +802,7 @@ class StationAgent:
             # Dedicated pool: a hung systemd must not tie up the default executor that
             # serves serial I/O (commands, PTT, telemetry polls).
             aprs = AprsDecoder()
-            if self._metrics is not None:
-                self._metrics.add_source(aprs.metric_values)
+            register_aprs_metric(self._metrics, aprs)
             return DecoderHost(
                 DecoderUnits(),
                 {AprsDecoder.name: aprs},

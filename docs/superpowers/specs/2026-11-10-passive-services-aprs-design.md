@@ -175,7 +175,7 @@ Layout **variant C** (user decision):
 - **APRS page** (central):
   - Tab **Karte & Log**: a map of heard stations across all iGates (default last 24 h), and a live log, newest first, with a station filter and grouped duplicates.
   - Tab **iGates**: our stations with their state (running/idle/in use/error/not opted-in), last packet, and packets per 24 h.
-  - Tab **Einstellungen** (admin only): global switch, `idle_minutes`, service radio profile, hand-over profile, APRS-IS server/filter, `max_gate_age`, retention, `no_rx_alert_hours`.
+  - Tab **Einstellungen** (admin only): global switch, `idle_minutes`, service radio profile, hand-over profile, APRS-IS server/filter, `max_gate_age`, retention (`no_rx_alert_hours` removed 2026-11-11, see 6.5).
 - **Station detail**: a new tab **APRS** for opted-in stations. It is the same map and log, pre-filtered to this station. The station's opt-in checkbox plus iGate callsign and SSID live in the station edit form (admin).
 - **Status badge** (station detail and control page): `Passiv: APRS aktiv` / `in Benutzung` / `aus` / `Fehler: …`.
 - Map library: whatever the project already uses or a light one, e.g. Leaflet with OSM tiles. Builder's choice, follow existing static-asset/CSP conventions.

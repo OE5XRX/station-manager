@@ -65,12 +65,11 @@ class AprsDecoder:
                 now - started < RX_WINDOW_S for started, _ in self._tracked.values()
             ):
                 return {}
-            total = sum(
-                1
-                for _, packets in self._tracked.values()
-                for ts in packets
-                if now - ts < RX_WINDOW_S
-            )
+            total = 0
+            for _, packets in self._tracked.values():
+                while packets and now - packets[0] >= RX_WINDOW_S:
+                    packets.popleft()
+                total += len(packets)
         return {RX_METRIC_KEY: float(total)}
 
     def env(self, slot: int, params: dict, rx_node: str) -> dict[str, str]:

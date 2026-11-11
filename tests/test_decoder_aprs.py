@@ -245,3 +245,22 @@ def test_metric_descriptor_and_collector_source():
     collector2.add_source(lambda: 1 / 0)  # failing source only omits its keys
     values2, _ = collector2.snapshot()
     assert "aprs.rx_packets_1h" not in values2
+
+
+def test_metric_prunes_stale_packets_on_read():
+    dec = AprsDecoder()
+    dec._track_start(1, 0.0)
+    dec._track_packet(1, 10.0)
+    assert dec.metric_values(now=7200.0) == {"aprs.rx_packets_1h": 0.0}
+    assert len(dec._tracked[1][1]) == 0
+
+
+def test_agent_registers_aprs_source_on_collector():
+    from station_agent.agent import register_aprs_metric
+    from station_agent.metrics import MetricsCollector
+
+    collector = MetricsCollector(root="/nonexistent")
+    dec = AprsDecoder()
+    register_aprs_metric(collector, dec)
+    assert collector._extra_sources == [dec.metric_values]
+    register_aprs_metric(None, dec)  # no collector: no-op
