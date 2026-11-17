@@ -195,6 +195,7 @@
         this._masterGain.connect(this._audioCtx.destination);
 
         this._installListeners();
+        this._installAutoplayUnlock();
         this._connect();
 
         // Refresh RX link-quality snapshots ~1 Hz for the display.
@@ -496,18 +497,22 @@
         for (var i = 0; i < result.out.length; i++) {
           var item = result.out[i];
           if (item.plc) {
-            // PLC: advance playhead by one 20 ms frame so the timeline stays
-            // in sync (silent gap) rather than letting the next real frame
-            // play early and cause a speed-up/desync.
-            var plcCtx = this._streamCtx[streamId];
-            if (plcCtx) {
-              plcCtx.playhead += 0.020;
-              A.linkRecord(plcCtx.stats, "conceal", { n: 1, tMs: nowMs });
-            }
+            this._concealFrame(streamId, nowMs);
             continue;
           }
           this._decodeChunk(streamId, ctx, item.frame);
         }
+      },
+
+      // PLC: advance playhead by one 20 ms frame so the timeline stays in sync
+      // (silent gap) rather than letting the next real frame play early and
+      // cause a speed-up/desync. An unprimed playhead (null: context was not
+      // running) stays unprimed — the next real frame primes it.
+      _concealFrame: function (streamId, nowMs) {
+        var ctx = this._streamCtx[streamId];
+        if (!ctx) return;
+        if (ctx.playhead !== null) ctx.playhead += 0.020;
+        A.linkRecord(ctx.stats, "conceal", { n: 1, tMs: nowMs });
       },
 
       // ---------------------------------------------------------------------
@@ -568,6 +573,7 @@
           gainNode: gainNode,
           playhead: audioCtx.currentTime + bufferAhead,
           bufferAhead: bufferAhead,
+          sources: [], // scheduled, not yet ended (stopped on a hard catch-up)
           sampleRate: sampleRate,
           channels: channels,
           stats: A.makeLinkStats(),
@@ -597,10 +603,10 @@
         }
         var audioCtx = this._audioCtx;
 
-        // Resume context if suspended (autoplay policy).
-        if (audioCtx.state === "suspended") {
-          audioCtx.resume().catch(function () {});
-        }
+        // Not running (autoplay policy, iOS "interrupted", backgrounded tab):
+        // ask to resume. The frame itself is dropped below — audio scheduled
+        // into a stopped clock piles up and plays seconds late once it runs.
+        if (audioCtx.state !== "running") this._resumeAudio();
 
         var numChannels = audioData.numberOfChannels;
         var numFrames = audioData.numberOfFrames;
@@ -624,31 +630,50 @@
         // Clamp to 0..1.
         this.levels[streamId] = Math.min(1, rms * 2);
 
-        // Schedule for gapless playback.
-        var now = audioCtx.currentTime;
-        if (ctx.playhead < now) {
-          // We fell behind — re-prime with a FULL buffer-depth ahead (not just
-          // one frame). After a re-key the playhead is stale from the silent
-          // gap; a thin reset would still race for several frames (audible
-          // start-up flutter), whereas re-priming to the full depth re-settles
-          // in one step. Record the underrun (the key stutter signal).
-          ctx.playhead = now + (ctx.bufferAhead || 0.02);
-          if (ctx.stats) {
-            A.linkRecord(ctx.stats, "underrun", { tMs: this._nowMs() });
+        // Schedule for gapless playback with a bounded lead (see
+        // A.rxScheduleDecision): an underrun re-primes a FULL buffer-depth
+        // ahead (a thin reset after a re-key would race for several frames);
+        // a lead that drifts past the target is pulled back by dropping quiet
+        // frames or playing slightly fast; a far-too-large lead flushes the
+        // queue and re-anchors.
+        var d = A.rxScheduleDecision({
+          now: audioCtx.currentTime,
+          playhead: ctx.playhead,
+          bufferAhead: ctx.bufferAhead,
+          duration: buffer.duration,
+          rms: rms,
+          running: audioCtx.state === "running",
+        });
+        ctx.playhead = d.playhead;
+        if (d.event === "underrun" || d.event === "drop" ||
+            d.event === "speedup" || d.event === "catchup") {
+          A.linkRecord(ctx.stats, d.event, { tMs: this._nowMs() });
+        }
+        if (d.action !== "play") return;
+        if (!ctx.sources) ctx.sources = [];
+        if (d.flush) {
+          for (var k = 0; k < ctx.sources.length; k++) {
+            try {
+              ctx.sources[k].stop();
+            } catch (_) {}
           }
+          ctx.sources = [];
         }
         var source = audioCtx.createBufferSource();
         source.buffer = buffer;
+        if (d.rate !== 1) source.playbackRate.value = d.rate;
         source.connect(ctx.gainNode);
         // Drop the node once it finishes so stale sources don't accumulate
         // during rapid subscribe/unsubscribe.
         source.onended = function () {
+          var idx = ctx.sources.indexOf(source);
+          if (idx !== -1) ctx.sources.splice(idx, 1);
           try {
             source.disconnect();
           } catch (e) {}
         };
-        source.start(ctx.playhead);
-        ctx.playhead += buffer.duration;
+        ctx.sources.push(source);
+        source.start(d.at);
       },
 
       _teardownStreamCtx: function (streamId) {
@@ -690,6 +715,12 @@
             ctx.jitter && ctx.jitter.frames
               ? Object.keys(ctx.jitter.frames).length
               : 0;
+          // Scheduled lead = how far behind live this stream plays (null =
+          // not primed, e.g. context suspended).
+          snap.leadMs =
+            ctx.playhead === null || !this._audioCtx
+              ? null
+              : Math.max(0, Math.round((ctx.playhead - this._audioCtx.currentTime) * 1000));
           out[sid] = snap;
         }
         this.linkStats = out;
@@ -844,6 +875,19 @@
       // (slot/module args) goes ONLY into `value`. A null slot clears the route.
       // Delegates to the control store's sendCommand (lock-holding control WS).
       // ---------------------------------------------------------------------
+      // TX-route <select> @change: option values are JSON {slot, module};
+      // "" (none) or anything unparsable clears the route.
+      onTxRouteChange: function (value) {
+        var p = null;
+        try {
+          p = value ? JSON.parse(value) : null;
+        } catch (_) {
+          p = null;
+        }
+        if (p && typeof p === "object") this.setTxRoute(p.slot, p.module);
+        else this.setTxRoute(null, null);
+      },
+
       setTxRoute: function (slot, module) {
         var value =
           slot === null || slot === undefined
@@ -969,6 +1013,37 @@
           toSub.push(st.stream_id);
         }
         if (toSub.length > 0) this._sendJSON({ v: 1, type: "subscribe", stream_ids: toSub });
+      },
+
+      // Resume the AudioContext if it is not running. Browsers (iOS above all)
+      // only honour this from a user gesture, so it is also wired to the
+      // first-class gestures below; a rejected attempt is harmless.
+      _resumeAudio: function () {
+        var ac = this._audioCtx;
+        if (!ac || ac.state === "running" || ac.state === "closed") return;
+        try {
+          var p = ac.resume();
+          if (p && p.catch) p.catch(function () {});
+        } catch (_) {}
+      },
+
+      // Autoplay/iOS: retry resume() on every user gesture while the context
+      // is not running (cheap no-op otherwise; it can stop again later, e.g.
+      // a phone call), and when iOS reports an interruption via statechange.
+      _installAutoplayUnlock: function () {
+        var self = this;
+        var unlock = function () {
+          self._resumeAudio();
+        };
+        this._addListener(window, "pointerdown", unlock);
+        this._addListener(window, "touchend", unlock);
+        this._addListener(window, "keydown", unlock);
+        if (this._audioCtx && this._audioCtx.addEventListener) {
+          this._addListener(this._audioCtx, "statechange", function () {
+            var st = self._audioCtx && self._audioCtx.state;
+            if (st === "interrupted" || st === "suspended") self._resumeAudio();
+          });
+        }
       },
 
       _addListener: function (target, type, handler) {

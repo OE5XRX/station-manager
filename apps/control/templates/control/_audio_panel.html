@@ -238,10 +238,7 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
                 class="cp-readout cp-readout--select"
                 style="font-size:12px;padding:5px 32px 5px 10px;min-width:160px;max-width:280px;"
                 :disabled="conn !== 'open'"
-                @change="
-                  var v = $event.target.value;
-                  try { if (v) { var p = JSON.parse(v); setTxRoute(p.slot, p.module); } else { setTxRoute(null, null); } } catch (e) { setTxRoute(null, null); }
-                ">
+                @change="onTxRouteChange($event.target.value)">
           <option value="">— {% trans "none" %} —</option>
           <template x-for="s in streams.filter(function(s){ return s.direction === 'rx' && s.module !== 'operator' && s.stream_id !== 'op.mic'; })" :key="s.stream_id">
             <option :value="JSON.stringify({slot: s.slot, module: s.module})"
@@ -401,7 +398,8 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
     {% comment %}======================================================
     Section: Link quality — RX smoothness telemetry + server relay counters.
     Per subscribed stream: rx frames, loss/plc/underruns (last-5s / total),
-    arrival jitter, jitter-buffer depth. Underruns are the key stutter signal.
+    arrival jitter, jitter-buffer depth, playback lead + drift drops/catch-ups.
+    Underruns are the key stutter signal; a growing lead is latency.
     ======================================================{% endcomment %}
     <section aria-labelledby="ap-link-heading" x-show="supported" x-cloak>
       <h3 id="ap-link-heading" class="cp-widget-label mb-2" style="font-size:11px;">{% trans "Link quality" %}</h3>
@@ -436,11 +434,17 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
             <span :style="st.jitterMs > 15 ? 'color:var(--warn);' : ''" x-text="'jit ' + st.jitterMs + 'ms'"></span>
             <span aria-hidden="true"> · </span>
             <span x-text="'buf ' + st.bufDepth"></span>
+            <span aria-hidden="true"> · </span>
+            <span :style="st.leadMs !== null && st.leadMs > 300 ? 'color:var(--warn);' : ''" x-text="'lead ' + (st.leadMs === null ? '–' : st.leadMs + 'ms')"></span>
+            <span aria-hidden="true"> · </span>
+            <span x-text="'drop ' + st.win.drops + '/' + st.drops"></span>
+            <span aria-hidden="true"> · </span>
+            <span :style="st.win.catchups ? 'color:var(--warn);' : ''" x-text="'catch-up ' + st.win.catchups + '/' + st.catchups"></span>
           </div>
         </template>
       </div>
       <p style="font-family:var(--font-mono);font-size:9px;color:var(--ink-3);margin-top:4px;letter-spacing:.03em;">
-        {% trans "last-5s / total · under = underruns (stutter) · plc = concealed · jit = arrival jitter" %}
+        {% trans "last-5s / total · under = underruns (stutter) · plc = concealed · jit = arrival jitter · lead = playback delay · drop = silent frames skipped to stay live · catch-up = queue flushed (lead too large)" %}
       </p>
     </section>
 

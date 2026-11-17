@@ -212,6 +212,64 @@
   }
 
   // ---------------------------------------------------------------------------
+  // RX playback scheduling: lead cap / drift compensation
+  // ---------------------------------------------------------------------------
+
+  // The station's clock is not the browser's: a source that delivers even
+  // slightly more audio than real time (measured: +0.6 %) makes the scheduled
+  // lead (playhead − now) grow without bound, because the playhead used to be
+  // re-anchored only on underrun. These bounds are relative to the stream's
+  // own bufferAhead, so op.mic (deeper jitter buffer) gets the same headroom.
+  var RX_LEAD_SOFT_S = 0.08; // excess over bufferAhead that starts catching up
+  var RX_LEAD_HARD_S = 0.4; // excess over bufferAhead that forces a re-anchor
+  var RX_QUIET_RMS = 0.01; // ≈ −40 dBFS: a frame this quiet can be dropped unheard
+  var RX_CATCHUP_RATE = 1.02; // playbackRate while catching up through speech
+
+  /* Decide how to schedule one decoded frame.
+     opts: {now, playhead, bufferAhead, duration, rms, running} (seconds; rms
+     linear, full scale 1.0; playhead null = not primed). Returns
+     {action: "play"|"drop", at, rate, flush, playhead, event}:
+       - at/rate: start time + playbackRate for a "play"
+       - flush: stop every already-scheduled source first (hard catch-up)
+       - playhead: the stream's next playhead (null = re-prime on next frame)
+       - event: null | "suspended" | "prime" | "underrun" | "drop" | "speedup"
+                | "catchup"
+     Order: not running → drop (scheduling into a suspended context piles the
+     audio up for later); unprimed → prime; behind → underrun re-prime (full
+     bufferAhead, unchanged); far ahead → flush + re-anchor; somewhat ahead →
+     drop the frame if quiet, else play it slightly fast. */
+  function rxScheduleDecision(opts) {
+    var now = opts.now;
+    var bufferAhead = opts.bufferAhead || 0.02;
+    var duration = opts.duration;
+    var playhead = opts.playhead;
+    if (!opts.running) {
+      return { action: "drop", at: null, rate: 1, flush: false, playhead: null, event: "suspended" };
+    }
+    var anchor = now + bufferAhead;
+    if (playhead === null || playhead === undefined || !isFinite(playhead)) {
+      return { action: "play", at: anchor, rate: 1, flush: false, playhead: anchor + duration, event: "prime" };
+    }
+    if (playhead < now) {
+      return { action: "play", at: anchor, rate: 1, flush: false, playhead: anchor + duration, event: "underrun" };
+    }
+    var excess = playhead - now - bufferAhead;
+    if (excess > RX_LEAD_HARD_S) {
+      return { action: "play", at: anchor, rate: 1, flush: true, playhead: anchor + duration, event: "catchup" };
+    }
+    if (excess > RX_LEAD_SOFT_S) {
+      if (opts.rms < RX_QUIET_RMS) {
+        return { action: "drop", at: null, rate: 1, flush: false, playhead: playhead, event: "drop" };
+      }
+      return {
+        action: "play", at: playhead, rate: RX_CATCHUP_RATE, flush: false,
+        playhead: playhead + duration / RX_CATCHUP_RATE, event: "speedup",
+      };
+    }
+    return { action: "play", at: playhead, rate: 1, flush: false, playhead: playhead + duration, event: null };
+  }
+
+  // ---------------------------------------------------------------------------
   // Presets
   // ---------------------------------------------------------------------------
 
@@ -372,9 +430,12 @@
       reorder: 0, // late/duplicate frames dropped by the jitter buffer
       conceal: 0, // PLC placeholders emitted for missing frames
       underruns: 0, // playback fell behind and had to reset the playhead
+      drops: 0, // quiet frames dropped to shrink an excess lead (drift)
+      speedups: 0, // frames played slightly fast to shrink an excess lead
+      catchups: 0, // hard re-anchors: lead far too large, queued audio flushed
       jitterMs: 0, // EWMA of |inter-arrival − 20 ms|
       _lastArrivalMs: null,
-      _events: [], // rolling {t,type} for lost|conceal|underrun
+      _events: [], // rolling {t,type} for lost|conceal|underrun|drop|catchup
     };
   }
 
@@ -386,9 +447,10 @@
     if (i > 0) ev.splice(0, i);
   }
 
-  /* Record one link event. type ∈ recv|lost|conceal|reorder|underrun.
-     opts.tMs = event time (ms, monotonic e.g. performance.now); opts.n = count
-     for lost/conceal/reorder (default 1). */
+  /* Record one link event. type ∈ recv|lost|conceal|reorder|underrun|drop|
+     speedup|catchup. opts.tMs = event time (ms, monotonic e.g.
+     performance.now); opts.n = count for lost/conceal/reorder/drop/speedup
+     (default 1). */
   function linkRecord(state, type, opts) {
     opts = opts || {};
     var nowMs = opts.tMs;
@@ -407,10 +469,16 @@
       state.reorder += n;
       return; // reorder is a total only, not a windowed "smoothness" event
     }
+    if (type === "speedup") {
+      state.speedups += n;
+      return; // total only: inaudible, the lead readout shows its effect
+    }
     if (type === "lost") state.lost += n;
     else if (type === "conceal") state.conceal += n;
-    else if (type === "underrun") {
-      state.underruns += 1;
+    else if (type === "drop") state.drops += n;
+    else if (type === "underrun" || type === "catchup") {
+      if (type === "underrun") state.underruns += 1;
+      else state.catchups += 1;
       n = 1;
     } else return;
     if (nowMs !== undefined) {
@@ -422,12 +490,14 @@
   /* Snapshot for display: cumulative totals + rolling-window counts. */
   function linkSnapshot(state, nowMs) {
     if (nowMs !== undefined) _linkPrune(state, nowMs);
-    var win = { lost: 0, conceal: 0, underruns: 0 };
+    var win = { lost: 0, conceal: 0, underruns: 0, drops: 0, catchups: 0 };
     for (var i = 0; i < state._events.length; i++) {
       var t = state._events[i].type;
       if (t === "lost") win.lost++;
       else if (t === "conceal") win.conceal++;
       else if (t === "underrun") win.underruns++;
+      else if (t === "drop") win.drops++;
+      else if (t === "catchup") win.catchups++;
     }
     return {
       recv: state.recv,
@@ -435,6 +505,9 @@
       reorder: state.reorder,
       conceal: state.conceal,
       underruns: state.underruns,
+      drops: state.drops,
+      speedups: state.speedups,
+      catchups: state.catchups,
       jitterMs: Math.round(state.jitterMs * 10) / 10,
       win: win,
     };
@@ -739,6 +812,13 @@
 
     // Jitter-buffer sizing
     jitterDepthFor: jitterDepthFor,
+
+    // RX lead cap / drift compensation
+    rxScheduleDecision: rxScheduleDecision,
+    RX_LEAD_SOFT_S: RX_LEAD_SOFT_S,
+    RX_LEAD_HARD_S: RX_LEAD_HARD_S,
+    RX_QUIET_RMS: RX_QUIET_RMS,
+    RX_CATCHUP_RATE: RX_CATCHUP_RATE,
 
     // Resampling
     makeResampler: makeResampler,
