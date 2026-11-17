@@ -643,22 +643,33 @@
           duration: buffer.duration,
           rms: rms,
           running: audioCtx.state === "running",
+          catchingUp: !!ctx.catchingUp,
         });
         ctx.playhead = d.playhead;
+        ctx.catchingUp = d.catchingUp;
         if (d.event === "underrun" || d.event === "drop" ||
             d.event === "speedup" || d.event === "catchup") {
           A.linkRecord(ctx.stats, d.event, { tMs: this._nowMs() });
         }
-        if (d.action !== "play") return;
         if (!ctx.sources) ctx.sources = [];
         if (d.flush) {
+          // Stop only sources that have not started: cutting the one that is
+          // playing mid-waveform clicks, and it ends within one frame anyway
+          // (well before the re-anchored playhead).
+          var keep = [];
           for (var k = 0; k < ctx.sources.length; k++) {
+            var queued = ctx.sources[k];
+            if (queued._startAt <= audioCtx.currentTime) {
+              keep.push(queued);
+              continue;
+            }
             try {
-              ctx.sources[k].stop();
+              queued.stop();
             } catch (_) {}
           }
-          ctx.sources = [];
+          ctx.sources = keep;
         }
+        if (d.action !== "play") return;
         var source = audioCtx.createBufferSource();
         source.buffer = buffer;
         if (d.rate !== 1) source.playbackRate.value = d.rate;
@@ -672,6 +683,7 @@
             source.disconnect();
           } catch (e) {}
         };
+        source._startAt = d.at;
         ctx.sources.push(source);
         source.start(d.at);
       },

@@ -443,13 +443,15 @@ ok("rxSchedule: underrun re-primes a full bufferAhead (unchanged behaviour)", ()
   assert.equal(d.rate, 1);
   assert.equal(d.flush, false);
 });
-ok("rxSchedule: suspended context drops and forgets the playhead", () => {
-  for (const running of [false]) {
-    const d = sched({ running });
-    assert.equal(d.action, "drop");
-    assert.equal(d.event, "suspended");
-    assert.equal(d.playhead, null);
-  }
+ok("rxSchedule: suspended context drops, flushes the queue, forgets the playhead", () => {
+  const d = sched({ running: false, catchingUp: true });
+  assert.equal(d.action, "drop");
+  assert.equal(d.event, "suspended");
+  assert.equal(d.playhead, null);
+  // Queued sources sit at frozen-clock times and would overlap the re-primed
+  // audio after resume — they must go.
+  assert.equal(d.flush, true);
+  assert.equal(d.catchingUp, false);
 });
 ok("rxSchedule: null playhead (after suspend) primes without an underrun", () => {
   const d = sched({ playhead: null });
@@ -494,17 +496,54 @@ ok("rxSchedule: soft/hard constants are sane", () => {
   assert.ok(A.RX_LEAD_HARD_S >= 0.3 && A.RX_LEAD_HARD_S <= 0.5);
 });
 
+ok("rxSchedule: catch-up has hysteresis (enter > SOFT, leave < SOFT_EXIT)", () => {
+  assert.ok(A.RX_LEAD_SOFT_EXIT_S > 0 && A.RX_LEAD_SOFT_EXIT_S < A.RX_LEAD_SOFT_S);
+  // Between exit and enter: keeps catching up if already catching up ...
+  const mid = 10 + BA + (A.RX_LEAD_SOFT_EXIT_S + A.RX_LEAD_SOFT_S) / 2;
+  let d = sched({ playhead: mid, catchingUp: true });
+  assert.equal(d.event, "speedup");
+  assert.equal(d.catchingUp, true);
+  // ... but does not start from there.
+  d = sched({ playhead: mid, catchingUp: false });
+  assert.equal(d.event, null);
+  assert.equal(d.catchingUp, false);
+  // Below the exit threshold it stops.
+  d = sched({ playhead: 10 + BA + A.RX_LEAD_SOFT_EXIT_S / 2, catchingUp: true });
+  assert.equal(d.event, null);
+  assert.equal(d.catchingUp, false);
+  // Underrun / catch-up / prime all leave catch-up mode.
+  for (const ph of [9, 10 + BA + A.RX_LEAD_HARD_S + 0.1, null]) {
+    assert.equal(sched({ playhead: ph, catchingUp: true }).catchingUp, false);
+  }
+});
+ok("rxSchedule: steady speech catches up in one contiguous run (no 1.00/1.02 flutter)", () => {
+  let now = 0, playhead = 0.02 + BA + A.RX_LEAD_SOFT_S + 0.005, catchingUp = false;
+  const events = [];
+  for (let i = 0; i < 400; i++) {
+    now += 0.02;
+    const d = A.rxScheduleDecision({ now, playhead, bufferAhead: BA, duration: 0.02,
+                                     rms: LOUD, running: true, catchingUp });
+    playhead = d.playhead; catchingUp = d.catchingUp;
+    events.push(d.event === "speedup" ? "S" : ".");
+  }
+  const runs = events.join("").split(/\.+/).filter(Boolean);
+  assert.equal(runs.length, 1, "one contiguous speed-up run, got " + runs.length);
+  // playhead already includes the frame just scheduled (+20 ms).
+  assert.ok(playhead - now - BA < A.RX_LEAD_SOFT_EXIT_S + 0.02 + 1e-9, "lead pulled back near bufferAhead");
+});
+
 // Drift simulation: the station delivers 0.6 % more audio than real time
 // (measured 2026-11-17: +6 ms/s). Without a cap the lead grew 5.5 → 6.1 s in
 // 85 s; with it the lead must stay bounded near the target.
 function simulateDrift(rmsFor, seconds) {
-  let now = 0, playhead = null, maxLead = 0, drops = 0, speedups = 0;
+  let now = 0, playhead = null, maxLead = 0, drops = 0, speedups = 0, catchingUp = false;
   const step = 0.02 / 1.006;
   for (let i = 0; i < seconds / step; i++) {
     now += step;
     const d = A.rxScheduleDecision({ now, playhead, bufferAhead: BA, duration: 0.02,
-                                     rms: rmsFor(i), running: true });
+                                     rms: rmsFor(i), running: true, catchingUp });
     playhead = d.playhead;
+    catchingUp = d.catchingUp;
     if (d.event === "drop") drops++;
     if (d.event === "speedup") speedups++;
     assert.notEqual(d.event, "catchup", "steady drift must never need the hard reset");
@@ -524,14 +563,17 @@ ok("rxSchedule: 0.6 % drift with pauses prefers dropping silence", () => {
 });
 ok("rxSchedule: a burst after a stall is pulled back to the target", () => {
   // 10 frames arrive at once after a 200 ms stall, then steady cadence.
-  let now = 1, playhead = 1 + BA;
+  let now = 1, playhead = 1 + BA, catchingUp = false;
+  const step = (o) => {
+    const d = A.rxScheduleDecision(Object.assign({ now, playhead, bufferAhead: BA, duration: 0.02,
+                                                   rms: LOUD, running: true, catchingUp }, o));
+    playhead = d.playhead; catchingUp = d.catchingUp;
+  };
   now += 0.2;
-  for (let k = 0; k < 10; k++) {
-    playhead = A.rxScheduleDecision({ now, playhead, bufferAhead: BA, duration: 0.02, rms: LOUD, running: true }).playhead;
-  }
+  for (let k = 0; k < 10; k++) step({});
   for (let i = 0; i < 500; i++) {
     now += 0.02;
-    playhead = A.rxScheduleDecision({ now, playhead, bufferAhead: BA, duration: 0.02, rms: LOUD, running: true }).playhead;
+    step({});
   }
   assert.ok(playhead - now <= BA + A.RX_LEAD_SOFT_S + 0.03, "lead " + (playhead - now));
 });

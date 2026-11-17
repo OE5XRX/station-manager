@@ -221,52 +221,60 @@
   // re-anchored only on underrun. These bounds are relative to the stream's
   // own bufferAhead, so op.mic (deeper jitter buffer) gets the same headroom.
   var RX_LEAD_SOFT_S = 0.08; // excess over bufferAhead that starts catching up
+  var RX_LEAD_SOFT_EXIT_S = 0.02; // ... and that ends it (hysteresis: one
+  // contiguous fast run instead of a 1.00/1.02 flutter around the threshold)
   var RX_LEAD_HARD_S = 0.4; // excess over bufferAhead that forces a re-anchor
   var RX_QUIET_RMS = 0.01; // ≈ −40 dBFS: a frame this quiet can be dropped unheard
   var RX_CATCHUP_RATE = 1.02; // playbackRate while catching up through speech
 
   /* Decide how to schedule one decoded frame.
-     opts: {now, playhead, bufferAhead, duration, rms, running} (seconds; rms
-     linear, full scale 1.0; playhead null = not primed). Returns
-     {action: "play"|"drop", at, rate, flush, playhead, event}:
+     opts: {now, playhead, bufferAhead, duration, rms, running, catchingUp}
+     (seconds; rms linear, full scale 1.0; playhead null = not primed;
+     catchingUp = the previous decision's flag). Returns
+     {action: "play"|"drop", at, rate, flush, playhead, catchingUp, event}:
        - at/rate: start time + playbackRate for a "play"
-       - flush: stop every already-scheduled source first (hard catch-up)
+       - flush: stop already-scheduled sources that have not started yet
        - playhead: the stream's next playhead (null = re-prime on next frame)
+       - catchingUp: feed back into the next call (soft catch-up hysteresis)
        - event: null | "suspended" | "prime" | "underrun" | "drop" | "speedup"
                 | "catchup"
-     Order: not running → drop (scheduling into a suspended context piles the
-     audio up for later); unprimed → prime; behind → underrun re-prime (full
-     bufferAhead, unchanged); far ahead → flush + re-anchor; somewhat ahead →
-     drop the frame if quiet, else play it slightly fast. */
+     Order: not running → drop + flush (audio scheduled into a stopped clock
+     piles up and would overlap the re-primed audio after resume); unprimed →
+     prime; behind → underrun re-prime (full bufferAhead, unchanged); far
+     ahead → flush + re-anchor; ahead (enter > SOFT, stay until < SOFT_EXIT)
+     → drop the frame if quiet, else play it slightly fast. */
   function rxScheduleDecision(opts) {
     var now = opts.now;
     var bufferAhead = opts.bufferAhead || 0.02;
     var duration = opts.duration;
     var playhead = opts.playhead;
-    if (!opts.running) {
-      return { action: "drop", at: null, rate: 1, flush: false, playhead: null, event: "suspended" };
+    function out(action, at, rate, flush, next, catchingUp, event) {
+      return { action: action, at: at, rate: rate, flush: flush, playhead: next,
+               catchingUp: catchingUp, event: event };
     }
+    if (!opts.running) return out("drop", null, 1, true, null, false, "suspended");
     var anchor = now + bufferAhead;
     if (playhead === null || playhead === undefined || !isFinite(playhead)) {
-      return { action: "play", at: anchor, rate: 1, flush: false, playhead: anchor + duration, event: "prime" };
+      return out("play", anchor, 1, false, anchor + duration, false, "prime");
     }
     if (playhead < now) {
-      return { action: "play", at: anchor, rate: 1, flush: false, playhead: anchor + duration, event: "underrun" };
+      return out("play", anchor, 1, false, anchor + duration, false, "underrun");
     }
     var excess = playhead - now - bufferAhead;
     if (excess > RX_LEAD_HARD_S) {
-      return { action: "play", at: anchor, rate: 1, flush: true, playhead: anchor + duration, event: "catchup" };
+      return out("play", anchor, 1, true, anchor + duration, false, "catchup");
     }
-    if (excess > RX_LEAD_SOFT_S) {
+    var catchingUp = opts.catchingUp
+      ? excess > RX_LEAD_SOFT_EXIT_S
+      : excess > RX_LEAD_SOFT_S;
+    if (catchingUp) {
       if (opts.rms < RX_QUIET_RMS) {
-        return { action: "drop", at: null, rate: 1, flush: false, playhead: playhead, event: "drop" };
+        return out("drop", null, 1, false, playhead, true, "drop");
       }
-      return {
-        action: "play", at: playhead, rate: RX_CATCHUP_RATE, flush: false,
-        playhead: playhead + duration / RX_CATCHUP_RATE, event: "speedup",
-      };
+      return out("play", playhead, RX_CATCHUP_RATE, false,
+                 playhead + duration / RX_CATCHUP_RATE, true, "speedup");
     }
-    return { action: "play", at: playhead, rate: 1, flush: false, playhead: playhead + duration, event: null };
+    return out("play", playhead, 1, false, playhead + duration, false, null);
   }
 
   // ---------------------------------------------------------------------------
@@ -816,6 +824,7 @@
     // RX lead cap / drift compensation
     rxScheduleDecision: rxScheduleDecision,
     RX_LEAD_SOFT_S: RX_LEAD_SOFT_S,
+    RX_LEAD_SOFT_EXIT_S: RX_LEAD_SOFT_EXIT_S,
     RX_LEAD_HARD_S: RX_LEAD_HARD_S,
     RX_QUIET_RMS: RX_QUIET_RMS,
     RX_CATCHUP_RATE: RX_CATCHUP_RATE,

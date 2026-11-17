@@ -146,6 +146,16 @@ ok("suspended context: frame dropped, resume() requested, playhead forgotten", (
   assert.equal(c._streamCtx["slot3.rx"].stats.underruns, 0);
 });
 
+ok("suspend after queuing: queued sources are stopped (no overlap after resume)", () => {
+  const c = panelWithStream("running", 0.06);
+  for (let i = 0; i < 3; i++) c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  const queued = c._audioCtx.started.slice();
+  c._audioCtx.state = "suspended";
+  c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  for (const s of queued) assert.equal(s.stopped, true);
+  assert.equal(c._streamCtx["slot3.rx"].sources.length, 0);
+});
+
 ok("iOS 'interrupted' context is treated like suspended", () => {
   const c = panelWithStream("interrupted", 0.06);
   c._onDecodedAudio("slot3.rx", audioData(LOUD));
@@ -174,20 +184,24 @@ ok("soft excess: quiet frame dropped (counted), loud frame sped up", () => {
   assert.equal(sc.stats.speedups, 1);
 });
 
-ok("hard excess: queued sources are stopped and the stream re-anchors", () => {
+ok("hard excess: future sources are stopped, the playing one finishes, stream re-anchors", () => {
   const c = panelWithStream("running", 0.06);
   // Queue a few frames normally, then fake a large accumulated lead.
   for (let i = 0; i < 3; i++) c._onDecodedAudio("slot3.rx", audioData(LOUD));
   const queued = c._audioCtx.started.slice();
+  // Clock moves into the first frame: it is now playing.
+  c._audioCtx.currentTime = queued[0].at + 0.005;
   const sc = c._streamCtx["slot3.rx"];
-  sc.playhead = 10 + 0.06 + A.RX_LEAD_HARD_S + 0.5;
+  sc.playhead = c._audioCtx.currentTime + 0.06 + A.RX_LEAD_HARD_S + 0.5;
   c._onDecodedAudio("slot3.rx", audioData(LOUD));
-  for (const s of queued) assert.equal(s.stopped, true);
+  assert.equal(queued[0].stopped, false, "currently playing source is not cut (click)");
+  assert.equal(queued[1].stopped, true);
+  assert.equal(queued[2].stopped, true);
   const last = c._audioCtx.started[c._audioCtx.started.length - 1];
   assert.equal(last.stopped, false);
-  assert.ok(Math.abs(last.at - 10.06) < 1e-9);
+  assert.ok(Math.abs(last.at - (c._audioCtx.currentTime + 0.06)) < 1e-9);
   assert.equal(sc.stats.catchups, 1);
-  assert.equal(sc.sources.length, 1, "only the fresh source is still tracked");
+  assert.deepEqual(sc.sources, [queued[0], last], "playing + fresh source still tracked");
 });
 
 ok("finished sources are untracked (no unbounded growth)", () => {
