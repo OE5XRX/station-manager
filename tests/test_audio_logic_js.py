@@ -17,6 +17,9 @@ TEST_FILES = [
     REPO_ROOT / "tests" / "js" / "audio-logic.test.mjs",
     # Behavioural: TX-meter dispatch/watchdog + capture-gain wiring in audio-panel.js.
     REPO_ROOT / "tests" / "js" / "audio-panel-txmeter.test.mjs",
+    # Behavioural: RX lead cap / drift compensation, suspended-context drop,
+    # autoplay unlock, lead/drop stats + TX-route select handler.
+    REPO_ROOT / "tests" / "js" / "audio-panel-rxsched.test.mjs",
 ]
 
 
