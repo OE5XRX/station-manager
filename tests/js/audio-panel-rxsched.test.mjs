@@ -335,6 +335,26 @@ ok("panel carries the catch-up flag between frames (hysteresis wiring)", () => {
   assert.equal(c._audioCtx.started[2].playbackRate.value, A.RX_CATCHUP_RATE);
 });
 
+ok("new stream ctx starts unprimed: first decoded frame primes from its own arrival", () => {
+  const c = factory();
+  c._audioCtx = makeAudioCtx("running");
+  c._audioCtx.createGain = () => ({ gain: { value: 1 }, connect() {}, disconnect() {} });
+  c._masterGain = {};
+  c._index = { byId: { "slot3.rx": { stream_id: "slot3.rx", direction: "rx", format: { rate: 8000, channels: 1 } } }, byRef: {} };
+  window.AudioDecoder = function () {
+    this.configure = () => {};
+    this.state = "configured";
+  };
+  c._ensureStreamCtx("slot3.rx");
+  assert.equal(c._streamCtx["slot3.rx"].playhead, null);
+  // Jitter hold-back + async decode: the first frame arrives ~40 ms later.
+  c._audioCtx.currentTime += 0.04;
+  c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  const sc = c._streamCtx["slot3.rx"];
+  assert.ok(Math.abs(c._audioCtx.started[0].at - (c._audioCtx.currentTime + sc.bufferAhead)) < 1e-9);
+  assert.equal(sc.stats.underruns, 0);
+});
+
 ok("TX route select: JSON value → setTxRoute(slot, module); empty/garbage clears", () => {
   const c = factory();
   const calls = [];

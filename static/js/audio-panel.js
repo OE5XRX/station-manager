@@ -507,8 +507,9 @@
 
       // PLC: advance playhead by one 20 ms frame so the timeline stays in sync
       // (silent gap) rather than letting the next real frame play early and
-      // cause a speed-up/desync. An unprimed playhead (null: context was not
-      // running) stays unprimed — the next real frame primes it.
+      // cause a speed-up/desync. An unprimed playhead (null: no frame played
+      // yet, or the context was not running) stays unprimed — the next real
+      // frame primes it.
       _concealFrame: function (streamId, nowMs) {
         var ctx = this._streamCtx[streamId];
         if (!ctx) return;
@@ -563,16 +564,17 @@
         // encoder-sourced (burstier) so it gets a deeper buffer than the
         // steady-cadence RX streams (see jitterDepthFor).
         var depth = A.jitterDepthFor(entry);
-        // Buffer ahead by the full jitter depth (20 ms/frame). Used both to seed
-        // the initial playhead AND to re-prime after an underrun (see below).
+        // Buffer ahead by the full jitter depth (20 ms/frame). Used to prime
+        // the playhead on the first frame AND to re-prime after an underrun.
         var bufferAhead = depth * 0.02;
-        // Playhead: scheduled time for next chunk. Seed the initial buffer to
-        // the buffer depth so a deeper jitter buffer also starts further ahead.
+        // Playhead: scheduled time for next chunk. Starts unprimed (null): the
+        // first decoded frame arrives only after the jitter hold-back + decode,
+        // so seeding it now would leave a thin first lead (or an underrun).
         this._streamCtx[streamId] = {
           decoder: decoder,
           jitter: A.createJitter({ depth: depth }),
           gainNode: gainNode,
-          playhead: audioCtx.currentTime + bufferAhead,
+          playhead: null,
           bufferAhead: bufferAhead,
           sources: [], // scheduled, not yet ended (stopped on a hard catch-up)
           sampleRate: sampleRate,
