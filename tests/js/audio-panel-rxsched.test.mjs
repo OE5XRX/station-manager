@@ -280,6 +280,61 @@ ok("autoplay unlock: a user gesture resumes a non-running context", () => {
   assert.equal(c._audioCtx.resumes, 2);
 });
 
+ok("autoplay unlock: listeners are removed on teardown", () => {
+  const added = [], removed = [];
+  window.addEventListener = (type, fn) => added.push([type, fn]);
+  window.removeEventListener = (type, fn) => removed.push([type, fn]);
+  window.clearInterval = () => {};
+  const c = factory();
+  const ac = makeAudioCtx("suspended");
+  ac.close = () => {};
+  const acRemoved = [];
+  ac.removeEventListener = (type) => acRemoved.push(type);
+  c._audioCtx = ac;
+  c._installAutoplayUnlock();
+  c._teardown();
+  for (const [type, fn] of added) {
+    assert.ok(removed.some(([t, f]) => t === type && f === fn), "removed " + type);
+  }
+  assert.deepEqual(added.map(([t]) => t).sort(), ["keydown", "pointerdown", "touchend"]);
+  assert.deepEqual(acRemoved, ["statechange"]);
+});
+
+ok("per-frame resume() is not re-issued while one is in flight; gestures always retry", () => {
+  const added = {};
+  window.addEventListener = (type, fn) => {
+    added[type] = fn;
+  };
+  const c = panelWithStream("suspended", 0.06);
+  // A context that is not allowed to start keeps its resume() promise pending.
+  c._audioCtx.resume = function () {
+    this.resumes += 1;
+    return new Promise(() => {});
+  };
+  c._installAutoplayUnlock();
+  for (let i = 0; i < 5; i++) c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  assert.equal(c._audioCtx.resumes, 1, "one in-flight resume, not one per frame");
+  added.pointerdown();
+  assert.equal(c._audioCtx.resumes, 2, "a gesture retries regardless");
+});
+
+ok("panel carries the catch-up flag between frames (hysteresis wiring)", () => {
+  const mid = 0.06 + (A.RX_LEAD_SOFT_EXIT_S + A.RX_LEAD_SOFT_S) / 2;
+  const c = panelWithStream("running", 0.06);
+  const sc = c._streamCtx["slot3.rx"];
+  // Not catching up: a lead between exit and enter thresholds plays at 1.0.
+  sc.playhead = 10 + mid;
+  c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  assert.equal(c._audioCtx.started[0].playbackRate.value, 1);
+  // Enter catch-up above SOFT, then the same mid lead keeps playing fast.
+  sc.playhead = 10 + 0.06 + A.RX_LEAD_SOFT_S + 0.01;
+  c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  assert.equal(sc.catchingUp, true);
+  sc.playhead = 10 + mid;
+  c._onDecodedAudio("slot3.rx", audioData(LOUD));
+  assert.equal(c._audioCtx.started[2].playbackRate.value, A.RX_CATCHUP_RATE);
+});
+
 ok("TX route select: JSON value → setTxRoute(slot, module); empty/garbage clears", () => {
   const c = factory();
   const calls = [];

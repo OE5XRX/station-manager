@@ -90,6 +90,7 @@
       _retry: 0,
       _closeCode: null,
       _closed: false,
+      _resumePending: false,    // an AudioContext.resume() is in flight
       _stationId: null,
       _listeners: [],
       _scanSlots: null,         // slots of the running scan (scanner panel) | null
@@ -1029,14 +1030,27 @@
 
       // Resume the AudioContext if it is not running. Browsers (iOS above all)
       // only honour this from a user gesture, so it is also wired to the
-      // first-class gestures below; a rejected attempt is harmless.
-      _resumeAudio: function () {
+      // first-class gestures below; a rejected attempt is harmless. A context
+      // that may not start yet keeps resume() PENDING (not rejected), so the
+      // per-frame call (force = false) skips while one is in flight instead of
+      // stacking ~50 promises/s per stream; gestures/statechange always retry.
+      _resumeAudio: function (force) {
         var ac = this._audioCtx;
         if (!ac || ac.state === "running" || ac.state === "closed") return;
+        if (this._resumePending && !force) return;
+        var self = this;
+        var settle = function () {
+          self._resumePending = false;
+        };
         try {
           var p = ac.resume();
-          if (p && p.catch) p.catch(function () {});
-        } catch (_) {}
+          if (p && p.then) {
+            this._resumePending = true;
+            p.then(settle, settle);
+          }
+        } catch (_) {
+          settle();
+        }
       },
 
       // Autoplay/iOS: retry resume() on every user gesture while the context
@@ -1045,7 +1059,7 @@
       _installAutoplayUnlock: function () {
         var self = this;
         var unlock = function () {
-          self._resumeAudio();
+          self._resumeAudio(true);
         };
         this._addListener(window, "pointerdown", unlock);
         this._addListener(window, "touchend", unlock);
@@ -1053,7 +1067,7 @@
         if (this._audioCtx && this._audioCtx.addEventListener) {
           this._addListener(this._audioCtx, "statechange", function () {
             var st = self._audioCtx && self._audioCtx.state;
-            if (st === "interrupted" || st === "suspended") self._resumeAudio();
+            if (st === "interrupted" || st === "suspended") self._resumeAudio(true);
           });
         }
       },
