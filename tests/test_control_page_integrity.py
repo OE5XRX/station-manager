@@ -187,7 +187,8 @@ OBJECT_PROTOTYPE_NAMES = (
 def test_alpine_component_members_do_not_shadow_object_prototype(js):
     text = (REPO_ROOT / "static/js" / f"{js}.js").read_text()
     for name in OBJECT_PROTOTYPE_NAMES:
-        assert not re.search(r"^\s+" + name + r"\s*:", text, re.MULTILINE), (
+        member = r"^\s+(?:(?:get|set|async)\s+)?" + name + r"\s*[:(]"
+        assert not re.search(member, text, re.MULTILINE), (
             f"{js}.js defines '{name}', which Alpine's scope resolves to Object.prototype.{name}"
         )
 

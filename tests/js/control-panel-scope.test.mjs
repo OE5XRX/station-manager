@@ -100,7 +100,35 @@ ok("bool toggle reads the real value through the Alpine scope", () => {
   c.values["3 fm filter_hpf"] = false;
 });
 
-ok("a toggle click from OFF sends value true", () => {
+// An Alpine attribute expression from _bool.html, with the Django placeholders filled in
+// for slot 3 / module fm / cap filter_hpf, evaluated like Alpine does (`with (scope)`).
+const BOOL_TPL = fs.readFileSync(
+  path.join(root, "apps/control/templates/control/widgets/_bool.html"),
+  "utf8"
+);
+function boolExpr(attr) {
+  const m = BOOL_TPL.match(new RegExp(attr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '="([^"]*)"'));
+  assert.ok(m, `_bool.html has ${attr}`);
+  return m[1]
+    .replace(/\{\{ m\.slot\|escapejs \}\}/g, "3")
+    .replace(/\{\{ m\.module_id\|escapejs \}\}/g, "fm")
+    .replace(/\{\{ cap\.name\|escapejs \}\}/g, "filter_hpf")
+    .replace(/\{\{ on_label\|escapejs \}\}/g, "ON")
+    .replace(/\{\{ off_label\|escapejs \}\}/g, "OFF");
+}
+function evalInScope(expr) {
+  // Non-strict Function body: `with` is allowed, matching Alpine's evaluator.
+  return new Function("scope", "with (scope) { return (" + expr + "); }")(scope);
+}
+
+ok("the _bool.html label shows OFF/ON from the real value", () => {
+  assert.equal(evalInScope(boolExpr("x-text")), "OFF");
+  c.values["3 fm filter_hpf"] = true;
+  assert.equal(evalInScope(boolExpr("x-text")), "ON");
+  c.values["3 fm filter_hpf"] = false;
+});
+
+ok("the _bool.html @click from OFF sends value true", () => {
   const sent = [];
   c._isOpen = () => true;
   c._send = (obj) => {
@@ -109,8 +137,7 @@ ok("a toggle click from OFF sends value true", () => {
   };
   c._widgetEl = () => null;
   c._capType = () => "bool";
-  // Exactly the _bool.html @click expression, evaluated in the merged scope.
-  scope.setValue("3", "fm", "filter_hpf", !scope.capValue("3", "fm", "filter_hpf"));
+  evalInScope(boolExpr("@click"));
   assert.equal(sent.length, 1);
   assert.equal(sent[0].value, true);
 });
