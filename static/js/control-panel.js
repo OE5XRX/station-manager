@@ -1,6 +1,6 @@
 /* OE5XRX Control Panel — live Alpine component.
    Owns the D4 control WebSocket, all reactive state, and every method the
-   widget templates call: valueOf, displayValue, setValue, stepValue, doAction,
+   widget templates call: capValue, displayValue, setValue, stepValue, doAction,
    isPending, errorOf, moduleOnline, canControl, telemetry, ptt, lock methods.
 
    Pure logic lives in control-logic.js (window.OE5XRXControlLogic); this file
@@ -613,7 +613,7 @@
         return this.drainLabel + " " + L.formatLocalDateTime(this.drainSince);
       },
 
-      valueOf: function (slot, module, cap) {
+      capValue: function (slot, module, cap) {
         return this.values[L.widgetKey(slot, module, cap)];
       },
 

@@ -144,7 +144,7 @@ def test_no_leaked_template_artifacts_in_body(client, operator, multi_module_sta
 # component — a typo here silently breaks the UI at runtime with no test failure
 # elsewhere. This is the regression guard for the template<->JS method contract.
 CONTRACT_METHODS = [
-    "valueOf",
+    "capValue",
     "displayValue",
     "isPending",
     "errorOf",
@@ -167,6 +167,30 @@ CONTRACT_METHODS = [
     "grant",
     "dismissRequest",
 ]
+
+
+# Alpine resolves template identifiers through a merged scope whose first object is a
+# plain ``{}`` -- it "has" every Object.prototype member, so a component member named
+# like one (e.g. the former ``valueOf``) is silently shadowed by the builtin.
+OBJECT_PROTOTYPE_NAMES = (
+    "valueOf",
+    "toString",
+    "toLocaleString",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "constructor",
+)
+
+
+@pytest.mark.parametrize("js", ["control-panel", "audio-panel", "scanner-panel", "repeater-panel"])
+def test_alpine_component_members_do_not_shadow_object_prototype(js):
+    text = (REPO_ROOT / "static/js" / f"{js}.js").read_text()
+    for name in OBJECT_PROTOTYPE_NAMES:
+        member = r"^\s+(?:(?:get|set|async)\s+)?" + name + r"\s*[:(]"
+        assert not re.search(member, text, re.MULTILINE), (
+            f"{js}.js defines '{name}', which Alpine's scope resolves to Object.prototype.{name}"
+        )
 
 
 @pytest.mark.parametrize("method", CONTRACT_METHODS)

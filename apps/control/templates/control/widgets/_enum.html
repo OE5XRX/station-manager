@@ -18,7 +18,7 @@
           aria-describedby="cp-err-{{ m.slot }}-{{ m.module_id }}-{{ cap.name }}">
     {% for v in cap.values %}
     <option value="{{ v }}"
-            :selected="valueOf('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') === '{{ v|escapejs }}'">
+            :selected="capValue('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}','{{ cap.name|escapejs }}') === '{{ v|escapejs }}'">
       {{ v }}
     </option>
     {% endfor %}
