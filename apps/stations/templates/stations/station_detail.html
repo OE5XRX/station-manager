@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n static %}
+{% load i18n static station_audit %}
 
 {% block title %}{{ station.name }} · OE5XRX{% endblock %}
 
@@ -508,7 +508,7 @@
             <tr>
               <td class="t-mono-sm" data-primary>{{ audit.created_at|date:"Y-m-d H:i:s" }}</td>
               <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ audit.get_event_type_display|upper }}</span></td>
-              <td data-label="{% trans 'Message' %}">{{ audit.message }}</td>
+              <td data-label="{% trans 'Message' %}">{% if can.audit.view %}{{ audit.message }}{% else %}{{ audit.message|mask_ips }}{% endif %}</td>
               <td data-label="{% trans 'User' %}">{{ audit.user.username|default:"—" }}</td>
               {% if can.audit.view %}<td class="t-mono" data-label="{% trans 'IP' %}">{{ audit.ip_address|default:"—" }}</td>{% endif %}
             </tr>
