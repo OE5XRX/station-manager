@@ -221,3 +221,23 @@ def test_sso_session_revoked_message_has_no_ip_city(client, admin, member, app):
     assert "89.207.4.5" not in row.message
     assert "Linz" not in row.message
     assert row.ip_address == "127.0.0.1"
+
+
+def test_no_username_in_station_audit_messages():
+    """Station-audit messages of non-personal event types outlive a hard purge
+    (user FK → NULL), so the actor must only live in the ``user`` FK, never in
+    the free text. Guard against ``... by {user.username}``-style messages.
+    AccountAuditLog suffixes (``suffix=``) are exempt: that table is deleted
+    after RETENTION_AUDIT_DAYS in full."""
+    import re
+    from pathlib import Path
+
+    pattern = re.compile(r"by \{(?:request\.)?user(?:\.username)?\}")
+    offenders = []
+    for path in Path("apps").rglob("*.py"):
+        if path.parts[1] in {"accounts", "sso"}:
+            continue
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            if pattern.search(line) and "suffix=" not in line:
+                offenders.append(f"{path}:{lineno}")
+    assert offenders == []

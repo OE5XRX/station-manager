@@ -207,9 +207,9 @@ class ModuleFirmwareTargetAdmin(admin.ModelAdmin):
                     station=obj.station,
                     event_type=StationAuditLog.EventType.FIRMWARE_TARGET_SET,
                     message=(
-                        f"Firmware target {obj.module_type.key} "
-                        f"{obj.scope}={obj.version} set by {request.user}."
+                        f"Firmware target {obj.module_type.key} {obj.scope}={obj.version} set."
                     ),
+                    user=request.user,
                 )
             except Exception:
                 pass

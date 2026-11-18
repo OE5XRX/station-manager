@@ -62,7 +62,7 @@ class UpgradeStationView(AreaPermissionMixin, View):
                 user=user,
                 audit_message=lambda s, dep, release: (
                     f"Upgrade triggered: {s.current_os_version or '?'} "
-                    f"\u2192 {release.tag} (deployment #{dep.pk}) by {user.username}"
+                    f"\u2192 {release.tag} (deployment #{dep.pk})"
                 ),
             )
         except NoEligibleStationsError as exc:
@@ -118,7 +118,7 @@ class UpgradeGroupView(AreaPermissionMixin, View):
             return (
                 f"Upgrade triggered (group '{group.name}', channel {group.channel}): "
                 f"{s.current_os_version or '?'} \u2192 {release.tag} "
-                f"(deployment #{dep.pk}) by {user.username}"
+                f"(deployment #{dep.pk})"
             )
 
         with transaction.atomic():

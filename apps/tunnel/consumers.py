@@ -79,7 +79,7 @@ class TerminalConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._audit_log(
             station,
             "updated",
-            f"Terminal session opened by {user.username}",
+            "Terminal session opened",
             user,
         )
 

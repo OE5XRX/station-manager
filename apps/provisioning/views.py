@@ -76,7 +76,7 @@ class CreateProvisioningJobView(AreaPermissionMixin, View):
                 event_type=StationAuditLog.EventType.PROVISIONING_REQUESTED,
                 message=(
                     f"Provisioning bundle requested for {image_release.get_machine_display()} "
-                    f"{image_release.tag} by {request.user.username}"
+                    f"{image_release.tag}"
                 ),
                 user=request.user,
             )
@@ -172,10 +172,7 @@ class ProvisioningJobDownloadView(AreaPermissionMixin, View):
                             StationAuditLog.log(
                                 station_id=station_pk,
                                 event_type=(StationAuditLog.EventType.PROVISIONING_DOWNLOADED),
-                                message=(
-                                    f"Provisioning bundle downloaded "
-                                    f"({image_release_tag}) by {user.username}"
-                                ),
+                                message=(f"Provisioning bundle downloaded ({image_release_tag})"),
                                 user=user,
                             )
                         except Exception as exc:
