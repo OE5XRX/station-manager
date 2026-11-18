@@ -76,6 +76,11 @@ MIDDLEWARE = [
     # AuthenticationMiddleware so that ``request.user`` is populated.
     # See ``config/middleware.py`` and issue #73 for the rationale.
     "config.middleware.LoginRequiredMiddleware",
+    # Datenschutz: sends logged-in users who haven't acknowledged the
+    # current PRIVACY_POLICY_VERSION to the notice page (UI only; API,
+    # OIDC protocol endpoints and agents stay untouched). Directly after
+    # LoginRequiredMiddleware so anonymous requests are already handled.
+    "config.middleware.PrivacyAckMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.middleware.csp.ContentSecurityPolicyMiddleware",

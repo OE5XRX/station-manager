@@ -4,6 +4,7 @@ from . import views
 from .views_api_tokens import ApiTokenListView, ApiTokenRevokeView
 from .views_membership import MembershipSetView
 from .views_notifications import NotificationSettingsView
+from .views_privacy import PrivacyAckView
 from .views_region_assignments import (
     RegionAssignmentCreateView,
     RegionAssignmentRevokeView,
@@ -19,6 +20,7 @@ urlpatterns = [
     path("login/", views.LoginView.as_view(), name="login"),
     path("logout/", views.LogoutView.as_view(), name="logout"),
     path("profile/", views.ProfileView.as_view(), name="profile"),
+    path("privacy/ack/", PrivacyAckView.as_view(), name="privacy_ack"),
     path(
         "notifications/",
         NotificationSettingsView.as_view(),

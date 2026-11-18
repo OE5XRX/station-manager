@@ -1,17 +1,45 @@
 """Project-wide middleware customisations.
 
-Currently houses ``LoginRequiredMiddleware``, our subclass of Django 5.1+'s
-``django.contrib.auth.middleware.LoginRequiredMiddleware`` that bolts a
-two-part allow-list (exact paths + true prefixes) onto the framework's
-default-deny gate. See the docstring on the class for the rationale.
+* ``LoginRequiredMiddleware`` — our subclass of Django 5.1+'s
+  ``django.contrib.auth.middleware.LoginRequiredMiddleware`` that bolts a
+  two-part allow-list (exact paths + true prefixes) onto the framework's
+  default-deny gate.
+* ``PrivacyAckMiddleware`` — sends logged-in users who have not yet
+  acknowledged the current privacy-policy version to the acknowledgement
+  page (browser UI only).
+
+See the docstrings on the classes for the rationale.
 """
 
 import posixpath
 from typing import Final
+from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib.auth.middleware import (
     LoginRequiredMiddleware as DjangoLoginRequiredMiddleware,
 )
+from django.shortcuts import redirect
+from django.urls import reverse
+from django.utils.deprecation import MiddlewareMixin
+from django_htmx.http import HttpResponseClientRedirect
+
+
+def normalise_path(path: str) -> str:
+    """Normalise ``path`` for allow-list matching.
+
+    ``posixpath.normpath`` collapses ``..`` segments and duplicate inner
+    slashes, so a traversal like ``/sso/token/../authorize/`` cannot flip
+    a gate decision. Two gotchas are handled: normpath preserves a leading
+    ``//`` (collapsed to a single ``/`` here) and drops the trailing ``/``
+    (re-appended, so every result ends with ``/``).
+    """
+    normalised = posixpath.normpath(path)
+    # Collapse leading double-slashes that posixpath preserves.
+    normalised = "/" + normalised.lstrip("/")
+    if not normalised.endswith("/"):
+        normalised += "/"
+    return normalised
 
 
 class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
@@ -157,11 +185,7 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
           :pyattr:`PUBLIC_EXACT_PATHS`. We re-append the slash
           afterwards.
         """
-        normalised = posixpath.normpath(path)
-        # Collapse leading double-slashes that posixpath preserves.
-        normalised = "/" + normalised.lstrip("/")
-        if not normalised.endswith("/"):
-            normalised += "/"
+        normalised = normalise_path(path)
         if normalised in cls.PUBLIC_EXACT_PATHS:
             return True
         return normalised.startswith(cls.PUBLIC_PATH_PREFIXES)
@@ -170,3 +194,99 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
         if self._is_public_path(request.path):
             return None
         return super().process_view(request, view_func, view_args, view_kwargs)
+
+
+class PrivacyAckMiddleware(MiddlewareMixin):
+    """Gate the browser UI until the current privacy policy is acknowledged.
+
+    Active only when ``settings.PRIVACY_POLICY_VERSION > 0`` and the user
+    is authenticated with ``privacy_ack_version`` below that version. Such
+    a user is redirected to ``accounts:privacy_ack`` (with ``next`` for
+    ``GET``/``HEAD``, so e.g. an OIDC ``/sso/authorize/?…`` flow resumes
+    exactly where it was). HTMX requests get an ``HX-Redirect`` instead of
+    a 302 that would otherwise be swapped into a fragment.
+
+    Only the UI is gated — never the API, the station agent, WebSockets or
+    the OIDC protocol endpoints an RP calls server-to-server:
+
+    * Token/DeviceKey auth (DRF) sets ``request.user`` inside the view, so
+      at ``process_view`` time those requests are anonymous → untouched.
+    * WebSockets don't run through HTTP middleware (Channels).
+    * Everything else machine-facing is listed in
+      :pyattr:`EXEMPT_PATH_PREFIXES` / the ``/sso/`` rule below.
+
+    ``process_view`` (not ``__call__``) so ``request.resolver_match`` is
+    available for :pyattr:`EXEMPT_VIEW_NAMES` regardless of the locale
+    prefix; unresolved paths (404) never reach the gate.
+    """
+
+    #: Machine-facing path prefixes that are never gated. Matched against
+    #: the :func:`normalise_path` form (always ends with ``/``); entries
+    #: without a trailing ``/`` (single files like ``/sw.js``) are matched
+    #: boundary-sensitively as ``<entry>/`` so ``/sw.jsx`` is not covered.
+    #: ``/api/`` is exempt as a whole: session-auth JSON fetches there
+    #: cannot digest an HTML redirect either.
+    EXEMPT_PATH_PREFIXES: Final[tuple[str, ...]] = (
+        "/api/",
+        "/static/",
+        "/media/",
+        "/i18n/",
+        "/webpush/",
+        "/sw.js",
+        "/manifest.webmanifest",
+        "/__debug__/",
+    )
+
+    #: The OIDC protocol surface under ``/sso/`` is exempt (token, revoke,
+    #: introspect, userinfo, RP logout, ``.well-known``/JWKS) — except the
+    #: browser authorize flow, which a human walks through and which must
+    #: show the notice before handing identity to another app.
+    SSO_PREFIX: Final[str] = "/sso/"
+    SSO_GATED_PREFIX: Final[str] = "/sso/authorize/"
+
+    #: Views reachable while un-acknowledged (matched on the resolved
+    #: ``view_name``, i.e. independent of the locale prefix).
+    EXEMPT_VIEW_NAMES: Final[frozenset[str]] = frozenset(
+        {"accounts:logout", "accounts:privacy_ack", "set_language"}
+    )
+
+    _EXEMPT_PREFIXES_NORMALISED: Final[tuple[str, ...]] = tuple(
+        p if p.endswith("/") else p + "/" for p in EXEMPT_PATH_PREFIXES
+    )
+
+    @classmethod
+    def _is_exempt_path(cls, path: str) -> bool:
+        """Return True iff ``path`` is a machine surface (never gated).
+
+        Uses the same :func:`normalise_path` as
+        ``LoginRequiredMiddleware._is_public_path`` so ``..`` traversal
+        can't turn a gated path into an exempt one.
+        """
+        normalised = normalise_path(path)
+        if normalised.startswith(cls._EXEMPT_PREFIXES_NORMALISED):
+            return True
+        return normalised.startswith(cls.SSO_PREFIX) and not normalised.startswith(
+            cls.SSO_GATED_PREFIX
+        )
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        version = settings.PRIVACY_POLICY_VERSION
+        if version <= 0:
+            return None
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated:
+            return None
+        if getattr(user, "privacy_ack_version", 0) >= version:
+            return None
+        if self._is_exempt_path(request.path):
+            return None
+        match = getattr(request, "resolver_match", None)
+        if match is not None and match.view_name in self.EXEMPT_VIEW_NAMES:
+            return None
+
+        url = reverse("accounts:privacy_ack")
+        if request.method in ("GET", "HEAD"):
+            url += "?" + urlencode({"next": request.get_full_path()})
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponseClientRedirect(url)
+        return redirect(url)
