@@ -232,7 +232,7 @@ def test_no_username_in_station_audit_messages():
     import re
     from pathlib import Path
 
-    pattern = re.compile(r"by \{(?:request\.)?user(?:\.username)?\}")
+    pattern = re.compile(r"by \{(?:self\.)?(?:request\.)?user(?:\.username)?\}")
     offenders = []
     for path in Path("apps").rglob("*.py"):
         if path.parts[1] in {"accounts", "sso"}:
