@@ -330,8 +330,11 @@ def _oauth_tokens_cleared(cfg, held):
     )
     querysets = (
         Grant.objects.filter(expires__lt=cfg.now),
+        # Lifetime as DOT validates it: access_token.expires + lifetime.
         RefreshToken.objects.filter(sso_session__isnull=True).filter(
-            Q(revoked__isnull=False) | Q(created__lt=cfg.now - refresh_lifetime)
+            Q(revoked__isnull=False)
+            | Q(access_token__expires__lt=cfg.now - refresh_lifetime)
+            | Q(access_token__isnull=True, created__lt=cfg.now - refresh_lifetime)
         ),
         # An access token still referenced by a refresh token must stay: the
         # refresh grant validates through RefreshToken.access_token (SET_NULL

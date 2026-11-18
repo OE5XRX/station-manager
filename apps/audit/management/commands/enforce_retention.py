@@ -10,7 +10,7 @@ import argparse
 import logging
 import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections
 
 from apps.audit.retention import RetentionConfig, run_retention
@@ -60,7 +60,10 @@ class Command(BaseCommand):
                 self._run(options["dry_run"])
                 time.sleep(options["interval"])
         else:
-            self._run(options["dry_run"])
+            result = self._run(options["dry_run"])
+            if result.errors:
+                # Non-zero exit for one-shot runs (cron/ops checks); the loop keeps going.
+                raise CommandError(f"retention steps failed: {', '.join(result.errors)}")
 
     def _run(self, dry_run):
         cfg = RetentionConfig.from_settings(dry_run=dry_run)

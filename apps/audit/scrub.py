@@ -30,7 +30,7 @@ _LEGACY_LOGIN_RE = re.compile(r"^Token issued\. UA=.*$", re.DOTALL)
 # Legacy SESSION_REVOKED tail: " from <ip> (<city>)". Only stripped when the
 # token is an IP (or "None" — a session without recorded IP), so ordinary
 # prose like "copied from foo (bar)" is left alone.
-_LEGACY_FROM_RE = re.compile(r" from (\S+) \([^)]*\)")
+_LEGACY_FROM_RE = re.compile(r" from (\S+) \([^()\n]{0,128}\)")
 # The lookbehind anchors each match at the start of the local part, so a long
 # run without "@" is not re-scanned from every offset (quadratic backtracking).
 _EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]+@[\w.-]+\.[^\W\d_]{2,}")

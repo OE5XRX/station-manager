@@ -89,9 +89,11 @@ def test_errors_go_to_stderr(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(retention, "_sso_audit_deleted", boom)
-    out, err = _run()
-    assert out == ""
-    assert "errors=sso_audit_deleted" in err
+    out, err = StringIO(), StringIO()
+    with pytest.raises(CommandError, match="sso_audit_deleted"):
+        call_command("enforce_retention", stdout=out, stderr=err)
+    assert out.getvalue() == ""
+    assert "errors=sso_audit_deleted" in err.getvalue()
 
 
 @pytest.mark.parametrize("value", ["0", "-5", "abc"])

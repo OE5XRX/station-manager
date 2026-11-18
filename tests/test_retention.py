@@ -434,6 +434,22 @@ def test_axes_logs_deleted_after_ip_window(db):
         assert not _exists(old) and _exists(new)
 
 
+def test_sessionless_refresh_token_kept_while_valid(user, app):
+    """DOT measures refresh lifetime from access_token.expires, not created."""
+    lifetime = timedelta(days=14)
+    at = AccessToken.objects.create(
+        user=user,
+        application=app,
+        token="at-valid",
+        expires=NOW - lifetime + timedelta(minutes=30),
+        scope="openid",
+    )
+    rt = RefreshToken.objects.create(user=user, application=app, token="r-valid", access_token=at)
+    RefreshToken.objects.filter(pk=rt.pk).update(created=NOW - lifetime - timedelta(minutes=30))
+    assert run_retention(_cfg()).errors == []
+    assert _exists(rt)
+
+
 def test_oauth_cleanup_skips_held_users(user, app, monkeypatch):
     monkeypatch.setattr(retention, "held_user_ids", lambda: frozenset({user.pk}))
     AccessToken.objects.create(

@@ -70,3 +70,11 @@ def test_scrub_long_input_is_linear():
         start = time.monotonic()
         scrub_message(text)
         assert time.monotonic() - start < 1.0
+
+
+def test_unclosed_legacy_from_runs_are_linear():
+    import time
+
+    start = time.monotonic()
+    scrub_message(" from x (" * 20000)
+    assert time.monotonic() - start < 1.0
