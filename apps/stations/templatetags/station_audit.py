@@ -13,8 +13,14 @@ _IPV6 = "|".join(
         "::",
     ]
 )
-# IPv4 dotted quads and IPv6 (full form or any "::" compressed form).
-_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b|(?<![\w:])(?:" + _IPV6 + r")(?![\w:])")
+_V4 = r"\d{1,3}(?:\.\d{1,3}){3}"
+# IPv4 dotted quads, IPv4-embedded IPv6 (::ffff:1.2.3.4), and IPv6 (full or "::" form).
+# Deliberately fail-closed: hex-only words around "::" and 4-part versions also match.
+_IP_RE = re.compile(
+    r"(?<![\w:.])[0-9A-Fa-f:]*:" + _V4 + r"\b"
+    r"|\b" + _V4 + r"\b"
+    r"|(?<![\w:])(?:" + _IPV6 + r")(?![\w:])"
+)
 
 
 @register.filter

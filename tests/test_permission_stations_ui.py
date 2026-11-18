@@ -177,3 +177,10 @@ def test_mask_ips_filter_keeps_other_text():
 
     assert mask_ips("OS version changed: 1.2 → 1.3") == "OS version changed: 1.2 → 1.3"
     assert mask_ips("at 10:30:00 from 10.0.0.1") == "at 10:30:00 from [IP]"
+
+
+def test_mask_ips_filter_embedded_ipv4():
+    from apps.stations.templatetags.station_audit import mask_ips
+
+    assert mask_ips("from ::ffff:192.168.1.1 now") == "from [IP] now"
+    assert mask_ips("64:ff9b::1.2.3.4") == "[IP]"
