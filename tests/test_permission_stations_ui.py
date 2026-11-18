@@ -126,3 +126,61 @@ def test_last_ip_hidden_below_staff_shown_to_staff(client, station, level):
     client.logout()
     _login(client, "staff")
     assert "203.0.113.77" in client.get(url).content.decode()
+
+
+def test_audit_tab_ip_only_for_admin(client, station):
+    from apps.stations.models import StationAuditLog
+
+    StationAuditLog.objects.create(
+        station=station,
+        event_type=StationAuditLog.EventType.UPDATED,
+        message="changed something",
+        ip_address="198.51.100.23",
+    )
+    url = reverse("stations:station_detail", args=[station.pk])
+    _login(client, "staff")
+    html = client.get(url).content.decode()
+    assert 'data-tab-panel="audit"' in html
+    assert "changed something" in html
+    assert "198.51.100.23" not in html
+    assert "<th>IP</th>" not in html
+    client.logout()
+    _login(client, "admin")
+    html = client.get(url).content.decode()
+    assert "198.51.100.23" in html
+    assert "<th>IP</th>" in html
+
+
+def test_audit_message_ips_masked_for_non_admin(client, station):
+    from apps.stations.models import StationAuditLog
+
+    StationAuditLog.objects.create(
+        station=station,
+        event_type=StationAuditLog.EventType.HEARTBEAT,
+        message="IP address changed: 198.51.100.23 → 2001:db8::1",
+    )
+    url = reverse("stations:station_detail", args=[station.pk])
+    _login(client, "staff")
+    html = client.get(url).content.decode()
+    assert "IP address changed: [IP] → [IP]" in html
+    assert "198.51.100.23" not in html
+    assert "2001:db8::1" not in html
+    client.logout()
+    _login(client, "admin")
+    html = client.get(url).content.decode()
+    assert "198.51.100.23" in html
+    assert "2001:db8::1" in html
+
+
+def test_mask_ips_filter_keeps_other_text():
+    from apps.stations.templatetags.station_audit import mask_ips
+
+    assert mask_ips("OS version changed: 1.2 → 1.3") == "OS version changed: 1.2 → 1.3"
+    assert mask_ips("at 10:30:00 from 10.0.0.1") == "at 10:30:00 from [IP]"
+
+
+def test_mask_ips_filter_embedded_ipv4():
+    from apps.stations.templatetags.station_audit import mask_ips
+
+    assert mask_ips("from ::ffff:192.168.1.1 now") == "from [IP] now"
+    assert mask_ips("64:ff9b::1.2.3.4") == "[IP]"
