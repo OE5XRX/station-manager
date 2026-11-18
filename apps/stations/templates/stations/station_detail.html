@@ -500,7 +500,7 @@
               <th>{% trans "Event" %}</th>
               <th>{% trans "Message" %}</th>
               <th>{% trans "User" %}</th>
-              {% if user.is_superuser %}<th>{% trans "IP" %}</th>{% endif %}
+              {% if can.topology.manage %}<th>{% trans "IP" %}</th>{% endif %}
             </tr>
           </thead>
           <tbody>
@@ -510,7 +510,7 @@
               <td data-label="{% trans 'Event' %}"><span class="pill pill-muted">{{ audit.get_event_type_display|upper }}</span></td>
               <td data-label="{% trans 'Message' %}">{{ audit.message }}</td>
               <td data-label="{% trans 'User' %}">{{ audit.user.username|default:"—" }}</td>
-              {% if user.is_superuser %}<td class="t-mono" data-label="{% trans 'IP' %}">{{ audit.ip_address|default:"—" }}</td>{% endif %}
+              {% if can.topology.manage %}<td class="t-mono" data-label="{% trans 'IP' %}">{{ audit.ip_address|default:"—" }}</td>{% endif %}
             </tr>
             {% endfor %}
           </tbody>
