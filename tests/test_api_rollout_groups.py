@@ -293,7 +293,7 @@ def test_station_patch_rollout_group_audits(api_topology, bearer, group):
     )
     assert logs.count() == 1
     log = logs.get()
-    assert log.message.startswith(f"Rollout group: none → Canary by {staff} via API token ")
+    assert log.message.startswith("Rollout group: none → Canary via API token ")
     assert log.changes == {"rollout_group": {"old": "none", "new": "Canary"}}
     assert log.user == staff
 
@@ -307,7 +307,7 @@ def test_station_patch_rollout_group_audits(api_topology, bearer, group):
     assert resp.status_code == 200
     assert logs.count() == 2
     assert logs.latest("created_at").message.startswith(
-        f"Rollout group: Canary → none by {staff} via API token "
+        "Rollout group: Canary → none via API token "
     )
 
 
@@ -324,7 +324,7 @@ def test_station_create_with_rollout_group_audits(api_topology, bearer, group):
     log = StationAuditLog.objects.get(
         station=station, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
     )
-    assert log.message.startswith(f"Rollout group: none → Canary by {staff} via API token ")
+    assert log.message.startswith("Rollout group: none → Canary via API token ")
 
 
 def test_station_create_without_group_no_group_audit(api_topology, bearer):

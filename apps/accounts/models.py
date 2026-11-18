@@ -201,6 +201,20 @@ class User(AbstractUser):
         help_text=_("Admin who triggered the soft-delete (SET_NULL on cascade)."),
     )
 
+    # === Datenschutz (2026-11-18) ===
+    # Highest privacy-policy version the user has acknowledged (0 = never).
+    # ``PrivacyAckMiddleware`` gates the UI while this is below
+    # ``settings.PRIVACY_POLICY_VERSION``.
+    privacy_ack_version = models.PositiveIntegerField(
+        _("acknowledged privacy policy version"),
+        default=0,
+    )
+    privacy_ack_at = models.DateTimeField(
+        _("privacy policy acknowledged at"),
+        null=True,
+        blank=True,
+    )
+
     objects = UserManager()
 
     class Meta:
@@ -310,6 +324,8 @@ class AccountAuditLog(models.Model):
         PERMISSION_DENIED = "permission_denied", _("Permission Denied")
         # === Added in Repeater list & scanner (2026-11-06) ===
         REPEATER_CHANGED = "repeater_changed", _("Repeater Changed")
+        # === Added in Datenschutz (2026-11-18) ===
+        PRIVACY_ACKNOWLEDGED = "privacy_acknowledged", _("Privacy Policy Acknowledged")
 
     event_type = models.CharField(
         _("event type"),

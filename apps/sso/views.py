@@ -503,11 +503,7 @@ class SessionRevokeView(AreaPermissionMixin, View):
                 actor=request.user,
                 target_user=session.user,
                 application=session.application,
-                message=(
-                    f"Session {session.pk} revoked. "
-                    f"Issued {session.issued_at.isoformat()} "
-                    f"from {session.ip_address} ({session.city or 'unknown'})"
-                ),
+                message=f"Session {session.pk} revoked. Issued {session.issued_at.isoformat()}.",
                 ip_address=_client_ip(request),
             )
 

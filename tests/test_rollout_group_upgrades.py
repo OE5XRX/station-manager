@@ -480,7 +480,7 @@ def test_upgrade_station_writes_one_audit_after_commit(
     assert log.user == admin_user
     assert "2026.10.18-01" in log.message
     assert f"deployment #{dep.pk}" in log.message
-    assert admin_user.username in log.message
+    assert admin_user.username not in log.message  # actor lives in the user FK
 
 
 def test_upgrade_station_conflict_writes_no_audit(
@@ -522,5 +522,5 @@ def test_upgrade_group_audits_served_stations_only(
     for log in logs:
         assert "2026.10.18-01" in log.message
         assert f"deployment #{dep.pk}" in log.message
-        assert admin_user.username in log.message
+        assert log.user == admin_user and admin_user.username not in log.message
         assert "group 'Audit'" in log.message

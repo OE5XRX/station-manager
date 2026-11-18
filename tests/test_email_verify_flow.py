@@ -164,7 +164,7 @@ class TestProfileEmailChangeTriggersVerify:
             target_user=member,
         ).latest("created_at")
         assert entry.actor == member
-        assert "old@example.org → new@example.org" in entry.message
+        assert entry.message == "email change requested"
 
 
 @pytest.mark.django_db
@@ -195,7 +195,7 @@ class TestVerifyEmailClick:
             event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
             target_user=member,
         ).latest("created_at")
-        assert "old@example.org → new@example.org" in entry.message
+        assert entry.message == "email changed"
 
     def test_verify_click_consumed_token_redirects_with_error(self, client, member):
         from apps.accounts.tokens import consume_token, issue_token

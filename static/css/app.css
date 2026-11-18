@@ -1125,6 +1125,56 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   max-width: 80%; max-height: 80%;
 }
 
+/* ---------- Privacy acknowledgement (accounts/privacy_ack.html) ---------- */
+.privacy-panel { gap: 22px; }
+.privacy-ledger { margin: 0; border-top: 1px solid var(--line); max-width: 520px; }
+.privacy-ledger-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 20px;
+  row-gap: 3px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.privacy-ledger dt { grid-column: 1; color: var(--ink-0); font-weight: 600; font-size: 14px; }
+.privacy-ledger-desc { grid-column: 1; margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.45; }
+.privacy-ledger-term {
+  grid-column: 2; grid-row: 1 / span 2; align-self: start;
+  margin: 0;
+  font-family: var(--font-mono); font-size: 12.5px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.privacy-ledger-row--none .privacy-ledger-term { color: var(--ink-2); }
+.privacy-contact { margin: 0; color: var(--ink-1); font-size: 13.5px; line-height: 1.7; max-width: 520px; }
+.privacy-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 520px; font-size: 12.5px; }
+.privacy-foot form { margin: 0; }
+.privacy-panel .stack-gap-14 { max-width: 520px; }
+.privacy-side-big { font-size: 56px; hyphens: manual; }
+@media (max-width: 640px) {
+  .privacy-ledger-row { grid-template-columns: 1fr; }
+  .privacy-ledger-term { grid-column: 1; grid-row: auto; }
+}
+
+/* ---------- Site footer (includes/privacy_footer.html) ------------------- */
+/* Body becomes a column so the shell fills the viewport *minus* the footer:
+   on short pages the footer sits at the bottom of the screen instead of
+   permanently one footer-height below the fold (shells are min-height 100vh). */
+body:has(> .site-footer) { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
+body:has(> .site-footer) > .app-shell,
+body:has(> .site-footer) > .auth-shell { flex: 1 0 auto; min-height: 0; }
+.site-footer {
+  position: relative; z-index: 1;
+  display: flex; justify-content: flex-end; gap: 20px;
+  padding: 10px 24px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.site-footer a { color: var(--ink-2); text-decoration: none; }
+.site-footer a:hover { color: var(--ink-0); text-decoration: underline; }
+.site-footer a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
 /* ---------- Terminal tab specific --------------------------------------- */
 .terminal-host {
   background: var(--term-bg);

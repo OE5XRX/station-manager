@@ -1,4 +1,6 @@
-"""Expose the permission registry to templates as ``can.<area>.<verb>``."""
+"""Template context: permission registry (``can.<area>.<verb>``) and privacy-policy link."""
+
+from django.conf import settings
 
 from apps.accounts.permissions import AREAS, VERBS, can
 
@@ -33,3 +35,11 @@ class CanProxy:
 
 def permissions(request):
     return {"can": CanProxy(getattr(request, "user", None))}
+
+
+def privacy(request):
+    """Privacy-policy URL/version for the footer link (hidden while version is 0)."""
+    return {
+        "PRIVACY_POLICY_URL": settings.PRIVACY_POLICY_URL,
+        "PRIVACY_POLICY_VERSION": settings.PRIVACY_POLICY_VERSION,
+    }

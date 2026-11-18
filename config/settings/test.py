@@ -27,6 +27,10 @@ AUTH_PASSWORD_VALIDATORS = []
 
 SECURE_CSP = None
 
+# Privacy-ack gate off by default so the existing suite is unaffected;
+# tests that exercise the gate opt in via ``settings.PRIVACY_POLICY_VERSION``.
+PRIVACY_POLICY_VERSION = 0
+
 # Use simple static file storage for tests (no manifest)
 STORAGES = {
     "default": {

@@ -114,6 +114,32 @@ Spec: `docs/superpowers/specs/2026-11-10-passive-services-aprs-design.md`. Eine 
 - E2E-Referenz: `tests/test_passive_e2e.py` (echter Broker + DecoderHost + AprsDecoder mit Fake-KISS,
   echter Consumer/Supervisor/Ingest, echter `IgateWorker` gegen Fake-APRS-IS).
 
+### Datenschutz / Retention (`apps/audit/retention.py`)
+Spec: `docs/superpowers/specs/2026-11-18-datenschutz-design.md` („Job für die Löschfristen“).
+
+- **Audit-Freitext (`message`) enthält nie E-Mail, IP, User-Agent oder GeoIP-Stadt** — IP nur im Feld
+  `ip_address`, UA/Stadt nur in `TokenSession`. `apps/audit/scrub.scrub_message` (rein, idempotent)
+  ersetzt E-Mails/IPs durch `[email]`/`[ip]` (IP nur, wenn `ipaddress` sie akzeptiert — Uhrzeiten/Versionen bleiben).
+- Settings (Env): `RETENTION_AUDIT_DAYS` (365), `RETENTION_IP_DAYS` (90), `RETENTION_BATCH_SIZE` (1000),
+  `RETENTION_ENFORCE` (Default `false` = **Dry-Run, zählt nur**; `--dry-run` erzwingt das auch bei `true`).
+  Tage `< 1` zählen als 1.
+- 365 d: personenbezogene `StationAuditLog`-Zeilen (`user` gesetzt **oder** Event in
+  `PERSONAL_STATION_EVENT_TYPES` — auch wenn der User gepurgt ist), alle Account-/SSO-Audit-Zeilen,
+  `TerminalSession`. Reine System-Zeilen im Stations-Audit bleiben.
+- 90 d: `ip_address` der drei Audit-Tabellen, TokenSession-Client-Felder, `AccountToken.ip_created`;
+  `station_audit_ip_scrubbed` scrubbt IPs/E-Mails in `StationAuditLog.message` **und** allen Strings im
+  `changes`-JSON (z.B. Stations-IP-Wechsel, `user=None`). django-axes-Logs (`AccessLog`/`AccessFailureLog`/`AccessAttempt`) nach 90 d. Dazu abgelaufene Tokens/Sessions
+  (`TokenSession.objects.stale` = dieselbe Regel wie `prune_token_sessions`) und Legacy-Freitext-Scrub.
+  **Kein `cleartokens`:** DOT löscht damit jedes revoked Refresh-Token sofort, und `TokenSession.refresh_token`
+  kaskadiert → rotierte Sessions wären vor ihrem 30-d-Fenster weg (auch bei Legal Hold). Refresh-Tokens fallen
+  erst, wenn ihre `TokenSession` bereits gepruned ist; Access-/ID-Tokens nur ohne referenzierendes Refresh-/Access-Token (sonst bricht der Refresh-Grant).
+- Jeder Schritt fehlerisoliert (`errors`), gebatcht, idempotent (zweiter Lauf zählt 0). Update-Schritte
+  filtern auf „Feld noch gesetzt“, sonst Endlosschleife im Batch-Loop.
+- **Legal-Hold-Hook:** `held_user_ids()` (heute leer) — Zeilen dieser User überspringen **beide** Fristen.
+- **Betrieb:** `manage.py enforce_retention [--dry-run] [--loop --interval 86400]`, eine Zählzeile pro Lauf;
+  eigener Compose-Service `retention` in `docker-compose.yml` und `deploy/docker-compose.prod.yml` —
+  das servers-Repo braucht ihn ebenfalls.
+
 ## station-agent
 
 ### Control-Device Single-Owner-Invariante

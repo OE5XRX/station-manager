@@ -195,7 +195,7 @@ class ProfileView(AreaPermissionMixin, TemplateView):
                 event_type=AccountAuditLog.EventType.EMAIL_VERIFY_REQUESTED,
                 actor=user,
                 target_user=user,
-                message=f"{user.email} → {new_email}",
+                message="email change requested",
                 ip_address=_client_ip(request),
             )
 
@@ -434,11 +434,6 @@ class VerifyEmailView(View):
         if not new_email:
             messages.error(request, _("Email verification token has no target address."))
             return redirect("accounts:login")
-        # NOTE: do NOT capture old_email here — it's read again under the
-        # lock below so the audit message reflects the actual transition
-        # (an admin could have edited user.email between this point and
-        # the lock-acquire).
-
         # Commit: race-check + consume + swap + audit all in one transaction.
         # The race-check INSIDE the lock closes the window between the
         # pre-check and the swap. Token is only marked used AFTER the
@@ -463,11 +458,6 @@ class VerifyEmailView(View):
             if not locked.is_active():
                 messages.error(request, _("Email verification link invalid or expired."))
                 return redirect("accounts:login")
-            # Capture the actual old email UNDER the lock so the audit
-            # message reflects the real transition even if an admin
-            # edited user.email between the unlocked pre-fetch and the
-            # lock-acquire.
-            old_email = locked.user.email
             # Race-guard inside the transaction: another account may have
             # grabbed the target email since the verify-request was issued
             # OR since our unlocked pre-fetch above.
@@ -505,7 +495,7 @@ class VerifyEmailView(View):
                 event_type=AccountAuditLog.EventType.EMAIL_VERIFIED,
                 actor=locked.user,
                 target_user=locked.user,
-                message=f"{old_email} → {new_email}",
+                message="email changed",
                 ip_address=_client_ip(request),
             )
         messages.success(request, _("Email updated to %(email)s.") % {"email": new_email})
@@ -554,7 +544,7 @@ class PasswordResetRequestView(View):
         ip = _client_ip(request)
 
         if _ip_rate_exceeded(ip):
-            self._audit_rate_limited(request, email, ip, reason="ip")
+            self._audit_rate_limited(ip, reason="ip")
             return self._generic_success(request, email)
 
         try:
@@ -572,7 +562,7 @@ class PasswordResetRequestView(View):
             return self._generic_success(request, email)
 
         if _user_rate_exceeded(user):
-            self._audit_rate_limited(request, email, ip, target_user=user, reason="user")
+            self._audit_rate_limited(ip, target_user=user, reason="user")
             return self._generic_success(request, email)
 
         with transaction.atomic():
@@ -583,7 +573,7 @@ class PasswordResetRequestView(View):
                 event_type=AccountAuditLog.EventType.PASSWORD_RESET_REQUESTED,
                 actor=None,
                 target_user=user,
-                message=f"to {email} from {ip}",
+                message="reset link sent",
                 ip_address=ip,
             )
 
@@ -600,12 +590,12 @@ class PasswordResetRequestView(View):
         )
         return redirect("accounts:login")
 
-    def _audit_rate_limited(self, request, email, ip, target_user=None, reason=""):
+    def _audit_rate_limited(self, ip, target_user=None, reason=""):
         AccountAuditLog.log(
             event_type=AccountAuditLog.EventType.PASSWORD_RESET_RATE_LIMITED,
             actor=None,
             target_user=target_user,
-            message=f"{reason} {email} from {ip}",
+            message=f"rate limited ({reason})",
             ip_address=ip,
         )
 
@@ -666,7 +656,7 @@ class ResendWelcomeView(AreaPermissionMixin, View):
                 event_type=AccountAuditLog.EventType.WELCOME_TOKEN_SENT,
                 actor=request.user,
                 target_user=user,
-                message=f"resend to {user.email}",
+                message="welcome link re-sent",
                 ip_address=_client_ip(request),
             )
         messages.success(request, _("Welcome link re-sent."))
@@ -777,7 +767,7 @@ class UserCreateView(AreaPermissionMixin, CreateView):
                 event_type=AccountAuditLog.EventType.USER_CREATED,
                 actor=self.request.user,
                 target_user=user,
-                message=f"{user.username} <{user.email}>",
+                message=user.username,
                 ip_address=_client_ip(self.request),
             )
             raw = issue_token(
@@ -797,7 +787,7 @@ class UserCreateView(AreaPermissionMixin, CreateView):
                 event_type=AccountAuditLog.EventType.WELCOME_TOKEN_SENT,
                 actor=self.request.user,
                 target_user=user,
-                message=f"to {user.email}",
+                message="welcome link sent",
                 ip_address=_client_ip(self.request),
             )
         messages.success(
@@ -1016,7 +1006,7 @@ class UserSoftDeleteView(AreaPermissionMixin, View):
                 event_type=AccountAuditLog.EventType.USER_SOFT_DELETED,
                 actor=request.user,
                 target_user=target,
-                message=f"{target.username} <{target.email}>",
+                message=target.username,
                 ip_address=_client_ip(request),
             )
 
@@ -1119,7 +1109,7 @@ class UserRestoreView(AreaPermissionMixin, View):
                     event_type=AccountAuditLog.EventType.USER_RESTORED,
                     actor=request.user,
                     target_user=target,
-                    message=f"{target.username} <{target.email}>",
+                    message=target.username,
                     ip_address=_client_ip(request),
                 )
         except IntegrityError:
@@ -1195,10 +1185,10 @@ class UserHardPurgeView(AreaPermissionMixin, View):
             )
 
             # Capture identifiers before delete — target FK becomes NULL
-            # via SET_NULL after .delete(), but the audit row's message
-            # string must preserve username/email for forensic continuity.
+            # via SET_NULL after .delete(), so the audit row's message keeps
+            # the username for forensic continuity. Never the e-mail: audit
+            # free text must not carry personal contact data (Datenschutz).
             username = target.username
-            email = target.email
             deleted_at = target.deleted_at
             target_pk = target.pk
             # Capture avatar storage + name BEFORE delete so we can
@@ -1218,9 +1208,7 @@ class UserHardPurgeView(AreaPermissionMixin, View):
                 event_type=AccountAuditLog.EventType.USER_HARD_PURGED,
                 actor=request.user,
                 target_user=target,
-                message=(
-                    f"{username} <{email}> (purged after soft-delete on {deleted_at:%Y-%m-%d})"
-                ),
+                message=f"{username} (purged after soft-delete on {deleted_at:%Y-%m-%d})",
                 ip_address=_client_ip(request),
             )
             target.delete()

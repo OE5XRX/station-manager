@@ -178,7 +178,7 @@ class TestSoftDeletePOST:
         assert member.account_tokens.filter(used_at__isnull=True).count() == 0
         assert member.account_tokens.filter(used_at__isnull=False).count() == 3
 
-    def test_emits_user_soft_deleted_audit_with_email_in_message(
+    def test_emits_user_soft_deleted_audit_without_email_in_message(
         self,
         client,
         admin,
@@ -193,5 +193,5 @@ class TestSoftDeletePOST:
         ).first()
         assert audit is not None
         assert audit.actor == admin
-        assert "OE5MEM1" in audit.message
-        assert "m@example.org" in audit.message
+        assert audit.message == "OE5MEM1"
+        assert "m@example.org" not in audit.message

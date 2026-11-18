@@ -89,6 +89,20 @@ services:
       redis:
         condition: service_started
 
+  retention:
+    image: ghcr.io/oe5xrx/station-manager:latest
+    restart: unless-stopped
+    command: python manage.py enforce_retention --loop --interval 86400
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   background-worker:
     image: ghcr.io/oe5xrx/station-manager:latest
     restart: unless-stopped

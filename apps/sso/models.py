@@ -201,6 +201,10 @@ class ApplicationPolicy(models.Model):
         return f"{self.application.name} -> {self.get_access_policy_display()}"
 
 
+# Forensic grace window for revoked/expired TokenSessions before they are pruned.
+STALE_CUTOFF_DAYS = 30
+
+
 class TokenSessionQuerySet(models.QuerySet):
     """Custom queryset so the same "active" criteria are reused across
     the validator hook, audit-log counters, and admin UI helpers.
@@ -225,6 +229,30 @@ class TokenSessionQuerySet(models.QuerySet):
             refresh_token__isnull=False,
             refresh_token__revoked__isnull=True,
             issued_at__gt=lifetime_cutoff,
+        )
+
+    def stale(self, now=None):
+        """Sessions past their forensic window (Spec §4.5), any one criterion:
+
+        - refresh_token.revoked older than STALE_CUTOFF_DAYS (explicit revoke aged out)
+        - own revoked_at older than STALE_CUTOFF_DAYS (session marked revoked)
+        - issued_at older than REFRESH_TOKEN_EXPIRE_SECONDS + STALE_CUTOFF_DAYS —
+          sessions that aged past the refresh lifetime without an explicit revoke.
+
+        Shared by ``prune_token_sessions`` and the retention job.
+        """
+        now = now or timezone.now()
+        cutoff = now - timedelta(days=STALE_CUTOFF_DAYS)
+        lifetime_seconds = settings.OAUTH2_PROVIDER.get(
+            "REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600
+        )
+        lifetime_grace_cutoff = now - timedelta(
+            seconds=lifetime_seconds + STALE_CUTOFF_DAYS * 86400
+        )
+        return self.filter(
+            Q(refresh_token__revoked__lt=cutoff)
+            | Q(revoked_at__lt=cutoff)
+            | Q(issued_at__lt=lifetime_grace_cutoff),
         )
 
 

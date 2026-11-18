@@ -130,7 +130,7 @@ jobs:
     # The normal suite runs on SQLite. The history tables are monthly RANGE-partitioned
     # on PostgreSQL only (vendor-switched migration in apps/history), so partitioning,
     # partition upkeep/drop and the PG-only ingest edge cases need a real Postgres.
-    name: History tests (Postgres)
+    name: Postgres-only tests (history, retention)
     runs-on: ubuntu-latest
 
     services:
@@ -178,3 +178,8 @@ jobs:
 
       - name: Run history tests on Postgres
         run: pytest -q tests/test_history_*.py
+
+      # The retention engine's station-audit scrub prefilter casts the
+      # `changes` JSON to text and uses __regex — backend-specific SQL.
+      - name: Run retention tests on Postgres
+        run: pytest -q tests/test_retention.py tests/test_enforce_retention_command.py

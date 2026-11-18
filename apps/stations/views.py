@@ -313,8 +313,7 @@ class StationCreateView(AreaPermissionMixin, CreateView):
             StationAuditLog.log(
                 station=self.object,
                 event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
-                message=f"Rollout group: none → {self.object.rollout_group.name} "
-                f"by {self.request.user}",
+                message=f"Rollout group: none → {self.object.rollout_group.name}",
                 changes={"rollout_group": {"old": "none", "new": self.object.rollout_group.name}},
                 user=self.request.user,
                 ip_address=_get_client_ip(self.request),
@@ -429,7 +428,7 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
             StationAuditLog.log(
                 station=self.object,
                 event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
-                message=f"Rollout group: {old_name} → {new_name} by {self.request.user}",
+                message=f"Rollout group: {old_name} → {new_name}",
                 changes={"rollout_group": {"old": old_name, "new": new_name}},
                 user=self.request.user,
                 ip_address=_get_client_ip(self.request),

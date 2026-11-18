@@ -76,6 +76,11 @@ MIDDLEWARE = [
     # AuthenticationMiddleware so that ``request.user`` is populated.
     # See ``config/middleware.py`` and issue #73 for the rationale.
     "config.middleware.LoginRequiredMiddleware",
+    # Datenschutz: sends logged-in users who haven't acknowledged the
+    # current PRIVACY_POLICY_VERSION to the notice page (UI only; API,
+    # OIDC protocol endpoints and agents stay untouched). Directly after
+    # LoginRequiredMiddleware so anonymous requests are already handled.
+    "config.middleware.PrivacyAckMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.middleware.csp.ContentSecurityPolicyMiddleware",
@@ -97,6 +102,7 @@ TEMPLATES = [
                 "django.template.context_processors.csp",
                 "django.contrib.auth.context_processors.auth",
                 "apps.accounts.context_processors.permissions",
+                "apps.accounts.context_processors.privacy",
                 "django.contrib.messages.context_processors.messages",
                 "django.template.context_processors.i18n",
             ],
@@ -312,6 +318,25 @@ AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
 # Partitions are dropped whole once their *end* is older than the retention.
 HISTORY_RAW_RETENTION_DAYS = int(os.environ.get("HISTORY_RAW_RETENTION_DAYS", "30"))
 HISTORY_HOURLY_RETENTION_DAYS = int(os.environ.get("HISTORY_HOURLY_RETENTION_DAYS", "730"))
+
+# Datenschutz (GDPR) — privacy-policy acknowledgement gate.
+# PRIVACY_POLICY_VERSION is the version users must have acknowledged;
+# 0 disables the gate (and the footer link) entirely. Bump it whenever
+# the published policy text changes materially — every user then sees
+# the acknowledgement page once more. See PrivacyAckMiddleware.
+PRIVACY_POLICY_VERSION = int(os.environ.get("PRIVACY_POLICY_VERSION", "0"))
+PRIVACY_POLICY_URL = os.environ.get(
+    "PRIVACY_POLICY_URL", "https://oe5xrx.org/docs/datenschutz.html"
+)
+
+# Datenschutz — retention job (``manage.py enforce_retention``).
+# Personal audit rows are deleted after RETENTION_AUDIT_DAYS, IP addresses
+# scrubbed after RETENTION_IP_DAYS. Without RETENTION_ENFORCE=true the job
+# only counts (dry run).
+RETENTION_AUDIT_DAYS = int(os.environ.get("RETENTION_AUDIT_DAYS", "365"))
+RETENTION_IP_DAYS = int(os.environ.get("RETENTION_IP_DAYS", "90"))
+RETENTION_ENFORCE = os.environ.get("RETENTION_ENFORCE", "false").lower() == "true"
+RETENTION_BATCH_SIZE = int(os.environ.get("RETENTION_BATCH_SIZE", "1000"))
 
 # Alert notifications — Email
 ALERT_EMAIL_ENABLED = os.environ.get("ALERT_EMAIL_ENABLED", "false").lower() == "true"
