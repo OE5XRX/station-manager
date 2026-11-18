@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Datenschutz" %} · OE5XRX{% endblock %}
+
+{% comment %}
+  Privacy-policy acknowledgement (PrivacyAckMiddleware sends every user here
+  until they have acknowledged settings.PRIVACY_POLICY_VERSION). Overrides the
+  body block like the other auth-flow pages: no sidebar/topbar, the user must
+  not navigate elsewhere before acknowledging. The only ways out are the
+  acknowledge button and signing out.
+{% endcomment %}
+{% block body %}
+<div class="auth-shell">
+  <section class="auth-panel privacy-panel" aria-labelledby="privacy-title">
+    <div class="auth-brand">
+      <div class="brand-mark" aria-hidden="true">{% include "includes/tower_mark.html" %}</div>
+      <div class="brand-text">
+        <div class="brand-callsign">OE5XRX</div>
+        <div class="brand-sub">{% trans "Station Manager" %}</div>
+      </div>
+    </div>
+
+    <div>
+      <h1 class="auth-title" id="privacy-title">{% trans "Was wir speichern und wie lange." %}</h1>
+      <p class="auth-sub">{% trans "Der Station-Manager protokolliert, wer eine Station wann bedient. Bevor es weitergeht, hier das Wichtigste in Kürze." %}</p>
+    </div>
+
+    <dl class="privacy-ledger">
+      <div class="privacy-ledger-row">
+        <dt>{% trans "Betriebsprotokoll" %}</dt>
+        <dd class="privacy-ledger-desc">{% trans "Kontrolle über eine Station, PTT, Befehle, Änderungen an Stationen und Beginn/Ende von Terminal-Sessions." %}</dd>
+        <dd class="privacy-ledger-term">{% trans "12 Monate" %}</dd>
+      </div>
+      <div class="privacy-ledger-row">
+        <dt>{% trans "IP-Adresse und Ort bei Logins und Sessions" %}</dt>
+        <dd class="privacy-ledger-desc">{% trans "Der ungefähre Ort kommt aus einer lokalen Datenbank, nicht von einem externen Dienst. IP-Adressen sehen nur Admins." %}</dd>
+        <dd class="privacy-ledger-term">{% trans "90 Tage" %}</dd>
+      </div>
+      <div class="privacy-ledger-row privacy-ledger-row--none">
+        <dt>{% trans "Audio und Terminal-Inhalte" %}</dt>
+        <dd class="privacy-ledger-desc">{% trans "Was über Funk oder im Terminal läuft, wird nicht aufgezeichnet." %}</dd>
+        <dd class="privacy-ledger-term">{% trans "nie gespeichert" %}</dd>
+      </div>
+    </dl>
+
+    <p class="privacy-contact">
+      {% trans "Fragen, Auskunft oder Löschung:" %} <a href="mailto:info@oe5xrx.org">info@oe5xrx.org</a><br>
+      <a href="{{ policy_url }}" target="_blank" rel="noopener">{% trans "Vollständige Datenschutzerklärung" %}</a>
+    </p>
+
+    <div class="stack-gap-14">
+      <form method="post" action="{% url 'accounts:privacy_ack' %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next }}">
+        <button type="submit" class="btn btn-primary btn-lg btn-block">{% trans "Zur Kenntnis genommen" %}</button>
+      </form>
+      <div class="privacy-foot">
+        <span class="t-muted">{% blocktrans %}Version {{ version }}{% endblocktrans %}</span>
+        <form method="post" action="{% url 'accounts:logout' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ghost btn-sm">{% trans "Abmelden" %}</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <aside class="auth-side" aria-hidden="true">
+    <div></div>
+    <div class="auth-side-big privacy-side-big">
+      {% trans "Kein Audio." %}<br>
+      {% trans "Keine Terminal-Inhalte." %}
+      <small>{% trans "Gespeichert wird nur, wer wann was bedient hat" %}</small>
+    </div>
+    <div class="auth-side-bottom">
+      <div class="row"><span class="key">{% trans "Betriebsprotokoll" %}</span><span class="val">{% trans "12 Monate" %}</span></div>
+      <div class="row"><span class="key">{% trans "IP-Adresse und Ort" %}</span><span class="val">{% trans "90 Tage" %}</span></div>
+      <div class="row"><span class="key">{% trans "Erklärung" %}</span><span class="val">{% blocktrans %}Version {{ version }}{% endblocktrans %}</span></div>
+    </div>
+  </aside>
+</div>
+{% endblock body %}
