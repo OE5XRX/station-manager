@@ -13,7 +13,7 @@ See the docstrings on the classes for the rationale.
 
 import posixpath
 from typing import Final
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from django.conf import settings
 from django.contrib.auth.middleware import (
@@ -276,7 +276,7 @@ class PrivacyAckMiddleware(MiddlewareMixin):
         user = getattr(request, "user", None)
         if user is None or not user.is_authenticated:
             return None
-        if getattr(user, "privacy_ack_version", 0) >= version:
+        if user.privacy_ack_version >= version:
             return None
         if self._is_exempt_path(request.path):
             return None
@@ -285,8 +285,24 @@ class PrivacyAckMiddleware(MiddlewareMixin):
             return None
 
         url = reverse("accounts:privacy_ack")
+        if request.headers.get("HX-Request") == "true":
+            # The request path is a fragment endpoint (e.g. a polling
+            # partial); come back to the page the user is looking at.
+            next_url = self._htmx_page_path(request)
+            if next_url:
+                url += "?" + urlencode({"next": next_url})
+            return HttpResponseClientRedirect(url)
         if request.method in ("GET", "HEAD"):
             url += "?" + urlencode({"next": request.get_full_path()})
-        if request.headers.get("HX-Request") == "true":
-            return HttpResponseClientRedirect(url)
         return redirect(url)
+
+    @staticmethod
+    def _htmx_page_path(request) -> str:
+        """Path + query of ``HX-Current-URL``, or ``""`` if absent.
+
+        Host and scheme are dropped; the ack view still validates ``next``.
+        """
+        parts = urlsplit(request.headers.get("HX-Current-URL", ""))
+        if not parts.path.startswith("/"):
+            return ""
+        return parts.path + (f"?{parts.query}" if parts.query else "")

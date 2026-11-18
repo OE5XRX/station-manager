@@ -129,6 +129,33 @@ def test_htmx_request_gets_hx_redirect(gated):
 
 
 @pytest.mark.django_db
+def test_htmx_redirect_returns_to_current_page_not_fragment(gated):
+    """A polling partial must not become the post-ack landing page."""
+    r = gated.get(
+        reverse("dashboard:index"),
+        HTTP_HX_REQUEST="true",
+        HTTP_HX_CURRENT_URL="https://testserver/en/stations/7/?tab=audit",
+    )
+    assert _next_of(r["HX-Redirect"]) == ["/en/stations/7/?tab=audit"]
+
+
+@pytest.mark.django_db
+def test_htmx_redirect_without_current_url_has_no_next(gated):
+    r = gated.get(reverse("dashboard:index"), HTTP_HX_REQUEST="true")
+    assert _next_of(r["HX-Redirect"]) is None
+
+
+@pytest.mark.django_db
+def test_htmx_post_returns_to_current_page(gated):
+    r = gated.post(
+        reverse("dashboard:index"),
+        HTTP_HX_REQUEST="true",
+        HTTP_HX_CURRENT_URL="https://testserver/en/",
+    )
+    assert _next_of(r["HX-Redirect"]) == ["/en/"]
+
+
+@pytest.mark.django_db
 def test_post_redirect_has_no_next(gated):
     r = gated.post(reverse("dashboard:index"))
     assert r.status_code == 302
