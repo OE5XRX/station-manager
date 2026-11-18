@@ -126,3 +126,26 @@ def test_last_ip_hidden_below_staff_shown_to_staff(client, station, level):
     client.logout()
     _login(client, "staff")
     assert "203.0.113.77" in client.get(url).content.decode()
+
+
+def test_audit_tab_ip_only_for_admin(client, station):
+    from apps.stations.models import StationAuditLog
+
+    StationAuditLog.objects.create(
+        station=station,
+        event_type=StationAuditLog.EventType.UPDATED,
+        message="changed something",
+        ip_address="198.51.100.23",
+    )
+    url = reverse("stations:station_detail", args=[station.pk])
+    _login(client, "staff")
+    html = client.get(url).content.decode()
+    assert 'data-tab-panel="audit"' in html
+    assert "changed something" in html
+    assert "198.51.100.23" not in html
+    assert "<th>IP</th>" not in html
+    client.logout()
+    _login(client, "admin")
+    html = client.get(url).content.decode()
+    assert "198.51.100.23" in html
+    assert "<th>IP</th>" in html
