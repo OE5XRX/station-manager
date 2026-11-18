@@ -275,7 +275,9 @@ class SsoOAuth2Validator(OAuth2Validator):
                     event_type=SsoAuditLog.EventType.LOGIN_SUCCESS,
                     target_user=rt.user,
                     application=rt.application,
-                    message=f"Token issued. UA={ua[:80]} City={city or 'unknown'}",
+                    # UA/City live only in TokenSession (90-day retention),
+                    # never in the 365-day audit free text.
+                    message="Token issued.",
                     ip_address=ip,
                 )
 
