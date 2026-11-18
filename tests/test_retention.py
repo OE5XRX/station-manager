@@ -363,6 +363,32 @@ def test_expired_oauth_tokens_counted_and_cleared(user, app):
     assert AccessToken.objects.filter(token="live").exists()
 
 
+def test_oauth_cleanup_keeps_rotated_sessions_in_forensic_window(user, app):
+    """Unlike DOT's cleartokens, a revoked refresh token whose TokenSession is
+    still inside the 30-day window survives (the session would cascade away)."""
+    rotated_rt = RefreshToken.objects.create(
+        user=user, application=app, token="r-rotated", revoked=NOW - timedelta(days=1)
+    )
+    session = TokenSession.objects.create(user=user, application=app, refresh_token=rotated_rt)
+    orphan_rt = RefreshToken.objects.create(
+        user=user, application=app, token="r-orphan", revoked=NOW - timedelta(days=1)
+    )
+    live_rt = RefreshToken.objects.create(user=user, application=app, token="r-live")
+    result = run_retention(_cfg())
+    assert result.errors == []
+    assert _exists(session) and _exists(rotated_rt) and _exists(live_rt)
+    assert not _exists(orphan_rt)
+
+
+def test_oauth_cleanup_skips_held_users(user, app, monkeypatch):
+    monkeypatch.setattr(retention, "held_user_ids", lambda: frozenset({user.pk}))
+    AccessToken.objects.create(
+        user=user, application=app, token="old", expires=NOW - timedelta(days=1), scope="openid"
+    )
+    assert run_retention(_cfg()).counts["oauth_tokens_cleared"] == 0
+    assert AccessToken.objects.filter(token="old").exists()
+
+
 def test_audit_messages_scrubbed_and_idempotent(user):
     legacy = _account_row(5, target=user, message="to a@b.at from 192.0.2.1")
     sso = _sso_row(5, target=user, message="Token issued. UA=Mozilla/5.0 City=Linz")

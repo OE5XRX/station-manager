@@ -130,6 +130,9 @@ Spec: `docs/superpowers/specs/2026-11-18-datenschutz-design.md` („Job für die
   `station_audit_ip_scrubbed` scrubbt IPs/E-Mails in `StationAuditLog.message` **und** allen Strings im
   `changes`-JSON (z.B. Stations-IP-Wechsel, `user=None`). Dazu abgelaufene Tokens/Sessions
   (`TokenSession.objects.stale` = dieselbe Regel wie `prune_token_sessions`) und Legacy-Freitext-Scrub.
+  **Kein `cleartokens`:** DOT löscht damit jedes revoked Refresh-Token sofort, und `TokenSession.refresh_token`
+  kaskadiert → rotierte Sessions wären vor ihrem 30-d-Fenster weg (auch bei Legal Hold). Refresh-Tokens fallen
+  erst, wenn ihre `TokenSession` bereits gepruned ist.
 - Jeder Schritt fehlerisoliert (`errors`), gebatcht, idempotent (zweiter Lauf zählt 0). Update-Schritte
   filtern auf „Feld noch gesetzt“, sonst Endlosschleife im Batch-Loop.
 - **Legal-Hold-Hook:** `held_user_ids()` (heute leer) — Zeilen dieser User überspringen **beide** Fristen.

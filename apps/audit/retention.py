@@ -16,7 +16,6 @@ Driven by ``manage.py enforce_retention`` (own compose service ``retention``).
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from io import StringIO
 
 from django.conf import settings
 from django.core.management import call_command
@@ -301,14 +300,32 @@ def _django_sessions_cleared(cfg, held):
 
 
 def _oauth_tokens_cleared(cfg, held):
-    from oauth2_provider.models import AccessToken
+    """Expired OAuth grants/tokens — deliberately NOT via DOT's ``cleartokens``.
 
-    # Approximation: django-oauth-toolkit's cleartokens also removes expired
-    # refresh tokens / grants / ID tokens; this counts expired access tokens only.
-    count = AccessToken.objects.filter(expires__lt=cfg.now).count()
-    if cfg.enforce:
-        call_command("cleartokens", stdout=StringIO())
-    return count
+    ``cleartokens`` deletes every revoked refresh token at once, and
+    ``TokenSession.refresh_token`` cascades: rotated/revoked sessions would vanish
+    before their 30-day forensic window (``TokenSession.objects.stale``) and past a
+    legal hold. A refresh token is therefore only removed once its session row is
+    gone (``token_sessions_pruned`` runs earlier) and it is revoked or past its
+    lifetime.
+    """
+    from oauth2_provider.models import AccessToken, Grant, IDToken, RefreshToken
+
+    refresh_lifetime = timedelta(
+        seconds=settings.OAUTH2_PROVIDER.get("REFRESH_TOKEN_EXPIRE_SECONDS", 14 * 24 * 3600)
+    )
+    querysets = (
+        Grant.objects.filter(expires__lt=cfg.now),
+        RefreshToken.objects.filter(sso_session__isnull=True).filter(
+            Q(revoked__isnull=False) | Q(created__lt=cfg.now - refresh_lifetime)
+        ),
+        AccessToken.objects.filter(expires__lt=cfg.now),
+        # Deleting an IDToken cascades to its AccessToken: only with that one gone/expired.
+        IDToken.objects.filter(expires__lt=cfg.now).filter(
+            Q(access_token__isnull=True) | Q(access_token__expires__lt=cfg.now)
+        ),
+    )
+    return sum(_apply(_exclude_held(qs, held, "user"), cfg) for qs in querysets)
 
 
 def _audit_messages_scrubbed(cfg, held):
