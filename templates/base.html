@@ -49,6 +49,11 @@
       </main>
     </div>
   {% endblock body %}
+  {% comment %}
+    Outside the body block on purpose: pages that override ``body``
+    (set_password, password_reset_request, privacy_ack, …) still get it.
+  {% endcomment %}
+  {% include "includes/privacy_footer.html" %}
 
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"
           integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"

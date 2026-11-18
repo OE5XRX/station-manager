@@ -1,0 +1,5 @@
+{% load i18n %}{% if PRIVACY_POLICY_VERSION > 0 %}
+<footer class="site-footer">
+  <a href="{{ PRIVACY_POLICY_URL }}" target="_blank" rel="noopener">{% trans "Datenschutz" %}</a>
+</footer>
+{% endif %}

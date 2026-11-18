@@ -1156,6 +1156,25 @@ input[type="checkbox"] + label, label + input[type="checkbox"] { display: inline
   .privacy-ledger-term { grid-column: 1; grid-row: auto; }
 }
 
+/* ---------- Site footer (includes/privacy_footer.html) ------------------- */
+/* Body becomes a column so the shell fills the viewport *minus* the footer:
+   on short pages the footer sits at the bottom of the screen instead of
+   permanently one footer-height below the fold (shells are min-height 100vh). */
+body:has(> .site-footer) { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
+body:has(> .site-footer) > .app-shell,
+body:has(> .site-footer) > .auth-shell { flex: 1 0 auto; min-height: 0; }
+.site-footer {
+  position: relative; z-index: 1;
+  display: flex; justify-content: flex-end; gap: 20px;
+  padding: 10px 24px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.site-footer a { color: var(--ink-2); text-decoration: none; }
+.site-footer a:hover { color: var(--ink-0); text-decoration: underline; }
+.site-footer a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
 /* ---------- Terminal tab specific --------------------------------------- */
 .terminal-host {
   background: var(--term-bg);
