@@ -103,6 +103,23 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  retention:
+    build:
+      context: .
+      args:
+        DEV: "true"
+    command: python manage.py enforce_retention --loop --interval 86400
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   background-worker:
     build:
       context: .
