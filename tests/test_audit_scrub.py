@@ -23,6 +23,10 @@ from apps.audit.scrub import EMAIL_PLACEHOLDER, IP_PLACEHOLDER, scrub_message
         ),
         ("firmware v1.2.3.4 at 12:30:45", "firmware v1.2.3.4 at 12:30:45"),
         ("version 1.2.3", "version 1.2.3"),
+        ("from 192.0.2.1:8080", "from [ip]:8080"),
+        ("IP:10.0.0.1", "IP:[ip]"),
+        ("ip=1.2.3.4:8080", "ip=[ip]:8080"),
+        ("contact mü@example.at", "contact [email]"),
         (
             "Policy grant_required -> open. 2 active session(s)",
             "Policy grant_required -> open. 2 active session(s)",
@@ -57,3 +61,12 @@ def test_scrub_is_idempotent(raw):
 def test_placeholders():
     assert EMAIL_PLACEHOLDER == "[email]"
     assert IP_PLACEHOLDER == "[ip]"
+
+
+def test_scrub_long_input_is_linear():
+    import time
+
+    for text in ("a" * 40000, "a@" * 20000, "a." * 10000 + "@" + "b." * 10000):
+        start = time.monotonic()
+        scrub_message(text)
+        assert time.monotonic() - start < 1.0

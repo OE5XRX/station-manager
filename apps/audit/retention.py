@@ -123,7 +123,7 @@ def _apply(qs, cfg: RetentionConfig, *, update: dict | None = None) -> int:
     model = qs.model
     total = 0
     while True:
-        pks = list(qs.values_list("pk", flat=True)[: cfg.batch_size])
+        pks = list(qs.order_by().values_list("pk", flat=True)[: cfg.batch_size])
         if not pks:
             return total
         with transaction.atomic():
@@ -299,6 +299,20 @@ def _django_sessions_cleared(cfg, held):
     return count
 
 
+def _axes_logs_deleted(cfg, held):
+    """django-axes login logs/attempts (IP, user agent, username) past the IP window.
+
+    Lockouts last ``AXES_COOLOFF_TIME`` (hours), far below the 90-day window.
+    Rows are keyed by username string, not a user FK, so no held-user filter.
+    """
+    from axes.models import AccessAttempt, AccessFailureLog, AccessLog
+
+    return sum(
+        _apply(model.objects.filter(attempt_time__lt=cfg.ip_cutoff), cfg)
+        for model in (AccessLog, AccessFailureLog, AccessAttempt)
+    )
+
+
 def _oauth_tokens_cleared(cfg, held):
     """Expired OAuth grants/tokens — deliberately NOT via DOT's ``cleartokens``.
 
@@ -319,11 +333,12 @@ def _oauth_tokens_cleared(cfg, held):
         RefreshToken.objects.filter(sso_session__isnull=True).filter(
             Q(revoked__isnull=False) | Q(created__lt=cfg.now - refresh_lifetime)
         ),
-        AccessToken.objects.filter(expires__lt=cfg.now),
-        # Deleting an IDToken cascades to its AccessToken: only with that one gone/expired.
-        IDToken.objects.filter(expires__lt=cfg.now).filter(
-            Q(access_token__isnull=True) | Q(access_token__expires__lt=cfg.now)
-        ),
+        # An access token still referenced by a refresh token must stay: the
+        # refresh grant validates through RefreshToken.access_token (SET_NULL
+        # would break every idle RP session), same rule as DOT's clear_expired.
+        AccessToken.objects.filter(expires__lt=cfg.now, refresh_token__isnull=True),
+        # Deleting an IDToken cascades to its AccessToken: only once that one is gone.
+        IDToken.objects.filter(expires__lt=cfg.now, access_token__isnull=True),
     )
     return sum(_apply(_exclude_held(qs, held, "user"), cfg) for qs in querysets)
 
@@ -356,6 +371,7 @@ def run_retention(cfg: RetentionConfig) -> RetentionResult:
         ("token_session_client_cleared", _token_session_client_cleared),
         ("account_token_ip_cleared", _account_token_ip_cleared),
         ("account_tokens_expired_deleted", _account_tokens_expired_deleted),
+        ("axes_logs_deleted", _axes_logs_deleted),
         ("token_sessions_pruned", _token_sessions_pruned),
         ("django_sessions_cleared", _django_sessions_cleared),
         ("oauth_tokens_cleared", _oauth_tokens_cleared),

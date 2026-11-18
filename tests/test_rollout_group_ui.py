@@ -141,7 +141,7 @@ def test_station_form_sets_group_and_audits(client, staff_user, station, make_ro
     log = StationAuditLog.objects.get(
         station=station, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
     )
-    assert log.message == f"Rollout group: none → Beta by {staff_user.username}"
+    assert log.message == "Rollout group: none → Beta"
     assert log.user == staff_user
 
     # Clearing the group audits the reverse transition.
@@ -153,7 +153,7 @@ def test_station_form_sets_group_and_audits(client, staff_user, station, make_ro
             station=station, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
         ).values_list("message", flat=True)
     )
-    assert f"Rollout group: Beta → none by {staff_user.username}" in messages
+    assert "Rollout group: Beta → none" in messages
 
     # Saving without a group change writes no further group audit entry.
     client.post(url, _station_post(station, rollout_group="", notes="hi"))
@@ -175,7 +175,7 @@ def test_station_create_with_group(client, staff_user, make_rollout_group):
     log = StationAuditLog.objects.get(
         station=created, event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED
     )
-    assert log.message == f"Rollout group: none → Beta by {staff_user.username}"
+    assert log.message == "Rollout group: none → Beta"
 
 
 def test_station_create_without_group_writes_no_group_audit(client, staff_user):

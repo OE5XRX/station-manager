@@ -158,7 +158,7 @@ class StationViewSet(
             self.request,
             station=station,
             event_type=StationAuditLog.EventType.ROLLOUT_GROUP_CHANGED,
-            message=f"Rollout group: {old_name} → {new_name} by {self.request.user}",
+            message=f"Rollout group: {old_name} → {new_name}",
             changes={"rollout_group": {"old": old_name, "new": new_name}},
         )
 

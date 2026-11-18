@@ -31,8 +31,12 @@ _LEGACY_LOGIN_RE = re.compile(r"^Token issued\. UA=.*$", re.DOTALL)
 # token is an IP (or "None" — a session without recorded IP), so ordinary
 # prose like "copied from foo (bar)" is left alone.
 _LEGACY_FROM_RE = re.compile(r" from (\S+) \([^)]*\)")
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# The lookbehind anchors each match at the start of the local part, so a long
+# run without "@" is not re-scanned from every offset (quadratic backtracking).
+_EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]+@[\w.-]+\.[^\W\d_]{2,}")
 _IP_CANDIDATE_RE = re.compile(r"(?<![\w.:])[0-9A-Fa-f:.]{2,}(?![\w:])")
+# IPv4 glued to a "label:" ("IP:10.0.0.1"), which the candidate lookbehind skips.
+_LABELED_IPV4_RE = re.compile(r"(?<=[^\W\d_]:)\d{1,3}(?:\.\d{1,3}){3}(?![\w.])")
 
 
 def _is_ip(token: str) -> bool:
@@ -58,7 +62,16 @@ def _replace_ip(match: re.Match) -> str:
     stripped = token.rstrip(".")
     if stripped != token and _is_ip(stripped):
         return IP_PLACEHOLDER + token[len(stripped) :]
+    # IPv4 with port ("192.0.2.1:8080").
+    host, _, port = token.rpartition(":")
+    if port.isdigit() and "." in host and _is_ip(host):
+        return f"{IP_PLACEHOLDER}:{port}"
     return token
+
+
+def _replace_labeled_ipv4(match: re.Match) -> str:
+    token = match.group(0)
+    return IP_PLACEHOLDER if _is_ip(token) else token
 
 
 def scrub_message(text: str) -> str:
@@ -68,4 +81,5 @@ def scrub_message(text: str) -> str:
     text = _LEGACY_LOGIN_RE.sub("Token issued.", text)
     text = _LEGACY_FROM_RE.sub(_strip_legacy_from, text)
     text = _EMAIL_RE.sub(EMAIL_PLACEHOLDER, text)
+    text = _LABELED_IPV4_RE.sub(_replace_labeled_ipv4, text)
     return _IP_CANDIDATE_RE.sub(_replace_ip, text)

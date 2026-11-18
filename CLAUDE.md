@@ -128,11 +128,11 @@ Spec: `docs/superpowers/specs/2026-11-18-datenschutz-design.md` („Job für die
   `TerminalSession`. Reine System-Zeilen im Stations-Audit bleiben.
 - 90 d: `ip_address` der drei Audit-Tabellen, TokenSession-Client-Felder, `AccountToken.ip_created`;
   `station_audit_ip_scrubbed` scrubbt IPs/E-Mails in `StationAuditLog.message` **und** allen Strings im
-  `changes`-JSON (z.B. Stations-IP-Wechsel, `user=None`). Dazu abgelaufene Tokens/Sessions
+  `changes`-JSON (z.B. Stations-IP-Wechsel, `user=None`). django-axes-Logs (`AccessLog`/`AccessFailureLog`/`AccessAttempt`) nach 90 d. Dazu abgelaufene Tokens/Sessions
   (`TokenSession.objects.stale` = dieselbe Regel wie `prune_token_sessions`) und Legacy-Freitext-Scrub.
   **Kein `cleartokens`:** DOT löscht damit jedes revoked Refresh-Token sofort, und `TokenSession.refresh_token`
   kaskadiert → rotierte Sessions wären vor ihrem 30-d-Fenster weg (auch bei Legal Hold). Refresh-Tokens fallen
-  erst, wenn ihre `TokenSession` bereits gepruned ist.
+  erst, wenn ihre `TokenSession` bereits gepruned ist; Access-/ID-Tokens nur ohne referenzierendes Refresh-/Access-Token (sonst bricht der Refresh-Grant).
 - Jeder Schritt fehlerisoliert (`errors`), gebatcht, idempotent (zweiter Lauf zählt 0). Update-Schritte
   filtern auf „Feld noch gesetzt“, sonst Endlosschleife im Batch-Loop.
 - **Legal-Hold-Hook:** `held_user_ids()` (heute leer) — Zeilen dieser User überspringen **beide** Fristen.

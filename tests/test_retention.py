@@ -31,6 +31,7 @@ CATEGORIES = [
     "token_session_client_cleared",
     "account_token_ip_cleared",
     "account_tokens_expired_deleted",
+    "axes_logs_deleted",
     "token_sessions_pruned",
     "django_sessions_cleared",
     "oauth_tokens_cleared",
@@ -378,6 +379,59 @@ def test_oauth_cleanup_keeps_rotated_sessions_in_forensic_window(user, app):
     assert result.errors == []
     assert _exists(session) and _exists(rotated_rt) and _exists(live_rt)
     assert not _exists(orphan_rt)
+
+
+def test_oauth_cleanup_keeps_expired_access_token_of_live_refresh_token(user, app):
+    """The refresh grant validates through RefreshToken.access_token — deleting
+    the (always soon expired) access token would break every idle RP session."""
+    from oauth2_provider.models import IDToken
+    from oauth2_provider.oauth2_validators import OAuth2Validator
+
+    id_token = IDToken.objects.create(
+        user=user, application=app, expires=NOW - timedelta(hours=2), scope="openid"
+    )
+    expired = AccessToken.objects.create(
+        user=user,
+        application=app,
+        token="expired-at",
+        expires=NOW - timedelta(hours=1),
+        scope="openid",
+        id_token=id_token,
+    )
+    rt = RefreshToken.objects.create(
+        user=user, application=app, token="r-live-2", access_token=expired
+    )
+    session = TokenSession.objects.create(user=user, application=app, refresh_token=rt)
+    result = run_retention(_cfg())
+    assert result.errors == []
+    assert _exists(expired) and _exists(rt) and _exists(session) and _exists(id_token)
+    rt.refresh_from_db()
+    assert rt.access_token_id == expired.pk
+
+    class _Req:
+        pass
+
+    req = _Req()
+    req.client = app
+    assert OAuth2Validator().validate_refresh_token("r-live-2", app, req)
+
+
+def test_axes_logs_deleted_after_ip_window(db):
+    from axes.models import AccessAttempt, AccessFailureLog, AccessLog
+
+    rows = []
+    for model in (AccessLog, AccessFailureLog, AccessAttempt):
+        extra = {"failures_since_start": 1} if model is AccessAttempt else {}
+        old = model.objects.create(username="u", ip_address="192.0.2.1", user_agent="ua", **extra)
+        new = model.objects.create(username="v", ip_address="192.0.2.2", user_agent="ua", **extra)
+        model.objects.filter(pk=old.pk).update(attempt_time=NOW - timedelta(days=91))
+        model.objects.filter(pk=new.pk).update(attempt_time=NOW - timedelta(days=89))
+        rows.append((old, new))
+    assert run_retention(_cfg(enforce=False)).counts["axes_logs_deleted"] == 3
+    result = run_retention(_cfg())
+    assert result.counts["axes_logs_deleted"] == 3 and result.errors == []
+    for old, new in rows:
+        assert not _exists(old) and _exists(new)
 
 
 def test_oauth_cleanup_skips_held_users(user, app, monkeypatch):
