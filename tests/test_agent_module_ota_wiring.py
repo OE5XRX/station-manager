@@ -97,6 +97,7 @@ def harness(monkeypatch, tmp_path):
         ctor_raises=False,
         block=0.0,
         image_ota_shuts_down=False,
+        image_ota_block=0.0,
     ):
         calls: list[str] = []
         clients: list[object] = []
@@ -132,6 +133,9 @@ def harness(monkeypatch, tmp_path):
 
         def fake_image_ota(c, h):
             calls.append("image_ota")
+            if image_ota_block:
+                time.sleep(image_ota_block)
+                calls.append("image_ota_done")
             if image_ota_shuts_down:
                 agent._shutdown.set()  # SIGTERM from the reboot the image OTA queued
 
@@ -380,4 +384,27 @@ def test_keepalive_not_started_when_shutting_down(monkeypatch):
     with agent._heartbeat_keepalive():
         time.sleep(0.05)
     assert started == []
-    assert not [t for t in threading.enumerate() if t.name == "module-ota-keepalive"]
+    assert not [t for t in threading.enumerate() if t.name == "ota-keepalive"]
+
+
+def test_keepalive_heartbeats_during_long_image_ota(harness):
+    """An image download over a slow link (plus retry backoff) takes hours: the
+    station must keep heartbeating while the main loop is blocked in it."""
+    _, thread, _, calls = harness(
+        heartbeat_interval=0.05, ota_check_interval=1, image_ota_block=0.4
+    )
+    assert _until(lambda: "image_ota_done" in calls)
+    during = calls[calls.index("image_ota") : calls.index("image_ota_done")]
+    assert during.count("keepalive") >= 2
+    assert "heartbeat" not in during
+    assert thread.is_alive()
+
+
+def test_image_ota_exception_does_not_kill_loop(monkeypatch):
+    agent = StationAgent()
+
+    def boom(config, http_client):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent, "_handle_ota", boom)
+    agent._run_image_ota(AgentConfig(), object())  # must not raise

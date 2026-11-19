@@ -13,7 +13,7 @@ import time
 from .boot_markers import FAIL_PREFIX as BOOT_FAIL_PREFIX
 from .bootinfo import write_last_ota_result
 from .bootloader import arm_trial_rollback, get_bootloader, get_env
-from .config import load_config
+from .config import DEFAULT_OTA_DOWNLOAD_STALL_LIMIT, load_config
 from .health_check import run_health_checks
 from .heartbeat import send_heartbeat
 from .http_client import HttpClient
@@ -21,10 +21,11 @@ from .inventory import get_current_version
 from .metrics import MetricsCollector
 from .module_ota import NUDGE_MIN_INTERVAL_S, ModuleOta
 from .ota import (
+    DownloadOutcome,
     apply_update,
     check_for_update,
     commit_boot,
-    download_firmware_resumable,
+    download_with_retry,
     report_status,
 )
 from .terminal import TerminalClient
@@ -62,12 +63,13 @@ class StationAgent:
 
     @contextlib.contextmanager
     def _heartbeat_keepalive(self):
-        """Keep heartbeating while the main thread is blocked in a module flash.
+        """Keep heartbeating while the main thread is blocked in an OTA step.
 
-        A flash can take minutes (download + settle + verify); without heartbeats the
-        server would see the station offline and lift the slot drain mid-flash. The
-        keepalive uses its OWN ``HttpClient`` (module_ota uses the main one concurrently)
-        and stops when the module OTA call returns. Not started when shutting down.
+        A module flash takes minutes (download + settle + verify), an image download
+        over a slow link hours; without heartbeats the server would see the station
+        offline (and lift a module slot drain mid-flash). The keepalive uses its OWN
+        ``HttpClient`` (the OTA step uses the main one concurrently) and stops when the
+        wrapped call returns. Not started when shutting down.
         """
         config = self._config
         if config is None or self._shutdown.is_set():
@@ -79,7 +81,7 @@ class StationAgent:
             try:
                 client = HttpClient(config)
             except Exception:  # noqa: BLE001
-                logger.exception("module_ota keepalive: cannot create HTTP client")
+                logger.exception("ota keepalive: cannot create HTTP client")
                 return
             while not stop.wait(config.heartbeat_interval) and not self._shutdown.is_set():
                 try:
@@ -91,9 +93,9 @@ class StationAgent:
                         metrics=self._metrics,
                     )
                 except Exception:  # noqa: BLE001 — a failed heartbeat must not end the keepalive
-                    logger.exception("module_ota keepalive heartbeat failed")
+                    logger.exception("ota keepalive heartbeat failed")
 
-        thread = threading.Thread(target=_keepalive, name="module-ota-keepalive", daemon=True)
+        thread = threading.Thread(target=_keepalive, name="ota-keepalive", daemon=True)
         thread.start()
         try:
             yield
@@ -178,6 +180,67 @@ class StationAgent:
                 logger.debug("firmware_check nudge received")
                 self._nudge_pending = True
 
+    def _run_image_ota(self, config, http_client):
+        """One image-OTA check on the main thread, heartbeating meanwhile.
+
+        Download (hours on a slow LTE/HAMNET link, incl. retry backoff) and
+        install block the main loop; without the keepalive the server would
+        see the station offline for the whole time. Never raises.
+        """
+        try:
+            with self._heartbeat_keepalive():
+                self._handle_ota(config, http_client)
+        except Exception as exc:  # noqa: BLE001 — the main loop must never die
+            logger.error("OTA check failed unexpectedly: %s", exc)
+
+    def _download_image(
+        self,
+        config,
+        http_client,
+        *,
+        result_pk,
+        version,
+        failure_prefix,
+        failure_detail,
+        **download_kwargs,
+    ) -> bool:
+        """Download with transient-error retry; report ``failed`` only when final.
+
+        Network trouble is retried in place (status stays ``downloading``,
+        the partial is resumed via Range) until no progress was made for
+        ``ota_download_stall_limit`` seconds. A shutdown during a backoff wait
+        returns False without reporting anything, so the next start resumes.
+        """
+        stall_limit = getattr(config, "ota_download_stall_limit", DEFAULT_OTA_DOWNLOAD_STALL_LIMIT)
+        result = download_with_retry(
+            http_client=http_client,
+            stall_limit_s=stall_limit,
+            wait=self._shutdown.wait,
+            **download_kwargs,
+        )
+        if result.outcome is DownloadOutcome.OK:
+            return True
+        if result.outcome is DownloadOutcome.ABORTED:
+            return False
+        report_status(
+            config,
+            http_client,
+            result_pk,
+            "failed",
+            error_message=f"{failure_prefix}: {result.detail}",
+        )
+        # M3: persist outcome at every terminal failure path.
+        try:
+            write_last_ota_result(
+                config.state_dir,
+                "failed",
+                detail=f"{failure_detail}: {result.detail}",
+                version=version,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("write_last_ota_result failed: %s", exc)
+        return False
+
     def _handle_ota(self, config, http_client):
         """Check for and process an OTA update.
 
@@ -249,30 +312,18 @@ class StationAgent:
             report_status(config, http_client, result_pk, "downloading")
 
             # Download firmware (resumable; download_url is opaque — pass verbatim).
-            if not download_firmware_resumable(
-                http_client=http_client,
+            if not self._download_image(
+                config,
+                http_client,
+                result_pk=result_pk,
+                version=version,
                 download_url=download_url,
                 expected_checksum=expected_checksum,
                 dest_path=dest_path,
                 expected_size=expected_size,
+                failure_prefix="Firmware download failed",
+                failure_detail="download or checksum verification failed",
             ):
-                report_status(
-                    config,
-                    http_client,
-                    result_pk,
-                    "failed",
-                    error_message="Firmware download or checksum verification failed",
-                )
-                # M3: persist outcome at every terminal failure path.
-                try:
-                    write_last_ota_result(
-                        config.state_dir,
-                        "failed",
-                        detail="download or checksum verification failed",
-                        version=version,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("write_last_ota_result failed: %s", exc)
                 return
         else:
             # Resuming from INSTALLING means the download completed once
@@ -282,30 +333,18 @@ class StationAgent:
             if not os.path.exists(dest_path):
                 logger.info("INSTALLING resume but partial is gone — re-downloading")
                 report_status(config, http_client, result_pk, "downloading")
-                if not download_firmware_resumable(
-                    http_client=http_client,
+                if not self._download_image(
+                    config,
+                    http_client,
+                    result_pk=result_pk,
+                    version=version,
                     download_url=download_url,
                     expected_checksum=expected_checksum,
                     dest_path=dest_path,
                     expected_size=expected_size,
+                    failure_prefix="Firmware re-download failed during INSTALLING resume",
+                    failure_detail="re-download failed during INSTALLING resume",
                 ):
-                    report_status(
-                        config,
-                        http_client,
-                        result_pk,
-                        "failed",
-                        error_message="Firmware re-download failed during INSTALLING resume",
-                    )
-                    # M3: persist outcome at every terminal failure path.
-                    try:
-                        write_last_ota_result(
-                            config.state_dir,
-                            "failed",
-                            detail="re-download failed during INSTALLING resume",
-                            version=version,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("write_last_ota_result failed: %s", exc)
                     return
 
         # Report installing
@@ -850,10 +889,7 @@ class StationAgent:
 
             # Check for OTA updates at the configured interval
             if heartbeat_count % config.ota_check_interval == 0:
-                try:
-                    self._handle_ota(config, http_client)
-                except Exception as exc:
-                    logger.error("OTA check failed unexpectedly: %s", exc)
+                self._run_image_ota(config, http_client)
                 self._run_module_ota()
 
             self._wait_for_next_heartbeat(config.heartbeat_interval)

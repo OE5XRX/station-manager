@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = "/etc/stationagent/config.yml"
 CONFIG_PATH_ENV = "STATION_AGENT_CONFIG"
 
+# Give up an image download only after it made no progress for this long (s).
+DEFAULT_OTA_DOWNLOAD_STALL_LIMIT = 6 * 3600
+
 
 @dataclass
 class AgentConfig:
@@ -21,6 +24,10 @@ class AgentConfig:
     ed25519_key_path: str = ""
     heartbeat_interval: int = 60
     ota_check_interval: int = 5
+    # Transient download errors (timeouts, dropped connections, 5xx) are retried
+    # with backoff and Range-resume; ``failed`` is reported only after the
+    # partial has not grown for this many seconds. LTE/HAMNET outages last hours.
+    ota_download_stall_limit: int = DEFAULT_OTA_DOWNLOAD_STALL_LIMIT
     download_dir: str = "/tmp/station-agent"
     state_dir: str = "/var/lib/station-agent"
     log_level: str = "INFO"
@@ -77,6 +84,8 @@ class AgentConfig:
             errors.append("heartbeat_interval must be at least 10 seconds")
         if self.ota_check_interval < 1:
             errors.append("ota_check_interval must be at least 1")
+        if self.ota_download_stall_limit < 0:
+            errors.append("ota_download_stall_limit must not be negative")
         if errors:
             raise ValueError(f"Configuration errors: {'; '.join(errors)}")
 
@@ -105,6 +114,9 @@ def load_config() -> AgentConfig:
         ed25519_key_path=str(data.get("ed25519_key_path", "")),
         heartbeat_interval=int(data.get("heartbeat_interval", 60)),
         ota_check_interval=int(data.get("ota_check_interval", 5)),
+        ota_download_stall_limit=int(
+            data.get("ota_download_stall_limit", DEFAULT_OTA_DOWNLOAD_STALL_LIMIT)
+        ),
         download_dir=str(data.get("download_dir", "/tmp/station-agent")),
         state_dir=str(data.get("state_dir", "/var/lib/station-agent")),
         log_level=str(data.get("log_level", "INFO")).upper(),
