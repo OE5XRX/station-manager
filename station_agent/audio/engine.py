@@ -92,7 +92,8 @@ class AudioEngine:
         self.registry = StreamRegistry(rx_rate=rx_rate, mic_rate=mic_rate)
         self._dead_man_timeout = dead_man_timeout
         self._max_tx_seconds = max_tx_seconds
-        # stream_id -> {"bridge", "seq", "ts", "rtp_max", "rtp_acc", "rate", "ref", "dead"}
+        # stream_id -> {"bridge", "seq", "ts", "ts_base", "last_ts", "first", "rtp_max",
+        #               "rtp_acc", "rate", "ref", "dead"}
         self._rx: dict[str, dict] = {}
         self._rx_watchdog_interval = rx_watchdog_interval
         self._rx_restart_backoff = rx_restart_backoff
@@ -292,7 +293,10 @@ class AudioEngine:
                 self._rx_demand.add(stream_id)
             await self._start_rx(stream_id)
 
-    async def _start_rx(self, stream_id: str) -> None:
+    async def _start_rx(self, stream_id: str, resume: dict | None = None) -> None:
+        """Start *stream_id*'s RX bridge. ``resume`` (the replaced bridge's state) continues
+        its §5.3 seq/ts: the browser keeps its jitter buffer per stream_ref, so a seq that
+        restarts at 0 would be dropped as "too late" until it caught up again."""
         if self._closed:
             return
         info = self.registry.get(stream_id)
@@ -311,9 +315,17 @@ class AudioEngine:
             # Agent-side lifecycle failure (no §5.5 client-error code fits) → stream_state.
             await self._emit_stream_state(stream_id, "error", "RX node unresolved")
             return
+        seq, ts_base = 0, 0
+        if resume is not None:
+            seq = resume["seq"]
+            last = resume["last_ts"]
+            ts_base = resume["ts_base"] if last is None else last + info.rate * 20 // 1000
         state = {
-            "seq": 0,
-            "ts": 0,
+            "seq": seq,
+            "ts": ts_base,
+            "ts_base": ts_base,
+            "last_ts": None,
+            "first": True,
             "rtp_max": None,
             "rtp_acc": 0,
             "rate": info.rate,
@@ -363,21 +375,24 @@ class AudioEngine:
         if state.get("dead"):
             return  # stream was unsubscribed; drop a late reader-thread callback
         flags = frame.FLAG_DTX if len(payload) <= _DTX_MAX_BYTES else 0
-        if state["seq"] == 0:
-            flags |= frame.FLAG_MARKER  # talk-onset on the first packet after (re)subscribe
+        if state["first"]:
+            flags |= frame.FLAG_MARKER  # talk-onset on the first packet of a bridge run
+            state["first"] = False
+        ts = self._media_ts(state, rtp_ts)
         data = frame.pack_frame(
             stream_ref=state["ref"],
             seq=state["seq"],
-            ts=self._media_ts(state, rtp_ts),
+            ts=ts,
             flags=flags,
             payload=payload,
         )
         state["seq"] += 1
+        state["last_ts"] = ts
         self._emit_binary(data)
 
     @staticmethod
     def _media_ts(state: dict, rtp_ts) -> int:
-        """§5.3 ts (samples at the stream rate, 0 on the first packet) for this packet.
+        """§5.3 ts (samples at the stream rate, ``ts_base`` on the first packet).
 
         Follows the bridge's RTP timestamp, so audio lost before the encoder (or a DTX pause)
         shows up as a ts gap the receiver can plan for instead of being hidden by pacing one
@@ -398,7 +413,7 @@ class AudioEngine:
             else:
                 inc = _RTP_TS_PER_FRAME
             state["rtp_acc"] += inc
-        return state["rtp_acc"] * state["rate"] // _RTP_CLOCK
+        return state["ts_base"] + state["rtp_acc"] * state["rate"] // _RTP_CLOCK
 
     # --- RX watchdog ---------------------------------------------------------
     def _ensure_rx_watchdog(self) -> None:
@@ -409,10 +424,16 @@ class AudioEngine:
     async def _rx_watchdog_loop(self) -> None:
         while not self._closed:
             await asyncio.sleep(self._rx_watchdog_interval)
-            try:
-                await self.rx_watchdog_tick()
-            except Exception:  # noqa: BLE001 — the watchdog must outlive one bad tick
-                logger.exception("engine: RX watchdog tick failed")
+            # Shielded: stop() cancelling us mid-restart must not abandon a bridge.start()
+            # still running in the executor (it would outlive the engine's stop). The tick
+            # finishes under _rx_lock; stop() then takes the lock and stops what it started.
+            await asyncio.shield(self._rx_watchdog_tick_safe())
+
+    async def _rx_watchdog_tick_safe(self) -> None:
+        try:
+            await self.rx_watchdog_tick()
+        except Exception:  # noqa: BLE001 — the watchdog must outlive one bad tick
+            logger.exception("engine: RX watchdog tick failed")
 
     def _rx_restart_interval(self, streak: int) -> float:
         base, cap = self._rx_restart_backoff
@@ -431,12 +452,15 @@ class AudioEngine:
                 continue
             reason = health.verdict()
             last = self._rx_wd_restarts.get(stream_id)
+            interval_over = last is None or now - last[0] >= self._rx_restart_interval(last[1])
             if reason is None:
-                if last is not None and last[1] > 1 and health.packets:
-                    # The restarted bridge delivers: back to the base interval.
-                    self._rx_wd_restarts[stream_id] = (last[0], 1)
+                if last is not None and interval_over:
+                    # Healthy for a whole backoff interval since the last restart: forget the
+                    # streak (a gappy-but-delivering bridge keeps its sticky verdict and so
+                    # keeps doubling instead).
+                    del self._rx_wd_restarts[stream_id]
                 continue
-            if last is not None and now - last[0] < self._rx_restart_interval(last[1]):
+            if not interval_over:
                 continue
             due.append((stream_id, state, reason))
         if not due:
@@ -455,7 +479,7 @@ class AudioEngine:
                     self._rx_restart_interval(streak),
                 )
                 await self._stop_rx(stream_id)
-                await self._start_rx(stream_id)
+                await self._start_rx(stream_id, resume=state)
 
     # --- TX (mic → module) -------------------------------------------------
     async def on_mic_state(self, *, active: bool, tx_slot, tx_module) -> None:

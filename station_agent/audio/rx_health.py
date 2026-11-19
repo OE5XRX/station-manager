@@ -34,7 +34,9 @@ class RxHealth:
 
     ``verdict`` evaluates the lost-frame ratio once per ``window`` seconds (then starts a new
     window) and only with at least ``min_pairs`` signal→signal intervals of evidence, so a
-    stream that is mostly silent (DTX) is never judged on a handful of frames.
+    stream that is mostly silent (DTX) is never judged on a handful of frames. The result is
+    sticky until the next window with enough evidence: a lossy stream stays "lost frames"
+    between evaluations and through silent windows, so None really means "not known bad".
     """
 
     def __init__(
@@ -59,6 +61,7 @@ class RxHealth:
         self._prev_dtx = True  # no signal pair before the first signal packet
         self._pairs = 0
         self._gaps = 0
+        self._gap_reason: str | None = None
         self.packets = 0
 
     def record(self, rtp_ts: int, payload_len: int) -> None:
@@ -87,11 +90,14 @@ class RxHealth:
             silent = now - self._last_packet_at
             if silent > self._stall_timeout:
                 return f"no RTP packet for {silent:.1f} s"
-            if now - self._window_start < self._window:
-                return None
-            pairs, gaps = self._pairs, self._gaps
-            self._pairs = self._gaps = 0
-            self._window_start = now
-        if pairs >= self._min_pairs and gaps > pairs * self._max_gap_ratio:
-            return f"lost frames: {gaps} of {pairs} signal intervals skip >1 frame"
-        return None
+            if now - self._window_start >= self._window:
+                pairs, gaps = self._pairs, self._gaps
+                self._pairs = self._gaps = 0
+                self._window_start = now
+                if pairs >= self._min_pairs:
+                    self._gap_reason = (
+                        f"lost frames: {gaps} of {pairs} signal intervals skip >1 frame"
+                        if gaps > pairs * self._max_gap_ratio
+                        else None
+                    )
+            return self._gap_reason

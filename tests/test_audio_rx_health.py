@@ -133,3 +133,20 @@ def test_packets_counter():
     h.record(0, SPEECH)
     h.record(960, DTX)
     assert h.packets == 2
+
+
+def test_lost_frames_verdict_is_sticky_through_silent_windows():
+    """Between evaluations and through windows without enough signal, a known-lossy stream
+    stays lossy — otherwise the watchdog would read "healthy" and forget its backoff."""
+    clock = Clock()
+    h = RxHealth(clock=clock, window=10.0)
+    h.record(0, SPEECH)
+    ts = _feed(h, clock, [960, 960, 960, 1984] * 150)
+    clock.t += 0.1
+    assert h.verdict() is not None
+    clock.t += 2
+    assert h.verdict() is not None  # mid-window: still known bad
+    ts = _feed(h, clock, [960, 7680] * 300, size=DTX, ts=ts)  # 12 s of DTX only
+    assert h.verdict() is not None  # silent window: no evidence either way
+    _feed(h, clock, [960] * 600, ts=ts)  # 12 s of clean signal
+    assert h.verdict() is None

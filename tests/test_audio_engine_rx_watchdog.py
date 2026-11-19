@@ -199,7 +199,26 @@ def test_watchdog_restarts_are_rate_limited_with_backoff():
     assert len(factory.rx) == 4
 
 
-def test_watchdog_backoff_resets_once_a_bridge_delivers():
+def test_watchdog_keeps_doubling_for_a_delivering_but_lossy_bridge():
+    """Packets flowing is not "healthy": a bridge with a (sticky) lost-frames verdict keeps
+    the streak, so a non-race loss cause is not restarted every base interval forever."""
+    clock = Clock()
+    eng, factory, _, _ = make_engine(clock=clock, rx_restart_backoff=(60.0, 900.0))
+
+    def lossy_latest():
+        h = factory.rx[-1].health
+        h.reason, h.packets = "lost frames: 40 of 200 signal intervals skip >1 frame", 500
+
+    # restarts at t=2, 62 (+120 next), 182 (+240 next); t=300 is still inside 240 s
+    _run_ticks(
+        eng,
+        clock,
+        [(2, lossy_latest), (60, lossy_latest), (120, lossy_latest)] + [(118, lossy_latest)],
+    )
+    assert len(factory.rx) == 4
+
+
+def test_watchdog_backoff_resets_after_a_healthy_interval():
     clock = Clock()
     eng, factory, _, _ = make_engine(clock=clock, rx_restart_backoff=(60.0, 900.0))
 
@@ -207,15 +226,107 @@ def test_watchdog_backoff_resets_once_a_bridge_delivers():
         factory.rx[-1].health.reason = "no RTP packet for 12.0 s"
 
     def heal_latest():
-        h = factory.rx[-1].health
-        h.reason, h.packets = None, 50
+        factory.rx[-1].health.reason = None
 
-    # t=2 restart #1 (+60), t=63 restart #2 (backoff doubled → +120), t=64 the new bridge
-    # delivers → streak reset, t=124 = 61 s after #2: without the reset this would wait for
-    # t=183, with it the base 60 s interval applies again.
-    steps = [(2, stall_latest), (61, stall_latest), (1, heal_latest), (60, stall_latest)]
+    # t=2 restart #1, t=62 restart #2 (next +120). The new bridge is healthy through t=182
+    # (a whole interval) → streak forgotten, so a fault at t=183 restarts at once (#3),
+    # and the one after that is gated by the base interval again (t=240 < 183+60).
+    steps = [(2, stall_latest), (60, stall_latest), (1, heal_latest), (119, heal_latest)]
+    steps += [(1, stall_latest), (57, stall_latest)]
     _run_ticks(eng, clock, steps)
     assert len(factory.rx) == 4
+
+
+def test_watchdog_restart_continues_seq_and_ts():
+    """The browser keeps its jitter buffer per stream_ref: a restarted bridge must continue
+    seq/ts, or its frames are dropped as too late until seq catches up again."""
+    clock = Clock()
+    eng, factory, _, sent_bin = make_engine(clock=clock)
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        old = factory.rx[0]
+        for i in range(3):
+            old.on_opus(b"\xfc" * 40, 5000 + 960 * i)
+        old.health.reason = "lost frames: 40 of 200 signal intervals skip >1 frame"
+        clock.t += 5
+        await eng.rx_watchdog_tick()
+        new = factory.rx[1]
+        new.on_opus(b"\xfc" * 40, 777)  # fresh gst: unrelated RTP ts base
+        new.on_opus(b"\xfc" * 40, 777 + 960)
+        await eng.stop()
+
+    asyncio.run(go())
+    frames = [frame.parse_frame(d) for d in sent_bin]
+    assert [f.seq for f in frames] == [0, 1, 2, 3, 4]
+    assert [f.ts for f in frames] == [0, 160, 320, 480, 640]
+    assert [f.marker for f in frames] == [True, False, False, True, False]
+
+
+def test_watchdog_restart_before_any_packet_keeps_ts_base():
+    clock = Clock()
+    eng, factory, _, sent_bin = make_engine(clock=clock)
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        factory.rx[0].on_opus(b"\xfc" * 40)  # ts 0, seq 0
+        for _ in range(2):  # two restarts in a row, the middle bridge never delivers
+            factory.rx[-1].health.reason = "no RTP packet for 12.0 s"
+            clock.t += 100
+            await eng.rx_watchdog_tick()
+        factory.rx[-1].on_opus(b"\xfc" * 40, 42)
+        await eng.stop()
+
+    asyncio.run(go())
+    frames = [frame.parse_frame(d) for d in sent_bin]
+    assert [(f.seq, f.ts) for f in frames] == [(0, 0), (1, 160)]
+
+
+def test_stop_during_watchdog_restart_leaks_no_bridge():
+    """stop() while the watchdog's bridge.start() runs in the executor: the restart finishes
+    under the lock and stop() then stops it — no gst outlives the engine."""
+    import threading
+
+    clock = Clock()
+    eng, factory, _, _ = make_engine(clock=clock, rx_watchdog_interval=0.01)
+    release = threading.Event()
+    entered = threading.Event()
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        orig_make = factory.make_rx
+
+        def slow_make(node, rate, on_opus):
+            b = orig_make(node, rate, on_opus)
+
+            def slow_start():
+                entered.set()
+                release.wait(5)
+                # A real RxBridge assigns its gst process only now: a stop() that already
+                # ran saw no process and the one spawned here would be orphaned.
+                b.leaked = b.stopped
+                b.started = True
+
+            b.start = slow_start
+            return b
+
+        factory.make_rx = slow_make
+        factory.rx[0].health.reason = "no RTP packet for 12.0 s"
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, entered.wait, 5)
+        stopper = asyncio.ensure_future(eng.stop())
+        await asyncio.sleep(0.05)
+        release.set()
+        await stopper
+
+    asyncio.run(go())
+    assert len(factory.rx) == 2
+    assert not getattr(factory.rx[1], "leaked", False)
+    assert all(b.stopped for b in factory.rx if b.started)
+    assert eng._rx == {}
 
 
 def test_watchdog_ignores_bridges_without_health():
