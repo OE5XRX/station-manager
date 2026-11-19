@@ -476,3 +476,12 @@ def test_refresh_rebuild_forgets_the_watchdog_backoff():
 
     asyncio.run(go())
     assert len(factory.rx) == 7
+
+
+def test_restart_interval_never_overflows_for_a_huge_streak():
+    """A stream stalled for weeks keeps restarting at the cap; the interval math must not
+    raise OverflowError (it would abort every watchdog tick for all streams)."""
+    eng, _, _, _ = make_engine(rx_restart_backoff=(60.0, 900.0))
+    assert eng._rx_restart_interval(1) == 60.0
+    assert eng._rx_restart_interval(3) == 240.0
+    assert eng._rx_restart_interval(10_000) == 900.0

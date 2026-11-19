@@ -463,7 +463,8 @@ class AudioEngine:
 
     def _rx_restart_interval(self, streak: int) -> float:
         base, cap = self._rx_restart_backoff
-        return min(base * 2 ** max(streak - 1, 0), cap)
+        # Exponent clamped: an unbounded 2**n times a float overflows after ~1000 restarts.
+        return min(base * 2 ** min(max(streak - 1, 0), 32), cap)
 
     async def rx_watchdog_tick(self) -> None:
         """Restart RX bridges whose pipeline runs but is broken (see ``RxHealth``): no
