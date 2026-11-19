@@ -101,6 +101,9 @@ class AudioEngine:
         self._rx_watchdog: asyncio.Task | None = None
         # stream_id -> (monotonic time of the last watchdog restart, consecutive restarts)
         self._rx_wd_restarts: dict[str, tuple[float, int]] = {}
+        # stream_id -> state of a replaced bridge whose restart failed: a later retry (refresh)
+        # still continues its seq/ts. Dropped when the stream stops being demanded.
+        self._rx_resume: dict[str, dict] = {}
         self._tx = None  # {"bridge": tx_bridge, "slot": int, "module": str}
         # Identifies the current TX bridge's meter stream; readings carrying a stale token
         # (torn-down/superseded bridge) are dropped.
@@ -226,10 +229,12 @@ class AudioEngine:
                 await self._start_rx(stream_id)
         for stream_id in gone:
             self._rx_restarts.pop(stream_id, None)
+            self._rx_resume.pop(stream_id, None)
             self._rx_demand.discard(stream_id)
             await self._emit_stream_state(stream_id, "idle", "audio slot removed")
         for stream_id in given_up:
             self._rx_restarts.pop(stream_id, None)
+            self._rx_resume.pop(stream_id, None)
             self._rx_demand.discard(stream_id)
             logger.warning("engine: RX pipeline for %s keeps dying; giving up", stream_id)
             await self._emit_stream_state(stream_id, "error", "RX pipeline keeps failing")
@@ -296,13 +301,18 @@ class AudioEngine:
     async def _start_rx(self, stream_id: str, resume: dict | None = None) -> None:
         """Start *stream_id*'s RX bridge. ``resume`` (the replaced bridge's state) continues
         its §5.3 seq/ts: the browser keeps its jitter buffer per stream_ref, so a seq that
-        restarts at 0 would be dropped as "too late" until it caught up again."""
+        restarts at 0 would be dropped as "too late" until it caught up again. If this start
+        fails, ``resume`` is kept for the next attempt (a refresh retry)."""
         if self._closed:
             return
         info = self.registry.get(stream_id)
         if info is None:
             await self._emit_error("unknown_stream", f"no such stream {stream_id!r}")
             return
+        if resume is None:
+            resume = self._rx_resume.get(stream_id)
+        if resume is not None and resume["ref"] != info.stream_ref:
+            resume = None  # a moved ref is a new stream for the browser: start fresh
         if stream_id == OP_MIC:
             # op.mic is browser-produced; the agent never encodes it as a source. A server
             # that subscribes it is misusing the contract — log, don't ship a bogus error.
@@ -313,6 +323,7 @@ class AudioEngine:
         node = await self._to_thread(self._backend.resolve_node, info.slot, "rx")
         if node is None:
             # Agent-side lifecycle failure (no §5.5 client-error code fits) → stream_state.
+            self._stash_resume(stream_id, resume)
             await self._emit_stream_state(stream_id, "error", "RX node unresolved")
             return
         seq, ts_base = 0, 0
@@ -346,16 +357,23 @@ class AudioEngine:
             self._rx.pop(stream_id, None)
             state["dead"] = True
             await self._to_thread(_safe_stop, bridge)
+            self._stash_resume(stream_id, resume)
             await self._emit_stream_state(stream_id, "error", "RX bridge start failed")
             return
+        self._rx_resume.pop(stream_id, None)
         self._ensure_rx_watchdog()
         await self._emit_stream_state(stream_id, "live", "")
+
+    def _stash_resume(self, stream_id: str, resume: dict | None) -> None:
+        if resume is not None and stream_id in self._rx_demand:
+            self._rx_resume[stream_id] = resume
 
     async def on_source_unsubscribe(self, stream_id: str) -> None:
         async with self._rx_lock:
             self._rx_demand.discard(stream_id)
             self._rx_restarts.pop(stream_id, None)
             self._rx_wd_restarts.pop(stream_id, None)
+            self._rx_resume.pop(stream_id, None)
             stopped = await self._stop_rx(stream_id)
         if stopped:
             await self._emit_stream_state(stream_id, "idle", "")

@@ -6,7 +6,8 @@ python-gi, which the A-image does not ship) a UDP datagram is the cheapest self-
 boundary that yields exactly one packet per read:
 
     RX (tap module → WS):   pipewiresrc(target=rx_node) ! opusenc(FEC,VBR,VOIP,DTX,20ms)
-                            ! rtpopuspay ! udpsink        → agent strip_rtp → on_opus()
+                            ! rtpopuspay ! udpsink        → agent parse_rtp
+                            → on_opus(payload, rtp_ts)
     TX (WS → inject module): agent feed_opus → wrap_rtp → udpsink(to gst)
                             → udpsrc ! rtpjitterbuffer ! rtpopusdepay ! opusdec(PLC,FEC)
                             ! [DSP chain: band-pass/gate/comp/makeup, optional pre-limiter

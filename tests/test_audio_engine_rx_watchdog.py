@@ -9,11 +9,14 @@ from station_agent.audio.engine import AudioEngine
 
 
 class FakeBackend:
+    def __init__(self):
+        self.node_gone = False
+
     def list_audio_slots(self):
         return [1]
 
     def resolve_node(self, slot, direction):
-        return f"node{slot}"
+        return None if self.node_gone else f"node{slot}"
 
 
 class FakeHealth:
@@ -379,3 +382,52 @@ def test_watchdog_skips_unsubscribed_stream():
 
     asyncio.run(go())
     assert len(factory.rx) == 1
+
+
+def test_failed_watchdog_restart_keeps_seq_for_the_refresh_retry():
+    """The watchdog restart fails (node briefly unresolvable); the later refresh retry must
+    still continue seq/ts instead of restarting at 0."""
+    clock = Clock()
+    eng, factory, _, sent_bin = make_engine(clock=clock)
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        for i in range(3):
+            factory.rx[0].on_opus(b"\xfc" * 40, 960 * i)
+        factory.rx[0].health.reason = "no RTP packet for 12.0 s"
+        eng._backend.node_gone = True
+        clock.t += 5
+        await eng.rx_watchdog_tick()
+        assert "slot1.rx" not in eng._rx
+        eng._backend.node_gone = False
+        await eng.refresh([1])  # retries the demanded-but-not-running stream
+        factory.rx[-1].on_opus(b"\xfc" * 40, 31337)
+        await eng.stop()
+
+    asyncio.run(go())
+    assert len(factory.rx) == 2
+    frames = [frame.parse_frame(d) for d in sent_bin]
+    assert [(f.seq, f.ts) for f in frames] == [(0, 0), (1, 160), (2, 320), (3, 480)]
+
+
+def test_resume_state_dropped_on_unsubscribe():
+    clock = Clock()
+    eng, factory, _, sent_bin = make_engine(clock=clock)
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        factory.rx[0].on_opus(b"\xfc" * 40, 0)
+        factory.rx[0].health.reason = "no RTP packet for 12.0 s"
+        eng._backend.node_gone = True
+        clock.t += 5
+        await eng.rx_watchdog_tick()
+        await eng.on_source_unsubscribe("slot1.rx")
+        eng._backend.node_gone = False
+        await eng.on_source_subscribe("slot1.rx")  # a fresh subscription starts at 0
+        factory.rx[-1].on_opus(b"\xfc" * 40, 5)
+        await eng.stop()
+
+    asyncio.run(go())
+    assert [frame.parse_frame(d).seq for d in sent_bin] == [0, 0]
