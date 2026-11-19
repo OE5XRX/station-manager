@@ -63,12 +63,13 @@ class StationAgent:
 
     @contextlib.contextmanager
     def _heartbeat_keepalive(self):
-        """Keep heartbeating while the main thread is blocked in a module flash.
+        """Keep heartbeating while the main thread is blocked in an OTA step.
 
-        A flash can take minutes (download + settle + verify); without heartbeats the
-        server would see the station offline and lift the slot drain mid-flash. The
-        keepalive uses its OWN ``HttpClient`` (module_ota uses the main one concurrently)
-        and stops when the module OTA call returns. Not started when shutting down.
+        A module flash takes minutes (download + settle + verify), an image download
+        over a slow link hours; without heartbeats the server would see the station
+        offline (and lift a module slot drain mid-flash). The keepalive uses its OWN
+        ``HttpClient`` (the OTA step uses the main one concurrently) and stops when the
+        wrapped call returns. Not started when shutting down.
         """
         config = self._config
         if config is None or self._shutdown.is_set():
@@ -80,7 +81,7 @@ class StationAgent:
             try:
                 client = HttpClient(config)
             except Exception:  # noqa: BLE001
-                logger.exception("module_ota keepalive: cannot create HTTP client")
+                logger.exception("ota keepalive: cannot create HTTP client")
                 return
             while not stop.wait(config.heartbeat_interval) and not self._shutdown.is_set():
                 try:
@@ -92,9 +93,9 @@ class StationAgent:
                         metrics=self._metrics,
                     )
                 except Exception:  # noqa: BLE001 — a failed heartbeat must not end the keepalive
-                    logger.exception("module_ota keepalive heartbeat failed")
+                    logger.exception("ota keepalive heartbeat failed")
 
-        thread = threading.Thread(target=_keepalive, name="module-ota-keepalive", daemon=True)
+        thread = threading.Thread(target=_keepalive, name="ota-keepalive", daemon=True)
         thread.start()
         try:
             yield

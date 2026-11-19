@@ -433,7 +433,9 @@ def download_with_retry(
             best_size = size
             last_progress = clock()
             failures = 0
-        base = min(_BACKOFF_MAX_S, _BACKOFF_INITIAL_S * 2**failures)
+        # Exponent bounded: 2**failures grows without limit while stalled
+        # (float overflow after ~1024 failures with a long stall limit).
+        base = min(_BACKOFF_MAX_S, _BACKOFF_INITIAL_S * 2 ** min(failures, 16))
         delay = base * (0.5 + 0.5 * rng())
         failures += 1
         stalled_for = clock() - last_progress

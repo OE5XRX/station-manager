@@ -384,7 +384,7 @@ def test_keepalive_not_started_when_shutting_down(monkeypatch):
     with agent._heartbeat_keepalive():
         time.sleep(0.05)
     assert started == []
-    assert not [t for t in threading.enumerate() if t.name == "module-ota-keepalive"]
+    assert not [t for t in threading.enumerate() if t.name == "ota-keepalive"]
 
 
 def test_keepalive_heartbeats_during_long_image_ota(harness):

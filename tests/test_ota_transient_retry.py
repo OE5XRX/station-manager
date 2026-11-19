@@ -176,6 +176,29 @@ class TestAttemptClassification:
         assert client.ranges == ["bytes=400-"]
         assert dest.read_bytes() == PAYLOAD
 
+    def test_416_restart_honours_expected_size(self, tmp_path):
+        """The 416 restart forwards expected_size: a short body after the
+        restart is TRANSIENT with the partial kept, not a checksum failure."""
+        dest = tmp_path / "fw.rootfs.bz2"
+        dest.write_bytes(b"S" * 100)
+        client = ScriptedClient(FakeResp(416), FakeResp(200, [PAYLOAD[:600]]))
+        result = _attempt(client, dest, expected_size=len(PAYLOAD))
+        assert result.outcome is DownloadOutcome.TRANSIENT
+        assert client.ranges == ["bytes=100-", None]
+        assert dest.read_bytes() == PAYLOAD[:600]
+
+    def test_content_range_mismatch_restart_honours_expected_size(self, tmp_path):
+        dest = tmp_path / "fw.rootfs.bz2"
+        dest.write_bytes(PAYLOAD[:100])
+        client = ScriptedClient(
+            FakeResp(206, [b"G" * 50], content_range=f"bytes 50-99/{len(PAYLOAD)}"),
+            FakeResp(200, [PAYLOAD[:600]]),
+        )
+        result = _attempt(client, dest, expected_size=len(PAYLOAD))
+        assert result.outcome is DownloadOutcome.TRANSIENT
+        assert client.ranges == ["bytes=100-", None]
+        assert dest.read_bytes() == PAYLOAD[:600]
+
     def test_download_uses_long_read_timeout(self, tmp_path):
         """Slow links stall for longer than the 30 s API default between reads."""
         client = ScriptedClient(FakeResp(200, [PAYLOAD]))
@@ -278,6 +301,16 @@ class TestRetryLoop:
         attempts = [(T, None)] * 9 + [(OK, 1000)]
         _retry(attempts, clock, tmp_path / "fw", stall_limit_s=10**6)
         assert clock.waits == [10, 20, 40, 80, 160, 320, 600, 600, 600]
+
+    def test_backoff_does_not_overflow_after_many_stalled_failures(self, tmp_path):
+        """With a huge stall limit the loop may fail thousands of times in a
+        row; the backoff exponent must not overflow the float."""
+        clock = FakeClock()
+        attempts = [(T, None)] * 2000 + [(OK, 1000)]
+        out, calls = _retry(attempts, clock, tmp_path / "fw", stall_limit_s=10**12)
+        assert out.outcome is DownloadOutcome.OK
+        assert len(calls) == 2001
+        assert max(clock.waits) == 600
 
     def test_jitter_scales_delay_down(self, tmp_path):
         clock = FakeClock()
