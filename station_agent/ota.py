@@ -15,7 +15,7 @@ import random
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import requests
 
@@ -152,6 +152,9 @@ class DownloadOutcome(enum.Enum):
 class DownloadResult:
     outcome: DownloadOutcome
     detail: str = ""
+    # The attempt discarded the existing partial on purpose and started over
+    # from byte 0 (416, Content-Range mismatch, partial larger than expected).
+    restarted: bool = False
 
     @property
     def ok(self) -> bool:
@@ -239,6 +242,7 @@ def download_firmware_attempt(
     headers: dict[str, str] = {}
     existing_len = 0
     mode = "wb"
+    restarted = False
     if resume and os.path.exists(dest_path):
         existing_len = os.path.getsize(dest_path)
         if expected_size is not None and existing_len >= expected_size:
@@ -265,6 +269,7 @@ def download_firmware_attempt(
             )
             _remove_quietly(dest_path)
             existing_len = 0
+            restarted = True
         if existing_len > 0:
             headers["Range"] = f"bytes={existing_len}-"
             mode = "ab"
@@ -274,7 +279,9 @@ def download_firmware_attempt(
     )
     if resp is None:
         # HttpClient already logged the connect error / timeout.
-        return DownloadResult(DownloadOutcome.TRANSIENT, "no response from server")
+        return DownloadResult(
+            DownloadOutcome.TRANSIENT, "no response from server", restarted=restarted
+        )
 
     if resp.status_code == 416 and existing_len > 0:
         # Our partial file is stale (e.g. left over from a different
@@ -283,13 +290,16 @@ def download_firmware_attempt(
         _close_quietly(resp)
         _remove_quietly(dest_path)
         logger.info("Server rejected Range (416); restarting download from 0")
-        return download_firmware_attempt(
-            http_client=http_client,
-            download_url=download_url,
-            expected_checksum=expected_checksum,
-            dest_path=dest_path,
-            resume=False,
-            expected_size=expected_size,
+        return replace(
+            download_firmware_attempt(
+                http_client=http_client,
+                download_url=download_url,
+                expected_checksum=expected_checksum,
+                dest_path=dest_path,
+                resume=False,
+                expected_size=expected_size,
+            ),
+            restarted=True,
         )
 
     if resp.status_code == 200:
@@ -314,13 +324,16 @@ def download_firmware_attempt(
                 reported_start,
                 existing_len,
             )
-            return download_firmware_attempt(
-                http_client=http_client,
-                download_url=download_url,
-                expected_checksum=expected_checksum,
-                dest_path=dest_path,
-                resume=False,
-                expected_size=expected_size,
+            return replace(
+                download_firmware_attempt(
+                    http_client=http_client,
+                    download_url=download_url,
+                    expected_checksum=expected_checksum,
+                    dest_path=dest_path,
+                    resume=False,
+                    expected_size=expected_size,
+                ),
+                restarted=True,
             )
     else:
         code = resp.status_code
@@ -331,7 +344,7 @@ def download_firmware_attempt(
             else DownloadOutcome.FATAL
         )
         logger.error("Firmware download failed: HTTP %s (%s)", code, outcome.value)
-        return DownloadResult(outcome, f"HTTP {code}")
+        return DownloadResult(outcome, f"HTTP {code}", restarted=restarted)
 
     # The agent's default download_dir (typically /tmp/station-agent)
     # may not exist on first OTA attempt. Create it every call — cheap
@@ -361,7 +374,9 @@ def download_firmware_attempt(
             logger.warning(
                 "Firmware download interrupted at %d bytes: %s", _file_size(dest_path), exc
             )
-            return DownloadResult(DownloadOutcome.TRANSIENT, f"connection interrupted: {exc}")
+            return DownloadResult(
+                DownloadOutcome.TRANSIENT, f"connection interrupted: {exc}", restarted=restarted
+            )
         except OSError as exc:
             # Full disk, permission error, read-only FS, etc. Must return
             # cleanly so the agent reports FAILED and tries again next
@@ -380,7 +395,9 @@ def download_firmware_attempt(
             # would delete a perfectly resumable partial.
             logger.warning("Firmware download ended early (%d of %d bytes)", got, expected_size)
             return DownloadResult(
-                DownloadOutcome.TRANSIENT, f"connection closed early ({got}/{expected_size} bytes)"
+                DownloadOutcome.TRANSIENT,
+                f"connection closed early ({got}/{expected_size} bytes)",
+                restarted=restarted,
             )
 
     return _verified(dest_path, expected_checksum)
@@ -417,6 +434,7 @@ def download_with_retry(
     best_size = _file_size(dest_path)
     last_progress = clock()
     failures = 0
+    rebased = False
     while True:
         result = attempt(
             http_client=http_client,
@@ -429,6 +447,13 @@ def download_with_retry(
             return result
 
         size = _file_size(dest_path)
+        if result.restarted and not rebased:
+            # The attempt threw a stale partial away and began again at 0:
+            # measure progress from there, not against the discarded size.
+            # Only once per call, so a server that keeps forcing restarts
+            # still runs into the stall limit.
+            rebased = True
+            best_size = 0
         if size > best_size:
             best_size = size
             last_progress = clock()

@@ -199,6 +199,24 @@ class TestAttemptClassification:
         assert client.ranges == ["bytes=100-", None]
         assert dest.read_bytes() == PAYLOAD[:600]
 
+    def test_restart_paths_flag_restarted(self, tmp_path):
+        dest = tmp_path / "fw.rootfs.bz2"
+        dest.write_bytes(b"S" * 100)
+        client = ScriptedClient(FakeResp(416), FakeResp(200, [PAYLOAD[:600]]))
+        assert _attempt(client, dest, expected_size=len(PAYLOAD)).restarted is True
+
+        dest.write_bytes(b"S" * (len(PAYLOAD) + 10))  # oversized stale partial
+        client = ScriptedClient(FakeResp(502))
+        assert _attempt(client, dest, expected_size=len(PAYLOAD)).restarted is True
+
+    def test_plain_resume_and_ignored_range_are_not_restarts(self, tmp_path):
+        """A 200 for a Range request is not flagged — otherwise a server that
+        ignores Range would count as progress forever."""
+        dest = tmp_path / "fw.rootfs.bz2"
+        dest.write_bytes(PAYLOAD[:400])
+        client = ScriptedClient(FakeResp(200, [PAYLOAD[:300]]))
+        assert _attempt(client, dest, expected_size=len(PAYLOAD)).restarted is False
+
     def test_download_uses_long_read_timeout(self, tmp_path):
         """Slow links stall for longer than the 30 s API default between reads."""
         client = ScriptedClient(FakeResp(200, [PAYLOAD]))
@@ -344,6 +362,25 @@ class TestRetryLoop:
         clock = FakeClock()
         attempts = [(T, 500)] * 50
         out, _ = _retry(attempts, clock, tmp_path / "fw", stall_limit_s=100)
+        assert out.outcome is DownloadOutcome.TRANSIENT
+
+    def test_restart_from_zero_measures_progress_from_zero(self, tmp_path):
+        """A stale partial discarded by the attempt (416 / Content-Range
+        mismatch) must not hide the progress made after the restart."""
+        dest = tmp_path / "fw"
+        dest.write_bytes(b"x" * 900)
+        clock = FakeClock()
+        restarted = DownloadResult(DownloadOutcome.TRANSIENT, "drop", restarted=True)
+        sizes = [100, 200, 300, 400, 500, 600, 700, 800]
+        attempts = [(restarted, sizes[0])] + [(T, s) for s in sizes[1:]] + [(OK, 1000)]
+        out, _ = _retry(attempts, clock, dest, stall_limit_s=15)
+        assert out.outcome is DownloadOutcome.OK
+        assert clock.waits == [10] * len(sizes)
+
+    def test_repeated_forced_restarts_still_hit_stall_limit(self, tmp_path):
+        clock = FakeClock()
+        restarted = DownloadResult(DownloadOutcome.TRANSIENT, "416 loop", restarted=True)
+        out, _ = _retry([(restarted, 300)] * 50, clock, tmp_path / "fw", stall_limit_s=100)
         assert out.outcome is DownloadOutcome.TRANSIENT
 
     def test_shutdown_during_wait_aborts_without_failure(self, tmp_path):
