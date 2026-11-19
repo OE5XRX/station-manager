@@ -3,6 +3,8 @@ from __future__ import annotations
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
+from apps.api.streaming import open_storage_stream
+
 
 def release_key(tag: str, machine: str, channel: str = "release") -> str:
     return f"images/{tag}/{channel}/{machine}.wic.bz2"
@@ -29,8 +31,8 @@ def upload_bytes(key: str, data: bytes) -> None:
 
 
 def open_stream(key: str):
-    """Return a file-like opened on the stored object."""
-    return default_storage.open(key, "rb")
+    """Return a seekable file-like streaming the stored object chunk-wise."""
+    return open_storage_stream(key)
 
 
 def delete(key: str) -> None:

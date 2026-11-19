@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 
 from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
+from apps.api.streaming import response_iterator
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.deployments.serializers import (
     DeploymentCheckRequestSerializer,
@@ -574,7 +575,9 @@ class DeploymentDownloadView(APIView):
         filename = f"oe5xrx-{image.machine}-{image.tag}.rootfs.bz2"
         safe_name = re.sub(r'["\r\n]', "_", filename) or "image.rootfs.bz2"
         response = StreamingHttpResponse(
-            iterator(), status=http_status, content_type="application/x-bzip2"
+            response_iterator(request, iterator()),
+            status=http_status,
+            content_type="application/x-bzip2",
         )
         response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
         # Only advertise Range support if the underlying stream is

@@ -747,3 +747,44 @@ class TestStationDetailIntegration:
         )
         assert response.status_code == 200
         assert b"Generate provisioning bundle" not in response.content
+
+
+@pytest.mark.django_db
+def test_download_under_asgi_streams_and_marks_downloaded(
+    admin_user, station, image_release, monkeypatch
+):
+    """Under ASGI the post-stream bookkeeping (ORM) runs from the async
+    wrapper via sync_to_async and must still mark the job DOWNLOADED."""
+    import io
+    from datetime import timedelta
+
+    from asgiref.sync import async_to_sync
+    from django.test import AsyncClient
+    from django.utils import timezone
+
+    from apps.provisioning.models import ProvisioningJob
+
+    job = ProvisioningJob.objects.create(
+        station=station,
+        image_release=image_release,
+        requested_by=admin_user,
+        status=ProvisioningJob.Status.READY,
+        output_s3_key="provisioning/abc/test.wic.bz2",
+        output_size_bytes=10,
+        ready_at=timezone.now(),
+        expires_at=timezone.now() + timedelta(hours=1),
+    )
+    monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(b"0123456789"))
+
+    async def fetch():
+        client = AsyncClient()
+        await client.aforce_login(admin_user)
+        r = await client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+        assert r.is_async
+        return r, b"".join([chunk async for chunk in r.streaming_content])
+
+    r, body = async_to_sync(fetch)()
+    assert r.status_code == 200
+    assert body == b"0123456789"
+    job.refresh_from_db()
+    assert job.status == ProvisioningJob.Status.DOWNLOADED

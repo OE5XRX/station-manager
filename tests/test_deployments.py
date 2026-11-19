@@ -1032,6 +1032,47 @@ class TestDeploymentDownload:
         )
         assert response.status_code == 404
 
+    def test_download_under_asgi_streams_async_without_buffering(
+        self, station_with_key, deployment_result, monkeypatch
+    ):
+        """daphne serves us via ASGI: a sync iterator would be drained into
+        memory before the first byte (Django warns and ``list()``s it).
+        The view must hand ASGI an async iterator that reads lazily."""
+        import io
+        import warnings
+
+        from asgiref.sync import async_to_sync
+        from django.test import AsyncClient
+
+        station, priv = station_with_key
+        reads = []
+
+        class CountingStream(io.BytesIO):
+            def read(self, n=-1):
+                reads.append(n)
+                return super().read(n)
+
+        monkeypatch.setattr(
+            "apps.images.storage.open_stream", lambda key: CountingStream(b"X" * 500)
+        )
+        url = reverse("api:deployment_download", args=[deployment_result.deployment_id])
+
+        async def fetch():
+            meta = device_auth_headers(priv, station.pk, b"")
+            # AsyncClient takes real header names, not WSGI META keys.
+            headers = {k.removeprefix("HTTP_").replace("_", "-"): v for k, v in meta.items()}
+            r = await AsyncClient().get(url, headers=headers)
+            assert r.status_code == 200, r.content
+            assert r.is_async
+            assert reads == []  # nothing read before the body is consumed
+            return r, b"".join([chunk async for chunk in r.streaming_content])
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message="StreamingHttpResponse must consume")
+            r, body = async_to_sync(fetch)()
+        assert r.status_code == 200
+        assert body == b"X" * 500
+
 
 @pytest.mark.django_db
 class TestCommitSetsCurrentImage:

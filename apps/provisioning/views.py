@@ -9,6 +9,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 
 from apps.accounts.permissions import AreaPermissionMixin
+from apps.api.streaming import response_iterator
 from apps.images import storage as image_storage
 from apps.stations.models import Station, StationAuditLog
 
@@ -190,7 +191,9 @@ class ProvisioningJobDownloadView(AreaPermissionMixin, View):
         # would break the header or allow response-splitting.
         raw_name = job.output_s3_key.split("/")[-1]
         filename = re.sub(r'["\r\n]', "_", raw_name) or "download.wic.bz2"
-        response = StreamingHttpResponse(iterator(), content_type="application/x-bzip2")
+        response = StreamingHttpResponse(
+            response_iterator(request, iterator()), content_type="application/x-bzip2"
+        )
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         if job.output_size_bytes:
             response["Content-Length"] = str(job.output_size_bytes)

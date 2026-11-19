@@ -98,3 +98,30 @@ def test_download_range_206(client, station_with_key, fw_release, module_type):
     assert resp.status_code == 206
     assert resp["Content-Range"] == "bytes 0-2/5"
     assert b"".join(resp.streaming_content) == b"hel"
+
+
+@pytest.mark.django_db
+def test_download_under_asgi_is_async_stream(station_with_key, fw_release, module_type):
+    """daphne/ASGI drains sync streaming iterators into memory first; the
+    view must hand ASGI an async iterator."""
+    from asgiref.sync import async_to_sync
+    from django.test import AsyncClient
+
+    station, priv = station_with_key
+    mod = Module.objects.create(uid="U1", module_type=module_type)
+    ModuleAssignmentHistory.objects.create(module=mod, station=station, slot="slot1")
+    meta = device_auth_headers(priv, station.pk, b"")
+    headers = {k.removeprefix("HTTP_").replace("_", "-"): v for k, v in meta.items()}
+    url = reverse("module_firmware_api:download", args=[fw_release.pk])
+
+    async def fetch():
+        r = await AsyncClient().get(url, headers=headers)
+        assert r.status_code == 200
+        assert r.is_async
+        return b"".join([chunk async for chunk in r.streaming_content])
+
+    with mock.patch(
+        "apps.module_firmware.api_views.storage.open_stream",
+        return_value=io.BytesIO(b"hello"),
+    ):
+        assert async_to_sync(fetch)() == b"hello"

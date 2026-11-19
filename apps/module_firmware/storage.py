@@ -3,6 +3,8 @@ from __future__ import annotations
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
+from apps.api.streaming import open_storage_stream
+
 
 def _variant_seg(variant: str) -> str:
     return variant or "_"
@@ -31,7 +33,7 @@ def upload_bytes(key: str, data: bytes) -> None:
 
 
 def open_stream(key: str):
-    return default_storage.open(key, "rb")
+    return open_storage_stream(key)
 
 
 def delete(key: str) -> None:
