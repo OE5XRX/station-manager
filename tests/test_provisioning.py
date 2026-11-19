@@ -223,7 +223,7 @@ class TestProvisioningWorker:
 
         # Stubs for IO-bound steps
         monkeypatch.setattr(
-            "apps.images.storage.open_stream",
+            "apps.images.storage.open_file",
             lambda key: __import__("io").BytesIO(b"FAKEWICBZ2BYTES"),
         )
         monkeypatch.setattr(
@@ -271,7 +271,7 @@ class TestProvisioningWorker:
         settings.SERVER_PUBLIC_URL = "https://remote.oe5xrx.org"
 
         monkeypatch.setattr(
-            "apps.images.storage.open_stream",
+            "apps.images.storage.open_file",
             lambda key: __import__("io").BytesIO(b"FAKEWICBZ2BYTES"),
         )
         monkeypatch.setattr(
@@ -320,7 +320,7 @@ class TestProvisioningWorker:
         def boom(key):
             raise RuntimeError("simulated S3 failure")
 
-        monkeypatch.setattr("apps.images.storage.open_stream", boom)
+        monkeypatch.setattr("apps.images.storage.open_file", boom)
 
         ProvisioningJob.objects.create(
             station=station,
@@ -354,7 +354,7 @@ class TestProvisioningWorker:
         settings.SERVER_PUBLIC_URL = "https://remote.oe5xrx.org"
 
         monkeypatch.setattr(
-            "apps.images.storage.open_stream",
+            "apps.images.storage.open_file",
             lambda key: __import__("io").BytesIO(b"FAKEWICBZ2BYTES"),
         )
         monkeypatch.setattr(

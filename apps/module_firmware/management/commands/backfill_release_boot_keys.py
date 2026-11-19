@@ -16,7 +16,7 @@ class Command(BaseCommand):
         for rel in qs.iterator():
             total += 1
             try:
-                with storage.open_stream(rel.storage_key) as fh:
+                with storage.open_file(rel.storage_key) as fh:
                     blob = fh.read()
             except Exception as exc:  # one bad object must not abort the run
                 self.stderr.write(f"skip {rel.pk} ({rel.storage_key}): {exc}")

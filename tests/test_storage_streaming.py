@@ -268,3 +268,23 @@ class TestResponseIterator:
 
         asyncio.run(asyncio.wait_for(main(), 30))
         assert len(closes) == 1
+
+
+class TestStorageModuleOpeners:
+    """Proxy views get the lazy ranged reader; batch consumers keep the
+    backend's own ``open()`` (S3: s3transfer multipart + retries)."""
+
+    @pytest.mark.parametrize("module", ["apps.images.storage", "apps.module_firmware.storage"])
+    def test_open_stream_is_lazy_and_open_file_uses_backend(self, s3, monkeypatch, module):
+        import importlib
+
+        mod = importlib.import_module(module)
+        storage, stub = s3
+        monkeypatch.setattr(streaming, "default_storage", storage)
+        monkeypatch.setattr(mod, "default_storage", storage)
+        stub.add_response("head_object", {"ContentLength": 1})
+        assert isinstance(mod.open_stream("img.bz2"), streaming.S3RangeReader)
+        opened = []
+        monkeypatch.setattr(storage, "open", lambda key, mode: opened.append((key, mode)))
+        mod.open_file("img.bz2")
+        assert opened == [("img.bz2", "rb")]

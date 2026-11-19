@@ -41,8 +41,8 @@ def provisioning_stubs():
     assert what config_yaml it received."""
     with (
         patch(
-            "apps.provisioning.management.commands.run_background_jobs.image_storage.open_stream"
-        ) as open_stream,
+            "apps.provisioning.management.commands.run_background_jobs.image_storage.open_file"
+        ) as open_file,
         patch(
             "apps.provisioning.management.commands.run_background_jobs._decompress_to"
         ) as decompress,
@@ -56,7 +56,7 @@ def provisioning_stubs():
             "apps.provisioning.management.commands.run_background_jobs.image_storage.upload_bytes"
         ),
     ):
-        open_stream.return_value.__enter__.return_value.read.side_effect = [b"", b""]
+        open_file.return_value.__enter__.return_value.read.side_effect = [b"", b""]
         decompress.return_value = None
         compress.return_value = b""
         yield inject
