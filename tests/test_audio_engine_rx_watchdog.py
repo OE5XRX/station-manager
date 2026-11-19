@@ -451,3 +451,28 @@ def test_refresh_rebuild_continues_seq_and_ts():
     assert len(factory.rx) == 2
     frames = [frame.parse_frame(d) for d in sent_bin]
     assert [(f.seq, f.ts) for f in frames] == [(0, 0), (1, 160), (2, 320)]
+
+
+def test_refresh_rebuild_forgets_the_watchdog_backoff():
+    """A high backoff streak (e.g. from a PipeWire outage) must not delay the watchdog for a
+    bridge that a hot-plug rebuild replaced."""
+    clock = Clock()
+    eng, factory, _, _ = make_engine(clock=clock, rx_restart_backoff=(60.0, 900.0))
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        for _ in range(4):  # streak 4 → next restart not before 480 s
+            factory.rx[-1].health.reason = "no RTP packet for 12.0 s"
+            clock.t += 1000
+            await eng.rx_watchdog_tick()
+        assert len(factory.rx) == 5
+        await eng.refresh([1], rebuild={1})
+        assert len(factory.rx) == 6
+        factory.rx[-1].health.reason = "lost frames: 40 of 200 signal intervals skip >1 frame"
+        clock.t += 5  # well inside 480 s, but the rebuilt stream has no streak
+        await eng.rx_watchdog_tick()
+        await eng.stop()
+
+    asyncio.run(go())
+    assert len(factory.rx) == 7

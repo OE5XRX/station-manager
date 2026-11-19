@@ -208,6 +208,9 @@ class AudioEngine:
             # stream_ref); _start_rx starts fresh if the ref moved.
             replaced = {sid: self._rx[sid] for sid in restart}
             for stream_id in gone + restart + given_up:
+                # A rebuilt/removed stream starts a new watchdog history: an old backoff
+                # streak (e.g. from a PipeWire outage) must not delay the next restart.
+                self._rx_wd_restarts.pop(stream_id, None)
                 await self._stop_rx(stream_id)
             if changed:
                 logger.info("engine: audio slots now %s; re-advertising", sorted(slots))
@@ -299,6 +302,8 @@ class AudioEngine:
         async with self._rx_lock:
             if stream_id != OP_MIC and self.registry.get(stream_id) is not None:
                 self._rx_demand.add(stream_id)
+            if stream_id not in self._rx:
+                self._rx_wd_restarts.pop(stream_id, None)  # a new bridge, a new history
             await self._start_rx(stream_id)
 
     async def _start_rx(self, stream_id: str, resume: dict | None = None) -> None:
