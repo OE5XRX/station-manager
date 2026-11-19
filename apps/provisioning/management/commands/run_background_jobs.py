@@ -265,7 +265,7 @@ def _run_provisioning_job(job: ProvisioningJob) -> None:
             decompressed = tmp / "work.wic"
 
             with (
-                image_storage.open_stream(job.image_release.s3_key) as src,
+                image_storage.open_file(job.image_release.s3_key) as src,
                 open(compressed_in, "wb") as dst,
             ):
                 for chunk in iter(lambda: src.read(1 << 20), b""):

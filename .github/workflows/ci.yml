@@ -81,6 +81,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # The suite takes ~20 min; fail fast instead of GitHub's 6 h default
+    # when something wedges (apt mirror, a hanging test).
+    timeout-minutes: 45
 
     env:
       DJANGO_SETTINGS_MODULE: config.settings.test
@@ -109,9 +112,13 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install system deps (guestfish for provisioning tests, GStreamer for TX DSP tests)
+        # linux-image-virtual, not -generic: -generic pulls linux-firmware
+        # (~600 MB), which crawled for over an hour from a slow mirror.
+        # supermin only needs a kernel plus the base modules (virtio, ext4).
+        timeout-minutes: 15
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-generic \
+          sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-virtual \
             gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
           # Ubuntu ships kernels with 0600 perms; libguestfs's supermin needs read access.
           # Guard the glob so CI does not fail on runner images where
@@ -124,6 +131,7 @@ jobs:
         run: pip install -r requirements/dev.txt
 
       - name: Run tests
+        timeout-minutes: 30
         run: pytest
 
   test-history-postgres:

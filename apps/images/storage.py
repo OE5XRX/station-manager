@@ -3,6 +3,8 @@ from __future__ import annotations
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 
+from apps.api.streaming import open_storage_stream
+
 
 def release_key(tag: str, machine: str, channel: str = "release") -> str:
     return f"images/{tag}/{channel}/{machine}.wic.bz2"
@@ -29,7 +31,22 @@ def upload_bytes(key: str, data: bytes) -> None:
 
 
 def open_stream(key: str):
-    """Return a file-like opened on the stored object."""
+    """Lazy, seekable stream for proxying ``key`` to an HTTP client.
+
+    First byte after one HEAD + ranged GET; a single connection without
+    mid-stream retry. Batch consumers that read the whole object should
+    use ``open_file`` instead.
+    """
+    return open_storage_stream(key)
+
+
+def open_file(key: str):
+    """Open ``key`` for a full read via the storage backend.
+
+    On S3 the object is fetched up front with s3transfer (parallel
+    multipart, retries) — the right trade-off for background jobs, where
+    total time and robustness matter more than time-to-first-byte.
+    """
     return default_storage.open(key, "rb")
 
 

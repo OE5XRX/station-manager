@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from apps.api.authentication import DeviceKeyAuthentication
 from apps.api.permissions import IsDevice
+from apps.api.streaming import response_iterator
 from apps.module_firmware import storage
 from apps.module_firmware.models import ModuleAssignmentHistory, ModuleFirmwareRelease
 
@@ -184,7 +185,9 @@ class ModuleFirmwareDownloadView(APIView):
         filename = f"{release.module_type.key}-{variant}-{release.version}{suffix}"
         safe_name = re.sub(r'["\r\n]', "_", filename) or f"firmware{suffix}"
         response = StreamingHttpResponse(
-            iterator(), status=http_status, content_type="application/octet-stream"
+            response_iterator(request, iterator()),
+            status=http_status,
+            content_type="application/octet-stream",
         )
         response["Content-Disposition"] = f'attachment; filename="{safe_name}"'
         # Only advertise Range support if the underlying stream is
