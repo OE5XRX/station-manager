@@ -56,3 +56,17 @@ def test_seq_and_ssrc_wrap():
     dg = rtp.wrap_rtp(b"y", seq=0x1_0002, ts=0x1_0000_0003, ssrc=0x1_0000_0004, pt=96)
     _, _, seq, ts, ssrc = struct.unpack("!BBHII", dg[:12])
     assert seq == 2 and ts == 3 and ssrc == 4
+
+
+def test_parse_rtp_returns_timestamp_and_payload():
+    dg = rtp.wrap_rtp(b"opus", seq=7, ts=0xFFFFFC40, ssrc=3, pt=96)
+    assert rtp.parse_rtp(dg) == (0xFFFFFC40, b"opus")
+
+
+def test_parse_rtp_skips_csrc_and_extension_like_strip():
+    import struct
+
+    first = (2 << 6) | 0x10 | 1  # V=2, X=1, CC=1
+    hdr = struct.pack("!BBHII", first, 96, 1, 4242, 9) + struct.pack("!I", 5)
+    ext = struct.pack("!HH", 0xBEDE, 1) + b"\x00" * 4
+    assert rtp.parse_rtp(hdr + ext + b"data") == (4242, b"data")
