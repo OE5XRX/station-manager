@@ -204,6 +204,9 @@ class AudioEngine:
                     (restart if n <= _MAX_DEAD_RESTARTS else given_up).append(stream_id)
                 else:
                     self._rx_restarts.pop(stream_id, None)
+            # A rebuild continues the stream's seq/ts (the browser keeps its jitter buffer per
+            # stream_ref); _start_rx starts fresh if the ref moved.
+            replaced = {sid: self._rx[sid] for sid in restart}
             for stream_id in gone + restart + given_up:
                 await self._stop_rx(stream_id)
             if changed:
@@ -214,7 +217,7 @@ class AudioEngine:
             # it would no-op and leave an undemanded pipeline running.
             for stream_id in restart:
                 logger.info("engine: rebuilding RX pipeline for %s", stream_id)
-                await self._start_rx(stream_id)
+                await self._start_rx(stream_id, resume=replaced[stream_id])
             # Demanded streams whose earlier (re)start failed (e.g. the PipeWire node lagged
             # the sysfs card): retry, bounded by the same consecutive-restart counter.
             for stream_id in sorted(self._rx_demand - set(self._rx) - set(given_up)):

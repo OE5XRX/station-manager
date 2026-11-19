@@ -431,3 +431,23 @@ def test_resume_state_dropped_on_unsubscribe():
 
     asyncio.run(go())
     assert [frame.parse_frame(d).seq for d in sent_bin] == [0, 0]
+
+
+def test_refresh_rebuild_continues_seq_and_ts():
+    """A hot-plug rebuild of the same slot (unchanged ref) continues seq/ts like the
+    watchdog restart does."""
+    eng, factory, _, sent_bin = make_engine()
+
+    async def go():
+        await eng.start()
+        await eng.on_source_subscribe("slot1.rx")
+        factory.rx[0].on_opus(b"\xfc" * 40, 0)
+        factory.rx[0].on_opus(b"\xfc" * 40, 960)
+        await eng.refresh([1], rebuild={1})
+        factory.rx[-1].on_opus(b"\xfc" * 40, 99)
+        await eng.stop()
+
+    asyncio.run(go())
+    assert len(factory.rx) == 2
+    frames = [frame.parse_frame(d) for d in sent_bin]
+    assert [(f.seq, f.ts) for f in frames] == [(0, 0), (1, 160), (2, 320)]
