@@ -3,6 +3,7 @@ import json
 from unittest import mock
 
 from station_agent import bootinfo
+from station_agent.ota import DownloadOutcome, DownloadResult
 
 
 def test_detect_boot_first_time_records_without_reboot_event(tmp_path):
@@ -259,7 +260,10 @@ def test_ota_failed_persists_last_ota_result_on_download_failure(tmp_path):
     with (
         patch("station_agent.agent.check_for_update", return_value=fake_deployment),
         patch("station_agent.agent.report_status"),
-        patch("station_agent.agent.download_firmware_resumable", return_value=False),
+        patch(
+            "station_agent.agent.download_with_retry",
+            return_value=DownloadResult(DownloadOutcome.FATAL, "HTTP 404"),
+        ),
     ):
         agent._handle_ota(fake_config, fake_http)
 
@@ -297,7 +301,10 @@ def test_ota_failed_persists_last_ota_result_on_install_failure(tmp_path):
     with (
         patch("station_agent.agent.check_for_update", return_value=fake_deployment),
         patch("station_agent.agent.report_status"),
-        patch("station_agent.agent.download_firmware_resumable", return_value=True),
+        patch(
+            "station_agent.agent.download_with_retry",
+            return_value=DownloadResult(DownloadOutcome.OK),
+        ),
         patch("station_agent.agent.apply_update", return_value=False),
     ):
         agent._handle_ota(fake_config, MagicMock())

@@ -13,6 +13,9 @@ from __future__ import annotations
 import pytest
 
 from station_agent.agent import StationAgent
+from station_agent.ota import DownloadOutcome, DownloadResult
+
+_OK = DownloadResult(DownloadOutcome.OK)
 
 
 class _FakeHttpClient:
@@ -415,8 +418,8 @@ class TestHandleOtaRebootTransition:
             ).append((pk, status)),
         )
         monkeypatch.setattr(
-            "station_agent.agent.download_firmware_resumable",
-            lambda **kw: True,
+            "station_agent.agent.download_with_retry",
+            lambda **kw: _OK,
         )
         monkeypatch.setattr("station_agent.agent.apply_update", lambda cfg, path: True)
 
@@ -659,7 +662,7 @@ class TestHandleOtaRebootTransition:
                 "status_updates", []
             ).append((pk, status, error_message)),
         )
-        monkeypatch.setattr("station_agent.agent.download_firmware_resumable", lambda **kw: True)
+        monkeypatch.setattr("station_agent.agent.download_with_retry", lambda **kw: _OK)
 
         def raising_apply(cfg, path):
             raise RuntimeError("Cannot determine active A/B slot from /proc/cmdline or / mount.")
@@ -709,9 +712,9 @@ class TestDestPathAndLegacySweep:
 
         def fake_download(**kw):
             captured["dest_path"] = kw["dest_path"]
-            return True
+            return _OK
 
-        monkeypatch.setattr("station_agent.agent.download_firmware_resumable", fake_download)
+        monkeypatch.setattr("station_agent.agent.download_with_retry", fake_download)
         monkeypatch.setattr("station_agent.agent.apply_update", lambda cfg, path: True)
         monkeypatch.setattr(
             "station_agent.agent.subprocess.run",
@@ -760,7 +763,7 @@ class TestDestPathAndLegacySweep:
             },
         )
         monkeypatch.setattr("station_agent.agent.report_status", lambda *a, **kw: None)
-        monkeypatch.setattr("station_agent.agent.download_firmware_resumable", lambda **kw: True)
+        monkeypatch.setattr("station_agent.agent.download_with_retry", lambda **kw: _OK)
         monkeypatch.setattr("station_agent.agent.apply_update", lambda cfg, path: True)
         monkeypatch.setattr(
             "station_agent.agent.subprocess.run",
@@ -785,3 +788,115 @@ class TestDestPathAndLegacySweep:
 
         assert not legacy.exists(), "legacy .wic.bz2 partial was not removed"
         assert keep.exists(), "unrelated file must stay"
+
+
+class TestTransientDownloadHandling:
+    """_handle_ota reports ``failed`` only for a final download outcome."""
+
+    DEPLOYMENT = {
+        "deployment_result_id": 42,
+        "download_url": "/api/v1/deployments/99/download/",
+        "target_tag": "v2",
+        "checksum_sha256": "a" * 64,
+        "size_bytes": 1000,
+        "deployment_result_status": "pending",
+    }
+
+    def _run(self, monkeypatch, tmp_path, result, *, status="pending", stall=None):
+        deployment = dict(self.DEPLOYMENT, deployment_result_status=status)
+        monkeypatch.setattr("station_agent.agent.check_for_update", lambda cfg, http: deployment)
+        reports = []
+        monkeypatch.setattr(
+            "station_agent.agent.report_status",
+            lambda cfg, http, pk, st, error_message="": reports.append((st, error_message)),
+        )
+        download_calls = []
+
+        def fake_download(**kw):
+            download_calls.append(kw)
+            return result
+
+        monkeypatch.setattr("station_agent.agent.download_with_retry", fake_download)
+        installs = []
+        monkeypatch.setattr(
+            "station_agent.agent.apply_update", lambda cfg, path: installs.append(path) or False
+        )
+
+        _dir = str(tmp_path)
+
+        class _Cfg:
+            download_dir = _dir
+            state_dir = _dir
+            server_url = "http://localhost"
+
+        if stall is not None:
+            _Cfg.ota_download_stall_limit = stall
+
+        agent = StationAgent()
+        agent._handle_ota(_Cfg(), object())
+        return agent, reports, download_calls, installs
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            DownloadResult(DownloadOutcome.FATAL, "HTTP 403"),
+            DownloadResult(DownloadOutcome.TRANSIENT, "no response from server"),
+        ],
+    )
+    def test_final_failure_reports_failed_with_detail(self, monkeypatch, tmp_path, result):
+        from station_agent.bootinfo import read_last_ota_result
+
+        _, reports, _, installs = self._run(monkeypatch, tmp_path, result)
+        assert reports[0] == ("downloading", "")
+        assert reports[-1][0] == "failed"
+        assert result.detail in reports[-1][1]
+        assert installs == []
+        assert read_last_ota_result(str(tmp_path))["result"] == "failed"
+
+    def test_aborted_download_reports_nothing_final(self, monkeypatch, tmp_path):
+        """Shutdown during backoff: leave the result in DOWNLOADING so the
+        next start resumes the partial instead of a terminal FAILED."""
+        _, reports, _, installs = self._run(
+            monkeypatch, tmp_path, DownloadResult(DownloadOutcome.ABORTED, "agent shutting down")
+        )
+        assert [st for st, _ in reports] == ["downloading"]
+        assert installs == []
+
+    def test_retry_uses_shutdown_event_and_configured_stall_limit(self, monkeypatch, tmp_path):
+        agent, _, calls, _ = self._run(
+            monkeypatch, tmp_path, DownloadResult(DownloadOutcome.ABORTED), stall=123
+        )
+        kw = calls[0]
+        assert kw["stall_limit_s"] == 123
+        assert kw["wait"] == agent._shutdown.wait
+        assert kw["download_url"] == "/api/v1/deployments/99/download/"
+        assert kw["expected_size"] == 1000
+        assert kw["expected_checksum"] == "a" * 64
+
+    def test_default_stall_limit_is_hours(self, monkeypatch, tmp_path):
+        _, _, calls, _ = self._run(monkeypatch, tmp_path, DownloadResult(DownloadOutcome.ABORTED))
+        assert calls[0]["stall_limit_s"] >= 3600
+
+    def test_installing_resume_redownload_aborted_reports_nothing_final(
+        self, monkeypatch, tmp_path
+    ):
+        _, reports, calls, installs = self._run(
+            monkeypatch,
+            tmp_path,
+            DownloadResult(DownloadOutcome.ABORTED),
+            status="installing",
+        )
+        assert len(calls) == 1
+        assert [st for st, _ in reports] == ["downloading"]
+        assert installs == []
+
+    def test_installing_resume_redownload_failure_reports_failed(self, monkeypatch, tmp_path):
+        _, reports, _, _ = self._run(
+            monkeypatch,
+            tmp_path,
+            DownloadResult(DownloadOutcome.FATAL, "checksum verification failed"),
+            status="installing",
+        )
+        assert reports[-1][0] == "failed"
+        assert "INSTALLING" in reports[-1][1]
+        assert "checksum" in reports[-1][1]

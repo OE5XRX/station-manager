@@ -7,11 +7,17 @@ bootloader for a trial boot, and committing successful boots.
 """
 
 import bz2
+import enum
 import hashlib
 import logging
 import os
+import random
 import re
 import subprocess
+import time
+from dataclasses import dataclass
+
+import requests
 
 from .bootinfo import mark_pending_upgrade
 from .bootloader import commit_boot_local, get_bootloader, get_inactive_slot, set_upgrade_pending
@@ -127,6 +133,68 @@ def download_firmware(
     return True
 
 
+class DownloadOutcome(enum.Enum):
+    """Classification of a firmware download (one attempt or the retry loop)."""
+
+    OK = "ok"
+    # Network/transport problem (timeout, dropped connection, 5xx, 408/429,
+    # short body). The partial is kept; retrying with Range continues it.
+    TRANSIENT = "transient"
+    # Retrying cannot help: checksum mismatch, local disk error, 4xx (the
+    # deployment is no longer active for us, or the image is gone).
+    FATAL = "fatal"
+    # Agent shutdown during a backoff wait. Not a failure: the server keeps
+    # the result in DOWNLOADING and the next agent run resumes the partial.
+    ABORTED = "aborted"
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    outcome: DownloadOutcome
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome is DownloadOutcome.OK
+
+
+# Statuses a proxy / overloaded server / rate limiter returns on a bad
+# moment; everything else outside 200/206/416 is treated as final.
+_TRANSIENT_HTTP = frozenset({408, 425, 429})
+
+# Per-socket-read timeout for the image download (seconds). The 30 s API
+# default is too tight for LTE/HAMNET links that stall for a minute; a stall
+# beyond this is just a transient error that resumes via Range.
+DOWNLOAD_TIMEOUT = 120
+
+# Backoff between transient download failures: 10 s doubling to 10 min,
+# scaled by a jitter factor in [0.5, 1.0) so a fleet that lost the same
+# uplink does not hammer the server in lockstep when it comes back.
+_BACKOFF_INITIAL_S = 10.0
+_BACKOFF_MAX_S = 600.0
+
+
+def _close_quietly(resp) -> None:
+    try:
+        resp.close()
+    except Exception as exc:
+        logger.debug("Response close failed (ignored): %s", exc)
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _file_size(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
 def download_firmware_resumable(
     http_client,
     download_url: str,
@@ -136,7 +204,27 @@ def download_firmware_resumable(
     resume: bool = True,
     expected_size: int | None = None,
 ) -> bool:
-    """Download a firmware image, optionally resuming from a partial file.
+    """Single download attempt as a bool (see ``download_firmware_attempt``)."""
+    return download_firmware_attempt(
+        http_client=http_client,
+        download_url=download_url,
+        expected_checksum=expected_checksum,
+        dest_path=dest_path,
+        resume=resume,
+        expected_size=expected_size,
+    ).ok
+
+
+def download_firmware_attempt(
+    http_client,
+    download_url: str,
+    expected_checksum: str,
+    dest_path: str,
+    *,
+    resume: bool = True,
+    expected_size: int | None = None,
+) -> DownloadResult:
+    """One download attempt, optionally resuming from a partial file.
 
     download_url is used verbatim — callers must not parse or rebuild it.
 
@@ -144,6 +232,9 @@ def download_firmware_resumable(
     it, skip the network round-trip entirely and only verify the
     checksum. A partial larger than ``expected_size`` is treated as
     stale and discarded before falling through to a fresh download.
+
+    Network errors never delete the partial — they return TRANSIENT so
+    ``download_with_retry`` can continue it with a Range request.
     """
     headers: dict[str, str] = {}
     existing_len = 0
@@ -161,7 +252,7 @@ def download_firmware_resumable(
                     dest_path,
                     expected_size,
                 )
-                return _verify_checksum(dest_path, expected_checksum)
+                return _verified(dest_path, expected_checksum)
             # existing_len > expected_size: partial is stale (probably
             # left from a larger previous release). Drop it and do a
             # full download instead of sending a Range that the server
@@ -172,38 +263,33 @@ def download_firmware_resumable(
                 existing_len,
                 expected_size,
             )
-            try:
-                os.remove(dest_path)
-            except OSError:
-                pass
+            _remove_quietly(dest_path)
             existing_len = 0
         if existing_len > 0:
             headers["Range"] = f"bytes={existing_len}-"
             mode = "ab"
 
-    resp = http_client.request("GET", download_url, stream=True, headers=headers)
+    resp = http_client.request(
+        "GET", download_url, stream=True, headers=headers, timeout=DOWNLOAD_TIMEOUT
+    )
     if resp is None:
-        return False
+        # HttpClient already logged the connect error / timeout.
+        return DownloadResult(DownloadOutcome.TRANSIENT, "no response from server")
 
     if resp.status_code == 416 and existing_len > 0:
         # Our partial file is stale (e.g. left over from a different
         # release, or the server decided Range isn't servable). Drop it
         # and restart from zero without Range — one retry, no loop.
-        try:
-            resp.close()
-        except Exception as exc:
-            logger.debug("Response close failed (ignored): %s", exc)
-        try:
-            os.remove(dest_path)
-        except OSError:
-            pass
+        _close_quietly(resp)
+        _remove_quietly(dest_path)
         logger.info("Server rejected Range (416); restarting download from 0")
-        return download_firmware_resumable(
+        return download_firmware_attempt(
             http_client=http_client,
             download_url=download_url,
             expected_checksum=expected_checksum,
             dest_path=dest_path,
             resume=False,
+            expected_size=expected_size,
         )
 
     if resp.status_code == 200:
@@ -221,29 +307,31 @@ def download_firmware_resumable(
         m = re.match(r"bytes\s+(\d+)-", content_range)
         reported_start = int(m.group(1)) if m else None
         if existing_len > 0 and reported_start != existing_len:
-            try:
-                resp.close()
-            except Exception as exc:
-                logger.debug("Response close failed (ignored): %s", exc)
-            try:
-                os.remove(dest_path)
-            except OSError:
-                pass
+            _close_quietly(resp)
+            _remove_quietly(dest_path)
             logger.warning(
                 "Content-Range start=%r != expected %d; restarting from 0",
                 reported_start,
                 existing_len,
             )
-            return download_firmware_resumable(
+            return download_firmware_attempt(
                 http_client=http_client,
                 download_url=download_url,
                 expected_checksum=expected_checksum,
                 dest_path=dest_path,
                 resume=False,
+                expected_size=expected_size,
             )
     else:
-        logger.error("Firmware download failed: %s", resp.status_code)
-        return False
+        code = resp.status_code
+        _close_quietly(resp)
+        outcome = (
+            DownloadOutcome.TRANSIENT
+            if code >= 500 or code in _TRANSIENT_HTTP
+            else DownloadOutcome.FATAL
+        )
+        logger.error("Firmware download failed: HTTP %s (%s)", code, outcome.value)
+        return DownloadResult(outcome, f"HTTP {code}")
 
     # The agent's default download_dir (typically /tmp/station-agent)
     # may not exist on first OTA attempt. Create it every call — cheap
@@ -256,11 +344,8 @@ def download_firmware_resumable(
             os.makedirs(parent, exist_ok=True)
         except OSError as exc:
             logger.error("Cannot create download dir %s: %s", parent, exc)
-            try:
-                resp.close()
-            except Exception:
-                pass
-            return False
+            _close_quietly(resp)
+            return DownloadResult(DownloadOutcome.FATAL, f"cannot create download dir: {exc}")
 
     try:
         try:
@@ -268,24 +353,107 @@ def download_firmware_resumable(
                 for chunk in resp.iter_content(chunk_size=_STREAM_CHUNK):
                     if chunk:
                         f.write(chunk)
+        except requests.RequestException as exc:
+            # Connection dropped / read timed out mid-stream. Must come
+            # before the OSError branch: requests' exceptions subclass
+            # OSError, and that branch deletes the partial we want to
+            # resume from.
+            logger.warning(
+                "Firmware download interrupted at %d bytes: %s", _file_size(dest_path), exc
+            )
+            return DownloadResult(DownloadOutcome.TRANSIENT, f"connection interrupted: {exc}")
         except OSError as exc:
             # Full disk, permission error, read-only FS, etc. Must return
             # cleanly so the agent reports FAILED and tries again next
             # poll cycle — letting this propagate would crash the OTA
             # worker thread.
             logger.error("Failed to write firmware to %s: %s", dest_path, exc)
-            try:
-                os.remove(dest_path)
-            except OSError:
-                pass
-            return False
+            _remove_quietly(dest_path)
+            return DownloadResult(DownloadOutcome.FATAL, f"cannot write firmware: {exc}")
     finally:
-        try:
-            resp.close()
-        except Exception as exc:
-            logger.debug("Response close failed (ignored): %s", exc)
+        _close_quietly(resp)
 
-    return _verify_checksum(dest_path, expected_checksum)
+    if expected_size is not None:
+        got = _file_size(dest_path)
+        if got < expected_size:
+            # The connection ended cleanly but early. Checksumming now
+            # would delete a perfectly resumable partial.
+            logger.warning("Firmware download ended early (%d of %d bytes)", got, expected_size)
+            return DownloadResult(
+                DownloadOutcome.TRANSIENT, f"connection closed early ({got}/{expected_size} bytes)"
+            )
+
+    return _verified(dest_path, expected_checksum)
+
+
+def _verified(dest_path: str, expected_checksum: str) -> DownloadResult:
+    if _verify_checksum(dest_path, expected_checksum):
+        return DownloadResult(DownloadOutcome.OK)
+    return DownloadResult(DownloadOutcome.FATAL, "checksum verification failed")
+
+
+def download_with_retry(
+    http_client,
+    download_url: str,
+    expected_checksum: str,
+    dest_path: str,
+    *,
+    expected_size: int | None = None,
+    stall_limit_s: float,
+    wait,
+    clock=time.monotonic,
+    rng=random.random,
+    attempt=download_firmware_attempt,
+) -> DownloadResult:
+    """Download with Range-resume, retrying transient failures with backoff.
+
+    Gives up (returns the last TRANSIENT result) only once the partial has
+    not grown for ``stall_limit_s`` seconds — a slow link that keeps making
+    progress is never abandoned, and any progress resets the backoff.
+    FATAL results return immediately. ``wait(seconds)`` sleeps and returns
+    True when the agent is shutting down (``threading.Event.wait``); that
+    yields ABORTED so the caller leaves the deployment in DOWNLOADING.
+    """
+    best_size = _file_size(dest_path)
+    last_progress = clock()
+    failures = 0
+    while True:
+        result = attempt(
+            http_client=http_client,
+            download_url=download_url,
+            expected_checksum=expected_checksum,
+            dest_path=dest_path,
+            expected_size=expected_size,
+        )
+        if result.outcome is not DownloadOutcome.TRANSIENT:
+            return result
+
+        size = _file_size(dest_path)
+        if size > best_size:
+            best_size = size
+            last_progress = clock()
+            failures = 0
+        base = min(_BACKOFF_MAX_S, _BACKOFF_INITIAL_S * 2**failures)
+        delay = base * (0.5 + 0.5 * rng())
+        failures += 1
+        stalled_for = clock() - last_progress
+        if stalled_for + delay > stall_limit_s:
+            logger.error(
+                "Firmware download made no progress for %.0f s; giving up (%s)",
+                stalled_for,
+                result.detail,
+            )
+            return result
+        logger.warning(
+            "Firmware download interrupted (%s) at %d/%s bytes; retrying in %.0f s",
+            result.detail,
+            size,
+            expected_size if expected_size is not None else "?",
+            delay,
+        )
+        if wait(delay):
+            logger.info("Shutdown during download backoff; resuming on next start")
+            return DownloadResult(DownloadOutcome.ABORTED, "agent shutting down")
 
 
 def _verify_checksum(dest_path: str, expected_checksum: str) -> bool:
