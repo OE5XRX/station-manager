@@ -10,8 +10,11 @@ into a list before sending anything. Both must stream chunk by chunk.
 
 import asyncio
 import io
+import logging
+import threading
 
 import pytest
+from asgiref.sync import ThreadSensitiveContext
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from django.core.files.storage import FileSystemStorage
@@ -53,8 +56,55 @@ class TestOpenStorageStream:
     def test_missing_s3_object_raises_at_open(self, s3):
         storage, stub = s3
         stub.add_client_error("head_object", http_status_code=404, service_error_code="404")
-        with pytest.raises(Exception):
+        with pytest.raises(FileNotFoundError):
             streaming.open_storage_stream("img.bz2", storage=storage)
+
+    def test_other_head_errors_propagate(self, s3):
+        from botocore.exceptions import ClientError
+
+        storage, stub = s3
+        stub.add_client_error("head_object", http_status_code=403, service_error_code="403")
+        with pytest.raises(ClientError):
+            streaming.open_storage_stream("img.bz2", storage=storage)
+
+    def test_path_traversal_is_rejected(self, s3):
+        from django.core.exceptions import SuspiciousOperation
+
+        storage, _stub = s3
+        with pytest.raises(SuspiciousOperation):
+            streaming.open_storage_stream("../../etc/passwd", storage=storage)
+
+    def test_object_parameters_are_forwarded(self, s3, monkeypatch):
+        storage, stub = s3
+        sse = {"SSECustomerAlgorithm": "AES256", "SSECustomerKey": "k" * 32}
+        # ContentDisposition is an upload-only param and must be filtered out.
+        monkeypatch.setattr(
+            storage, "get_object_parameters", lambda name: {**sse, "ContentDisposition": "x"}
+        )
+        stub.add_response(
+            "head_object",
+            {"ContentLength": 3},
+            {"Bucket": "bucket", "Key": "media/img.bz2", **sse},
+        )
+        stub.add_response(
+            "get_object",
+            _body(b"abc"),
+            {"Bucket": "bucket", "Key": "media/img.bz2", "Range": "bytes=0-", **sse},
+        )
+        fh = streaming.open_storage_stream("img.bz2", storage=storage)
+        assert fh.read() == b"abc"
+
+    def test_object_shrunk_after_head_is_eof_with_warning(self, s3, caplog):
+        storage, stub = s3
+        stub.add_response("head_object", {"ContentLength": 10})
+        stub.add_client_error(
+            "get_object", service_error_code="InvalidRange", http_status_code=416
+        )
+        fh = streaming.open_storage_stream("img.bz2", storage=storage)
+        with caplog.at_level(logging.WARNING, logger="apps.api.streaming"):
+            assert fh.read(5) == b""
+        assert "media/img.bz2" in caplog.text
+        assert fh.tell() == 0
 
     def test_s3_stream_is_lazy_ranged_and_chunked(self, s3):
         storage, stub = s3
@@ -173,3 +223,48 @@ class TestResponseIterator:
         request = Request(AsyncRequestFactory().get("/"))
         ait = streaming.response_iterator(request, iter([b"x"]))
         assert hasattr(ait, "__aiter__")
+
+    def test_cancel_during_blocking_next_closes_source_once(self):
+        """Production disconnect path: Django cancels the response task while
+        ``next()`` is running on the thread-sensitive executor. ``close()`` is
+        queued behind the in-flight ``next()``; a second cancel while it waits
+        (TaskGroup teardown) must not drop it — the shield keeps it alive."""
+        request = AsyncRequestFactory().get("/")
+        entered = threading.Event()
+        release = threading.Event()
+        closed = threading.Event()
+        closes = []
+
+        class Source:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                entered.set()
+                # Bounded so a regression can never hang the suite.
+                assert release.wait(5)
+                return b"x"
+
+            def close(self):
+                closes.append(threading.get_ident())
+                closed.set()
+
+        ait = streaming.response_iterator(request, Source())
+
+        async def main():
+            async with ThreadSensitiveContext():
+                task = asyncio.ensure_future(anext(ait))
+                await asyncio.wait_for(asyncio.to_thread(entered.wait, 5), 10)
+                task.cancel()
+                # Let the generator reach its ``finally`` and queue close()
+                # behind the still-blocked next(), then cancel again.
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                task.cancel()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 10)
+                await asyncio.wait_for(asyncio.to_thread(closed.wait, 5), 10)
+
+        asyncio.run(asyncio.wait_for(main(), 30))
+        assert len(closes) == 1

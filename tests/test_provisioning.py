@@ -788,3 +788,78 @@ def test_download_under_asgi_streams_and_marks_downloaded(
     assert body == b"0123456789"
     job.refresh_from_db()
     assert job.status == ProvisioningJob.Status.DOWNLOADED
+
+
+def _ready_job(admin_user, station, image_release):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.provisioning.models import ProvisioningJob
+
+    return ProvisioningJob.objects.create(
+        station=station,
+        image_release=image_release,
+        requested_by=admin_user,
+        status=ProvisioningJob.Status.READY,
+        output_s3_key="provisioning/abc/test.wic.bz2",
+        output_size_bytes=10,
+        ready_at=timezone.now(),
+        expires_at=timezone.now() + timedelta(hours=1),
+    )
+
+
+@pytest.mark.django_db
+def test_download_under_asgi_client_abort_keeps_job_ready(
+    admin_user, station, image_release, monkeypatch
+):
+    """Client goes away mid-stream under ASGI: the source generator gets
+    GeneratorExit via the async wrapper's close and must NOT mark the job
+    DOWNLOADED."""
+    import asyncio
+    import io
+
+    from asgiref.sync import async_to_sync
+    from django.test import AsyncClient
+
+    from apps.provisioning.models import ProvisioningJob
+    from apps.provisioning.views import ProvisioningJobDownloadView
+
+    job = _ready_job(admin_user, station, image_release)
+    monkeypatch.setattr(ProvisioningJobDownloadView, "CHUNK", 4)
+    monkeypatch.setattr("apps.images.storage.open_stream", lambda key: io.BytesIO(b"0123456789"))
+
+    async def fetch_first_chunk():
+        client = AsyncClient()
+        await client.aforce_login(admin_user)
+        r = await client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+        ait = aiter(r.streaming_content)
+        first = await asyncio.wait_for(anext(ait), 10)
+        await asyncio.wait_for(ait.aclose(), 10)
+        return r, first
+
+    r, first = async_to_sync(fetch_first_chunk)()
+    assert r.status_code == 200
+    assert first == b"0123"
+    job.refresh_from_db()
+    assert job.status == ProvisioningJob.Status.READY
+
+
+@pytest.mark.django_db
+def test_download_missing_bundle_returns_502(admin_user, station, image_release, monkeypatch):
+    from django.test import Client
+
+    from apps.provisioning.models import ProvisioningJob
+
+    job = _ready_job(admin_user, station, image_release)
+
+    def missing(key):
+        raise FileNotFoundError(key)
+
+    monkeypatch.setattr("apps.images.storage.open_stream", missing)
+    client = Client()
+    client.force_login(admin_user)
+    r = client.get(reverse("provisioning:download", kwargs={"pk": job.id}))
+    assert r.status_code == 502
+    job.refresh_from_db()
+    assert job.status == ProvisioningJob.Status.READY

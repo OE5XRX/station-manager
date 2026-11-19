@@ -104,9 +104,11 @@ class ProvisioningJobStatusView(AreaPermissionMixin, View):
 class ProvisioningJobDownloadView(AreaPermissionMixin, View):
     """Stream the provisioned image from S3 and mark job as downloaded.
 
-    Returns 409 if the job is not yet READY and 410 if its presigned-like
-    expiry window has lapsed. The DOWNLOADED status transition only occurs
-    after the response generator has streamed the full object, and uses a
+    Returns 409 if the job is not yet READY, 410 if its presigned-like
+    expiry window has lapsed and 502 if the bundle cannot be opened. The
+    DOWNLOADED status transition only occurs after the response generator
+    has streamed the full object (handed to the server — under daphne that
+    is not proof of client receipt, see ``apps.api.streaming``), and uses a
     conditional UPDATE so concurrent downloads can't clobber a FAILED /
     EXPIRED state written by the worker between status check and iteration.
     """
@@ -123,7 +125,11 @@ class ProvisioningJobDownloadView(AreaPermissionMixin, View):
         if job.expires_at and job.expires_at < timezone.now():
             return HttpResponse(_("expired"), status=410)
 
-        stream = image_storage.open_stream(job.output_s3_key)
+        try:
+            stream = image_storage.open_stream(job.output_s3_key)
+        except Exception as exc:
+            logger.error("Failed to open provisioning bundle %s: %s", job.output_s3_key, exc)
+            return HttpResponse(_("bundle unavailable from storage backend"), status=502)
         chunk_size = self.CHUNK
         job_pk = job.pk
         station_pk = job.station_id

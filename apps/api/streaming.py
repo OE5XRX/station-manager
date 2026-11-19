@@ -11,19 +11,33 @@ left the server (OTA rootfs: 134 MB, 58 s TTFB → agent read timeout):
 2. Django's ASGI handler (we run daphne) drains a *sync* streaming
    iterator into a list before sending. ``response_iterator`` hands
    ASGI requests an async iterator that pulls one chunk at a time.
+
+Known limit: daphne has no ASGI flow control — ``send()`` appends to
+Twisted's transport buffer and returns at once. The S3 read is therefore
+paced by S3, not by the client: if server↔S3 is faster than
+server↔station, the unsent tail accumulates in daphne's memory (per
+concurrent download). This fixes the time-to-first-byte; bounding memory
+for slow clients needs a server with backpressure (uvicorn/hypercorn) and
+is an ops decision. Likewise, "fully streamed" in the views means "fully
+handed to the server", not "received by the client".
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import logging
 
 from asgiref.sync import sync_to_async
 from botocore.exceptions import ClientError
+from django.core.exceptions import SuspiciousOperation
 from django.core.files.storage import default_storage
 from django.core.handlers.asgi import ASGIRequest
+from s3transfer.constants import ALLOWED_DOWNLOAD_ARGS
 from storages.backends.s3 import S3Storage
-from storages.utils import clean_name
+from storages.utils import clean_name, safe_join
+
+logger = logging.getLogger(__name__)
 
 
 class S3RangeReader(io.RawIOBase):
@@ -36,12 +50,13 @@ class S3RangeReader(io.RawIOBase):
     offset.
     """
 
-    def __init__(self, client, bucket: str, key: str, size: int):
+    def __init__(self, client, bucket: str, key: str, size: int, params: dict | None = None):
         super().__init__()
         self._client = client
         self._bucket = bucket
         self._key = key
         self._size = size
+        self._params = params or {}
         self._pos = 0
         self._body = None
 
@@ -78,11 +93,22 @@ class S3RangeReader(io.RawIOBase):
         if self._body is None:
             try:
                 resp = self._client.get_object(
-                    Bucket=self._bucket, Key=self._key, Range=f"bytes={self._pos}-"
+                    Bucket=self._bucket,
+                    Key=self._key,
+                    Range=f"bytes={self._pos}-",
+                    **self._params,
                 )
             except ClientError as exc:
-                # Object shrank since the HEAD — treat as EOF.
+                # Object shrank since the HEAD — treat as EOF. The caller
+                # already advertised the old length, so the client sees a
+                # short body; leave a trace of why.
                 if exc.response.get("Error", {}).get("Code") == "InvalidRange":
+                    logger.warning(
+                        "S3 object %s shorter than expected: range from %d of %d bytes invalid",
+                        self._key,
+                        self._pos,
+                        self._size,
+                    )
                     return b""
                 raise
             self._body = resp["Body"]
@@ -112,16 +138,29 @@ class S3RangeReader(io.RawIOBase):
 def open_storage_stream(key: str, storage=None):
     """Open ``key`` for chunked sequential reading.
 
-    Raises like ``storage.open()`` when the object does not exist (S3:
-    an eager HEAD), so callers can keep mapping that to 502.
+    Raises ``FileNotFoundError`` like ``storage.open()`` when the object
+    does not exist (S3: an eager HEAD), so callers can keep mapping that
+    to 502.
     """
     storage = storage if storage is not None else default_storage
     if not isinstance(storage, S3Storage):
         return storage.open(key, "rb")
-    name = storage._normalize_name(clean_name(key))
+    try:
+        name = safe_join(storage.location, clean_name(key))
+    except ValueError:
+        raise SuspiciousOperation(f"Attempted access to {key!r} denied.") from None
+    # Same filtered download params S3File would send (e.g. SSE-C keys).
+    params = {
+        k: v for k, v in storage.get_object_parameters(name).items() if k in ALLOWED_DOWNLOAD_ARGS
+    }
     client = storage.connection.meta.client
-    head = client.head_object(Bucket=storage.bucket_name, Key=name)
-    return S3RangeReader(client, storage.bucket_name, name, head["ContentLength"])
+    try:
+        head = client.head_object(Bucket=storage.bucket_name, Key=name, **params)
+    except ClientError as exc:
+        if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
+            raise FileNotFoundError(f"File does not exist: {name}") from exc
+        raise
+    return S3RangeReader(client, storage.bucket_name, name, head["ContentLength"], params)
 
 
 def response_iterator(request, iterator):
