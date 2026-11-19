@@ -24,8 +24,10 @@ import logging
 import socket
 import subprocess
 import threading
+import time
 
 from station_agent.audio import rtp, tx_meter
+from station_agent.audio.rx_health import RxHealth
 from station_agent.audio.tx_dsp import (
     DSP_ELEMENTS,
     TxDspConfig,
@@ -45,6 +47,17 @@ _RTP_PT = 96
 # another slot's audio and TX would feed another module's sink. With them the stream is
 # dropped instead, gst exits, and the hot-plug refresh rebuilds it on the new node.
 _PIN_STREAM = "stream-properties=props,node.dont-reconnect=true,node.dont-fallback=true"
+# RX only: a non-live pipewiresrc. Live, pipewiresrc (PipeWire <= 1.6.11) posts CLOCK_LOST on
+# the transient streaming→paused→streaming every new pw_stream does right after start; if the
+# element is PLAYING by then (a race, ~5 % of starts, more when streams start together) the
+# pipeline re-selects its clock with a shifted base_time, basesrc keeps its stale ts_offset and
+# holds every buffer ~1–2 graph cycles, and the 2-buffer stream drops one cycle in every 4–6
+# for its whole life (37.5 instead of 50 packets/s). Non-live = no basesrc clock sync at all
+# (same behaviour as the upstream fix, PipeWire 8837678ba "don't sync to clock by default").
+# A non-live pipewiresrc provides no clock either, so provide-clock=false would be redundant.
+# Never pair it with udpsink sync=true (it would wait on raw PipeWire PTS). The TX
+# pipewiresink is not affected (no basesrc), so TX keeps the plain _PIN_STREAM.
+_RX_STREAM = f"{_PIN_STREAM},stream.is-live=false"
 _STOP_WAIT = 3.0
 
 
@@ -56,7 +69,7 @@ def build_rx_argv(rx_node: str, port: int, rate: int) -> list[str]:
         "-q",
         "pipewiresrc",
         f"target-object={rx_node}",
-        _PIN_STREAM,
+        _RX_STREAM,
         "!",
         "audioconvert",
         "!",
@@ -267,9 +280,11 @@ def _terminate(proc) -> None:
 
 
 class RxBridge:
-    """Taps a PipeWire source node, Opus-encodes it, and calls ``on_opus(payload)`` for
-    each 20 ms packet. The reader runs in a daemon thread (like the control client's own
-    loop); ``on_opus`` is invoked from that thread."""
+    """Taps a PipeWire source node, Opus-encodes it, and calls ``on_opus(payload, rtp_ts)``
+    for each 20 ms packet (``rtp_ts`` on the 48 kHz Opus RTP clock). The reader runs in a
+    daemon thread (like the control client's own loop); ``on_opus`` is invoked from that
+    thread. ``health`` (:class:`RxHealth`) tracks stalls and lost frames for the engine's
+    watchdog — a pipeline can be alive and still deliver nothing or too little."""
 
     def __init__(
         self,
@@ -281,6 +296,7 @@ class RxBridge:
         spawn=_default_spawn,
         socket_factory=_udp_socket,
         start_reader: bool = True,
+        clock=time.monotonic,
     ):
         self._node = rx_node
         self._port = port
@@ -293,8 +309,11 @@ class RxBridge:
         self._sock = None
         self._reader: threading.Thread | None = None
         self._stop = threading.Event()
+        self._clock = clock
+        self.health = RxHealth(clock=clock)
 
     def start(self) -> None:
+        self.health = RxHealth(clock=self._clock)  # stall clock runs from the spawn
         self._sock = self._socket_factory()
         self._sock.bind((_LOOPBACK, self._port))
         self._proc = self._spawn(build_rx_argv(self._node, self._port, self._rate))
@@ -317,18 +336,20 @@ class RxBridge:
 
     def _handle_datagram(self, datagram: bytes) -> None:
         try:
-            payload = rtp.strip_rtp(datagram)
+            rtp_ts, payload = rtp.parse_rtp(datagram)
         except rtp.RtpError:
             logger.debug("rx-bridge: dropping malformed RTP datagram")
             return
+        self.health.record(rtp_ts, len(payload))
         try:
-            self._on_opus(payload)
+            self._on_opus(payload, rtp_ts)
         except Exception:  # noqa: BLE001 — a consumer error must not kill the reader
             logger.exception("rx-bridge: on_opus callback raised")
 
     def is_alive(self) -> bool:
         """True while the gst pipeline runs. A pipeline whose source node vanished (module
-        unplugged / re-enumerated) exits; the engine's hot-plug refresh restarts it."""
+        unplugged / re-enumerated) exits; the engine's hot-plug refresh restarts it. A
+        running pipeline can still be broken — see ``health``."""
         proc = self._proc
         return proc is not None and proc.poll() is None
 

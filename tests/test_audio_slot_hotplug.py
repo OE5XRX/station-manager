@@ -1087,7 +1087,9 @@ def test_bridge_pipelines_are_pinned_to_their_target():
     from station_agent.audio.opus_bridge import _PIN_STREAM, build_rx_argv, build_tx_argv
 
     assert "node.dont-reconnect=true" in _PIN_STREAM
-    assert _PIN_STREAM in build_rx_argv("n", 47000, 8000)
+    # RX extends the pinned stream-properties (stream.is-live=false); still pinned.
+    rx_props = next(a for a in build_rx_argv("n", 47000, 8000) if a.startswith("stream-prop"))
+    assert rx_props.startswith(_PIN_STREAM + ",")
     assert _PIN_STREAM in build_tx_argv("n", 47000, 16000)
 
 

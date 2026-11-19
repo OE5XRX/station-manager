@@ -20,6 +20,27 @@ def test_build_rx_argv_has_opus_profile_and_target():
     assert "udpsink" in joined and "port=47001" in joined and "host=127.0.0.1" in joined
 
 
+def test_build_rx_argv_pins_stream_non_live_and_never_syncs():
+    """pipewiresrc start race (PipeWire <= 1.6.11): a live stream whose CLOCK_LOST re-PLAY
+    shifts base_time makes basesrc hold every buffer, and the 2-buffer stream then drops a
+    graph cycle in every 4-6 for its whole life. stream.is-live=false = no basesrc sync."""
+    argv = ob.build_rx_argv("oe5xrx.slot1", 47001, 8000)
+    props = next(a for a in argv if a.startswith("stream-properties="))
+    assert "stream.is-live=false" in props.split(",")
+    # still pinned to its node (no relink to another slot's audio)
+    assert "node.dont-reconnect=true" in props and "node.dont-fallback=true" in props
+    # a non-live pipeline must never sync the sink: it would wait on raw PipeWire PTS
+    sink = argv[argv.index("udpsink") :]
+    assert "sync=false" in sink and "sync=true" not in argv
+
+
+def test_build_tx_argv_keeps_live_stream_properties():
+    """The race lives in pipewiresrc; the TX pipewiresink stays as it was."""
+    argv = ob.build_tx_argv("oe5xrx.slot1.tx", 47002, 8000)
+    props = next(a for a in argv if a.startswith("stream-properties="))
+    assert "stream.is-live=false" not in props
+
+
 def test_build_tx_argv_has_jitterbuffer_plc_and_target():
     argv = ob.build_tx_argv("oe5xrx.slot1.tx", 47002, 8000)
     joined = " ".join(argv)
@@ -84,7 +105,7 @@ def test_rx_bridge_start_spawns_pipeline_and_binds_socket():
         "oe5xrx.slot1",
         47003,
         8000,
-        on_opus=lambda p: got.append(p),
+        on_opus=lambda p, ts: got.append((p, ts)),
         spawn=spawn,
         socket_factory=lambda: sock,
         start_reader=False,
@@ -95,7 +116,9 @@ def test_rx_bridge_start_spawns_pipeline_and_binds_socket():
     # a received RTP datagram yields its Opus payload
     dg = rtp.wrap_rtp(b"opus-bytes", seq=1, ts=960, ssrc=1, pt=96)
     br._handle_datagram(dg)
-    assert got == [b"opus-bytes"]
+    # …together with its RTP timestamp (48 kHz Opus clock), which also feeds the health
+    assert got == [(b"opus-bytes", 960)]
+    assert br.health.packets == 1
     br.stop()
     assert sock.closed is True
 
@@ -106,13 +129,52 @@ def test_rx_bridge_ignores_malformed_datagram():
         "n",
         1,
         8000,
-        on_opus=lambda p: got.append(p),
+        on_opus=lambda p, ts: got.append(p),
         spawn=lambda a: FakeProc(),
         socket_factory=FakeSock,
         start_reader=False,
     )
     br._handle_datagram(b"\x00\x01")  # too short → RtpError swallowed
     assert got == []
+    assert br.health.packets == 0
+
+
+def test_rx_bridge_health_counts_packet_even_if_consumer_raises():
+    def boom(p, ts):
+        raise RuntimeError("consumer bug")
+
+    br = ob.RxBridge(
+        "n",
+        1,
+        8000,
+        on_opus=boom,
+        spawn=lambda a: FakeProc(),
+        socket_factory=FakeSock,
+        start_reader=False,
+    )
+    br._handle_datagram(rtp.wrap_rtp(b"x" * 40, seq=1, ts=1920, ssrc=1, pt=96))
+    assert br.health.packets == 1
+
+
+def test_rx_bridge_health_starts_fresh_on_start():
+    """The stall clock runs from start(), not from construction (a slow bind/spawn)."""
+    t = [0.0]
+    br = ob.RxBridge(
+        "n",
+        1,
+        8000,
+        on_opus=lambda p, ts: None,
+        spawn=lambda a: FakeProc(),
+        socket_factory=FakeSock,
+        start_reader=False,
+        clock=lambda: t[0],
+    )
+    t[0] = 50.0
+    br.start()
+    t[0] = 55.0
+    assert br.health.verdict() is None
+    t[0] = 61.0
+    assert "no RTP packet" in br.health.verdict()
 
 
 def test_tx_bridge_feed_wraps_rtp_and_sends():

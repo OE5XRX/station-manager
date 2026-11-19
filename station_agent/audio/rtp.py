@@ -4,14 +4,15 @@ Without a GStreamer ``appsink`` (which needs python-gi, a package the A-image do
 ship), a UDP datagram is the cheapest self-delimiting boundary that yields exactly one
 Opus packet per read. The bridge pipelines therefore RTP-payload Opus over UDP loopback:
 
-    RX:  … ! opusenc ! rtpopuspay ! udpsink   → agent ``strip_rtp`` → §5.3 media frame
+    RX:  … ! opusenc ! rtpopuspay ! udpsink   → agent ``parse_rtp`` → §5.3 media frame
     TX:  agent ``wrap_rtp`` → udpsrc ! rtpopusdepay ! opusdec ! …
 
-We only care about the Opus payload; the RTP seq/ts here are the transport's, distinct
-from the §5.3 header's per-stream seq/ts. For TX injection we emit a minimal, valid header
-(no padding/extension/CSRC) that ``rtpopusdepay`` accepts. The RTP timestamp uses the
-48 kHz Opus RTP clock (RFC 7587), i.e. 960 ticks per 20 ms frame regardless of the media
-sample rate; the caller owns advancing seq/ts.
+RX keeps the Opus payload and the RTP timestamp (the engine derives the §5.3 ts from it,
+so lost frames show up as a ts gap instead of being hidden); the RTP seq is the
+transport's. For TX injection we emit a minimal, valid header (no padding/extension/CSRC)
+that ``rtpopusdepay`` accepts. The RTP timestamp uses the 48 kHz Opus RTP clock
+(RFC 7587), i.e. 960 ticks per 20 ms frame regardless of the media sample rate; the
+caller owns advancing seq/ts.
 """
 
 from __future__ import annotations
@@ -51,14 +52,19 @@ def wrap_rtp(
 
 
 def strip_rtp(datagram: bytes) -> bytes:
-    """Return the Opus payload from an RTP datagram, or raise :class:`RtpError`.
+    """Return the Opus payload from an RTP datagram, or raise :class:`RtpError`."""
+    return parse_rtp(datagram)[1]
+
+
+def parse_rtp(datagram: bytes) -> tuple[int, bytes]:
+    """Return ``(timestamp, payload)`` from an RTP datagram, or raise :class:`RtpError`.
 
     Handles the CSRC list (``CC`` count) and an optional header extension (``X`` bit) so a
     payloader that inserts either does not corrupt the payload boundary.
     """
     if len(datagram) < _FIXED_LEN:
         raise RtpError(f"RTP datagram too short: {len(datagram)}")
-    first, _second, _seq, _ts, _ssrc = _FIXED.unpack_from(datagram)
+    first, _second, _seq, ts, _ssrc = _FIXED.unpack_from(datagram)
     if (first >> 6) != RTP_VERSION:
         raise RtpError(f"bad RTP version {first >> 6}")
     cc = first & 0x0F
@@ -71,4 +77,4 @@ def strip_rtp(datagram: bytes) -> bytes:
         offset += 4 + 4 * ext_words
     if offset > len(datagram):
         raise RtpError("RTP header longer than datagram")
-    return bytes(datagram[offset:])
+    return ts, bytes(datagram[offset:])
