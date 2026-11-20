@@ -113,9 +113,11 @@ class SsoOAuth2Validator(OAuth2Validator):
 
         from django.contrib.auth import get_user_model
 
+        # Same resolution as ModelBackend (active slice, case-insensitive).
+        user_model = get_user_model()
         try:
-            user = get_user_model().objects.get(username=username)
-        except get_user_model().DoesNotExist:
+            user = user_model._default_manager.get_by_natural_key(username)
+        except user_model.DoesNotExist:
             return False
 
         # `client` here is an oauthlib Client wrapper; the DOT

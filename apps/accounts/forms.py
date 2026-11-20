@@ -80,7 +80,7 @@ class UserCreationForm(forms.ModelForm):
         return email
 
     def clean_username(self):
-        username = self.cleaned_data["username"].strip()
+        username = self.cleaned_data["username"].strip().upper()
         if User.objects.active().filter(username__iexact=username).exists():
             raise forms.ValidationError(_("A user with this username already exists."))
         return username
@@ -139,6 +139,16 @@ class UserChangeForm(BaseUserChangeForm):
             "locator": forms.TextInput(attrs={"class": "form-control", "placeholder": "JN78AB"}),
             "is_directory_visible": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
+
+    def clean_username(self):
+        # Callsigns are uppercase by convention (login is case-insensitive).
+        username = self.cleaned_data["username"].strip().upper()
+        clash = User.objects.active().filter(username__iexact=username)
+        if self.instance.pk:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise forms.ValidationError(_("A user with this username already exists."))
+        return username
 
     def clean_avatar(self):
         f = self.cleaned_data.get("avatar")

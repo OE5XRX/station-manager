@@ -313,6 +313,8 @@ SESSION_COOKIE_SAMESITE = "Lax"
 AXES_FAILURE_LIMIT = 5
 AXES_COOLOFF_TIME = 1  # hours
 AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
+# Uppercase the username so case variants of a callsign share one lockout counter.
+AXES_USERNAME_CALLABLE = "apps.accounts.axes.get_axes_username"
 
 # Telemetry history (apps/history): raw samples / hourly aggregates retention in days.
 # Partitions are dropped whole once their *end* is older than the retention.
