@@ -19,8 +19,9 @@ In scope:
 
 - The Django application in this repo (all `apps/*`, `config/*`)
 - The `station_agent/` code that ships onto the fleet
-- Our prod deploy config under `deploy/` (`docker-compose.prod.yml`,
-  `nginx.conf`)
+- The self-hosted reference deploy config under `deploy/`
+  (`docker-compose.prod.yml`, `nginx.conf`; OE5XRX prod itself runs from
+  the `servers` repo behind a Cloudflare tunnel)
 - The published container image `ghcr.io/oe5xrx/station-manager`
 
 Out of scope:

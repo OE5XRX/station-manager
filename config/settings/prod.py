@@ -21,8 +21,17 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# Prod path: Cloudflare edge -> cloudflared tunnel -> web:8000 (no nginx).
+# Cloudflare overwrites CF-Connecting-IP at the edge; every other client
+# header (X-Real-IP, X-Forwarded-For) is forwarded verbatim by cloudflared
+# and therefore spoofable. This default is only safe behind Cloudflare with
+# web:8000 unreachable otherwise; any other deployment of these settings must
+# set CLIENT_IP_HEADER (its proxy's header, or "" to trust no header) — see
+# deploy/nginx.conf for the nginx reference stack.
+CLIENT_IP_HEADER = os.environ.get("CLIENT_IP_HEADER", "CF-Connecting-IP")
+
 # Health check endpoint must work over plain HTTP (Docker internal health checks
-# and nginx-to-Django communication don't use HTTPS).
+# and cloudflared-to-Django communication don't use HTTPS).
 SECURE_REDIRECT_EXEMPT = [r"^api/v1/health/"]
 
 # CSP: disabled for now (Django 6.0 expects a dict, not a boolean).

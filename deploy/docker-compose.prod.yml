@@ -6,6 +6,8 @@ services:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.prod
+      # Behind the nginx below (sets X-Real-IP), not Cloudflare — see deploy/nginx.conf.
+      - CLIENT_IP_HEADER=X-Real-IP
     volumes:
       - oidc_keys:/app/oidc_keys
     depends_on:

@@ -17,6 +17,12 @@ from apps.sso.models import SsoAuditLog, TokenSession
 from apps.sso.permissions import SsoOAuth2Validator
 
 
+@pytest.fixture(autouse=True)
+def _trust_cf_header(settings):
+    """Prod config: CF-Connecting-IP is the trusted client-IP header."""
+    settings.CLIENT_IP_HEADER = "CF-Connecting-IP"
+
+
 @pytest.fixture
 def app(db):
     return Application.objects.create(
@@ -157,7 +163,7 @@ def _make_dot_tokens(user, app):
 def test_save_bearer_token_creates_token_session(db, user, app):
     _, rt = _make_dot_tokens(user, app)
     request = SimpleNamespace(
-        headers={"X-Real-IP": "89.207.4.5", "User-Agent": "TestUA/1.0"},
+        headers={"CF-Connecting-IP": "89.207.4.5", "User-Agent": "TestUA/1.0"},
         refresh_token_instance=None,
     )
 
@@ -176,13 +182,13 @@ def test_save_bearer_token_creates_token_session(db, user, app):
 def test_save_bearer_token_extracts_http_prefixed_headers(db, user, app):
     """Regression test: oauthlib copies Django META verbatim, so the
     production-reality header keys are HTTP_USER_AGENT and
-    HTTP_X_REAL_IP. The validator must accept those, not just the HTTP
+    HTTP_CF_CONNECTING_IP. The validator must accept those, not just the HTTP
     standard names. The client-controlled X-Forwarded-For is ignored."""
     _, rt = _make_dot_tokens(user, app)
     request = SimpleNamespace(
         headers={
             "HTTP_X_FORWARDED_FOR": "6.6.6.6, 89.207.4.5",
-            "HTTP_X_REAL_IP": "89.207.4.5",
+            "HTTP_CF_CONNECTING_IP": "89.207.4.5",
             "HTTP_USER_AGENT": "Mozilla/5.0 (X11; Linux)",
         },
         refresh_token_instance=None,
@@ -190,14 +196,14 @@ def test_save_bearer_token_extracts_http_prefixed_headers(db, user, app):
     validator = SsoOAuth2Validator()
     validator._record_token_session({"refresh_token": "rtok-456"}, request)
     s = TokenSession.objects.get(refresh_token=rt)
-    assert s.ip_address == "89.207.4.5", "proxy-set X-Real-IP must win over XFF"
+    assert s.ip_address == "89.207.4.5", "trusted CF-Connecting-IP must win over XFF"
     assert s.user_agent == "Mozilla/5.0 (X11; Linux)"
 
 
 def test_save_bearer_token_emits_login_success_audit(db, user, app):
     _, rt = _make_dot_tokens(user, app)
     request = SimpleNamespace(
-        headers={"X-Real-IP": "89.207.4.5"},
+        headers={"CF-Connecting-IP": "89.207.4.5"},
         refresh_token_instance=None,
     )
     validator = SsoOAuth2Validator()
@@ -218,7 +224,8 @@ def test_save_bearer_token_refresh_rotation_chains_parent(db, user, app):
     validator._record_token_session(
         {"refresh_token": "rtok-456"},
         SimpleNamespace(
-            headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"}, refresh_token_instance=None
+            headers={"CF-Connecting-IP": "89.207.4.5", "User-Agent": "UA1"},
+            refresh_token_instance=None,
         ),
     )
     parent_session = TokenSession.objects.get(refresh_token=parent_rt)
@@ -241,7 +248,7 @@ def test_save_bearer_token_refresh_rotation_chains_parent(db, user, app):
     validator._record_token_session(
         {"refresh_token": "rtok-789"},
         SimpleNamespace(
-            headers={"X-Real-IP": "89.207.4.5", "User-Agent": "UA1"},
+            headers={"CF-Connecting-IP": "89.207.4.5", "User-Agent": "UA1"},
             refresh_token_instance=parent_rt,
         ),
     )
@@ -258,7 +265,9 @@ def test_save_bearer_token_geoip_fallback_writes_empty_fields(db, user, app, mon
     """When GeoIP DB is missing, country/city stay empty -- session row is
     still created, login is not blocked."""
     _, rt = _make_dot_tokens(user, app)
-    request = SimpleNamespace(headers={"X-Real-IP": "203.0.113.99"}, refresh_token_instance=None)
+    request = SimpleNamespace(
+        headers={"CF-Connecting-IP": "203.0.113.99"}, refresh_token_instance=None
+    )
 
     # Monkeypatch lookup_location at the geoip module (the import target
     # of the local ``from .geoip import lookup_location`` inside
@@ -289,7 +298,7 @@ def test_save_bearer_token_rotation_falls_back_to_source_refresh_token(db, user,
     validator = SsoOAuth2Validator()
     validator._record_token_session(
         {"refresh_token": "rtok-456"},
-        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5"}, refresh_token_instance=None),
+        SimpleNamespace(headers={"CF-Connecting-IP": "89.207.4.5"}, refresh_token_instance=None),
     )
     parent_session = TokenSession.objects.get(refresh_token=parent_rt)
 
@@ -311,7 +320,7 @@ def test_save_bearer_token_rotation_falls_back_to_source_refresh_token(db, user,
 
     validator._record_token_session(
         {"refresh_token": "rtok-789"},
-        SimpleNamespace(headers={"X-Real-IP": "89.207.4.5"}, refresh_token_instance=None),
+        SimpleNamespace(headers={"CF-Connecting-IP": "89.207.4.5"}, refresh_token_instance=None),
     )
 
     child_session = TokenSession.objects.get(refresh_token=rt2)

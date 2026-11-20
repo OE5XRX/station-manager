@@ -9,6 +9,13 @@ A4 — Station delete ProtectedError → 409, no false audit row.
 import pytest
 from django.urls import reverse
 
+
+@pytest.fixture(autouse=True)
+def _trust_cf_header(settings):
+    """Prod config: CF-Connecting-IP is the trusted client-IP header."""
+    settings.CLIENT_IP_HEADER = "CF-Connecting-IP"
+
+
 pytestmark = pytest.mark.django_db
 
 
@@ -18,7 +25,7 @@ pytestmark = pytest.mark.django_db
 
 
 class TestClientIp:
-    """Unit tests for apps.api.audit._client_ip (trusted X-Real-IP, validated)."""
+    """Unit tests for apps.api.audit._client_ip (trusted CF-Connecting-IP, validated)."""
 
     def _make_request(self, real=None, remote=None, xff=None):
         """Build a minimal mock-request-like object."""
@@ -29,7 +36,7 @@ class TestClientIp:
         req = FakeReq()
         req.META = {}
         if real is not None:
-            req.META["HTTP_X_REAL_IP"] = real
+            req.META["HTTP_CF_CONNECTING_IP"] = real
         if xff is not None:
             req.META["HTTP_X_FORWARDED_FOR"] = xff
         if remote is not None:
@@ -52,13 +59,13 @@ class TestClientIp:
         assert _client_ip(self._make_request(real="not-an-ip; DROP TABLE audit--")) is None
 
     def test_garbage_real_ip_falls_back_to_remote(self):
-        """When X-Real-IP is garbage, REMOTE_ADDR is used if valid."""
+        """When CF-Connecting-IP is garbage, REMOTE_ADDR is used if valid."""
         from apps.api.audit import _client_ip
 
         assert _client_ip(self._make_request(real="garbage!!", remote="10.0.0.1")) == "10.0.0.1"
 
     def test_client_xff_is_ignored(self):
-        """X-Forwarded-For is client-controlled behind nginx (it appends)."""
+        """X-Forwarded-For is client-controlled (forwarded verbatim by cloudflared)."""
         from apps.api.audit import _client_ip
 
         req = self._make_request(xff="6.6.6.6, 10.0.0.1", remote="10.0.0.1")
@@ -102,7 +109,7 @@ class TestClientIpDoesNotSuppressAudit:
             url,
             {"name": "Updated Name"},
             format="json",
-            HTTP_X_REAL_IP="not-an-ip; DROP TABLE audit--",
+            HTTP_CF_CONNECTING_IP="not-an-ip; DROP TABLE audit--",
         )
         assert r.status_code == 200
         after = AccountAuditLog.objects.filter(

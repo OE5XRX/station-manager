@@ -120,6 +120,11 @@ Spec: `docs/superpowers/specs/2026-11-18-datenschutz-design.md` („Job für die
 - **Audit-Freitext (`message`) enthält nie E-Mail, IP, User-Agent oder GeoIP-Stadt** — IP nur im Feld
   `ip_address`, UA/Stadt nur in `TokenSession`. `apps/audit/scrub.scrub_message` (rein, idempotent)
   ersetzt E-Mails/IPs durch `[email]`/`[ip]` (IP nur, wenn `ipaddress` sie akzeptiert — Uhrzeiten/Versionen bleiben).
+- **Client-IP = genau ein vertrauter Header** (`CLIENT_IP_HEADER`, Prod-Default `CF-Connecting-IP` in
+  `prod.py`; leer = nur `REMOTE_ADDR`/Scope-Client). Prod: Cloudflare → cloudflared → `web:8000`, kein nginx —
+  `REMOTE_ADDR` ist der cloudflared-Container, `X-Real-IP`/`X-Forwarded-For` reicht cloudflared ungeprüft durch
+  (spoofbar). HTTP, WS, SSO-Validator und django-axes (`AXES_CLIENT_IP_CALLABLE`, IPv6 auf /64 gekürzt) gehen alle über
+  `apps/accounts/client_ip.py` — nie einen eigenen Header-Lookup bauen.
 - Settings (Env): `RETENTION_AUDIT_DAYS` (365), `RETENTION_IP_DAYS` (90), `RETENTION_BATCH_SIZE` (1000),
   `RETENTION_ENFORCE` (Default `false` = **Dry-Run, zählt nur**; `--dry-run` erzwingt das auch bei `true`).
   Tage `< 1` zählen als 1.

@@ -17,6 +17,13 @@ from apps.accounts.models import AccountAuditLog, AccountToken, User
 from apps.sso.models import SsoAuditLog, TokenSession
 from apps.sso.permissions import SsoOAuth2Validator
 
+
+@pytest.fixture(autouse=True)
+def _trust_cf_header(settings):
+    """Prod config: CF-Connecting-IP is the trusted client-IP header."""
+    settings.CLIENT_IP_HEADER = "CF-Connecting-IP"
+
+
 EMAIL = "member@example.org"
 
 
@@ -189,7 +196,7 @@ def test_sso_login_success_message_has_no_ua_city(member, app, monkeypatch):
     monkeypatch.setattr("apps.sso.geoip.lookup_location", lambda ip: ("AT", "Linz"))
     _issue_tokens(member, app)
     request = SimpleNamespace(
-        headers={"X-Real-IP": "89.207.4.5", "User-Agent": "TestUA/1.0"},
+        headers={"CF-Connecting-IP": "89.207.4.5", "User-Agent": "TestUA/1.0"},
         refresh_token_instance=None,
     )
     SsoOAuth2Validator()._record_token_session({"refresh_token": "rtok-pii"}, request)

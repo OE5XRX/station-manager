@@ -232,16 +232,15 @@ rotate_client_secret admin action.
 
 ## Production deploy
 
-Pushing to `main` triggers [`deploy.yml`](.github/workflows/deploy.yml):
+Pushing to `main` triggers [`deploy.yml`](.github/workflows/deploy.yml),
+which builds the multi-arch image (`amd64` + `arm64`) and pushes it to GHCR.
 
-1. Multi-arch image built (`amd64` + `arm64`) and pushed to GHCR
-2. Self-hosted runner on the prod host pulls the image
-3. `docker compose up -d --force-recreate` across web/db/redis/nginx
-   plus the two workers (`station-monitor`, `alert-monitor`)
-4. `manage.py migrate --noinput`
-5. Health check against `https://remote.oe5xrx.org/api/v1/health/`
-
-The prod compose file lives under `deploy/`. Secrets (DB password,
+The OE5XRX prod stack itself is defined in the `servers` repo
+(`services/station_manager`): Cloudflare edge → cloudflared tunnel →
+`web:8000`, no nginx. The client IP for audit rows and login lockouts comes
+from `CF-Connecting-IP` (`CLIENT_IP_HEADER`, default in `config/settings/prod.py`);
+`deploy/` holds a self-hosted reference stack behind nginx that sets
+`CLIENT_IP_HEADER=X-Real-IP` instead. Secrets (DB password,
 Django key, Telegram token, SMTP credentials) are passed through
 `.env` on the server — never committed.
 

@@ -28,7 +28,7 @@ User = get_user_model()
 
 
 def _get_client_ip(request):
-    """Trusted client IP (proxy-set X-Real-IP, see apps.accounts.client_ip)."""
+    """Trusted client IP (``CLIENT_IP_HEADER``, see apps.accounts.client_ip)."""
     from apps.accounts.client_ip import client_ip
 
     return client_ip(request)
