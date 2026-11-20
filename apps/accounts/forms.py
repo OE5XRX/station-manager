@@ -142,7 +142,13 @@ class UserChangeForm(BaseUserChangeForm):
 
     def clean_username(self):
         # Callsigns are uppercase by convention (login is case-insensitive).
-        return self.cleaned_data["username"].strip().upper()
+        username = self.cleaned_data["username"].strip().upper()
+        clash = User.objects.active().filter(username__iexact=username)
+        if self.instance.pk:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise forms.ValidationError(_("A user with this username already exists."))
+        return username
 
     def clean_avatar(self):
         f = self.cleaned_data.get("avatar")

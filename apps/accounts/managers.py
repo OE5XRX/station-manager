@@ -49,6 +49,12 @@ class UserManager(BaseUserManager):
         case-insensitive duplicate check in the creation form keep the
         active slice unambiguous under ``iexact``.
         """
-        return self.filter(deleted_at__isnull=True).get(
-            **{f"{self.model.USERNAME_FIELD}__iexact": username}
-        )
+        field = self.model.USERNAME_FIELD
+        active = self.filter(deleted_at__isnull=True)
+        try:
+            return active.get(**{f"{field}__iexact": username})
+        except self.model.MultipleObjectsReturned:
+            # Case-variant duplicates can only come from legacy/shell/admin
+            # data (the unique constraint is case-sensitive). Fail closed
+            # to the exact-case row rather than 500 or guess.
+            return active.get(**{field: username})

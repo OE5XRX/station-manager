@@ -128,3 +128,53 @@ class TestUsernameNormalisation:
         )
         assert form.is_valid(), form.errors
         assert form.cleaned_data["username"] == "OE5XYZ"
+
+
+@pytest.mark.django_db
+class TestDuplicateGuards:
+    def test_change_form_rejects_case_variant_duplicate(self, oe5abc):
+        other = User.objects.create_user(username="OE5OTH", password="x", email="o@x.test")
+        form = UserChangeForm(
+            {
+                "username": "oe5abc",
+                "email": "o@x.test",
+                "first_name": "",
+                "last_name": "",
+                "language": "en",
+            },
+            instance=other,
+        )
+        assert not form.is_valid()
+        assert "username" in form.errors
+
+    def test_change_form_allows_keeping_own_username(self, oe5abc):
+        form = UserChangeForm(
+            {
+                "username": "oe5abc",
+                "email": "a@x.test",
+                "first_name": "",
+                "last_name": "",
+                "language": "en",
+            },
+            instance=oe5abc,
+        )
+        assert form.is_valid(), form.errors
+
+    def test_legacy_case_variant_duplicates_fail_closed_to_exact_match(self, oe5abc):
+        legacy = User.objects.create_user(username="oe5abc", password="y", email="l@x.test")
+        assert User.objects.get_by_natural_key("oe5abc") == legacy
+        assert User.objects.get_by_natural_key("OE5ABC") == oe5abc
+        with pytest.raises(User.DoesNotExist):
+            User.objects.get_by_natural_key("Oe5abc")
+
+
+@pytest.mark.django_db
+class TestAxesLockoutAcrossCase:
+    def test_case_variants_share_lockout(self, client, oe5abc, settings):
+        settings.AXES_FAILURE_LIMIT = 3
+        url = reverse("accounts:login")
+        for typed in ("OE5ABC", "oe5abc", "Oe5AbC"):
+            client.post(url, {"username": typed, "password": "wrong"})
+        response = client.post(url, {"username": "oE5aBc", "password": "testpass123"})
+        assert response.status_code == 429
+        assert "_auth_user_id" not in client.session
