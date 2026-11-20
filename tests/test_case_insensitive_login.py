@@ -57,8 +57,10 @@ class TestLockoutKey:
         from apps.accounts.axes import get_axes_username
 
         request = rf.post("/")
-        assert get_axes_username(request, {"username": "OE5ABC"}) == "oe5abc"
-        assert get_axes_username(request, {"username": "oe5AbC"}) == "oe5abc"
+        assert get_axes_username(request, {"username": "OE5ABC"}) == "OE5ABC"
+        assert get_axes_username(request, {"username": "oe5AbC"}) == "OE5ABC"
+        # dotless i upper-cases to I, like the DB's UPPER()-based iexact match
+        assert get_axes_username(request, {"username": "oe5abc".replace("a", "ı")}) == "OE5IBC"
 
 
 @pytest.mark.django_db
