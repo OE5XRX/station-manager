@@ -15,6 +15,12 @@ from apps.accounts.models import AccountAuditLog, User
 from apps.accounts.permissions import AreaConsumerMixin, AreaPermission
 
 
+@pytest.fixture(autouse=True)
+def _trust_cf_header(settings):
+    """Prod config: CF-Connecting-IP is the trusted client-IP header."""
+    settings.CLIENT_IP_HEADER = "CF-Connecting-IP"
+
+
 class ImgViewSet(ViewSet):
     permission_classes = [AreaPermission]
     area = "images"
@@ -117,10 +123,10 @@ def test_ws_action_uses_fresh_user():
     asyncio.run(scenario())
 
 
-# --- denial audit records the proxy-set client IP (X-Real-IP), never client XFF ---
+# --- denial audit records the proxy-set client IP (CF-Connecting-IP), never client XFF ---
 
 
-def test_web_denial_ip_uses_x_real_ip_not_xff():
+def test_web_denial_ip_uses_cf_connecting_ip_not_xff():
     from django.test import RequestFactory
 
     from apps.accounts.permissions import AreaDenied, require
@@ -129,7 +135,7 @@ def test_web_denial_ip_uses_x_real_ip_not_xff():
     req = RequestFactory().get(
         "/de/audit/",
         REMOTE_ADDR="127.0.0.1",
-        HTTP_X_REAL_IP="203.0.113.7",
+        HTTP_CF_CONNECTING_IP="203.0.113.7",
         HTTP_X_FORWARDED_FOR="6.6.6.6, 203.0.113.7",
     )
     req.user = user
@@ -154,12 +160,12 @@ def test_web_denial_ip_spoofed_xff_ignored():
     assert AccountAuditLog.objects.get(event_type="permission_denied").ip_address == "127.0.0.1"
 
 
-def test_api_denial_ip_uses_x_real_ip_not_xff():
+def test_api_denial_ip_uses_cf_connecting_ip_not_xff():
     c = APIClient()
     c.force_authenticate(_u("staff"))
     r = c.get(
         "/t/img/available/",
-        HTTP_X_REAL_IP="198.51.100.4",
+        HTTP_CF_CONNECTING_IP="198.51.100.4",
         HTTP_X_FORWARDED_FOR="6.6.6.6",
         REMOTE_ADDR="127.0.0.1",
     )
@@ -183,8 +189,8 @@ def _ws_denied_ip(headers, client=("127.0.0.1", 4444)):
     return AccountAuditLog.objects.get(event_type="permission_denied").ip_address
 
 
-def test_ws_denial_ip_uses_x_real_ip_not_xff():
-    headers = [(b"x-forwarded-for", b"6.6.6.6, 127.0.0.1"), (b"x-real-ip", b"192.0.2.55")]
+def test_ws_denial_ip_uses_cf_connecting_ip_not_xff():
+    headers = [(b"x-forwarded-for", b"6.6.6.6, 127.0.0.1"), (b"cf-connecting-ip", b"192.0.2.55")]
     assert _ws_denied_ip(headers) == "192.0.2.55"
 
 
@@ -193,7 +199,7 @@ def test_ws_denial_ip_spoofed_xff_ignored():
 
 
 def test_ws_denial_ip_falls_back_to_scope_client_on_garbage_real_ip():
-    assert _ws_denied_ip([(b"x-real-ip", b"not-an-ip")]) == "127.0.0.1"
+    assert _ws_denied_ip([(b"cf-connecting-ip", b"not-an-ip")]) == "127.0.0.1"
 
 
 def test_ws_denial_ip_without_header_uses_scope_client():
