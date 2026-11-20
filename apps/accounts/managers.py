@@ -43,5 +43,12 @@ class UserManager(BaseUserManager):
         breaking login for the active user with a recycled callsign.
 
         Filter on the active slice so the resolution is unambiguous.
+
+        The match is case-insensitive: callsigns are stored uppercase but
+        users type ``oe5abc``. ``unique_active_username`` plus the
+        case-insensitive duplicate check in the creation form keep the
+        active slice unambiguous under ``iexact``.
         """
-        return self.filter(deleted_at__isnull=True).get(**{self.model.USERNAME_FIELD: username})
+        return self.filter(deleted_at__isnull=True).get(
+            **{f"{self.model.USERNAME_FIELD}__iexact": username}
+        )
