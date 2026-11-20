@@ -315,9 +315,9 @@ AXES_COOLOFF_TIME = 1  # hours
 AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
 # Uppercase the username so case variants of a callsign share one lockout counter.
 AXES_USERNAME_CALLABLE = "apps.accounts.axes.get_axes_username"
-# Same trusted client IP as the audit rows — axes' default (REMOTE_ADDR) is the
+# Trusted client IP (IPv6 collapsed to /64) — axes' default (REMOTE_ADDR) is the
 # cloudflared container in prod, i.e. one shared IP for every client.
-AXES_CLIENT_IP_CALLABLE = "apps.accounts.client_ip.client_ip"
+AXES_CLIENT_IP_CALLABLE = "apps.accounts.axes.get_axes_client_ip"
 
 # Client IP: the one HTTP header set by the trusted reverse proxy (e.g.
 # "CF-Connecting-IP"). Empty = no proxy, only REMOTE_ADDR / the ASGI scope

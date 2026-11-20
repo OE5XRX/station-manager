@@ -24,7 +24,10 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # Prod path: Cloudflare edge -> cloudflared tunnel -> web:8000 (no nginx).
 # Cloudflare overwrites CF-Connecting-IP at the edge; every other client
 # header (X-Real-IP, X-Forwarded-For) is forwarded verbatim by cloudflared
-# and therefore spoofable. Set CLIENT_IP_HEADER="" to trust no header.
+# and therefore spoofable. This default is only safe behind Cloudflare with
+# web:8000 unreachable otherwise; any other deployment of these settings must
+# set CLIENT_IP_HEADER (its proxy's header, or "" to trust no header) — see
+# deploy/nginx.conf for the nginx reference stack.
 CLIENT_IP_HEADER = os.environ.get("CLIENT_IP_HEADER", "CF-Connecting-IP")
 
 # Health check endpoint must work over plain HTTP (Docker internal health checks

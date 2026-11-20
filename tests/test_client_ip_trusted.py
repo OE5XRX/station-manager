@@ -60,7 +60,7 @@ def test_prod_settings_default_to_cf_connecting_ip(tmp_path):
         timeout=60,
         check=True,
     )
-    assert out.stdout.split() == ["CF-Connecting-IP", "apps.accounts.client_ip.client_ip"]
+    assert out.stdout.split() == ["CF-Connecting-IP", "apps.accounts.axes.get_axes_client_ip"]
 
 
 def test_base_settings_default_to_no_trusted_header():
@@ -203,21 +203,87 @@ def test_sso_validator_extract_ip_ignores_cf_header_without_setting(no_proxy):
     assert extract(SimpleNamespace(headers={"CF-Connecting-IP": SPOOF})) is None
 
 
-@pytest.mark.django_db
-def test_axes_records_trusted_client_ip(cf):
-    """django-axes lockouts key on ip_address — must not be the shared cloudflared IP."""
-    from axes.helpers import get_client_ip_address
-    from django.test import override_settings
-
-    with override_settings(AXES_CLIENT_IP_CALLABLE="apps.accounts.client_ip.client_ip"):
-        req = _req(REMOTE_ADDR=CLOUDFLARED, HTTP_CF_CONNECTING_IP=REAL, HTTP_X_REAL_IP=SPOOF)
-        assert get_client_ip_address(req) == REAL
-
-
 def test_base_settings_route_axes_through_helper():
     from config.settings import base
 
-    assert base.AXES_CLIENT_IP_CALLABLE == "apps.accounts.client_ip.client_ip"
+    assert base.AXES_CLIENT_IP_CALLABLE == "apps.accounts.axes.get_axes_client_ip"
+
+
+def test_axes_ip_uses_trusted_header(cf):
+    from axes.helpers import get_client_ip_address
+
+    req = _req(REMOTE_ADDR=CLOUDFLARED, HTTP_CF_CONNECTING_IP=REAL, HTTP_X_REAL_IP=SPOOF)
+    assert get_client_ip_address(req) == REAL
+    assert get_client_ip_address(_req(REMOTE_ADDR=CLOUDFLARED, HTTP_X_REAL_IP=SPOOF)) == (
+        CLOUDFLARED
+    )
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::"),
+        ("2001:db8:1:2::1", "2001:db8:1:2::"),
+        ("::ffff:198.51.100.7", "198.51.100.7"),
+        ("198.51.100.7", "198.51.100.7"),
+        ("garbage", CLOUDFLARED),
+    ],
+)
+def test_axes_ip_collapses_ipv6_to_64(cf, header, expected):
+    from apps.accounts.axes import get_axes_client_ip
+
+    assert get_axes_client_ip(_req(REMOTE_ADDR=CLOUDFLARED, HTTP_CF_CONNECTING_IP=header)) == (
+        expected
+    )
+
+
+@pytest.mark.django_db
+class TestAxesLockoutPerClientIp:
+    """Real lockouts through the login view, keyed on the trusted client IP."""
+
+    @pytest.fixture
+    def member(self, db):
+        from apps.accounts.models import User
+
+        return User.objects.create_user(username="OE5LCK", password="right-pw-123")
+
+    def _login(self, client, ip, password, **extra):
+        from django.urls import reverse
+
+        return client.post(
+            reverse("accounts:login"),
+            {"username": "OE5LCK", "password": password},
+            REMOTE_ADDR=CLOUDFLARED,
+            HTTP_CF_CONNECTING_IP=ip,
+            **extra,
+        )
+
+    def _fail(self, client, ip, times=3):
+        for _ in range(times):
+            self._login(client, ip, "wrong")
+
+    def test_locked_ip_stays_locked_other_ip_is_not(self, cf, settings, client, member):
+        from django.test import Client
+
+        settings.AXES_FAILURE_LIMIT = 3
+        self._fail(client, "198.51.100.1")
+        assert self._login(client, "198.51.100.1", "right-pw-123").status_code == 429
+        # A spoofed X-Real-IP cannot escape the lockout.
+        locked = self._login(Client(), "198.51.100.1", "right-pw-123", HTTP_X_REAL_IP=SPOOF)
+        assert locked.status_code == 429
+        # Another real client is not collateral damage of the shared cloudflared IP.
+        other = Client()
+        assert self._login(other, "198.51.100.2", "right-pw-123").status_code == 302
+        assert "_auth_user_id" in other.session
+
+    def test_ipv6_rotation_within_64_stays_locked(self, cf, settings, client, member):
+        from django.test import Client
+
+        settings.AXES_FAILURE_LIMIT = 3
+        for suffix in ("1", "2", "3"):
+            self._login(Client(), f"2001:db8:1:2::{suffix}", "wrong")
+        assert self._login(Client(), "2001:db8:1:2::ffff", "right-pw-123").status_code == 429
+        assert self._login(Client(), "2001:db8:1:3::1", "right-pw-123").status_code == 302
 
 
 @pytest.mark.django_db
