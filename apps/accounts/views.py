@@ -1283,6 +1283,9 @@ class UserDetailView(AreaPermissionMixin, DetailView):
         ctx["is_admin_view"] = aud == Audience.ADMIN
         ctx["is_self_view"] = aud in (Audience.SELF, Audience.APPLICANT)
         ctx["is_member_view"] = aud == Audience.MEMBER
+        # An admin's own page resolves to ADMIN (not SELF): the template needs
+        # this to offer "Edit profile" instead of identity edit / soft-delete.
+        ctx["is_own_detail"] = self.request.user.pk == self.object.pk
         ctx["visible_fields"] = directory_visible_fields(self.request.user, self.object)
         # API tokens are strictly personal: only on your own page, also for admins
         # (whose own page resolves to the ADMIN audience, not SELF).

@@ -532,3 +532,30 @@ class TestSoftDeletedAccessGate:
         client.force_login(admin)
         resp = client.get(reverse("accounts:user_detail", kwargs={"pk": deleted.pk}))
         assert resp.status_code == 200
+
+
+@pytest.mark.django_db
+class TestUserDetailActions:
+    """Header action buttons per audience (own page vs. other user)."""
+
+    def test_admin_own_page_has_profile_edit_but_no_danger_or_identity(self, client, admin):
+        client.force_login(admin)
+        html = client.get(reverse("accounts:user_detail", args=[admin.pk])).content.decode()
+        assert reverse("accounts:profile") in html
+        assert "Edit profile" in html
+        assert reverse("accounts:user_soft_delete", args=[admin.pk]) not in html
+        assert reverse("accounts:user_edit", args=[admin.pk]) not in html
+
+    def test_member_own_page_still_has_edit_profile(self, client, member):
+        client.force_login(member)
+        html = client.get(reverse("accounts:user_detail", args=[member.pk])).content.decode()
+        assert reverse("accounts:profile") in html
+        assert "Edit profile" in html
+        assert reverse("accounts:user_soft_delete", args=[member.pk]) not in html
+
+    def test_admin_on_other_user_has_identity_and_soft_delete(self, client, admin, member):
+        client.force_login(admin)
+        html = client.get(reverse("accounts:user_detail", args=[member.pk])).content.decode()
+        assert reverse("accounts:user_edit", args=[member.pk]) in html
+        assert reverse("accounts:user_soft_delete", args=[member.pk]) in html
+        assert "Edit profile" not in html
