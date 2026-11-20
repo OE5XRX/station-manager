@@ -18,6 +18,10 @@ def get_axes_client_ip(request):
     default ``REMOTE_ADDR`` is the cloudflared container in prod, i.e. one
     shared IP for every client. The /64 network address is still a valid
     address for axes' ``GenericIPAddressField``.
+
+    Trade-off: axes also stores this value in ``AccessAttempt``/``AccessLog``,
+    so those logs hold the /64, not the full IPv6 (hosts within one prefix are
+    indistinguishable there; data-minimising). Audit rows keep the full IP.
     """
     ip = client_ip(request)
     if ip is None or ":" not in ip:
