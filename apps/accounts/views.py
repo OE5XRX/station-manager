@@ -104,6 +104,9 @@ class LoginView(auth_views.LoginView):
     permission_exempt = "auth-flow"
     template_name = "accounts/login.html"
     authentication_form = LoginForm
+    # A stale login tab (user already logged in elsewhere) must not show a
+    # login form again; Django validates ``next`` against open redirects.
+    redirect_authenticated_user = True
 
 
 @method_decorator(login_not_required, name="dispatch")
