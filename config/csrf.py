@@ -12,6 +12,7 @@ path keeps a 403, rendered in the app layout.
 from django.conf import settings
 from django.contrib import messages
 from django.http import HttpResponseRedirect
+from django.middleware.csrf import REASON_NO_CSRF_COOKIE
 from django.shortcuts import render, resolve_url
 from django.urls import Resolver404, resolve, reverse
 from django.utils.http import url_has_allowed_host_and_scheme, urlencode
@@ -39,13 +40,22 @@ def _safe_next(request) -> str:
     return ""
 
 
+# Only stale/missing-token failures are a "session expired" case. Origin /
+# Referer failures (e.g. a proxy or CSRF_TRUSTED_ORIGINS misconfiguration)
+# keep the 403 so they are not masked as a harmless expiry.
+def _is_token_failure(reason: str) -> bool:
+    # Django's token reasons: "CSRF token missing." and
+    # "CSRF token from POST/header incorrect / has incorrect length / ...".
+    return reason == REASON_NO_CSRF_COOKIE or reason.startswith("CSRF token")
+
+
 def csrf_failure(request, reason="", template_name="403_csrf.html"):
     try:
         view_name = resolve(request.path_info).view_name
     except Resolver404:
         view_name = ""
 
-    if view_name in AUTH_FORM_VIEWS:
+    if view_name in AUTH_FORM_VIEWS and _is_token_failure(reason):
         next_url = _safe_next(request)
         if request.user.is_authenticated:
             return HttpResponseRedirect(next_url or resolve_url(settings.LOGIN_REDIRECT_URL))

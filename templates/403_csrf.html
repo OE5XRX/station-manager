@@ -3,15 +3,14 @@
 
 {% block title %}{% trans "Sitzung abgelaufen" %} · OE5XRX{% endblock %}
 
-{% block content %}
-<div class="page-head">
-  <div class="page-head-main">
+{% block body %}
+<div class="auth-shell">
+  <section class="auth-panel">
     <h1 class="page-title">{% trans "Sitzung abgelaufen" %}</h1>
     <p class="page-sub">{% trans "Das Formular ist veraltet (z. B. weil die Seite lange offen war oder du dich in einem anderen Tab an- oder abgemeldet hast). Bitte lade die Seite neu und versuche es erneut." %}</p>
-  </div>
+    <div class="row-gap-8">
+      <a class="btn btn-primary" href="{% url 'dashboard:index' %}">{% trans "Weiter" %}</a>
+    </div>
+  </section>
 </div>
-
-<div class="row-gap-8">
-  <a class="btn btn-primary" href="{% url 'dashboard:index' %}">{% trans "Zur Übersicht" %}</a>
-</div>
-{% endblock %}
+{% endblock body %}

@@ -86,3 +86,31 @@ class TestRedirectAuthenticatedLogin:
 
     def test_anonymous_still_sees_form(self, client):
         assert client.get(reverse("accounts:login")).status_code == 200
+
+
+@pytest.mark.django_db
+class TestReviewRegressions:
+    def test_anonymous_non_auth_path_is_403_not_500(self):
+        anon = Client(enforce_csrf_checks=True)
+        for url in ("/i18n/setlang/", reverse("accounts:logout")):
+            response = anon.post(url, {})
+            assert response.status_code == 403
+            assert "Sitzung abgelaufen" in response.content.decode()
+
+    def test_set_password_stale_post_redirects_to_same_page(self, csrf_client):
+        url = reverse("accounts:set_password", kwargs={"token": "abc"})
+        response = csrf_client.post(url, {"csrfmiddlewaretoken": "stale"})
+        assert response.status_code == 302
+        assert response["Location"] == url
+
+    def test_origin_failure_keeps_403(self, user):
+        client = Client(enforce_csrf_checks=True, HTTP_ORIGIN="https://evil.example")
+        response = client.post(reverse("accounts:login"), BAD)
+        assert response.status_code == 403
+
+    def test_authenticated_login_next_to_login_does_not_500(self, client, user):
+        client.force_login(user)
+        login = reverse("accounts:login")
+        response = client.get(login + "?next=" + login)
+        assert response.status_code == 302
+        assert response["Location"] == reverse("dashboard:index")

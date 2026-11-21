@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
@@ -8,7 +9,7 @@ from django.contrib.auth.decorators import login_not_required
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -107,6 +108,16 @@ class LoginView(auth_views.LoginView):
     # A stale login tab (user already logged in elsewhere) must not show a
     # login form again; Django validates ``next`` against open redirects.
     redirect_authenticated_user = True
+
+    def dispatch(self, request, *args, **kwargs):
+        # ``?next=<login page>`` would make Django raise on an authenticated
+        # user (crafted link); treat it as no ``next`` at all.
+        if (
+            request.user.is_authenticated
+            and (request.GET.get(self.redirect_field_name) or "").split("?")[0] == request.path
+        ):
+            return HttpResponseRedirect(resolve_url(settings.LOGIN_REDIRECT_URL))
+        return super().dispatch(request, *args, **kwargs)
 
 
 @method_decorator(login_not_required, name="dispatch")
