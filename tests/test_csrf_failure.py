@@ -4,6 +4,7 @@ import pytest
 from django.contrib.messages import get_messages
 from django.test import Client
 from django.urls import reverse
+from django.utils.http import urlencode
 
 from apps.accounts.models import User
 
@@ -135,3 +136,31 @@ class TestReauthAndMessage:
         response = csrf_client.post(reverse("accounts:login"), BAD, follow=True)
         assert response.status_code == 200
         assert "Die Sitzung ist abgelaufen" in response.content.decode()
+
+
+@pytest.mark.django_db
+class TestReauthPost:
+    AUTHORIZE = "/sso/authorize/?client_id=x&response_type=code"
+
+    def test_wrong_password_in_query_next_rerenders_form(self, client, user):
+        client.force_login(user)
+        url = reverse("accounts:login") + "?" + urlencode({"next": self.AUTHORIZE})
+        response = client.post(url, {"username": "OE5ABC", "password": "nope"})
+        assert response.status_code == 200
+
+    def test_next_only_in_post_body_does_not_skip_reauth(self, client, user):
+        client.force_login(user)
+        response = client.post(
+            reverse("accounts:login"),
+            {"username": "OE5ABC", "password": "nope", "next": self.AUTHORIZE},
+        )
+        assert response.status_code == 200
+
+    def test_correct_password_logs_in_again_and_redirects(self, client, user):
+        client.force_login(user)
+        response = client.post(
+            reverse("accounts:login"),
+            {"username": "OE5ABC", "password": "testpass123", "next": self.AUTHORIZE},
+        )
+        assert response.status_code == 302
+        assert response["Location"] == self.AUTHORIZE

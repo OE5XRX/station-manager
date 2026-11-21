@@ -111,18 +111,20 @@ class LoginView(auth_views.LoginView):
     redirect_authenticated_user = True
 
     def dispatch(self, request, *args, **kwargs):
-        # ``?next=<login page>`` would make Django raise on an authenticated
-        # user (crafted link); treat it as no ``next`` at all.
-        if (
-            request.user.is_authenticated
-            and (request.GET.get(self.redirect_field_name) or "").split("?")[0] == request.path
-        ):
-            return HttpResponseRedirect(resolve_url(settings.LOGIN_REDIRECT_URL))
-        # OIDC ``prompt=login``: keep showing the form to a logged-in user.
-        if request.user.is_authenticated and wants_reauth(
-            request.GET.get(self.redirect_field_name) or ""
-        ):
-            self.redirect_authenticated_user = False
+        if request.user.is_authenticated:
+            # Same precedence as Django's ``get_redirect_url``: POST first.
+            raw_next = (
+                request.POST.get(self.redirect_field_name)
+                or request.GET.get(self.redirect_field_name)
+                or ""
+            )
+            # ``next=<login page>`` would make Django raise on an authenticated
+            # user (crafted link); treat it as no ``next`` at all.
+            if raw_next.split("?")[0] == request.path:
+                return HttpResponseRedirect(resolve_url(settings.LOGIN_REDIRECT_URL))
+            # OIDC ``prompt=login``: keep showing the form to a logged-in user.
+            if wants_reauth(raw_next):
+                self.redirect_authenticated_user = False
         return super().dispatch(request, *args, **kwargs)
 
 

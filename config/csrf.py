@@ -42,9 +42,6 @@ def _safe_next(request) -> str:
     return ""
 
 
-# Only stale/missing-token failures are a "session expired" case. Origin /
-# Referer failures (e.g. a proxy or CSRF_TRUSTED_ORIGINS misconfiguration)
-# keep the 403 so they are not masked as a harmless expiry.
 def wants_reauth(next_url: str) -> bool:
     """True if ``next`` is the OIDC authorize endpoint.
 
@@ -58,6 +55,9 @@ def wants_reauth(next_url: str) -> bool:
         return False
 
 
+# Only stale/missing-token failures are a "session expired" case. Origin /
+# Referer failures (e.g. a proxy or CSRF_TRUSTED_ORIGINS misconfiguration)
+# keep the 403 so they are not masked as a harmless expiry.
 def _is_token_failure(reason: str) -> bool:
     # Django's token reasons: "CSRF token missing." and
     # "CSRF token from POST/header incorrect / has incorrect length / ...".
