@@ -114,3 +114,24 @@ class TestReviewRegressions:
         response = client.get(login + "?next=" + login)
         assert response.status_code == 302
         assert response["Location"] == reverse("dashboard:index")
+
+
+@pytest.mark.django_db
+class TestReauthAndMessage:
+    AUTHORIZE = "/sso/authorize/?client_id=x&response_type=code"
+
+    def test_logged_in_user_with_authorize_next_still_sees_login_form(self, client, user):
+        client.force_login(user)
+        response = client.get(reverse("accounts:login"), {"next": self.AUTHORIZE})
+        assert response.status_code == 200
+
+    def test_stale_login_post_with_authorize_next_goes_back_to_form(self, csrf_client, user):
+        csrf_client.force_login(user)
+        response = csrf_client.post(reverse("accounts:login"), {**BAD, "next": self.AUTHORIZE})
+        assert response.status_code == 302
+        assert response["Location"].startswith(reverse("accounts:login") + "?next=")
+
+    def test_expired_warning_is_rendered_on_login_page(self, csrf_client, user):
+        response = csrf_client.post(reverse("accounts:login"), BAD, follow=True)
+        assert response.status_code == 200
+        assert "Die Sitzung ist abgelaufen" in response.content.decode()

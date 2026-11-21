@@ -9,6 +9,8 @@ POST is never processed, so CSRF protection is not weakened. Every other
 path keeps a 403, rendered in the app layout.
 """
 
+from urllib.parse import urlsplit
+
 from django.conf import settings
 from django.contrib import messages
 from django.http import HttpResponseRedirect
@@ -43,6 +45,19 @@ def _safe_next(request) -> str:
 # Only stale/missing-token failures are a "session expired" case. Origin /
 # Referer failures (e.g. a proxy or CSRF_TRUSTED_ORIGINS misconfiguration)
 # keep the 403 so they are not masked as a harmless expiry.
+def wants_reauth(next_url: str) -> bool:
+    """True if ``next`` is the OIDC authorize endpoint.
+
+    DOT's ``prompt=login`` sends an *already logged-in* user to the login
+    page with ``next`` = authorize (``prompt`` stripped); the login form
+    must then be shown, not skipped, or the forced re-auth is bypassed.
+    """
+    try:
+        return resolve(urlsplit(next_url).path).url_name == "sso-authorize"
+    except Resolver404:
+        return False
+
+
 def _is_token_failure(reason: str) -> bool:
     # Django's token reasons: "CSRF token missing." and
     # "CSRF token from POST/header incorrect / has incorrect length / ...".
@@ -57,12 +72,13 @@ def csrf_failure(request, reason="", template_name="403_csrf.html"):
 
     if view_name in AUTH_FORM_VIEWS and _is_token_failure(reason):
         next_url = _safe_next(request)
-        if request.user.is_authenticated:
+        if request.user.is_authenticated and not wants_reauth(next_url):
             return HttpResponseRedirect(next_url or resolve_url(settings.LOGIN_REDIRECT_URL))
-        messages.warning(
-            request,
-            _("Die Sitzung ist abgelaufen – bitte erneut versuchen."),
-        )
+        if not request.user.is_authenticated:
+            messages.warning(
+                request,
+                _("Die Sitzung ist abgelaufen – bitte erneut versuchen."),
+            )
         if view_name == "accounts:login":
             target = reverse("accounts:login")
             if next_url:

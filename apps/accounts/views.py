@@ -24,6 +24,7 @@ from django.views.generic import (
 )
 
 from apps.stations.models import StationAssignment
+from config.csrf import wants_reauth
 
 from .forms import (
     LoginForm,
@@ -117,6 +118,11 @@ class LoginView(auth_views.LoginView):
             and (request.GET.get(self.redirect_field_name) or "").split("?")[0] == request.path
         ):
             return HttpResponseRedirect(resolve_url(settings.LOGIN_REDIRECT_URL))
+        # OIDC ``prompt=login``: keep showing the form to a logged-in user.
+        if request.user.is_authenticated and wants_reauth(
+            request.GET.get(self.redirect_field_name) or ""
+        ):
+            self.redirect_authenticated_user = False
         return super().dispatch(request, *args, **kwargs)
 
 
