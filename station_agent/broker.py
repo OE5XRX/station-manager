@@ -1079,7 +1079,11 @@ class Broker:
         result: dict = {}
         try:
             for _attempt in range(2):
-                result = await self._execute(slot, module, "do", "ptt", "false", failsafe=True)
+                try:
+                    result = await self._execute(slot, module, "do", "ptt", "false", failsafe=True)
+                except Exception as exc:  # noqa: BLE001 — a raising attempt still gets the retry
+                    logger.warning("broker: SSTV unkey attempt raised: %r", exc)
+                    result = {"ok": False, "error": type(exc).__name__}
                 if result.get("ok"):
                     return True
         finally:

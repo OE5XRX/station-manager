@@ -50,8 +50,8 @@ _ENCODER_PEAK = 0.9
 DOWNLOAD_DEADLINE_S = 180.0
 _CHUNK = 64 * 1024
 _KILL_WAIT_S = 2.0
-# Per socket read: bounds how long a download thread lingers after an abort or the deadline
-# (it cannot be interrupted mid-read), so stragglers never pin the small executor for long.
+# Per socket read. Each loop step is ONE recv (read1), so the thread re-checks abort and the
+# download deadline at least this often — a trickling body cannot pin the small executor.
 _READ_TIMEOUT_S = 10
 _SEEN_IDS = 256
 
@@ -313,7 +313,11 @@ class SstvTxSession:
                 if length is not None and length.strip() != str(self._size):
                     return "size_mismatch"
                 digest, total = hashlib.sha256(), 0
-                for chunk in resp.iter_content(_CHUNK):
+                raw = resp.raw
+                # read1: return whatever one recv yields. iter_content/read(n) would block
+                # until a full chunk arrived, skipping the abort/deadline checks below.
+                read = getattr(raw, "read1", None) or raw.read
+                while chunk := read(_CHUNK):
                     if self._cancel_download.is_set():
                         return "cancelled"
                     if time.monotonic() > self._download_deadline:

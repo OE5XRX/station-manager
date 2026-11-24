@@ -6,6 +6,7 @@ asserts the PTT ends low and the session reports aborted/error.
 
 import asyncio
 import hashlib
+import time
 
 import pytest
 
@@ -54,9 +55,20 @@ class FakeResponse:
         self.headers = headers if headers is not None else {"Content-Length": str(len(body))}
         self.closed = False
 
-    def iter_content(self, chunk_size):
-        for i in range(0, len(self._body), self._chunk):
-            yield self._body[i : i + self._chunk]
+        self.raw = self  # requests' urllib3 response; the agent reads it with read1()
+        self._pos = 0
+        self.trickle_s = None  # set: one byte per read1, after this delay (a stalling server)
+        self.reads_after_close = 0
+
+    def read1(self, amt):
+        if self.closed:
+            self.reads_after_close += 1
+        if self.trickle_s is not None:
+            time.sleep(self.trickle_s)
+            amt = 1
+        out = self._body[self._pos : self._pos + min(amt, self._chunk)]
+        self._pos += len(out)
+        return out
 
     def close(self):
         self.closed = True
@@ -75,6 +87,7 @@ class FakeHttp:
         if self.block is not None:
             self.block.wait(5)
         resp = FakeResponse(self.body, **self.kw)
+        resp.trickle_s = getattr(self, "trickle_s", None)
         self.responses.append(resp)
         return resp
 
@@ -1097,3 +1110,44 @@ def test_disconnect_unkeys_voice_before_waiting_for_sstv(tmp_path, monkeypatch):
     assert stamps["voice"] - t0 < 1.0
     assert stamps["sstv"] - t0 >= 1.5  # on_disconnect still waited for the SSTV teardown
     assert fws[1].state["fm"]["ptt"] == "false" and fws[2].state["fm"]["ptt"] == "false"
+
+
+def test_trickling_download_releases_its_thread(fw, tmp_path):
+    http = FakeHttp()
+    http.trickle_s = 0.02  # one byte every 20 ms: never a full chunk, never a read timeout
+    mgr = _manager(tmp_path, http, download_deadline_s=0.2)
+    b, col = _broker(fw, mgr)
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+        await asyncio.sleep(0.2)  # the worker notices the deadline on its next byte
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "download_timeout")
+    resp = http.responses[0]
+    assert resp.closed  # the download thread itself gave up and closed the response
+    assert _ptt(fw, "true") == 0
+
+
+def test_raising_unkey_attempt_is_retried(fw, tmp_path):
+    def fail(sc, module, op, cap, token, trace):
+        if (op, cap, token) == ("do", "ptt", "false") and not fail.raised:
+            fail.raised = True
+            raise OSError("line hiccup")
+        return sc.execute(module, op, cap, token, trace)
+
+    fail.raised = False
+    transport = _failing_transport(fail)
+    mgr = _manager(tmp_path, player=FakePlayer("ok", 0.05))
+    b, col = _broker(fw, mgr)
+    b._transport_factory = transport
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+
+    asyncio.run(scenario())
+    assert col.states()[-1][0] == "done"
+    assert transport.calls.count(("do", "ptt", "false")) == 2
+    _assert_low(fw)
