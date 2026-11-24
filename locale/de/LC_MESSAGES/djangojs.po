@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 19:40+0100\n"
+"POT-Creation-Date: 2026-11-24 20:35+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -34,113 +34,65 @@ msgstr "Wird aktualisiert"
 msgid "Error"
 msgstr "Fehler"
 
-#: static/js/app.js:25
-msgid "Pending"
-msgstr "Ausstehend"
-
-#: static/js/app.js:26
-msgid "In Progress"
-msgstr "Läuft"
-
-#: static/js/app.js:27
-msgid "Completed"
-msgstr "Abgeschlossen"
-
-#: static/js/app.js:28
-msgid "Failed"
-msgstr "Fehlgeschlagen"
-
-#: static/js/app.js:29
-msgid "Cancelled"
-msgstr "Abgebrochen"
-
-#: static/js/app.js:30
-msgid "Downloading"
-msgstr "Herunterladen"
-
-#: static/js/app.js:31
-msgid "Installing"
-msgstr "Installieren"
-
-#: static/js/app.js:32
-msgid "Rebooting"
-msgstr "Neustart"
-
-#: static/js/app.js:33
-msgid "Verifying"
-msgstr "Prüfen"
-
-#: static/js/app.js:34
-msgid "Success"
-msgstr "Erfolgreich"
-
-#: static/js/app.js:35
-msgid "Rolled Back"
-msgstr "Zurückgerollt"
-
-#: static/js/app.js:36
-msgid "Superseded"
-msgstr "Ersetzt"
-
-#: static/js/app.js:241
+#: static/js/app.js:233
 msgid "LIVE"
 msgstr "LIVE"
 
-#: static/js/app.js:241
+#: static/js/app.js:233
 msgid "RECONNECTING"
 msgstr "VERBINDE NEU"
 
-#: static/js/app.js:277
+#: static/js/app.js:269
 msgid "%(n)ss ago"
 msgstr "vor %(n)s s"
 
-#: static/js/app.js:278
+#: static/js/app.js:270
 msgid "%(n)sm ago"
 msgstr "vor %(n)s min"
 
-#: static/js/app.js:279
+#: static/js/app.js:271
 msgid "%(n)sh ago"
 msgstr "vor %(n)s h"
 
-#: static/js/app.js:280
+#: static/js/app.js:272
 msgid "%(n)sd ago"
 msgstr "vor %(n)s Tg."
 
-#: static/js/app.js:324
+#: static/js/app.js:316
 msgid "%(completed)s / %(total)s OK · %(failed)s FAIL"
 msgstr "%(completed)s / %(total)s OK · %(failed)s FEHLER"
 
-#: static/js/app.js:379
+#: static/js/app.js:371
 msgid "Connecting to station #%(id)s..."
 msgstr "Verbinde mit Station #%(id)s..."
 
-#: static/js/app.js:384
+#: static/js/app.js:376
 msgid "[ connected ]"
 msgstr "[ verbunden ]"
 
-#: static/js/app.js:391
+#: static/js/app.js:383
 msgid "[ closed: %(reason)s ]"
 msgstr "[ geschlossen: %(reason)s ]"
 
-#: static/js/app.js:394
+#: static/js/app.js:386
 msgid "rejected"
 msgstr "abgelehnt"
 
-#: static/js/app.js:400
+#: static/js/app.js:392
 msgid "[ disconnected: %(code)s ]"
 msgstr "[ getrennt: %(code)s ]"
 
-#: static/js/app.js:405
+#: static/js/app.js:397
 msgid "[ disconnected — giving up after %(n)s attempts; refresh to retry ]"
 msgstr ""
 "[ getrennt — Abbruch nach %(n)s Versuchen; Seite neu laden für einen neuen "
 "Versuch ]"
 
-#: static/js/app.js:410
+#: static/js/app.js:402
 msgid "[ reconnecting… (%(n)s/%(max)s) ]"
 msgstr "[ verbinde neu… (%(n)s/%(max)s) ]"
 
-#: static/js/app.js:425
+#: static/js/app.js:417
 msgid "[ restarting shell… ]"
 msgstr "[ starte Shell neu… ]"
 

@@ -382,3 +382,50 @@ def test_terminal_disconnect_survives_crashed_keepalive(monkeypatch):
     session = TerminalSession.objects.get(station=station)
     assert session.status == "closed"
     assert session.close_reason.startswith("disconnect")
+
+
+@pytest.mark.parametrize(
+    ("language", "deployment", "result"),
+    [("en", "In Progress", "Rolled Back"), ("de", "Läuft", "Zurückgerollt")],
+)
+@pytest.mark.django_db(transaction=True)
+def test_deployment_feed_sends_translated_status_labels(language, deployment, result):
+    from django.utils import translation
+
+    user = User.objects.create(username=f"feed-lbl-{language}", membership_level=STAFF, language=language)
+
+    async def scenario():
+        comm = _comm("/ws/deployments/status/", user)
+        connected, _ = await comm.connect()
+        assert connected is True
+        assert await comm.receive_nothing(timeout=0.2)  # group join done
+        await get_channel_layer().group_send(
+            "deployment_status",
+            {
+                "type": "deployment_update",
+                "data": {
+                    "deployment_id": 1,
+                    "status": "in_progress",
+                    "result": {"id": 2, "station_id": 3, "status": "rolled_back"},
+                },
+            },
+        )
+        msg = await comm.receive_json_from()
+        await comm.disconnect()
+        return msg
+
+    msg = asyncio.run(scenario())
+    # Machine codes stay for backwards compatibility.
+    assert msg["status"] == "in_progress"
+    assert msg["result"]["status"] == "rolled_back"
+    with translation.override(language):
+        assert msg["status_label"] == deployment
+        assert msg["result"]["status_label"] == result
+
+
+def test_with_status_labels_unknown_code_falls_back_to_raw():
+    from apps.deployments.consumers import with_status_labels
+
+    out = with_status_labels({"status": "weird", "result": {"status": "x"}})
+    assert out["status_label"] == "weird"
+    assert out["result"]["status_label"] == "x"
