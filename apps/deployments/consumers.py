@@ -31,7 +31,10 @@ def with_status_labels(data):
         out["status_label"] = _status_label(Deployment.Status, out["status"])
     result = out.get("result")
     if isinstance(result, dict) and "status" in result:
-        out["result"] = {**result, "status_label": _status_label(DeploymentResult.Status, result["status"])}
+        out["result"] = {
+            **result,
+            "status_label": _status_label(DeploymentResult.Status, result["status"]),
+        }
     return out
 
 

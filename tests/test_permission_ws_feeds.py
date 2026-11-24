@@ -392,7 +392,9 @@ def test_terminal_disconnect_survives_crashed_keepalive(monkeypatch):
 def test_deployment_feed_sends_translated_status_labels(language, deployment, result):
     from django.utils import translation
 
-    user = User.objects.create(username=f"feed-lbl-{language}", membership_level=STAFF, language=language)
+    user = User.objects.create(
+        username=f"feed-lbl-{language}", membership_level=STAFF, language=language
+    )
 
     async def scenario():
         comm = _comm("/ws/deployments/status/", user)
