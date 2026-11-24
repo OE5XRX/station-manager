@@ -12,7 +12,7 @@ from unittest import mock
 
 import pytest
 from django.core import mail
-from django.utils import translation
+from django.utils import timezone, translation
 
 from apps.accounts.models import User
 from apps.monitoring.models import Alert, AlertRule
@@ -331,3 +331,57 @@ def test_unknown_channel_error_is_translated():
     assert ok is False
     assert "pigeon" in err
     assert "Unbekannter Kanal" in err
+
+
+@pytest.mark.django_db
+def test_alert_email_render_failure_in_one_group_does_not_block_other(email_on, caplog):
+    """A rendering error (not just SMTP) for one language stays isolated."""
+    from apps.monitoring import notifications
+
+    _admin("de1", "de")
+    _admin("en1", "en")
+    real = notifications._alert_email
+
+    def flaky(alert):
+        if translation.get_language() == "de":
+            raise ValueError("bad catalog")
+        return real(alert)
+
+    with mock.patch.object(notifications, "_alert_email", side_effect=flaky):
+        send_alert_notifications(_alert())
+
+    assert [m.to for m in mail.outbox] == [["en1@x"]]
+    assert any(r.levelname == "ERROR" and r.exc_info for r in caplog.records)
+
+
+@pytest.mark.django_db
+def test_alert_email_time_carries_timezone(email_on, settings):
+    settings.TIME_ZONE = "Europe/Vienna"
+    _admin("en1", "en")
+    alert = _alert()
+    send_alert_notifications(alert)
+    tzname = timezone.localtime(alert.created_at).tzname()
+    assert tzname in ("CET", "CEST")
+    time_line = next(line for line in mail.outbox[0].body.splitlines() if line.startswith("Time:"))
+    assert time_line.endswith(f" {tzname}")
+
+
+@pytest.mark.django_db
+def test_test_email_partial_failure_names_the_failing_language(email_on):
+    from django.core.mail import send_mail as real_send_mail
+
+    nomail = _admin("nomail", "de", email="")
+    _admin("de1", "de")
+    _admin("en1", "en")
+
+    def flaky(*, recipient_list, **kwargs):
+        if "de1@x" in recipient_list:
+            raise OSError("smtp down")
+        return real_send_mail(recipient_list=recipient_list, **kwargs)
+
+    with mock.patch("apps.monitoring.notifications.send_mail", side_effect=flaky):
+        ok, err = send_test_notification("email", requesting_user=nomail)
+
+    assert ok is False
+    assert err == "de: smtp down"
+    assert [m.to for m in mail.outbox] == [["en1@x"]]

@@ -55,9 +55,9 @@ def _send_email_notification(alert, recipients_qs=None):
     sent = 0
     for language, group in group_by_language(rows, key=lambda row: row[1]).items():
         recipient_list = [email for email, _language in group]
-        with override(language):
-            subject, body = _alert_email(alert)
         try:
+            with override(language):
+                subject, body = _alert_email(alert)
             send_mail(
                 subject=subject,
                 message=body,
@@ -81,12 +81,19 @@ def _alert_title(alert) -> str:
     }
 
 
+def _local_time(value=None) -> str:
+    """Localized date + time with the zone name (e.g. ``CET``) — the reader
+    may not be in the server's time zone, and DST makes bare times ambiguous."""
+    local = timezone.localtime(value)
+    return f"{formats.date_format(local, 'DATETIME_FORMAT')} {local.tzname()}"
+
+
 def _alert_email(alert):
     """Subject + body of the alert mail in the active language."""
     # A CR/LF in the subject raises a header error and the mail is lost.
     subject = " ".join(_alert_title(alert).splitlines())
     severity = alert.get_severity_display()
-    created = formats.date_format(timezone.localtime(alert.created_at), "DATETIME_FORMAT")
+    created = _local_time(alert.created_at)
     body = (
         _("Station: %(station)s") % {"station": alert.station.name}
         + "\n"
@@ -270,7 +277,7 @@ def _test_email(requesting_user=None):
                 "This is a test notification from OE5XRX Station Manager.\n"
                 "Sent at: %(time)s\n\n"
                 "If you received this, email notifications are working correctly."
-            ) % {"time": formats.date_format(timezone.localtime(), "DATETIME_FORMAT")}
+            ) % {"time": _local_time()}
         try:
             send_mail(
                 subject=subject,
@@ -280,7 +287,8 @@ def _test_email(requesting_user=None):
                 fail_silently=False,
             )
         except Exception as e:
-            errors.append(str(e))
+            # Name the group: with several languages one may succeed.
+            errors.append(f"{language}: {e}")
     if errors:
         return False, "; ".join(errors)
     return True, ""
@@ -300,7 +308,7 @@ def _test_telegram():
     with override(settings.LANGUAGE_CODE):
         text = "\u2705 *OE5XRX Station Manager*\n" + _(
             "Test notification successful.\nSent at: %(time)s"
-        ) % {"time": formats.date_format(timezone.localtime(), "DATETIME_FORMAT")}
+        ) % {"time": _local_time()}
 
     try:
         import telegram
