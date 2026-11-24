@@ -76,8 +76,8 @@ _BIT_MAX_SPLIT_HZ = 160.0  # ... and no further than this
 _MAX_OFFSET_HZ = 100.0
 
 _SYNC_THRESHOLD_HZ = (SYNC_HZ + BLACK_HZ) / 2  # 1350
-_SYNC_MIN_QUALITY = 0.5
-_FIRST_SYNC_WINDOW_MS = 10.0
+_SYNC_MIN_QUALITY = 0.7  # a one-sided frequency step scores only ~0.5
+_WIDE_SYNC_WINDOW_MS = 10.0
 _FIT_POINTS = 32
 _FIT_MIN_POINTS = 4
 _LOSS_MS = 3000.0
@@ -309,6 +309,7 @@ class StreamDecoder:
         self._guard = max(2, self._sync_len // 2)
         # Absolute (fractional) start of line 0.
         self._t0 = p + VIS_BITS * VIS_BIT_MS * spm + mode.start_ms * spm
+        self._last_good_start = self._t0  # start of the last line with a good sync
         self._good: list[tuple[int, float]] = []
         self._outliers: list[tuple[int, float]] = []
         self._missing = 0
@@ -361,9 +362,11 @@ class StreamDecoder:
     def _decode_line(self, events: list[Event]) -> bool:
         mode, k = self._mode, self._line
         pred = self._predict(k)
+        # Wide window until locked and while syncs are missing (so a timing
+        # jump, e.g. a dropped audio buffer, can be re-acquired), tight otherwise.
         window = (
-            self._ms(_FIRST_SYNC_WINDOW_MS)
-            if not self._good
+            self._ms(_WIDE_SYNC_WINDOW_MS)
+            if not self._good or self._missing or self._outliers
             else max(self._ms(2), round(0.005 * self._line_len))
         )
         line_end = pred - self._sync_off + self._line_len
@@ -397,19 +400,25 @@ class StreamDecoder:
         if good:
             self._confirm(events)
             self._missing = 0
+            self._last_good_start = start
         else:
             self._missing += 1
 
         self._line += 1
         if self._missing >= self._miss_limit:
-            self._finish(events, start, complete_ok=False)
+            # Search for a new VIS from the last good line on: a picture that
+            # started while this one was fading out must not be lost.
+            self._finish(events, self._last_good_start, complete_ok=False)
             return True
         if self._line == mode.lines:
             if self._missing <= 2:
                 self._confirm(events)
             self._finish(events, start + self._line_len * scale, complete_ok=True)
             return True
-        keep = start + self._line_len * scale - self._ms(_FIRST_SYNC_WINDOW_MS) - 2 * self._guard
+        keep = start + self._line_len * scale - self._ms(_WIDE_SYNC_WINDOW_MS) - 2 * self._guard
+        # Keep audio back to the last good line: if the signal dies inside it,
+        # a new VIS may start right there (see the loss branch above).
+        keep = min(keep, self._last_good_start - self._ms(10))
         self._trim(math.floor(keep) - 4)
         return True
 
@@ -422,8 +431,11 @@ class StreamDecoder:
         self._outliers.append((k, residual))
         if len(self._outliers) < _RELOCK_LINES:
             return False
-        shifted = [(kk, self._predict(kk) + r) for kk, r in self._outliers[:-1]]
-        self._good = shifted
+        # The sender jumped: keep the slant estimate, shift the history by the
+        # agreed offset and accept the agreeing outliers.
+        shift = float(np.mean([r for _, r in self._outliers]))
+        self._good = [(kk, x + shift) for kk, x in self._good[-_FIT_POINTS:]]
+        self._good += [(kk, self._predict(kk) + r - shift) for kk, r in self._outliers[:-1]]
         self._outliers = []
         return True
 

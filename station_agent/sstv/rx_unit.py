@@ -10,7 +10,8 @@ serves the events on ``127.0.0.1:P`` as newline-delimited UTF-8 JSON:
 
 One client at a time; a new connection replaces the old one (the agent
 reconnects after a hiccup) and, if a picture is being received, first gets
-its ``start`` line again — rows already sent are not repeated. Events while
+its ``start`` and every row so far again (the agent builds the final picture
+from the rows, so a reconnect must not leave holes). Events while
 no client is connected are dropped (live only). Exit 0 on stdin EOF (after a
 final ``end`` for a running picture), 2 on bad arguments (the unit's
 ``RestartPreventExitStatus=2``).
@@ -88,7 +89,9 @@ class RxUnit:
         self._chunk_bytes = rate * CHUNK_MS // 1000 * 2
         self._rest = b""
         self._client: asyncio.StreamWriter | None = None
-        self._current_start: bytes | None = None  # replayed to a new client
+        # Lines of the picture being received (start + rows), replayed to a new
+        # client. Bounded by the largest picture: PD 180, ~1.3 MB.
+        self._replay: list[bytes] = []
         self.addresses: list[tuple[str, int]] = []
 
     @property
@@ -99,8 +102,8 @@ class RxUnit:
         old, self._client = self._client, writer
         if old is not None:
             old.close()
-        if self._current_start is not None:
-            writer.write(self._current_start)
+        if self._replay:
+            writer.write(b"".join(self._replay))
         try:
             while await reader.read(4096):  # input is ignored; wait for EOF
                 pass
@@ -138,13 +141,26 @@ class RxUnit:
         for event in events:
             line = _line(event)
             if isinstance(event, Start):
-                self._current_start = line
+                self._replay = [line]
                 logger.info("sstv picture started: %s", event.mode.key)
             elif isinstance(event, End):
-                self._current_start = None
+                self._replay = []
                 logger.info("sstv picture ended: complete=%s rows=%d", event.complete, event.rows)
+            else:
+                self._replay.append(line)
             lines.append(line)
         self._send(lines)
+
+    async def _close_client(self) -> None:
+        """At EOF: give the client up to DRAIN_TIMEOUT_S for the final lines, then close."""
+        writer, self._client = self._client, None
+        if writer is None:
+            return
+        try:
+            await asyncio.wait_for(writer.drain(), DRAIN_TIMEOUT_S)
+        except (TimeoutError, ConnectionError, OSError):
+            logger.warning("sstv client did not take the final lines in time")
+        writer.close()
 
     async def run(self, started: Callable[["RxUnit"], None] | None = None) -> int:
         server = await asyncio.start_server(self._on_client, HOST, self.port)
@@ -159,13 +175,7 @@ class RxUnit:
                     self._publish(events)
                     if eof:
                         break
-            if self._client is not None:
-                writer, self._client = self._client, None
-                try:
-                    await asyncio.wait_for(writer.drain(), DRAIN_TIMEOUT_S)
-                except (TimeoutError, ConnectionError, OSError):
-                    pass
-                writer.close()
+            await self._close_client()
         finally:
             server.close()
             await server.wait_closed()

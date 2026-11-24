@@ -241,10 +241,15 @@ def test_missing_first_leader_half_rejected():
 
 @pytest.mark.parametrize("chunk", [7, 4099])
 def test_chunking_does_not_matter(chunk):
+    m = MODES["robot36"]
     _, pcm = _clean("robot36")
     events = _run(pcm, chunk=chunk)
     assert events[-1] == End(complete=True, rows=240)
-    assert sum(isinstance(e, Row) for e in events) == 240
+    _, got = _rows(events, m)
+    _, ref = _rows(_run(pcm), m)
+    assert got.shape == ref.shape == (240, 320, 3)
+    # Same pixels as the 20 ms reference (float rounding may flip a level).
+    assert np.max(np.abs(got.astype(int) - ref.astype(int))) <= 1
 
 
 def _shift(x, hz):
@@ -265,3 +270,45 @@ def test_receiver_frequency_offset_tolerated(hz):
     _, pcm = _clean("martin1")
     audio = np.concatenate([_noise(0.5, rng, 300), _shift(pcm, hz), _noise(1.0, rng, 300)])
     _assert_complete(_run(_awgn(audio, 20, rng)), "martin1", 12)
+
+
+@pytest.mark.parametrize("gap_s", [0.0, 1.0, 2.0])
+def test_new_picture_right_after_a_lost_one(gap_s):
+    # Signal dies mid-picture and a new picture starts before the old one is
+    # declared lost (~3 s): the new one must still be found.
+    rng = np.random.default_rng(10)
+    _, a = _clean("martin1")
+    _, b = _clean("robot36")
+    vis = int(0.91 * SR)
+    cut = vis + int(0.3 * (len(a) - vis))
+    audio = np.concatenate(
+        [_noise(0.5, rng, 300), a[:cut], _noise(gap_s, rng, 300), b, _noise(1.0, rng, 300)]
+    )
+    events = _run(_awgn(audio, 20, rng))
+    summary = [
+        (type(e).__name__, e.mode.key if isinstance(e, Start) else None)
+        for e in events
+        if not isinstance(e, Row)
+    ]
+    assert summary == [("Start", "martin1"), ("End", None), ("Start", "robot36"), ("End", None)]
+    ends = [e for e in events if isinstance(e, End)]
+    assert ends[0].complete is False and abs(ends[0].rows - 0.3 * 256) <= 5
+    assert ends[1] == End(complete=True, rows=240)
+
+
+def test_relock_after_a_timing_jump_keeps_decoding():
+    # A sound-card glitch drops 4 ms mid-picture: syncs jump, the decoder must
+    # relock (not lose the picture) and keep the rest of the picture clean.
+    rng = np.random.default_rng(11)
+    m = MODES["martin1"]
+    pic, pcm = _clean("martin1")
+    vis = int(0.91 * SR)
+    line = m.line_ms * SR / 1000
+    jump = vis + int(100.5 * line)
+    sig = np.concatenate([pcm[:jump], pcm[jump + 32 :]])
+    audio = np.concatenate([_noise(0.5, rng, 300), _resample(sig, 1.001), _noise(1.0, rng, 300)])
+    events = _run(_awgn(audio, 20, rng))
+    assert events[-1] == End(complete=True, rows=256)
+    _, got = _rows(events, m)
+    err = np.abs(got.astype(int) - pic.astype(int)).mean(axis=(1, 2))
+    assert err[110:].mean() < 12

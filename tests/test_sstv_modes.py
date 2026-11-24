@@ -100,3 +100,24 @@ def test_robot36_separator_marks_chroma():
 def test_scottie_has_leading_sync():
     assert MODES["scottie1"].start_ms == pytest.approx(9.0)
     assert MODES["martin1"].start_ms == 0
+
+
+@pytest.mark.parametrize(
+    "key,line_ms",
+    [
+        ("martin1", 446.446),
+        ("martin2", 226.798),
+        ("scottie1", 428.22),
+        ("scottie2", 277.692),
+        ("scottiedx", 1050.3),
+        ("robot36", 150.0),
+        ("robot72", 300.0),
+        ("pd90", 703.04),
+        ("pd120", 508.48),
+        ("pd180", 754.24),
+    ],
+)
+def test_line_timing_matches_published_tables(key, line_ms):
+    # Encoder and decoder share this table, so a round trip cannot catch a
+    # wrong timing; pin it to the Dayton paper / MMSSTV values instead.
+    assert MODES[key].line_ms == pytest.approx(line_ms, abs=1e-3)

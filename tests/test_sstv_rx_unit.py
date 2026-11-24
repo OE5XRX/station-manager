@@ -173,7 +173,7 @@ def test_empty_stdin_exits_0():
     assert unit.join() == 0
 
 
-def test_newest_client_replaces_older_and_gets_start_replayed():
+def test_newest_client_replaces_older_and_gets_the_picture_replayed():
     m = MODES["martin2"]
     pcm = _pcm(m, _picture(m))
     unit = _Unit(_free_port())
@@ -200,8 +200,8 @@ def test_newest_client_replaces_older_and_gets_start_replayed():
     assert unit.join() == 0
     assert lines[0] == {"t": "start", "mode": "martin2", "width": 320, "height": 256}
     assert lines[-1] == {"t": "end", "complete": True, "rows": 256}
-    row_ids = [r["i"] for r in lines[1:-1]]
-    assert row_ids == sorted(row_ids) and row_ids[-1] == 255 and row_ids[0] > 0
+    # start + every row exactly once: the rows sent to the first client are replayed.
+    assert [r["i"] for r in lines[1:-1]] == list(range(256))
 
 
 def test_listens_on_localhost_only():
@@ -236,3 +236,78 @@ def test_module_entry_point_exit_codes():
         timeout=30,
     )
     assert ok.returncode == 0, ok.stderr
+
+
+def test_client_that_stops_reading_is_dropped():
+    # The kernel's localhost socket buffers absorb a whole picture, so drive the
+    # policy directly: a client whose write buffer is past the limit is dropped
+    # instead of growing the unit's memory (decoding never waits for a client).
+    class _Transport:
+        def __init__(self, size):
+            self.size = size
+
+        def get_write_buffer_size(self):
+            return self.size
+
+    class _Writer:
+        def __init__(self, size):
+            self.transport = _Transport(size)
+            self.closed = False
+            self.written = []
+
+        def is_closing(self):
+            return self.closed
+
+        def close(self):
+            self.closed = True
+
+        def write(self, data):
+            self.written.append(data)
+
+    unit = rx_unit.RxUnit(_free_port(), SR, io.BytesIO(b""))
+    ok = _Writer(rx_unit.MAX_CLIENT_BUFFER)
+    unit._client = ok
+    unit._send([b"a\n"])
+    assert ok.written == [b"a\n"] and unit.has_client
+
+    stalled = _Writer(rx_unit.MAX_CLIENT_BUFFER + 1)
+    unit._client = stalled
+    unit._send([b"b\n"])
+    assert stalled.closed and stalled.written == [] and not unit.has_client
+
+
+def test_exit_with_a_connected_client_that_never_reads():
+    m = MODES["robot36"]
+    unit = _Unit(_free_port())
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    assert unit.ready.wait(5)
+    sock.connect(("127.0.0.1", unit.port))
+    unit.wait_client()
+    unit.write(_pcm(m, _picture(m)))
+    unit.close_stdin()
+    assert unit.join() == 0
+    sock.close()
+
+
+def test_drain_timeout_on_exit(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(rx_unit, "DRAIN_TIMEOUT_S", 0.1)
+
+    class _HangingWriter:
+        closed = False
+
+        async def drain(self):
+            await asyncio.sleep(60)
+
+        def close(self):
+            self.closed = True
+
+    unit = rx_unit.RxUnit(_free_port(), SR, io.BytesIO(b""))
+    writer = _HangingWriter()
+    unit._client = writer
+    t0 = time.monotonic()
+    asyncio.run(unit._close_client())
+    assert time.monotonic() - t0 < 5
+    assert writer.closed and not unit.has_client
