@@ -49,3 +49,4 @@ oidc_keys/
 
 # Dev secrets (covered by *.pem but listed explicitly for clarity)
 dev-device-key.pem
+*.mo
