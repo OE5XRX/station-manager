@@ -418,3 +418,25 @@ def test_back_to_back_with_sample_rate_offset(key, factor):
     audio = np.concatenate([_noise(0.5, rng, 300), sig, _noise(1.0, rng, 300)])
     events = _run(_awgn(audio, 20, rng))
     assert [e for e in events if isinstance(e, End)] == [End(complete=True, rows=m.height)] * 2
+
+
+def test_internal_error_while_draining_before_a_new_vis_keeps_the_new_picture(monkeypatch):
+    monkeypatch.setattr(decoder_module, "STRICT", False)
+    _, a = _clean("robot36")
+    _, b = _clean("martin2")
+    real = StreamDecoder._decode_line
+
+    def flaky(self, events):
+        if self._barrier is not None:  # only in the drain before a new VIS
+            raise decoder_module._BufferError("boom")
+        return real(self, events)
+
+    monkeypatch.setattr(StreamDecoder, "_decode_line", flaky)
+    events = _run(np.concatenate([a, b, np.zeros(SR)]))
+    summary = [
+        (type(e).__name__, e.mode.key if isinstance(e, Start) else None)
+        for e in events
+        if not isinstance(e, Row)
+    ]
+    assert summary == [("Start", "robot36"), ("End", None), ("Start", "martin2"), ("End", None)]
+    assert events[-1] == End(complete=True, rows=256)

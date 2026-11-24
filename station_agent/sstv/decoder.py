@@ -242,8 +242,10 @@ class StreamDecoder:
                     # Lines that end before the new leader still belong to the
                     # running picture; then it ends (incomplete if cut short).
                     self._barrier = p - self._ms(2 * LEADER_MS + BREAK_MS)
-                    while self._mode is not None and self._decode_line(events):
-                        pass
+                    # Own guard: a failure here must not also lose the new picture.
+                    with self._survive(events):
+                        while self._mode is not None and self._decode_line(events):
+                            pass
                     self._barrier = None
                     if self._mode is not None:
                         self._finish(events, complete_ok=False)
