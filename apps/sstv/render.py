@@ -121,6 +121,10 @@ def _reduced(img: Image.Image) -> Image.Image:
         return _grey16(img, factor)
     if img.mode in ("P", "1"):  # reduce() cannot handle these
         img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+    elif factor >= 2 and "transparency" in img.info:
+        # A colour key (tRNS on L/RGB) must become alpha first: averaging would
+        # turn the key colour at edges into opaque fringe pixels.
+        img = img.convert("LA" if img.mode == "L" else "RGBA")
     return img.reduce(factor) if factor >= 2 else img
 
 

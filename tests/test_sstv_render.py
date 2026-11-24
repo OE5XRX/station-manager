@@ -467,3 +467,22 @@ def test_big_palette_with_transparency_is_reduced():
     assert out.size == (1200, 1100)
     assert out.getpixel((100, 500)) == (0, 0, 0)
     assert out.getpixel((1100, 500)) == (200, 50, 10)
+
+
+@pytest.mark.parametrize(
+    ("mode", "key", "fill"),
+    [("RGB", (255, 0, 255), (20, 120, 220)), ("L", 200, 90)],
+)
+def test_big_colour_key_transparency_has_no_fringe(mode, key, fill):
+    img = Image.new(mode, (4096, 2400), fill)
+    img.paste(key, (0, 0, 2049, 2400))  # key edge not on a reduce-block boundary
+    out = render.load_upload(_file(_encode(img, "PNG", transparency=key)))
+    assert out.size == (2048, 1200)
+    expected = fill if mode == "RGB" else (fill,) * 3
+    colours = {c for _, c in out.getcolors(10**6)}
+    # Only black (keyed), the fill, and blends of the two — never the key colour.
+    assert (0, 0, 0) in colours and expected in colours
+    key_rgb = key if mode == "RGB" else (key,) * 3
+    assert key_rgb not in colours
+    for c in colours:
+        assert all(0 <= v <= max(e, 0) for v, e in zip(c, expected, strict=True)), c
