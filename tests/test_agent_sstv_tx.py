@@ -987,6 +987,40 @@ def test_download_does_not_park_a_scan_on_another_slot(tmp_path):
             f.stop()
 
 
+def test_scan_update_adding_the_sstv_slot_is_parked(tmp_path):
+    import threading
+
+    from tests.test_scanner import _entry
+
+    http = FakeHttp()
+    http.block = threading.Event()
+    fws, mgr, b, col = _scan_rig(tmp_path, http)
+
+    async def scenario():
+        await b.handle(_start())  # SSTV on slot 1, download blocks
+        await b.handle(_scan(2))
+        await asyncio.sleep(0.1)
+        # The running slot-2 scan now also gets slot-1 entries.
+        entries = [
+            _entry("a", slot=2, rx=145.6, tx=145.0),
+            _entry("c", slot=1, rx=145.65, tx=145.05),
+        ]
+        await b.handle({"v": 1, "type": "scan_update", "scan_id": "s1", "entries": entries})
+        await asyncio.sleep(0.3)
+        assert "held" in _scan_states(col)
+        assert _retunes(fws[1]) == 0  # never retuned the SSTV slot before the key
+        http.block.set()
+        await mgr.wait_idle()
+        await b.stop()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        for f in fws.values():
+            f.stop()
+    assert col.states()[-1][0] == "done"
+
+
 def test_key_refused_before_device_open_writes_nothing(fw, tmp_path):
     import threading
 
@@ -1015,7 +1049,7 @@ def test_key_refused_before_device_open_writes_nothing(fw, tmp_path):
 def test_disconnect_unkeys_voice_before_waiting_for_sstv(tmp_path, monkeypatch):
     # A player that ignores the kill makes the SSTV teardown slow (bounded by _KILL_WAIT_S);
     # the voice PTT on another slot must still be unkeyed right away, not after it.
-    monkeypatch.setattr(sstv_tx, "_KILL_WAIT_S", 0.5)
+    monkeypatch.setattr(sstv_tx, "_KILL_WAIT_S", 2.0)
     player = FakePlayer("hang")
     fws, mgr, b, _ = _scan_rig(tmp_path, FakeHttp())
     mgr._spawn = player.spawn
@@ -1059,6 +1093,7 @@ def test_disconnect_unkeys_voice_before_waiting_for_sstv(tmp_path, monkeypatch):
     finally:
         for f in fws.values():
             f.stop()
-    assert stamps["voice"] - t0 < 0.3
-    assert stamps["sstv"] - t0 >= 0.4  # on_disconnect still waited for the SSTV teardown
+    assert stamps["voice"] < stamps["sstv"]
+    assert stamps["voice"] - t0 < 1.0
+    assert stamps["sstv"] - t0 >= 1.5  # on_disconnect still waited for the SSTV teardown
     assert fws[1].state["fm"]["ptt"] == "false" and fws[2].state["fm"]["ptt"] == "false"
