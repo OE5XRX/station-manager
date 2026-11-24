@@ -115,6 +115,18 @@ def build_decoder_output(
     )
 
 
+SSTV_TX_STATES = ("downloading", "keyed", "done", "aborted", "error")
+
+
+def build_sstv_tx_state(
+    tx_id: str, state: str, progress: float, detail: str | None = None
+) -> dict:
+    """Station-side SSTV transmission progress (SSTV spec §5.4 step 6)."""
+    return _envelope(
+        "sstv_tx_state", tx_id=tx_id, state=state, progress=float(progress), detail=detail
+    )
+
+
 def parse_message(text: str) -> dict:
     """Parse an inbound frame; raise ProtocolError(VALIDATION_FAILED) if malformed."""
     try:

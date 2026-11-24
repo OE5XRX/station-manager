@@ -851,12 +851,28 @@ class StationAgent:
                 ),
             )
 
+        from .sstv_tx import SstvTxManager
+
+        # SSTV TX (spec §5.4): artefact over the signed client, played at the calibrated TX
+        # ceiling into the slot's TX node.
+        sstv_tx = SstvTxManager(
+            # No redirects: the artefact must come from our server, and a redirect would carry
+            # the device signature headers elsewhere.
+            http_get=lambda path, headers, timeout: http_client.request(
+                "GET", path, stream=True, headers=headers, timeout=timeout, allow_redirects=False
+            ),
+            server_url=config.server_url,
+            ceiling_dbfs=lambda: tx_settings.ceiling_dbfs,
+            tx_node=router_backend.tx_sink_node,
+        )
+
         control_client = ControlClient(
             config,
             virtual_modules=virtual,
             on_firmware_check=self._wake.set,
             on_rescan=audio.kick,
             decoder_host_factory=_make_decoder_host,
+            sstv_tx=sstv_tx,
         )
         control_thread = threading.Thread(
             target=control_client.run, name="control-client", daemon=True
@@ -904,7 +920,9 @@ class StationAgent:
         if control_client is not None:
             control_client.stop()
         if control_thread is not None:
-            control_thread.join(timeout=5)
+            # Long enough for an SSTV TX teardown (kill wait + two fail-safe unkey attempts at
+            # the slot command timeout) to finish before the daemon thread is abandoned.
+            control_thread.join(timeout=20)
 
         # Stop the audio supervisor + client on shutdown
         audio.stop()
