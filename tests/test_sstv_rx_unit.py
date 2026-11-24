@@ -318,3 +318,33 @@ def _strict_decoder(monkeypatch):
     from station_agent.sstv import decoder
 
     monkeypatch.setattr(decoder, "STRICT", True)
+
+
+def test_decoder_crash_ends_picture_and_unit_keeps_running(monkeypatch):
+    from station_agent.sstv import decoder
+
+    monkeypatch.setattr(decoder, "STRICT", False)
+    m = MODES["robot36"]
+    pcm = _pcm(m, _picture(m))
+    real_feed = decoder.StreamDecoder.feed
+    state = {"rows": 0, "crashed": False}
+
+    def feed(self, samples):
+        events = real_feed(self, samples)
+        state["rows"] += sum(isinstance(e, decoder.Row) for e in events)
+        if state["rows"] >= 100 and not state["crashed"]:
+            state["crashed"] = True
+            raise ValueError("boom")
+        return events
+
+    monkeypatch.setattr(decoder.StreamDecoder, "feed", feed)
+    unit = _Unit(_free_port())
+    sock = unit.connect()
+    unit.wait_client()
+    unit.write(pcm)  # the crash happens during this picture
+    unit.write(pcm)  # and the restarted decoder decodes the next one
+    unit.close_stdin()
+    lines = _read_lines(sock)
+    assert unit.join() == 0
+    marks = [(ln["t"], ln.get("complete")) for ln in lines if ln["t"] != "row"]
+    assert marks == [("start", None), ("end", False), ("start", None), ("end", True)]

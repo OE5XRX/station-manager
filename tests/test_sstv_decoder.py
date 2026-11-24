@@ -404,3 +404,17 @@ def test_internal_error_ends_picture_and_decoding_continues(monkeypatch, caplog)
     assert ends[0].complete is False
     assert ends[1] == End(complete=True, rows=256)
     assert "invariant failed" in caplog.text
+
+
+@pytest.mark.parametrize("key", ["martin1", "scottie1", "robot36", "pd180"])
+@pytest.mark.parametrize("factor", [0.999, 1.001])
+def test_back_to_back_with_sample_rate_offset(key, factor):
+    # No gap, slightly fast/slow sound card: the last line of the first picture
+    # must still be decoded before the second picture's leader ends it.
+    rng = np.random.default_rng(14)
+    m = MODES[key]
+    _, pcm = _clean(key)
+    sig = _resample(np.concatenate([pcm, pcm]), factor)
+    audio = np.concatenate([_noise(0.5, rng, 300), sig, _noise(1.0, rng, 300)])
+    events = _run(_awgn(audio, 20, rng))
+    assert [e for e in events if isinstance(e, End)] == [End(complete=True, rows=m.height)] * 2

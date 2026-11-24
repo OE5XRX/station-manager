@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+from . import decoder as decoder_module
 from .decoder import End, Row, Start, StreamDecoder
 
 logger = logging.getLogger(__name__)
@@ -129,11 +130,26 @@ class RxUnit:
         """Read one chunk of stdin and decode it (runs in the executor)."""
         data = self._stdin.read(self._chunk_bytes)
         if not data:
-            return self._decoder.flush(), True
+            return self._decode(self._decoder.flush), True
         data = self._rest + data
         usable = len(data) & ~1
         self._rest = data[usable:]
-        return self._decoder.feed(np.frombuffer(data[:usable], dtype="<i2")), False
+        samples = np.frombuffer(data[:usable], dtype="<i2")
+        return self._decode(lambda: self._decoder.feed(samples)), False
+
+    def _decode(self, call) -> list:
+        """Last line of defence: a decoder bug ends the running picture
+        (incomplete) and restarts the decoder instead of killing the unit."""
+        try:
+            return call()
+        except Exception:
+            if decoder_module.STRICT:
+                raise
+            logger.exception("sstv decoder failed; restarting it")
+            self._decoder = StreamDecoder(self.rate)
+            if self._replay:  # a picture is running: start line + its rows
+                return [End(complete=False, rows=len(self._replay) - 1)]
+            return []
 
     def _publish(self, events: list) -> None:
         """Serialise and send (event loop thread, so a reconnect never races it)."""

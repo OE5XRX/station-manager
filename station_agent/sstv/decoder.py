@@ -440,10 +440,14 @@ class StreamDecoder:
         need = max(line_end, pred + self._sync_len) + window + self._sync_len + 2 * self._guard + 2
         if self._end < need:
             return False
-        if self._final_end is not None and line_end > self._final_end + 2:
+        # Does the line fit before EOF / a new leader? Use the measured line
+        # length (a fast sound card makes lines shorter) plus 1 ms of slack.
+        est_start, est_scale = self._placement(k, pred)
+        fits_before = est_start + self._line_len * est_scale - self._ms(1)
+        if self._final_end is not None and fits_before > self._final_end:
             return False
         if self._barrier is not None:
-            if line_end > self._barrier + 2:
+            if fits_before > self._barrier:
                 return False
         elif (
             self._final_end is None
