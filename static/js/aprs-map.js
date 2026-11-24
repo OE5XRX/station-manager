@@ -11,7 +11,9 @@
   };
   // Date/time formatting follows the page language (Austrian format for German).
   var pageLang = document.documentElement.lang || "";
-  var LOCALE = pageLang.indexOf("de") === 0 ? "de-AT" : pageLang || undefined;
+  // Bare "en" resolves to en-US (12h AM/PM, month-first) — the UI's English
+  // is the European one, so pin en-GB (24h, day-first) like de → de-AT.
+  var LOCALE = pageLang.indexOf("de") === 0 ? "de-AT" : pageLang.indexOf("en") === 0 ? "en-GB" : pageLang || undefined;
   var root = document.getElementById("aprs-root");
   if (!root || !window.L || !window.OE5XRXAprsLogic) return;
   var Logic = window.OE5XRXAprsLogic;

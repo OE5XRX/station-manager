@@ -3,7 +3,9 @@ from django.conf.urls.i18n import i18n_patterns
 from django.contrib import admin
 from django.contrib.auth.decorators import login_not_required
 from django.urls import include, path
-from django.views.decorators.cache import cache_page
+from django.utils import timezone
+from django.views.decorators.cache import cache_control, cache_page
+from django.views.decorators.http import last_modified
 from django.views.i18n import JavaScriptCatalog
 from oauth2_provider import urls as dot_urls
 
@@ -22,6 +24,31 @@ DOT_PROTOCOL_URLPATTERNS = (
     dot_urls.metadata_urlpatterns
     + [p for p in dot_urls.base_urlpatterns if p.name not in _DOT_DEVICE_FLOW]
     + dot_urls.oidc_urlpatterns
+)
+
+# The catalog only changes with a deploy (compiled .mo files), i.e. with a
+# new process. Server side it is cached for a day (per-process LocMem cache);
+# browsers get a short max-age plus Last-Modified = process start, so they
+# revalidate cheaply (304) and pick up new translations within minutes of a
+# deploy instead of replaying a stale catalog from an unversioned URL.
+_CATALOG_LAST_MODIFIED = timezone.now().replace(microsecond=0)
+_CATALOG_BROWSER_MAX_AGE = 300
+
+
+def _catalog_last_modified(request, **kwargs):
+    return _CATALOG_LAST_MODIFIED
+
+
+# Order matters: last_modified sits OUTSIDE cache_page so If-Modified-Since
+# is answered with a 304 before the cached body is replayed; cache_control
+# sits inside — patch_cache_control keeps the smaller max-age, so cache_page
+# still caches 86400 s server side while the header says 300.
+javascript_catalog = login_not_required(
+    last_modified(_catalog_last_modified)(
+        cache_page(86400)(
+            cache_control(max_age=_CATALOG_BROWSER_MAX_AGE)(JavaScriptCatalog.as_view())
+        )
+    )
 )
 
 urlpatterns = [
@@ -55,11 +82,7 @@ urlpatterns += i18n_patterns(
     # JS translation catalog: the language comes from the prefix, so the
     # cache key (URL) is per language. Public (the login page uses it) and
     # exempt from the privacy-notice gate (a script can't follow a redirect).
-    path(
-        "jsi18n/",
-        login_not_required(cache_page(86400)(JavaScriptCatalog.as_view())),
-        name="javascript-catalog",
-    ),
+    path("jsi18n/", javascript_catalog, name="javascript-catalog"),
     path("admin/", admin.site.urls),
     path("accounts/", include("apps.accounts.urls")),
     path("sso-admin/", include("apps.sso.urls")),

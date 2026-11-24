@@ -108,6 +108,33 @@ def test_login_next_sso_authorize_stays_unprefixed(client, de_user):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "next_url",
+    [
+        "//evil.example/",
+        "https://evil.example/",
+        "//evil.example/en/stations/",
+        "https://evil.example/en/stations/",
+        "/\\evil.example/",
+    ],
+)
+def test_login_next_offsite_never_redirects_offsite(client, de_user, next_url):
+    # Regression guard for the Location rewrite (localized_url): an
+    # off-site ``next`` must still be dropped by Django's allowed-host check
+    # and never come back out as an external redirect.
+    r = client.post(
+        _login_url("en") + "?next=" + next_url,
+        {"username": "member", "password": PASSWORD, "next": next_url},
+    )
+    assert r.status_code == 302
+    loc = urlsplit(r["Location"])
+    assert not loc.scheme and not loc.netloc, r["Location"]
+    assert r["Location"].startswith("/") and not r["Location"].startswith("//")
+    assert "evil.example" not in r["Location"]
+    assert r["Location"] == _dashboard_url("de")
+
+
+@pytest.mark.django_db
 def test_login_english_user_from_de_page_goes_to_en(client, member_user):
     r = client.post(_login_url("de"), {"username": "member", "password": PASSWORD})
     assert r.status_code == 302

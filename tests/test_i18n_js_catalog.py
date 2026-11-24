@@ -43,9 +43,33 @@ def test_catalog_served_anonymously_as_javascript(client, lang):
 
 
 @pytest.mark.django_db
-def test_catalog_is_cacheable(client):
+def test_catalog_browser_cache_is_short_and_revalidatable(client):
+    # The URL is unversioned: a long browser max-age would replay stale
+    # translations after a deploy. Browsers get 5 min + Last-Modified.
     resp = client.get(_catalog_url("de"))
-    assert "max-age=86400" in resp.get("Cache-Control", "")
+    assert "max-age=300" in resp.get("Cache-Control", "")
+    assert "max-age=86400" not in resp.get("Cache-Control", "")
+    assert resp.has_header("Last-Modified")
+
+
+@pytest.mark.django_db
+def test_catalog_conditional_get_returns_304(client):
+    first = client.get(_catalog_url("de"))
+    resp = client.get(_catalog_url("de"), HTTP_IF_MODIFIED_SINCE=first["Last-Modified"])
+    assert resp.status_code == 304
+
+
+@pytest.mark.django_db
+def test_catalog_still_cached_server_side(client, monkeypatch):
+    from django.views.i18n import JavaScriptCatalog
+
+    client.get(_catalog_url("de"))
+    calls = []
+    monkeypatch.setattr(JavaScriptCatalog, "get", lambda self, *a, **kw: calls.append(1) or None)
+    resp = client.get(_catalog_url("de"))
+    assert resp.status_code == 200
+    assert calls == [], "second request must be served from the server-side cache"
+    assert "max-age=300" in resp.get("Cache-Control", "")
 
 
 @pytest.mark.django_db

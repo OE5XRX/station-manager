@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 
 from django.conf import settings
 from django.contrib import messages
@@ -11,7 +12,7 @@ from django.db.models import Q
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 from django.urls import reverse
-from django.utils import timezone
+from django.utils import timezone, translation
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -209,19 +210,31 @@ class ProfileView(AreaPermissionMixin, TemplateView):
             self._emit_user_updated(request, user, changed - {"email"})
             if new_email:
                 self._trigger_email_verify(request, user, new_email)
-                messages.info(
-                    request,
-                    _(
-                        "Confirmation link sent to %(new)s. "
-                        "Until you click it, %(old)s stays active."
+            new_language = (
+                user.language
+                if "language" in changed and is_supported_language(user.language)
+                else None
+            )
+            # The flash renders on the next page, which is already in the new
+            # language: build it in that language (str() — a lazy string would
+            # be evaluated later under the request's old language).
+            with translation.override(new_language) if new_language else nullcontext():
+                if new_email:
+                    messages.info(
+                        request,
+                        str(
+                            _(
+                                "Confirmation link sent to %(new)s. "
+                                "Until you click it, %(old)s stays active."
+                            )
+                        )
+                        % {"new": new_email, "old": user.email},
                     )
-                    % {"new": new_email, "old": user.email},
-                )
-            if changed - {"email"}:
-                messages.success(request, _("Identity updated."))
-            if "language" in changed and is_supported_language(user.language):
-                response = redirect(localized_url(reverse("accounts:profile"), user.language))
-                set_language_cookie(response, user.language)
+                if changed - {"email"}:
+                    messages.success(request, str(_("Identity updated.")))
+            if new_language:
+                response = redirect(localized_url(reverse("accounts:profile"), new_language))
+                set_language_cookie(response, new_language)
                 return response
         else:
             for errors in form.errors.values():
