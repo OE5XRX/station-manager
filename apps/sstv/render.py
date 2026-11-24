@@ -19,11 +19,14 @@ ALLOWED_FORMATS = ("JPEG", "PNG", "WEBP", "GIF")
 # Our own bomb limit, checked from the header before decoding. Pillow's global
 # ``Image.MAX_IMAGE_PIXELS`` (~89 Mpx) is left alone: it guards every other upload.
 MAX_IMAGE_PIXELS = 40_000_000
+# 16-bit greyscale needs a 4-byte working copy (plus a mask with tRNS): lower cap.
+MAX_IMAGE_PIXELS_16BIT = 16_000_000
 # JPEGs are decoded at a reduced scale (DCT draft) when far larger than any mode.
 _JPEG_DRAFT_SIZE = (1280, 1280)
 # Right after decoding, every picture is cut to the working size before any
-# further copy (transpose, composite): the centre at most 2:1 (wider than any
-# mode, so the later cover-crop sees the same region), short side >= 1024 px.
+# full-size conversion or further copy: the centre at most 2:1 (wider than any
+# mode, so the later cover-crop sees the same region), then reduced right after
+# its first mode conversion to a short side >= 1024 px.
 _MAX_ASPECT = 2
 _WORK_SHORT_SIDE = 1024
 
@@ -68,57 +71,73 @@ def load_upload(f, *, max_bytes: int = 15 * 1024 * 1024) -> Image.Image:
             _("The file is larger than %(mb)d MB.") % {"mb": max_bytes // (1024 * 1024)},
             "too_large",
         )
-    bomb = UploadError(
-        _("The picture has too many pixels (at most %(mpx)d megapixels).")
-        % {"mpx": MAX_IMAGE_PIXELS // 1_000_000},
-        "too_many_pixels",
-    )
     try:
         img = Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS)
         width, height = img.size
-        if width * height > MAX_IMAGE_PIXELS:
-            raise bomb
+        limit = MAX_IMAGE_PIXELS_16BIT if _is_16bit(img.mode) else MAX_IMAGE_PIXELS
+        if width * height > limit:
+            raise _bomb(limit)
         if img.format in ("JPEG", "MPO"):  # phone JPEGs with a second frame open as MPO
             img.draft(None, _JPEG_DRAFT_SIZE)
         img.load()
     except Image.DecompressionBombError:
-        raise bomb from None
+        raise _bomb(MAX_IMAGE_PIXELS) from None
     except UploadError:
         raise
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, EOFError):
         raise _unsupported() from None
-    return _to_rgb(_upright(_shrink(_reducible(img))))
+    img = _crop_centre(img)  # rebinding frees the full frame before any conversion
+    return _to_rgb(_upright(_reduced(img)))
 
 
-def _reducible(img: Image.Image) -> Image.Image:
-    """8-bit modes ``reduce()`` supports; transparency becomes an alpha channel."""
-    if img.mode == "I" or img.mode.startswith("I;16"):
-        # 16-bit greyscale: scale to 8 bit (a plain convert would clip to white).
-        wide = img.convert("I")
-        grey = wide.point(lambda v: v * (1 / 256)).convert("L")
-        key = img.info.get("transparency")
-        if not isinstance(key, int):
-            return grey
-        alpha = ImageMath.lambda_eval(lambda a: (a["x"] != key) * 255, x=wide).convert("L")
-        merged = Image.merge("LA", (grey, alpha))
-        merged.info = {k: v for k, v in img.info.items() if k != "transparency"}  # keep EXIF
-        return merged
-    if img.mode in ("P", "1"):
-        return img.convert("RGBA" if "transparency" in img.info else "RGB")
-    return img
+def _bomb(limit: int) -> UploadError:
+    return UploadError(
+        _("The picture has too many pixels (at most %(mpx)d megapixels).")
+        % {"mpx": limit // 1_000_000},
+        "too_many_pixels",
+    )
 
 
-def _shrink(img: Image.Image) -> Image.Image:
-    """Centre at most ``_MAX_ASPECT``:1, then integer-reduce to the working size."""
+def _is_16bit(mode: str) -> bool:
+    return mode == "I" or mode.startswith("I;16")
+
+
+def _crop_centre(img: Image.Image) -> Image.Image:
+    """The centre, at most ``_MAX_ASPECT``:1 (``crop`` works in every mode)."""
     w, h = img.size
     if w > _MAX_ASPECT * h:
         x0 = (w - _MAX_ASPECT * h) // 2
-        img = img.crop((x0, 0, x0 + _MAX_ASPECT * h, h))
-    elif h > _MAX_ASPECT * w:
+        return img.crop((x0, 0, x0 + _MAX_ASPECT * h, h))
+    if h > _MAX_ASPECT * w:
         y0 = (h - _MAX_ASPECT * w) // 2
-        img = img.crop((0, y0, w, y0 + _MAX_ASPECT * w))
+        return img.crop((0, y0, w, y0 + _MAX_ASPECT * w))
+    return img
+
+
+def _reduced(img: Image.Image) -> Image.Image:
+    """8-bit working copy, reduced right after its first conversion; tRNS → alpha."""
     factor = min(img.size) // _WORK_SHORT_SIDE
+    if _is_16bit(img.mode):
+        return _grey16(img, factor)
+    if img.mode in ("P", "1"):  # reduce() cannot handle these
+        img = img.convert("RGBA" if "transparency" in img.info else "RGB")
     return img.reduce(factor) if factor >= 2 else img
+
+
+def _grey16(img: Image.Image, factor: int) -> Image.Image:
+    """16-bit greyscale → 8-bit L/LA (a plain convert would clip to white)."""
+    key = img.info.get("transparency")
+    wide = img.convert("I")
+    alpha = None
+    if isinstance(key, int):
+        alpha = ImageMath.lambda_eval(lambda a: (a["x"] != key) * 255, x=wide).convert("L")
+    if factor >= 2:
+        wide = wide.reduce(factor)
+        alpha = alpha.reduce(factor) if alpha else None
+    grey = wide.point(lambda v: v * (1 / 256)).convert("L")
+    out = Image.merge("LA", (grey, alpha)) if alpha else grey
+    out.info = {k: v for k, v in img.info.items() if k != "transparency"}  # keep EXIF
+    return out
 
 
 def _upright(img: Image.Image) -> Image.Image:

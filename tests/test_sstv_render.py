@@ -27,7 +27,7 @@ def _file(data, name="upload.bin"):
     return SimpleUploadedFile(name, data)
 
 
-def _png_with_size(width, height):
+def _png_with_size(width, height, bit_depth=8):
     """A tiny, valid-headered PNG claiming ``width``×``height`` (a decompression bomb)."""
 
     def chunk(kind, data):
@@ -38,7 +38,7 @@ def _png_with_size(width, height):
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
         )
 
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", width, height, bit_depth, 0, 0, 0, 0)
     return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", ihdr)
@@ -435,3 +435,35 @@ def test_sixteen_bit_greyscale_with_transparency_is_scaled():
     assert out.getpixel((0, 0)) == (0, 0, 0)
     r, g, b = out.getpixel((3, 0))
     assert 110 <= r <= 124 and r == g == b
+
+
+def test_sixteen_bit_has_a_lower_pixel_cap():
+    big = render.MAX_IMAGE_PIXELS_16BIT + 1
+    with pytest.raises(UploadError) as exc:
+        render.load_upload(_file(_png_with_size(big, 1, bit_depth=16)))
+    assert exc.value.code == "too_many_pixels"
+    assert "16" in str(exc.value)
+    # The same size at 8 bit is within the general cap (fails later only as a bad PNG).
+    with pytest.raises(UploadError) as exc:
+        render.load_upload(_file(_png_with_size(big, 1)))
+    assert exc.value.code == "unsupported"
+
+
+def test_big_sixteen_bit_with_transparency_is_reduced():
+    img = Image.new("I;16", (3000, 2400), 30000)
+    img.paste(Image.new("I;16", (1500, 2400), 40000), (0, 0))  # left half = tRNS key
+    out = render.load_upload(_file(_encode(img, "PNG", transparency=40000)))
+    assert out.size == (1500, 1200)
+    assert out.getpixel((100, 600)) == (0, 0, 0)
+    r, g, b = out.getpixel((1400, 600))
+    assert 110 <= r <= 124 and r == g == b
+
+
+def test_big_palette_with_transparency_is_reduced():
+    img = Image.new("P", (2400, 2200), 1)
+    img.putpalette([0, 0, 0, 200, 50, 10] + [0] * 762)
+    img.paste(0, (0, 0, 1200, 2200))
+    out = render.load_upload(_file(_encode(img, "PNG", transparency=0)))
+    assert out.size == (1200, 1100)
+    assert out.getpixel((100, 500)) == (0, 0, 0)
+    assert out.getpixel((1100, 500)) == (200, 50, 10)
