@@ -170,7 +170,7 @@
               </td>
               <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—" }} {% include "images/_channel_badge.html" with channel=station.current_image_variant %}</td>
               {% if can.stations.manage %}<td class="t-mono" data-station-ip data-label="{% trans 'IP' %}">{{ station.last_ip_address|default:"—" }}</td>{% endif %}
-              <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">{{ station.last_seen|timesince|default:"—" }}{% if station.last_seen %} {% trans "ago" %}{% endif %}</td>
+              <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">{% if station.last_seen %}{% blocktrans with since=station.last_seen|timesince %}{{ since }} ago{% endblocktrans %}{% else %}—{% endif %}</td>
               <td class="actions">
                 <a href="{% url 'stations:station_detail' station.pk %}" class="btn btn-sm btn-ghost" aria-label="{% trans 'Open' %}">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>

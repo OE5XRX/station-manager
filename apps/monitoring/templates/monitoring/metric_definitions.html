@@ -70,7 +70,7 @@
             {% if d.last_rejected_at %}
             <div class="md-rejected" data-rejected>
               <span class="pill pill-warn" title="{{ d.last_rejected_at|date:'c' }}">{% trans "Rejected" %}</span>
-              <span>{{ d.last_rejected_at|timesince }} {% trans "ago" %}</span>
+              <span>{% blocktrans with since=d.last_rejected_at|timesince %}{{ since }} ago{% endblocktrans %}</span>
               {% if d.last_rejected_value is not None %}
               <span class="t-muted">
                 {% if d.last_rejected_value.avg is not None %}min {{ d.last_rejected_value.min|unlocalize }} · avg {{ d.last_rejected_value.avg|unlocalize }} · max {{ d.last_rejected_value.max|unlocalize }}{% else %}{{ d.last_rejected_value|unlocalize }}{% endif %}

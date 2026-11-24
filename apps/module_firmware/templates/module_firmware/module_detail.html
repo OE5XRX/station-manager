@@ -53,7 +53,7 @@
     </div>
     <div class="summary-item">
       <div class="summary-key">{% trans "Last seen" %}</div>
-      <div class="summary-val">{% if module.last_seen %}{{ module.last_seen|timesince }} {% trans "ago" %}{% else %}—{% endif %}</div>
+      <div class="summary-val">{% if module.last_seen %}{% blocktrans with since=module.last_seen|timesince %}{{ since }} ago{% endblocktrans %}{% else %}—{% endif %}</div>
     </div>
   </div>
 

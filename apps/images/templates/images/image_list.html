@@ -283,7 +283,7 @@
           <div class="tl-meta">
             {{ job.created_at|date:"Y-m-d H:i" }}
             {% if job.requested_by %} · {{ job.requested_by.username }}{% endif %}
-            {% if job.completed_at %} · {% trans "done" %} {{ job.completed_at|timesince }} {% trans "ago" %}{% endif %}
+            {% if job.completed_at %} · {% blocktrans with since=job.completed_at|timesince %}done {{ since }} ago{% endblocktrans %}{% endif %}
           </div>
           {% if job.error_message %}
           <div class="tl-message t-danger" style="margin-top:6px;font-family:var(--font-mono);font-size:11.5px;">{{ job.error_message }}</div>

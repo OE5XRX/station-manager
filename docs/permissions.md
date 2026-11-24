@@ -17,9 +17,9 @@ Ein nicht definiertes niedrigeres Verb erbt die Stufe des nächsthöheren.
 | `deployments` | Deployments | A | S | S |
 | `rollouts` | Rollouts | A | Ad | Ad |
 | `images` | Images | A | Ad | Ad |
-| `provisioning` | Provisioning | Ad | Ad | Ad |
+| `provisioning` | Provisionierung | Ad | Ad | Ad |
 | `alerts` | Alarme | A | S | S |
-| `alert_rules` | Alarm-Regeln | A | Ad | Ad |
+| `alert_rules` | Alarmregeln | A | Ad | Ad |
 | `modules` | Module & Firmware | A | S | S |
 | `repeaters` | Repeater | A | S | S |
 | `passive_services` | Passive Dienste | A | Ad | Ad |
