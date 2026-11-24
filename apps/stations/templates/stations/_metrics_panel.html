@@ -14,7 +14,7 @@
       {% endif %}
     </div>
     <div class="row-gap-8">
-      {% if station.telemetry and metric_groups %}<span class="t-label">{% trans "Updated" %} {{ station.telemetry.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+      {% if station.telemetry and metric_groups %}<span class="t-label">{% blocktrans with since=station.telemetry.updated_at|timesince %}Updated {{ since }} ago{% endblocktrans %}</span>{% endif %}
       {% if can.alert_rules.view %}<a class="btn btn-sm btn-ghost" href="{% url 'monitoring:alert_settings' %}#threshold-rules">{% trans "Threshold rules" %}</a>{% endif %}
     </div>
   </div>

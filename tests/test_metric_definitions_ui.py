@@ -42,6 +42,9 @@ def _post(**overrides):
 class TestMetricDefinitionsPage:
     def test_lists_definitions_with_rejected_badge(self, client, admin_user, mdef):
         client.force_login(admin_user)
+        # Explicit language choice; otherwise UserLanguageMiddleware sends the
+        # (English) user from /de/ back to /en/.
+        client.cookies["django_language"] = "de"
         with translation.override("de"):
             resp = client.get(reverse("monitoring:metric_definitions"))
         assert resp.status_code == 200

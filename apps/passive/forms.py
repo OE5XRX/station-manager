@@ -51,12 +51,12 @@ class ProfileForm(forms.Form):
     rx_tone = forms.CharField(
         label=_("RX tone (CTCSS)"),
         required=False,
-        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "none"}),
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": _("none")}),
     )
     tx_tone = forms.CharField(
         label=_("TX tone (CTCSS)"),
         required=False,
-        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "none"}),
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": _("none")}),
     )
     volume = forms.IntegerField(
         label=_("Volume (1-8)"),
@@ -163,8 +163,8 @@ class StationPassiveForm(forms.ModelForm):
         model = StationPassiveConfig
         fields = ["enabled", "igate_callsign", "igate_ssid"]
         labels = {
-            "enabled": _("Passiv APRS mithören und gaten"),
-            "igate_callsign": _("iGate-Rufzeichen"),
+            "enabled": _("Passively listen to and gate APRS"),
+            "igate_callsign": _("iGate callsign"),
             "igate_ssid": _("SSID"),
         }
         widgets = {
@@ -196,13 +196,13 @@ class StationPassiveForm(forms.ModelForm):
         call = cleaned.get("igate_callsign") or ""
         ssid = cleaned.get("igate_ssid")
         if call and not is_valid_igate_callsign(call):
-            self.add_error("igate_callsign", _("Ungültiges Rufzeichen (ohne SSID, z. B. OE5XRX)."))
+            self.add_error("igate_callsign", _("Invalid callsign (without SSID, e.g. OE5XRX)."))
             return cleaned
         if cleaned.get("enabled"):
             if not call and "igate_callsign" not in self.errors:
-                self.add_error("igate_callsign", _("Zum Aktivieren ist ein Rufzeichen nötig."))
+                self.add_error("igate_callsign", _("A callsign is required to enable this."))
             if ssid is None and "igate_ssid" not in self.errors:
-                self.add_error("igate_ssid", _("Zum Aktivieren ist eine SSID nötig (0–15)."))
+                self.add_error("igate_ssid", _("An SSID (0–15) is required to enable this."))
         if call and ssid is not None and not self.errors:
             clash = StationPassiveConfig.objects.filter(igate_callsign=call, igate_ssid=ssid)
             if self.instance.pk:
@@ -211,7 +211,7 @@ class StationPassiveForm(forms.ModelForm):
             if other is not None:
                 self.add_error(
                     "igate_ssid",
-                    _("%(call)s-%(ssid)s gehört schon zur Station %(station)s.")
+                    _("%(call)s-%(ssid)s already belongs to station %(station)s.")
                     % {"call": call, "ssid": ssid, "station": other.station.name},
                 )
         return cleaned

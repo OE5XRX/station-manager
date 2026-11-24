@@ -14,7 +14,7 @@
 
   <div class="page-head">
     <div class="page-head-main">
-      <div class="page-eyebrow">{% trans "Mission Control" %} · FLEET OVERVIEW</div>
+      <div class="page-eyebrow">{% trans "Mission Control" %} · {% translate "FLEET OVERVIEW" %}</div>
       <h1 class="page-title">{% trans "Good" %} {% now "H" as hour %}{% if hour < "12" %}{% trans "morning" %}{% elif hour < "18" %}{% trans "afternoon" %}{% else %}{% trans "evening" %}{% endif %}, {{ user.first_name|default:user.username }}.</h1>
       <p class="page-sub">{% blocktrans with online=stations_online total=station_count %}{{ online }} of {{ total }} stations are transmitting right now. Deployments and alerts are below.{% endblocktrans %}</p>
     </div>
@@ -117,11 +117,11 @@
     <div class="stat">
       <div class="stat-label">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 9l6 6M15 9l-6 6"/></svg>
-        {% trans "Zugriffsverweigerungen (24 h)" %}
+        {% trans "Access denials (24 h)" %}
       </div>
       <div class="stat-value {% if denials_24h > 0 %}stat-warn{% endif %}">{{ denials_24h }}</div>
       <div class="stat-meta">
-        <a href="{% url 'audit:audit_list' %}?event_type=permission_denied" class="t-mono">{% trans "Verweigerungen ansehen" %} →</a>
+        <a href="{% url 'audit:audit_list' %}?event_type=permission_denied" class="t-mono">{% trans "View denials" %} →</a>
       </div>
     </div>
     {% endif %}
@@ -170,7 +170,7 @@
               </td>
               <td class="t-mono" data-station-version data-label="{% trans 'OS' %}">{{ station.current_os_version|default:"—" }} {% include "images/_channel_badge.html" with channel=station.current_image_variant %}</td>
               {% if can.stations.manage %}<td class="t-mono" data-station-ip data-label="{% trans 'IP' %}">{{ station.last_ip_address|default:"—" }}</td>{% endif %}
-              <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">{{ station.last_seen|timesince|default:"—" }}{% if station.last_seen %} {% trans "ago" %}{% endif %}</td>
+              <td class="t-mono" data-station-seen data-label="{% trans 'Last heard' %}">{% if station.last_seen %}{% blocktrans with since=station.last_seen|timesince %}{{ since }} ago{% endblocktrans %}{% else %}—{% endif %}</td>
               <td class="actions">
                 <a href="{% url 'stations:station_detail' station.pk %}" class="btn btn-sm btn-ghost" aria-label="{% trans 'Open' %}">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
@@ -205,8 +205,8 @@
       {% endcomment %}
       <section class="panel" data-fw-updates>
         <div class="panel-head">
-          <div class="panel-title"><span class="dot" style="background:var({% if fw_dfu_stuck %}--warn{% else %}--cyan{% endif %})"></span>{% trans "Firmware-Updates" %}</div>
-          {% if can.modules.view %}<a href="{% url 'module_firmware:convergence' %}" class="t-label" style="color:var(--ink-2);">{% trans "Konvergenz" %} →</a>{% endif %}
+          <div class="panel-title"><span class="dot" style="background:var({% if fw_dfu_stuck %}--warn{% else %}--cyan{% endif %})"></span>{% trans "Firmware updates" %}</div>
+          {% if can.modules.view %}<a href="{% url 'module_firmware:convergence' %}" class="t-label" style="color:var(--ink-2);">{% trans "Convergence" %} →</a>{% endif %}
         </div>
         <div class="panel-body flush">
           {% for entry in fw_dfu_stuck %}
@@ -214,14 +214,14 @@
               <div class="row-split">
                 <div class="stack-gap-2" style="min-width:0;">
                   <div class="truncate" style="font-weight:600;color:var(--ink-0);font-size:13px;">
-                    {% if entry.station %}{% if can.stations.view %}<a href="{% url 'stations:station_detail' entry.station.pk %}" class="callsign">{{ entry.station.callsign|default:entry.station.name }}</a>{% else %}<span class="callsign">{{ entry.station.callsign|default:entry.station.name }}</span>{% endif %}{% else %}{% trans "ohne Station" %}{% endif %}
+                    {% if entry.station %}{% if can.stations.view %}<a href="{% url 'stations:station_detail' entry.station.pk %}" class="callsign">{{ entry.station.callsign|default:entry.station.name }}</a>{% else %}<span class="callsign">{{ entry.station.callsign|default:entry.station.name }}</span>{% endif %}{% else %}{% trans "no station" %}{% endif %}
                     <span class="t-mono-sm t-muted">{% if entry.slot %}{{ entry.slot }} · {% endif %}{{ entry.module.uid }}</span>
                   </div>
                   <div class="t-mono-sm stat-warn">{{ entry.message }}</div>
                 </div>
                 <span class="pill pill-warn">{% trans "DFU" %}</span>
               </div>
-              <div class="t-mono-sm t-muted mt-10">{% trans "seit" %} {{ entry.since|date:"d.m.Y H:i" }}</div>
+              <div class="t-mono-sm t-muted mt-10">{% trans "since" %} {{ entry.since|date:"d.m.Y H:i" }}</div>
             </div>
           {% endfor %}
           {% for station, status in fw_waiting %}
@@ -231,9 +231,9 @@
                   {% if can.stations.view %}<a href="{% url 'stations:station_detail' station.pk %}" class="callsign">{{ station.callsign|default:station.name }}</a>{% else %}<span class="callsign">{{ station.callsign|default:station.name }}</span>{% endif %}
                   <span class="t-mono-sm t-muted truncate">{{ status.module_uids|join:", " }}</span>
                 </div>
-                <span class="pill pill-updating">{% trans "wartet" %}</span>
+                <span class="pill pill-updating">{% trans "waiting" %}</span>
               </div>
-              <div class="t-mono-sm t-muted mt-10" title="{{ status.since|date:'d.m.Y H:i' }}">{% trans "wartet seit" %} {{ status.since|date:"d.m.Y H:i" }} ({{ status.since|timesince }})</div>
+              <div class="t-mono-sm t-muted mt-10" title="{{ status.since|date:'d.m.Y H:i' }}">{% trans "waiting since" %} {{ status.since|date:"d.m.Y H:i" }} ({{ status.since|timesince }})</div>
             </div>
           {% endfor %}
         </div>
@@ -252,7 +252,7 @@
               <a href="{% url 'deployments:deployment_detail' d.pk %}" style="display:block;padding:12px 18px;border-bottom:1px solid var(--line);color:inherit;text-decoration:none;">
                 <div class="row-split">
                   <div class="stack-gap-2" style="min-width:0;">
-                    <div class="t-mono-sm t-muted">DEPLOY #{{ d.pk }}</div>
+                    <div class="t-mono-sm t-muted">{% blocktranslate with pk=d.pk %}DEPLOY #{{ pk }}{% endblocktranslate %}</div>
                     <div class="truncate" style="font-weight:600;color:var(--ink-0);font-size:13px;">{{ d.image_tag }} · {{ d.image_channel }}</div>
                   </div>
                   <span class="pill pill-{{ d.status|slugify }}">{{ d.get_status_display|upper }}</span>

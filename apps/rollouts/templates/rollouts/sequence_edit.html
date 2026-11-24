@@ -159,13 +159,13 @@
       body: body.toString(),
     }).then(function (resp) {
       if (!resp.ok) {
-        alert('{% trans "Failed to save new order. Reloading." %}');
+        alert("{% filter escapejs %}{% trans "Failed to save new order. Reloading." %}{% endfilter %}");
         window.location.reload();
         return;
       }
       renumber();
     }).catch(function () {
-      alert('{% trans "Failed to save new order. Reloading." %}');
+      alert("{% filter escapejs %}{% trans "Failed to save new order. Reloading." %}{% endfilter %}");
       window.location.reload();
     });
   }

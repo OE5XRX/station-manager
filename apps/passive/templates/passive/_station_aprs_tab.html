@@ -20,39 +20,39 @@
      data-packets-url="{% url 'passive:aprs_packets' %}">
   <div class="aprs-station-head">
     {% include "passive/_badge.html" with badge=passive_badge %}
-    {% if passive_call %}<span class="callsign" title="{% trans 'iGate-Rufzeichen' %}">{{ passive_call }}</span>
-    {% else %}<span class="aprs-heard">{% trans "Kein iGate-Rufzeichen: die Pakete werden gesammelt, aber nicht ins APRS-IS gegated." %}</span>{% endif %}
-    <label class="aprs-check"><input type="checkbox" id="aprs-direct-only"> {% trans "Nur direkt gehört" %}</label>
+    {% if passive_call %}<span class="callsign" title="{% trans 'iGate callsign' %}">{{ passive_call }}</span>
+    {% else %}<span class="aprs-heard">{% trans "No iGate callsign: packets are collected but not gated to APRS-IS." %}</span>{% endif %}
+    <label class="aprs-check"><input type="checkbox" id="aprs-direct-only"> {% trans "Heard directly only" %}</label>
     <span class="t-mono-sm t-muted" id="aprs-status" role="status" aria-live="polite"></span>
   </div>
 
   <section class="panel" style="margin-bottom:14px;">
     <div class="panel-body flush">
-      <div id="aprs-map" class="aprs-map" role="region" aria-label="{% trans 'Karte der zuletzt gehörten Positionen' %}"></div>
+      <div id="aprs-map" class="aprs-map" role="region" aria-label="{% trans 'Map of recently heard positions' %}"></div>
     </div>
   </section>
 
   <section class="panel">
     <div class="panel-head">
-      <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span><span>{% trans "Zuletzt gehört (24 Stunden)" %}</span></div>
-      <a class="t-label" href="{% url 'passive:aprs' %}">{% trans "Alle Stationen" %}</a>
+      <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span><span>{% trans "Last heard (24 hours)" %}</span></div>
+      <a class="t-label" href="{% url 'passive:aprs' %}">{% trans "All stations" %}</a>
     </div>
     <div class="panel-body flush">
       <div class="table-wrap" style="border:none;border-radius:0;">
         <table class="t-table">
           <thead>
             <tr>
-              <th>{% trans "Zeit" %}</th>
-              <th>{% trans "Quelle" %}</th>
-              <th>{% trans "Typ" %}</th>
-              <th>{% trans "Paket" %}</th>
-              <th>{% trans "Gehört von" %}</th>
+              <th>{% trans "Time" %}</th>
+              <th>{% trans "Source" %}</th>
+              <th>{% trans "Type" %}</th>
+              <th>{% trans "Packet" %}</th>
+              <th>{% trans "Heard by" %}</th>
             </tr>
           </thead>
           <tbody id="aprs-log"></tbody>
         </table>
       </div>
-      <div id="aprs-log-empty" class="aprs-empty">{% trans "Seit 24 Stunden wurde nichts gehört. Der Dienst startet erst, wenn die Station im Leerlauf ist." %}</div>
+      <div id="aprs-log-empty" class="aprs-empty">{% trans "Nothing heard in the last 24 hours. The service only starts when the station is idle." %}</div>
     </div>
   </section>
 </div>

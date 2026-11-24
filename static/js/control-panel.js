@@ -14,13 +14,20 @@
 (function () {
   "use strict";
 
+  // i18n: globals from Django's JavaScriptCatalog; identity fallback under Node.
+  // Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
+
   var L = window.OE5XRXControlLogic;
   var PTT_CAP = "ptt"; // the only capability name referenced literally (D3 §8)
   var KEEPALIVE_MS = 1000;
   var PTT_KEY_STORAGE = "oe5xrx.ptt_key";
   var LOSS_NOTICE_MS = 4000;
   var DENY_NOTICE_MS = 8000; // long enough to read the full permission message
-  var DRAIN_LABEL_DEFAULT = "Station wartet auf Firmware-Update seit";
   // Agent events that toggle a module's firmware-updating state (Teilbereich D).
   var FW_STARTED = "firmware_update_started";
   var FW_FINISHED = "firmware_update_finished";
@@ -65,7 +72,6 @@
       ptt: {}, // "slot module" -> 'armed' | 'keying' | 'tx'
       updating: {}, // "slot module" -> true while the agent flashes its firmware
       drainSince: null, // ISO time a pending firmware update blocks new control since
-      drainLabel: DRAIN_LABEL_DEFAULT,
       // lock
       lockState: "free", // 'free' | 'held' | 'other'
       lockHolder: null,
@@ -106,7 +112,6 @@
         }
         this.canAdmin = root.getAttribute("data-can-admin") === "1";
         this.drainSince = root.getAttribute("data-drain-since") || null;
-        this.drainLabel = root.getAttribute("data-drain-label") || DRAIN_LABEL_DEFAULT;
         var defaultKey = root.getAttribute("data-ptt-default-key");
         if (defaultKey === null || defaultKey === "") defaultKey = " ";
         var stored = null;
@@ -294,10 +299,10 @@
           if (!this.connError) {
             this.connError =
               code === 4401
-                ? "You are not signed in."
+                ? gettext("You are not signed in.")
                 : code === 4403
-                  ? "You are not permitted to control this station."
-                  : "Station not found.";
+                  ? gettext("You are not permitted to control this station.")
+                  : gettext("Station not found.");
           }
           return;
         }
@@ -610,7 +615,11 @@
 
       drainText: function () {
         if (!this.drainSince) return "";
-        return this.drainLabel + " " + L.formatLocalDateTime(this.drainSince);
+        return interpolate(
+          gettext("Station waiting for firmware update since %(since)s"),
+          { since: L.formatLocalDateTime(this.drainSince) },
+          true
+        );
       },
 
       capValue: function (slot, module, cap) {

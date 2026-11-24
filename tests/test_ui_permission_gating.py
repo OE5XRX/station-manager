@@ -104,7 +104,7 @@ class TestControlPanelButton:
             assert '@click="acquire()"' not in body
             assert "enableMic()" not in body
             assert 'data-cap="ptt"' not in body
-            assert "nur lesend" in body
+            assert "read-only" in body
             assert 'x-data="audioPanel"' in body
         else:
             assert '@click="acquire()"' in body

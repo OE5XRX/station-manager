@@ -245,11 +245,11 @@ def igate_state(station, config, run, lock_held) -> tuple[str, str]:
         if run.state == run_states.RUNNING:
             return "running", ""
         if run.state == run_states.STARTING:
-            return "running", "startet"
+            return "running", _("starting")
         if run.state == run_states.AGENT_OFFLINE:
             return "agent_offline", ""
         if run.state == run_states.STOPPING:
-            return ("in_use", "") if lock_held else ("idle", "beendet")
+            return ("in_use", "") if lock_held else ("idle", _("stopping"))
         if run.state == run_states.ERROR and not lock_held:
             return "error", run.last_error
     if lock_held:

@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.serialization import (
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 
 
 class DeviceKey(models.Model):
@@ -32,20 +33,20 @@ class DeviceKey(models.Model):
         related_name="device_key",
     )
     current_public_key = models.TextField(
-        help_text="Base64-encoded Ed25519 public key",
+        help_text=_("Base64-encoded Ed25519 public key"),
     )
     next_public_key = models.TextField(
         null=True,
         blank=True,
-        help_text="Pending key for A/B rotation",
+        help_text=_("Pending key for A/B rotation"),
     )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        verbose_name = "device key"
-        verbose_name_plural = "device keys"
+        verbose_name = _("device key")
+        verbose_name_plural = _("device keys")
 
     def __str__(self):
         station_name = str(self.station) if self.station_id else "unlinked"
@@ -121,8 +122,8 @@ class PersonalAccessToken(models.Model):
     revoked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        verbose_name = "personal access token"
-        verbose_name_plural = "personal access tokens"
+        verbose_name = _("personal access token")
+        verbose_name_plural = _("personal access tokens")
         ordering = ["-created_at"]
 
     def __str__(self):

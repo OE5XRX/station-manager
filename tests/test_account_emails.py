@@ -84,3 +84,17 @@ class TestSendAccountEmail:
         send_account_email(member, "welcome", {"raw_token": "T"})
 
         assert mail.outbox[0].from_email == settings.DEFAULT_FROM_EMAIL
+
+
+@pytest.mark.django_db
+def test_email_link_uses_recipient_language_prefix(member):
+    from django.utils import translation
+
+    from apps.accounts.emails import send_account_email
+
+    member.language = "de"
+    member.save(update_fields=["language"])
+    with translation.override("en"):  # e.g. an English-speaking admin triggers it
+        send_account_email(member, "welcome", {"raw_token": "ABC123XYZ", "actor": "OE5ADMIN"})
+    assert "/de/accounts/" in mail.outbox[-1].body
+    assert "/en/accounts/" not in mail.outbox[-1].body

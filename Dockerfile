@@ -35,8 +35,20 @@ RUN export AUTOBAHN_USE_NVX=0; \
 
 COPY . .
 
-# collectstatic needs a SECRET_KEY but we don't want to embed one
+# Compile the German catalog (.mo is gitignored). gettext is only needed for
+# msgfmt, so purge it again to keep the image small.
 ARG DJANGO_SECRET_KEY=build-only-dummy-key
+RUN apt-get update && apt-get install -y --no-install-recommends gettext \
+    && DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY} \
+       python manage.py compilemessages -l de \
+         --ignore '.venv/*' --ignore 'vendor/*' --ignore 'staticfiles/*' \
+         --ignore 'tests/*' --ignore 'station_agent/*' --ignore 'docs/*' \
+         --ignore 'scripts/*' --ignore 'node_modules/*' \
+         --settings=config.settings.prod \
+    && apt-get purge -y --auto-remove gettext \
+    && rm -rf /var/lib/apt/lists/*
+
+# collectstatic needs a SECRET_KEY but we don't want to embed one
 RUN DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY} \
     python manage.py collectstatic --noinput --settings=config.settings.prod
 

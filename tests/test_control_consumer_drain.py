@@ -218,3 +218,36 @@ def test_lock_frame_drain_null_when_idle():
         await comm.disconnect()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ws_error_message_follows_user_language():
+    """WS frames have no locale prefix: user-visible texts use User.language."""
+    from django.utils import translation
+
+    from apps.control import lock as lockmod
+
+    station = Station.objects.create(name="cdr-de", status="online")
+    user = _member("cdr-de-u")
+    user.language = "de"
+    user.save(update_fields=["language"])
+    with translation.override("de"):
+        german = str(lockmod.FIRMWARE_DRAIN_MESSAGE)
+    with translation.override("en"):
+        english = str(lockmod.FIRMWARE_DRAIN_MESSAGE)
+    assert german != english
+
+    async def scenario():
+        with (
+            mock.patch(DRAINING, return_value=True),
+            mock.patch(DRAIN_STATUS, return_value=ACTIVE),
+        ):
+            comm = _browser_comm(user, station.id)
+            assert (await comm.connect())[0] is True
+            await _drain_until(comm, "lock")
+            await comm.send_json_to({"type": "lock_acquire"})
+            err = await _drain_until(comm, "error")
+            assert err["message"] == german
+            await comm.disconnect()
+
+    asyncio.run(scenario())

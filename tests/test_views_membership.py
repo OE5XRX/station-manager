@@ -150,13 +150,13 @@ def test_user_detail_renders_membership_card_for_admin(client, admin_user):
     assert response.status_code == 200
     body = response.content.decode()
     # Section header + the dropdown
-    assert "Vereins-Rolle" in body or "Vereinsrolle" in body
+    assert "Club role" in body
     assert "<select" in body
     # All four membership-level options should appear by display label
-    assert "Vereins-Bewerber" in body
-    assert "Vereins-Mitglied" in body
-    assert "Vereins-Staff" in body
-    assert "Vereins-Admin" in body
+    assert "Club applicant" in body
+    assert "Club member" in body
+    assert "Club staff" in body
+    assert "Club admin" in body
 
 
 # NOTE: The old "test_user_form_does_not_render_membership_card_on_self" test

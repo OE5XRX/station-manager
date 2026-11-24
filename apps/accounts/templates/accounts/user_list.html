@@ -2,14 +2,14 @@
 {% load i18n %}
 
 {% block title %}
-  {% if is_member_view %}{% trans "Mitglieder" %}{% else %}{% trans "Users" %}{% endif %} · OE5XRX
+  {% if is_member_view %}{% trans "Members" %}{% else %}{% trans "Users" %}{% endif %} · OE5XRX
 {% endblock %}
 
 {% block breadcrumbs %}
   <a href="{% url 'dashboard:index' %}">OE5XRX</a>
   <span class="sep">/</span>
   <span class="cur">
-    {% if is_member_view %}{% trans "Mitglieder" %}{% else %}{% trans "Users" %}{% endif %}
+    {% if is_member_view %}{% trans "Members" %}{% else %}{% trans "Users" %}{% endif %}
   </span>
 {% endblock %}
 
@@ -20,17 +20,17 @@
       {% if is_admin_view %}
         {% trans "Administration" %} · {% trans "People" %}
       {% else %}
-        {% trans "Verein" %} · {% trans "Mitgliederverzeichnis" %}
+        {% trans "Club" %} · {% trans "Member directory" %}
       {% endif %}
     </div>
     <h1 class="page-title">
-      {% if is_admin_view %}{% trans "Users" %}{% else %}{% trans "Mitglieder" %}{% endif %}
+      {% if is_admin_view %}{% trans "Users" %}{% else %}{% trans "Members" %}{% endif %}
     </h1>
     <p class="page-sub">
       {% if is_admin_view %}
         {% trans "Add, view, edit, and remove member, staff, and admin accounts." %}
       {% else %}
-        {% trans "Vereinsmitglieder mit Kontaktdaten und Funktionen." %}
+        {% trans "Club members with contact details and roles." %}
       {% endif %}
     </p>
   </div>
@@ -79,11 +79,11 @@
   <select name="role" class="form-select">
     <option value="">{% trans "All roles" %}</option>
     {% if is_admin_view %}
-      <option value="applicant" {% if filter_role == "applicant" %}selected{% endif %}>{% trans "Vereins-Bewerber" %}</option>
+      <option value="applicant" {% if filter_role == "applicant" %}selected{% endif %}>{% trans "Club applicant" %}</option>
     {% endif %}
-    <option value="member" {% if filter_role == "member" %}selected{% endif %}>{% trans "Vereins-Mitglied" %}</option>
-    <option value="staff" {% if filter_role == "staff" %}selected{% endif %}>{% trans "Vereins-Staff" %}</option>
-    <option value="admin" {% if filter_role == "admin" %}selected{% endif %}>{% trans "Vereins-Admin" %}</option>
+    <option value="member" {% if filter_role == "member" %}selected{% endif %}>{% trans "Club member" %}</option>
+    <option value="staff" {% if filter_role == "staff" %}selected{% endif %}>{% trans "Club staff" %}</option>
+    <option value="admin" {% if filter_role == "admin" %}selected{% endif %}>{% trans "Club admin" %}</option>
   </select>
   <button type="submit" class="btn btn-primary btn-sm">{% trans "Filter" %}</button>
   {% if filter_q or filter_role %}
@@ -158,15 +158,15 @@
         </td>
         {% if is_admin_view %}
           <td class="t-mono-sm t-muted" data-label="{% trans 'Last login' %}">
-            {{ u.last_login|date:"Y-m-d H:i"|default:"never" }}
+            {% if u.last_login %}{{ u.last_login|date:"Y-m-d H:i" }}{% else %}{% trans "never" %}{% endif %}
           </td>
           <td data-label="{% trans 'Status' %}">
             {% if u.deleted_at %}
-              <span class="pill pill-muted">DELETED {{ u.deleted_at|date:"Y-m-d" }}</span>
+              <span class="pill pill-muted">{% blocktranslate with date=u.deleted_at|date:"Y-m-d" %}DELETED {{ date }}{% endblocktranslate %}</span>
             {% elif u.is_active %}
-              <span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
+              <span class="pill pill-online"><span class="dot"></span>{% translate "ACTIVE" %}</span>
             {% else %}
-              <span class="pill pill-violet">INACTIVE</span>
+              <span class="pill pill-violet">{% translate "INACTIVE" %}</span>
             {% endif %}
           </td>
         {% endif %}

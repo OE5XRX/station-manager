@@ -69,6 +69,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Sessions without a language cookie get User.language (cookie + one
+    # redirect to the matching locale prefix). See config/middleware.py.
+    "config.middleware.UserLanguageMiddleware",
     # Default-deny: every view is login-required unless decorated with
     # ``django.contrib.auth.decorators.login_not_required`` or covered
     # by our subclass's exact-path / true-prefix allow-list (OIDC
@@ -161,6 +164,9 @@ LANGUAGES = [
 ]
 LOCALE_PATHS = [BASE_DIR / "locale"]
 USE_I18N = True
+LANGUAGE_COOKIE_HTTPONLY = True
+LANGUAGE_COOKIE_SAMESITE = "Lax"
+LANGUAGE_COOKIE_AGE = 365 * 24 * 3600
 
 TIME_ZONE = "Europe/Vienna"
 USE_TZ = True

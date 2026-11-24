@@ -4,6 +4,8 @@
   ``django.contrib.auth.middleware.LoginRequiredMiddleware`` that bolts a
   two-part allow-list (exact paths + true prefixes) onto the framework's
   default-deny gate.
+* ``UserLanguageMiddleware`` — gives a logged-in session without a
+  language cookie the user's ``User.language`` (cookie + one redirect).
 * ``PrivacyAckMiddleware`` — sends logged-in users who have not yet
   acknowledged the current privacy-policy version to the acknowledgement
   page (browser UI only).
@@ -22,6 +24,7 @@ from django.contrib.auth.middleware import (
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.deprecation import MiddlewareMixin
+from django.utils.translation import get_language_from_path
 from django_htmx.http import HttpResponseClientRedirect
 
 
@@ -247,7 +250,7 @@ class PrivacyAckMiddleware(MiddlewareMixin):
     #: Views reachable while un-acknowledged (matched on the resolved
     #: ``view_name``, i.e. independent of the locale prefix).
     EXEMPT_VIEW_NAMES: Final[frozenset[str]] = frozenset(
-        {"accounts:logout", "accounts:privacy_ack", "set_language"}
+        {"accounts:logout", "accounts:privacy_ack", "set_language", "javascript-catalog"}
     )
 
     _EXEMPT_PREFIXES_NORMALISED: Final[tuple[str, ...]] = tuple(
@@ -306,3 +309,89 @@ class PrivacyAckMiddleware(MiddlewareMixin):
         if not parts.path.startswith("/"):
             return ""
         return parts.path + (f"?{parts.query}" if parts.query else "")
+
+
+class UserLanguageMiddleware:
+    """Carry ``User.language`` into sessions that predate the language cookie.
+
+    Login, the switcher and the profile form set the language cookie
+    themselves (``apps.accounts.language``). A session that is already
+    logged in (7-day rolling, no re-login after a deploy) has no cookie yet;
+    for such a request (authenticated user, no cookie) this middleware
+
+    * sets the cookie to ``user.language`` on the response, and
+    * on a ``GET`` to a locale-prefixed UI page whose prefix differs from
+      ``user.language`` (not HTMX) redirects once to the translated URL.
+
+    Once the cookie exists it never redirects — an explicit ``/en/...`` link is
+    respected — but a cookie that differs from ``user.language`` is re-set (a
+    change made on another device reaches this browser). Machine surfaces
+    (:pyattr:`EXEMPT_PATH_PREFIXES`, the JS catalogue) are never touched;
+    WebSockets don't run through HTTP middleware. A cookie the view itself
+    set (switcher, profile) wins. Placed directly after
+    ``AuthenticationMiddleware``.
+    """
+
+    EXEMPT_PATH_PREFIXES: Final[tuple[str, ...]] = (
+        "/api/",
+        "/sso/",
+        "/i18n/",
+        "/jsi18n/",
+        "/static/",
+        "/media/",
+        "/webpush/",
+        "/sw.js/",
+        "/manifest.webmanifest/",
+        "/__debug__/",
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    @classmethod
+    def _is_exempt_path(cls, path: str) -> bool:
+        normalised = normalise_path(path)
+        language = get_language_from_path(normalised)
+        if language:
+            # ``/de/jsi18n/`` → ``/jsi18n/``
+            normalised = normalised[len(language) + 1 :]
+        return normalised.startswith(cls.EXEMPT_PATH_PREFIXES)
+
+    def __call__(self, request):
+        from apps.accounts.language import (
+            is_supported_language,
+            localized_url,
+            set_language_cookie,
+        )
+
+        # Path check first: exempt paths never touch the (lazy) user/session.
+        if self._is_exempt_path(request.path):
+            return self.get_response(request)
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated or not is_supported_language(user.language):
+            return self.get_response(request)
+
+        language = user.language
+        cookie = request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME)
+        if cookie is not None:
+            # Cookie present: an explicit prefixed URL is respected (no
+            # redirect), but the cookie follows User.language so a change made
+            # on another device reaches this browser too.
+            response = self.get_response(request)
+            if cookie != language and settings.LANGUAGE_COOKIE_NAME not in response.cookies:
+                set_language_cookie(response, language)
+            return response
+        if request.method == "GET" and request.headers.get("HX-Request") != "true":
+            path_language = get_language_from_path(request.path_info)
+            if path_language and path_language != language:
+                full_path = request.get_full_path()
+                target = localized_url(full_path, language)
+                if target != full_path:
+                    response = redirect(target)
+                    set_language_cookie(response, language)
+                    return response
+
+        response = self.get_response(request)
+        if settings.LANGUAGE_COOKIE_NAME not in response.cookies:
+            set_language_cookie(response, language)
+        return response

@@ -215,7 +215,7 @@ class TestApplicantInvariant:
         )
         with pytest.raises(ValidationError) as exc:
             a.save()
-        assert "Vereins-Bewerber" in str(exc.value)
+        assert "Club applicant" in str(exc.value)
 
     def test_applicant_cannot_be_station_maintainer(self):
         from apps.stations.models import StationAssignment

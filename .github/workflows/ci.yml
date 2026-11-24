@@ -119,7 +119,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libguestfs-tools linux-image-virtual \
-            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gettext
           # Ubuntu ships kernels with 0600 perms; libguestfs's supermin needs read access.
           # Guard the glob so CI does not fail on runner images where
           # the kernel lives somewhere else (or no file matches).
@@ -130,9 +130,37 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements/dev.txt
 
+      - name: Compile translations
+        run: scripts/i18n.sh compile
+
       - name: Run tests
         timeout-minutes: 30
         run: pytest
+
+  translations:
+    name: Translations complete
+    runs-on: ubuntu-latest
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DJANGO_SECRET_KEY: ci-test-secret-key
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install gettext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gettext
+
+      - name: Install dependencies
+        run: pip install -r requirements/dev.txt
+
+      - name: Check German catalog is complete and compiles
+        run: PYTHON=python scripts/i18n.sh check
 
   test-history-postgres:
     # The normal suite runs on SQLite. The history tables are monthly RANGE-partitioned

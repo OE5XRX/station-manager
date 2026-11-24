@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load i18n %}
 
-{% block title %}{% trans "Datenschutz" %} · OE5XRX{% endblock %}
+{% block title %}{% trans "Privacy" %} · OE5XRX{% endblock %}
 
 {% comment %}
   Privacy-policy acknowledgement (PrivacyAckMiddleware sends every user here
@@ -22,44 +22,44 @@
     </div>
 
     <div>
-      <h1 class="auth-title" id="privacy-title">{% trans "Was wir speichern und wie lange." %}</h1>
-      <p class="auth-sub">{% trans "Der Station-Manager protokolliert, wer eine Station wann bedient. Bevor es weitergeht, hier das Wichtigste in Kürze." %}</p>
+      <h1 class="auth-title" id="privacy-title">{% trans "What we store and for how long." %}</h1>
+      <p class="auth-sub">{% trans "The Station Manager logs who operates a station and when. Before you continue, here is a short summary." %}</p>
     </div>
 
     <dl class="privacy-ledger">
       <div class="privacy-ledger-row">
-        <dt>{% trans "Betriebsprotokoll" %}</dt>
-        <dd class="privacy-ledger-desc">{% trans "Kontrolle über eine Station, PTT, Befehle, Änderungen an Stationen und Beginn/Ende von Terminal-Sessions." %}</dd>
-        <dd class="privacy-ledger-term">{% trans "12 Monate" %}</dd>
+        <dt>{% trans "Operation log" %}</dt>
+        <dd class="privacy-ledger-desc">{% trans "Control of a station, PTT, commands, changes to stations and start/end of terminal sessions." %}</dd>
+        <dd class="privacy-ledger-term">{% trans "12 months" %}</dd>
       </div>
       <div class="privacy-ledger-row">
-        <dt>{% trans "IP-Adresse und Ort bei Logins und Sessions" %}</dt>
-        <dd class="privacy-ledger-desc">{% trans "Der ungefähre Ort kommt aus einer lokalen Datenbank, nicht von einem externen Dienst. IP-Adressen sehen nur Admins." %}</dd>
-        <dd class="privacy-ledger-term">{% trans "90 Tage" %}</dd>
+        <dt>{% trans "IP address and location for logins and sessions" %}</dt>
+        <dd class="privacy-ledger-desc">{% trans "The approximate location comes from a local database, not from an external service. Only admins can see IP addresses." %}</dd>
+        <dd class="privacy-ledger-term">{% trans "90 days" %}</dd>
       </div>
       <div class="privacy-ledger-row privacy-ledger-row--none">
-        <dt>{% trans "Audio und Terminal-Inhalte" %}</dt>
-        <dd class="privacy-ledger-desc">{% trans "Was über Funk oder im Terminal läuft, wird nicht aufgezeichnet." %}</dd>
-        <dd class="privacy-ledger-term">{% trans "nie gespeichert" %}</dd>
+        <dt>{% trans "Audio and terminal content" %}</dt>
+        <dd class="privacy-ledger-desc">{% trans "What happens on the air or in the terminal is not recorded." %}</dd>
+        <dd class="privacy-ledger-term">{% trans "never stored" %}</dd>
       </div>
     </dl>
 
     <p class="privacy-contact">
-      {% trans "Fragen, Auskunft oder Löschung:" %} <a href="mailto:info@oe5xrx.org">info@oe5xrx.org</a><br>
-      <a href="{{ policy_url }}" target="_blank" rel="noopener">{% trans "Vollständige Datenschutzerklärung" %}</a>
+      {% trans "Questions, access requests or deletion:" %} <a href="mailto:info@oe5xrx.org">info@oe5xrx.org</a><br>
+      <a href="{{ policy_url }}" target="_blank" rel="noopener">{% trans "Full privacy policy" %}</a>
     </p>
 
     <div class="stack-gap-14">
       <form method="post" action="{% url 'accounts:privacy_ack' %}">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ next }}">
-        <button type="submit" class="btn btn-primary btn-lg btn-block">{% trans "Zur Kenntnis genommen" %}</button>
+        <button type="submit" class="btn btn-primary btn-lg btn-block">{% trans "Acknowledged" %}</button>
       </form>
       <div class="privacy-foot">
         <span class="t-muted">{% blocktrans %}Version {{ version }}{% endblocktrans %}</span>
         <form method="post" action="{% url 'accounts:logout' %}">
           {% csrf_token %}
-          <button type="submit" class="btn btn-ghost btn-sm">{% trans "Abmelden" %}</button>
+          <button type="submit" class="btn btn-ghost btn-sm">{% trans "Sign out" %}</button>
         </form>
       </div>
     </div>
@@ -68,14 +68,14 @@
   <aside class="auth-side" aria-hidden="true">
     <div></div>
     <div class="auth-side-big privacy-side-big">
-      {% trans "Kein Audio." %}<br>
-      {% trans "Keine Terminal-Inhalte." %}
-      <small>{% trans "Gespeichert wird nur, wer wann was bedient hat" %}</small>
+      {% trans "No audio." %}<br>
+      {% trans "No terminal content." %}
+      <small>{% trans "We only store who operated what and when" %}</small>
     </div>
     <div class="auth-side-bottom">
-      <div class="row"><span class="key">{% trans "Betriebsprotokoll" %}</span><span class="val">{% trans "12 Monate" %}</span></div>
-      <div class="row"><span class="key">{% trans "IP-Adresse und Ort" %}</span><span class="val">{% trans "90 Tage" %}</span></div>
-      <div class="row"><span class="key">{% trans "Erklärung" %}</span><span class="val">{% blocktrans %}Version {{ version }}{% endblocktrans %}</span></div>
+      <div class="row"><span class="key">{% trans "Operation log" %}</span><span class="val">{% trans "12 months" %}</span></div>
+      <div class="row"><span class="key">{% trans "IP address and location" %}</span><span class="val">{% trans "90 days" %}</span></div>
+      <div class="row"><span class="key">{% trans "Policy" %}</span><span class="val">{% blocktrans %}Version {{ version }}{% endblocktrans %}</span></div>
     </div>
   </aside>
 </div>

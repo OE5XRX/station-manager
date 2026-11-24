@@ -284,21 +284,21 @@ ok("passiveMuteDecision: non-running frames while idle do nothing", () => {
   }
 });
 ok("passiveBadge: labels match the server-rendered badge", () => {
-  assert.deepEqual(L.passiveBadge({ state: "running" }), { label: "Passiv: APRS aktiv", level: "ok", detail: "" });
-  assert.equal(L.passiveBadge({ state: "starting" }).label, "Passiv: APRS startet");
-  assert.equal(L.passiveBadge({ state: "stopping" }).label, "Passiv: in Benutzung");
+  assert.deepEqual(L.passiveBadge({ state: "running" }), { label: "Passive: APRS active", level: "ok", detail: "" });
+  assert.equal(L.passiveBadge({ state: "starting" }).label, "Passive: APRS starting");
+  assert.equal(L.passiveBadge({ state: "stopping" }).label, "Passive: in use");
   assert.equal(L.passiveBadge({ state: "agent_offline" }).level, "off");
-  assert.equal(L.passiveBadge({ state: "error", reason: "sa818 timeout" }).label, "Passiv: Fehler: sa818 timeout");
+  assert.equal(L.passiveBadge({ state: "error", reason: "sa818 timeout" }).label, "Passive: error: sa818 timeout");
 });
 ok("passiveBadge: idle reasons explain themselves, unknown codes are errors", () => {
-  assert.equal(L.passiveBadge({ state: "off", reason: null }).label, "Passiv: aus");
+  assert.equal(L.passiveBadge({ state: "off", reason: null }).label, "Passive: off");
   const wait = L.passiveBadge({ state: "off", reason: "idle_wait" });
-  assert.equal(wait.label, "Passiv: aus");
-  assert.equal(wait.detail, "Wartet auf Leerlauf");
-  assert.equal(L.passiveBadge({ state: "off", reason: "lock_held" }).label, "Passiv: in Benutzung");
+  assert.equal(wait.label, "Passive: off");
+  assert.equal(wait.detail, "Waiting for idle");
+  assert.equal(L.passiveBadge({ state: "off", reason: "lock_held" }).label, "Passive: in use");
   const err = L.passiveBadge({ state: "off", reason: "no_rx_node" });
   assert.equal(err.level, "error");
-  assert.equal(err.label, "Passiv: Fehler: no_rx_node");
+  assert.equal(err.label, "Passive: error: no_rx_node");
 });
 
 console.log("\n" + passed + " assertions passed");

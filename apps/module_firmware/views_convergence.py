@@ -186,11 +186,11 @@ class ModuleRetryUpdateView(AreaPermissionMixin, View):
         if versions:
             messages.success(
                 request,
-                _("Update für %(uid)s wird erneut versucht (%(versions)s).")
+                _("Retrying the update for %(uid)s (%(versions)s).")
                 % {"uid": module.uid, "versions": ", ".join(versions)},
             )
         else:
-            messages.info(request, _("%(uid)s ist nicht im Fehlerzustand.") % {"uid": module.uid})
+            messages.info(request, _("%(uid)s is not in a failed state.") % {"uid": module.uid})
         return _redirect_back(request, uid)
 
 

@@ -15,6 +15,14 @@
 (function () {
   "use strict";
 
+  // i18n: globals from Django's JavaScriptCatalog; identity fallback under Node.
+  // Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
+
   var STORAGE_PREFIX = "oe5xrx.bandmap.";
   var SEARCH_DEBOUNCE_MS = 250;
   var REFRESH_DEBOUNCE_MS = 600;
@@ -117,7 +125,7 @@
   function formatShift(row) {
     var d = Number(row.input_frequency) - Number(row.output_frequency);
     if (!isFinite(d)) return "";
-    if (Math.abs(d) < TUNE_EPSILON) return "simplex";
+    if (Math.abs(d) < TUNE_EPSILON) return gettext("simplex");
     var sign = d > 0 ? "+" : "−";
     var abs = Math.abs(d);
     if (abs < 1) return sign + Math.round(abs * 1000) + " kHz";
@@ -143,27 +151,29 @@
   function errorText(code) {
     switch (code) {
       case "not_locked":
-        return "Take control of the station first.";
+        return gettext("Take control of the station first.");
       case "forbidden":
-        return "Your membership level may not change these settings.";
+        return gettext("Your membership level may not change these settings.");
       case "not_applicable":
-        return "This repeater is outside the module's bands, or the module went offline.";
+        return gettext("This repeater is outside the module's bands, or the module went offline.");
       case "not_supported":
-        return "Cross-band repeaters need two modules and are not supported yet.";
+        return gettext("Cross-band repeaters need two modules and are not supported yet.");
       case "ptt_active":
-        return "Release PTT before switching repeaters.";
+        return gettext("Release PTT before switching repeaters.");
       case "not_connected":
-        return "The station connection is down. Wait for it to reconnect.";
+        return gettext("The station connection is down. Wait for it to reconnect.");
       case "timeout":
-        return "The station did not answer in time. Check the module settings.";
+        return gettext("The station did not answer in time. Check the module settings.");
       default:
-        return "The repeater could not be applied.";
+        return gettext("The repeater could not be applied.");
     }
   }
 
   // Human summary of an apply_preset result frame.
   function resultText(msg, callsign) {
-    if (msg.ok === true) return { ok: true, text: "Tuned to " + callsign + "." };
+    if (msg.ok === true) {
+      return { ok: true, text: interpolate(gettext("Tuned to %(callsign)s."), { callsign: callsign }, true) };
+    }
     var code = msg.error && msg.error.code;
     if (code === "ptt_active") return { ok: false, text: errorText(code) };
     var failed = [];
@@ -174,7 +184,14 @@
       }
     }
     if (failed.length) {
-      return { ok: false, text: callsign + " applied partly. Not set: " + failed.join(", ") + "." };
+      return {
+        ok: false,
+        text: interpolate(
+          gettext("%(callsign)s applied partly. Not set: %(caps)s."),
+          { callsign: callsign, caps: failed.join(", ") },
+          true
+        ),
+      };
     }
     return { ok: false, text: errorText(code) };
   }
@@ -417,9 +434,9 @@
       },
 
       rowTitle: function (row) {
-        if (row.cross_band) return "Cross-band – not yet supported";
-        if (!this.canApply) return "Take control of the station to tune a repeater";
-        return "Tune " + row.callsign;
+        if (row.cross_band) return gettext("Cross-band – not yet supported");
+        if (!this.canApply) return gettext("Take control of the station to tune a repeater");
+        return interpolate(gettext("Tune %(callsign)s"), { callsign: row.callsign }, true);
       },
 
       // -- apply ----------------------------------------------------------------

@@ -408,7 +408,7 @@ class StationUpdateView(AreaPermissionMixin, UpdateView):
                     raise _PassiveClashError from exc
         except _PassiveClashError:
             self.passive_form.add_error(
-                "igate_ssid", _("Rufzeichen und SSID gehören schon zu einer anderen Station.")
+                "igate_ssid", _("Callsign and SSID already belong to another station.")
             )
             return self.form_invalid(form)
         changes = _track_changes(old, self.object, TRACKED_FIELDS)

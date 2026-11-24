@@ -78,8 +78,8 @@ def test_unsafe_method_needs_manage_and_renders_403_page(client):
     r = client.post("/t/images/")
     assert r.status_code == 403
     body = r.content.decode()
-    assert "Keine Berechtigung" in body
-    assert "Vereins-Admin" in body and "Vereins-Staff" in body
+    assert "Permission denied" in body
+    assert "Club admin" in body and "Club staff" in body
     assert AccountAuditLog.objects.filter(event_type="permission_denied").count() == 1
 
 

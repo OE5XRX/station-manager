@@ -1,6 +1,9 @@
 import base64
 import hashlib
+import shutil
 import time
+import warnings
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -16,6 +19,48 @@ from apps.api.models import DeviceKey
 from apps.deployments.models import Deployment, DeploymentResult
 from apps.monitoring.models import Alert, AlertRule
 from apps.stations.models import Station
+
+_LOCALE_DIR = Path(__file__).resolve().parent.parent / "locale"
+
+
+def _translations_stale():
+    for po in _LOCALE_DIR.glob("*/LC_MESSAGES/*.po"):
+        mo = po.with_suffix(".mo")
+        if not mo.exists() or mo.stat().st_mtime < po.stat().st_mtime:
+            return True
+    return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _compiled_translations():
+    """Compile locale/*/LC_MESSAGES/*.po when a .mo is missing or outdated.
+
+    .mo files are gitignored, so a fresh checkout has none. Without msgfmt we
+    only warn: tests that need German then fail visibly instead of the whole
+    session aborting.
+    """
+    if not _translations_stale():
+        return
+    if shutil.which("msgfmt") is None:
+        warnings.warn(
+            "msgfmt (gettext) not found; German translations are not compiled "
+            "and tests relying on them will fail. Install gettext.",
+            stacklevel=1,
+        )
+        return
+    from django.core.management import call_command
+
+    call_command(
+        "compilemessages",
+        locale=["de"],
+        ignore_patterns=[
+            ".venv/*",
+            "vendor/*",
+            "staticfiles/*",
+            "node_modules/*",
+        ],
+        verbosity=0,
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -270,7 +270,7 @@ class TestUserFormTemplate:
         # Identity panel (always)
         assert ">Identity<" in body or "<h2>Identity</h2>" in body or "Identity" in body
         # Profil panel (Edit-Mode only)
-        assert "Profil" in body
+        assert "Profile" in body
         # Address panel (Edit-Mode only)
         assert "Adresse" in body or "Address" in body
         # Mobile-friendly: no inline max-width on the form
@@ -283,8 +283,8 @@ class TestUserFormTemplate:
         # Profil/Adresse only show up in Edit-Mode (1c spec Sektion 3.4).
         # Match on the panel-title pattern so we don't get fooled by the word
         # "Profil" appearing in help text or aside content.
-        assert ">Profil<" not in body
-        assert ">Adresse & Standort<" not in body
+        assert ">Profile<" not in body
+        assert ">Address & location<" not in body
 
 
 @pytest.mark.django_db

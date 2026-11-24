@@ -56,7 +56,7 @@ def staff(db):
     return _user("st", User.MembershipLevel.STAFF)
 
 
-STAFF_ONLY = "Vereins-Staff only"  # level_label(required_level("control", "manage"))
+STAFF_ONLY = "Club staff only"  # level_label(required_level("control", "manage"))
 
 
 def _render(tpl_src, user=None, **ctx):
@@ -166,7 +166,7 @@ def test_default_policy_label_is_member_level():
 
     tpl = "{% load control_caps %}{% cap_access cap m as a %}{{ a.required_label }}"
     out = _render(tpl, cap={"name": "x"}, m=SimpleNamespace(type="fm"))
-    assert out == "Vereins-Mitglied"  # label of the control.use level
+    assert out == "Club member"  # label of the control.use level
 
 
 def test_label_follows_the_registry(monkeypatch):
@@ -176,7 +176,7 @@ def test_label_follows_the_registry(monkeypatch):
     monkeypatch.setattr(control_caps, "required_level", lambda area, verb: Level.ADMIN)
     tpl = "{% load control_caps %}{% cap_access cap m as a %}{{ a.required_label }}"
     out = _render(tpl, cap={"name": "x"}, m=SimpleNamespace(type="fm"))
-    assert out == "Vereins-Admin"
+    assert out == "Club admin"
 
 
 def test_text_and_action_read_only_variants(client, station, member, monkeypatch):
@@ -218,7 +218,7 @@ def test_applicant_page_is_read_only_with_rx_audio(client, station, module, db):
     # No lock / PTT / mic / TX-route controls; readonly badge instead.
     for absent in ('@click="acquire()"', 'data-cap="ptt"', "enableMic()", 'id="ap-tx-route"'):
         assert absent not in html, absent
-    assert "nur lesend" in html
+    assert "read-only" in html
     # RX audio panel (subscribe/mixer) is still there.
     assert 'x-data="audioPanel"' in html and "toggleSub(" in html
     assert 'data-can-admin="0"' in html

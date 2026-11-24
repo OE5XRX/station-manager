@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n static station_audit %}
+{% load i18n static station_audit l10n %}
 
 {% block title %}{{ station.name }} · OE5XRX{% endblock %}
 
@@ -33,7 +33,7 @@
         {% endfor %}
         {% if station.last_seen %}
           <span class="t-mono-sm t-muted" data-station-seen>
-            {% trans "Last heard" %} {{ station.last_seen|timesince }} {% trans "ago" %}
+            {% blocktrans with since=station.last_seen|timesince %}Last heard {{ since }} ago{% endblocktrans %}
           </span>
         {% endif %}
       </div>
@@ -41,7 +41,7 @@
     <div class="page-head-actions">
       {% if not can.stations.manage %}{% include "includes/readonly_badge.html" %}{% endif %}
       {% if can.control.view and station.modules.exists %}
-      <a class="btn btn-sm btn-primary" href="{% url 'control:station_control' station.id %}">{% trans "Steuerung" %}</a>
+      <a class="btn btn-sm btn-primary" href="{% url 'control:station_control' station.id %}">{% trans "Control" %}</a>
       {% endif %}
       {% if can.stations.manage %}
       <a href="{% url 'stations:station_edit' station.pk %}" class="btn btn-ghost">
@@ -87,7 +87,7 @@
     <div class="summary-item">
       <div class="summary-key">{% trans "Coordinates" %}</div>
       <div class="summary-val mono">
-        {% if station.latitude and station.longitude %}{{ station.latitude }}, {{ station.longitude }}{% else %}—{% endif %}
+        {% if station.latitude and station.longitude %}{{ station.latitude|unlocalize }}, {{ station.longitude|unlocalize }}{% else %}—{% endif %}
       </div>
     </div>
     <div class="summary-item">
@@ -291,7 +291,7 @@
       <div class="panel-head">
         <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Hardware inventory" %}</div>
         <div class="row-gap-8">
-          {% if station.inventory %}<span class="t-label">{% trans "Updated" %} {{ station.inventory.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+          {% if station.inventory %}<span class="t-label">{% blocktrans with since=station.inventory.updated_at|timesince %}Updated {{ since }} ago{% endblocktrans %}</span>{% endif %}
           <a class="btn btn-sm btn-ghost" href="#metrics" data-tab-link="metrics">{% trans "Live readings → Metrics" %}</a>
         </div>
       </div>
@@ -378,7 +378,7 @@
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title"><span class="dot" style="background:var(--cyan)"></span>{% trans "Agent Telemetry" %}</div>
-        {% if tel %}<span class="t-label">{% trans "Updated" %} {{ tel.updated_at|timesince }} {% trans "ago" %}</span>{% endif %}
+        {% if tel %}<span class="t-label">{% blocktrans with since=tel.updated_at|timesince %}Updated {{ since }} ago{% endblocktrans %}</span>{% endif %}
       </div>
       <div class="panel-body">
         {% if tel %}
@@ -404,7 +404,7 @@
                       <span class="t-muted">{{ tel.last_reboot_reason }}</span>
                     {% endif %}
                     {% if tel.last_reboot_at %}
-                      <span class="t-mono-sm t-muted">{{ tel.last_reboot_at|timesince }} {% trans "ago" %}</span>
+                      <span class="t-mono-sm t-muted">{% blocktrans with since=tel.last_reboot_at|timesince %}{{ since }} ago{% endblocktrans %}</span>
                     {% endif %}
                   {% else %}—{% endif %}
                 </dd>

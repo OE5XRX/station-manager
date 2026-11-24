@@ -59,7 +59,7 @@ def test_create_error_returns_to_tab_with_message(client, member_user):
     assert resp["Location"].endswith("#api-tokens")
     assert not PersonalAccessToken.objects.filter(user=member_user).exists()
     page = client.get(resp["Location"])
-    assert "Name ist erforderlich." in page.content.decode()
+    assert "Name is required." in page.content.decode()
 
 
 @pytest.mark.django_db

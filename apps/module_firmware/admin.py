@@ -54,12 +54,12 @@ class ModuleFirmwareReleaseAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         return self.model.all_objects.all()
 
-    @admin.action(description="Archivieren")
+    @admin.action(description=_("Archive"))
     def archive_selected(self, request, queryset):
         for r in queryset:
             r.archive()
 
-    @admin.action(description="Wiederherstellen")
+    @admin.action(description=_("Restore"))
     def restore_selected(self, request, queryset):
         for r in queryset:
             r.restore()
@@ -131,7 +131,7 @@ class ModuleAdmin(admin.ModelAdmin):
         # its audit attribution. Use the `retired` lifecycle instead.
         return False
 
-    @admin.action(description="Registrierung bestätigen")
+    @admin.action(description=_("Confirm registration"))
     def confirm_registration(self, request, queryset):
         for module in queryset:
             services.confirm_registration(module, user=request.user)

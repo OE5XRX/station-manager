@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.utils.translation import gettext_lazy as _
 
 from apps.api.models import DeviceKey
 
@@ -10,6 +11,6 @@ class DeviceKeyAdmin(admin.ModelAdmin):
     search_fields = ("station__name", "station__callsign")
     readonly_fields = ("current_public_key", "next_public_key", "created_at", "last_seen")
 
-    @admin.display(description="Public Key")
+    @admin.display(description=_("Public Key"))
     def pubkey_preview(self, obj):
         return f"{obj.current_public_key[:16]}..." if obj.current_public_key else "-"

@@ -196,7 +196,7 @@ def test_region_manager_member_can_preempt_plain_member_cannot():
         await pc.send_json_to({"type": "lock_preempt"})
         frame = await _drain_until(pc, "error")
         assert frame["code"] == "forbidden"
-        assert "Übernehmen der Steuerung" in frame["message"]
+        assert "taking over control" in frame["message"]
         assert "kalibrieren" not in frame["message"]
         await pc.disconnect()
 

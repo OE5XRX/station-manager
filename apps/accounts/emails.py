@@ -8,10 +8,11 @@ module that changes — all callers remain on ``send_account_email``.
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
-from django.urls import reverse
+
+from .language import reverse_for_user
 
 
-def _absolute_link(url_name, **kwargs):
+def _absolute_link(user, url_name, **kwargs):
     """Compose an absolute URL for an email-link.
 
     We use ``settings.SITE_URL`` (https://remote.oe5xrx.org in prod,
@@ -20,7 +21,7 @@ def _absolute_link(url_name, **kwargs):
     request available.
     """
     base = getattr(settings, "SITE_URL", "").rstrip("/")
-    path = reverse(url_name, kwargs=kwargs)
+    path = reverse_for_user(user, url_name, kwargs=kwargs)
     return f"{base}{path}"
 
 
@@ -35,9 +36,9 @@ def send_account_email(user, kind, context):
     """
     raw_token = context["raw_token"]
     if kind == "verify":
-        link = _absolute_link("accounts:verify_email", token=raw_token)
+        link = _absolute_link(user, "accounts:verify_email", token=raw_token)
     else:
-        link = _absolute_link("accounts:set_password", token=raw_token)
+        link = _absolute_link(user, "accounts:set_password", token=raw_token)
 
     ctx = {
         "user": user,

@@ -23,7 +23,7 @@ def test_staff_sees_alert_list_and_can_ack(client, alert):
 def test_applicant_sees_alert_settings_read_only(client):
     _login(client, "applicant")
     r = client.get(reverse("monitoring:alert_settings"))
-    assert r.status_code == 200 and "nur lesend" in r.content.decode()
+    assert r.status_code == 200 and "read-only" in r.content.decode()
 
 
 def test_staff_cannot_update_alert_rule_or_send_test(client):
@@ -63,7 +63,7 @@ def test_dashboard_denial_tile_admin_only(client):
     assert AccountAuditLog.objects.filter(event_type="permission_denied", actor=m).exists()
     _login(client, "admin", "adm")
     html = client.get(reverse("dashboard:index")).content.decode()
-    assert "Zugriffsverweigerungen" in html
+    assert "Access denials" in html
     assert "event_type=permission_denied" in html
     r = client.get(reverse("audit:audit_list") + "?event_type=permission_denied")
     assert "audit.view" in r.content.decode()
@@ -72,7 +72,7 @@ def test_dashboard_denial_tile_admin_only(client):
 def test_dashboard_denial_tile_hidden_for_staff(client):
     _login(client, "staff")
     html = client.get(reverse("dashboard:index")).content.decode()
-    assert "Zugriffsverweigerungen" not in html
+    assert "Access denials" not in html
 
 
 def test_audit_quick_filter_chip_and_details(client):
@@ -80,7 +80,7 @@ def test_audit_quick_filter_chip_and_details(client):
     client.get(reverse("audit:audit_list"))
     _login(client, "admin", "adm2")
     html = client.get(reverse("audit:audit_list")).content.decode()
-    assert "Verweigerungen" in html
+    assert "Denials" in html
     html = client.get(
         reverse("audit:audit_list") + "?event_type=permission_denied"
     ).content.decode()

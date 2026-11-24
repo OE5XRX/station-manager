@@ -280,7 +280,7 @@ def test_module_read_has_update_status_and_boot_key(api_topology, bearer, fm):
     assert set(status) == {"state", "phase", "reason_code", "reason_text", "since"}
     assert status["state"] == "pending"
     assert status["phase"] == "" and status["reason_code"] == ""
-    assert status["reason_text"] == "Update ausstehend"
+    assert status["reason_text"] == "Update pending"
     # list carries the same shape/values (bulk path)
     row = client.get(reverse("api:module-list")).data["results"][0]
     assert row["update_status"] == status
@@ -312,7 +312,7 @@ def test_module_without_assignment_update_status_no_target(api_topology, bearer,
         "state": "no_target",
         "phase": "",
         "reason_code": "",
-        "reason_text": "Kein Ziel",
+        "reason_text": "No target",
         "since": None,
     }
     assert data["reported_boot_key"] == ""

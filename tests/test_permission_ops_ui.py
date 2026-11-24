@@ -19,7 +19,7 @@ def test_applicant_can_view_ops_pages(client, name):
     _login(client, "applicant")
     r = client.get(reverse(name))
     assert r.status_code == 200
-    assert "nur lesend" in r.content.decode()
+    assert "read-only" in r.content.decode()
 
 
 def test_staff_can_trigger_station_upgrade_but_not_group(client, station, image_release):
@@ -84,7 +84,7 @@ def test_staff_images_page_hides_import_panel(client, image_release):
     _login(client, "staff")
     html = client.get(reverse("images:list")).content.decode()
     assert 'id="import-form"' not in html
-    assert "nur lesend" in html
+    assert "read-only" in html
 
 
 def test_admin_images_page_has_import_panel(client):

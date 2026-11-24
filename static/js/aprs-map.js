@@ -2,6 +2,18 @@
    Every packet field is untrusted radio data: only textContent and DOM nodes. */
 (function () {
   "use strict";
+  // i18n: globals from Django's JavaScriptCatalog; identity fallback if it failed to load.
+  // Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
+  // Date/time formatting follows the page language (Austrian format for German).
+  var pageLang = document.documentElement.lang || "";
+  // Bare "en" resolves to en-US (12h AM/PM, month-first) — the UI's English
+  // is the European one, so pin en-GB (24h, day-first) like de → de-AT.
+  var LOCALE = pageLang.indexOf("de") === 0 ? "de-AT" : pageLang.indexOf("en") === 0 ? "en-GB" : pageLang || undefined;
   var root = document.getElementById("aprs-root");
   if (!root || !window.L || !window.OE5XRXAprsLogic) return;
   var Logic = window.OE5XRXAprsLogic;
@@ -120,7 +132,9 @@
       box.appendChild(el("span", cls, h.call + (h.starred ? "*" : "")));
     });
     wrap.appendChild(box);
-    wrap.appendChild(el("span", "aprs-pop-via", info.direct ? "direkt gehört" : "über " + info.via));
+    wrap.appendChild(el("span", "aprs-pop-via", info.direct
+      ? gettext("heard directly")
+      : interpolate(gettext("via %(via)s"), { via: info.via }, true)));
     return wrap;
   }
 
@@ -130,28 +144,39 @@
     head.appendChild(symbolNode(p.symbol));
     var title = el("div");
     title.appendChild(el("div", "aprs-pop-call", source));
-    title.appendChild(el("div", "aprs-pop-sub", p.symbol ? "Symbol " + p.symbol : "Kein Symbol"));
+    title.appendChild(el("div", "aprs-pop-sub", p.symbol ? interpolate(gettext("Symbol %(symbol)s"), { symbol: p.symbol }, true) : gettext("No symbol")));
     head.appendChild(title);
     pop.appendChild(head);
 
     var hear = Logic.hearings(p, packets.concat(positions));
     var dl = el("dl");
-    row(dl, "Zuletzt", new Date(p.heard_at).toLocaleString("de-AT") + " (vor " + Logic.formatAge(ageS(p.heard_at)) + ")");
-    row(dl, "Gehört von", hear.map(function (h) { return h.station_name; }).join(", "));
-    row(dl, "Pfad", pathNode(p));
-    if (p.comment) row(dl, "Kommentar", p.comment);
+    row(dl, gettext("Last heard"), interpolate(gettext("%(when)s (%(age)s ago)"), {
+      when: new Date(p.heard_at).toLocaleString(LOCALE),
+      age: Logic.formatAge(ageS(p.heard_at)),
+    }, true));
+    row(dl, gettext("Heard by"), hear.map(function (h) { return h.station_name; }).join(", "));
+    row(dl, gettext("Path"), pathNode(p));
+    if (p.comment) row(dl, gettext("Comment"), p.comment);
     pop.appendChild(dl);
 
     var notes = [];
     hear.forEach(function (h) {
       var r = Logic.buildRoute(routeInput(p, h), digiPositions);
-      if (r.missing.length) notes.push(h.station_name + ": Position unbekannt für " + r.missing.join(", ") + " – Linie ohne diese Hops.");
-      if (!r.hasIgate) notes.push(h.station_name + " hat keine Koordinaten – keine Linie.");
+      if (r.missing.length) {
+        notes.push(interpolate(
+          gettext("%(station)s: position unknown for %(hops)s – line drawn without these hops."),
+          { station: h.station_name, hops: r.missing.join(", ") },
+          true
+        ));
+      }
+      if (!r.hasIgate) {
+        notes.push(interpolate(gettext("%(station)s has no coordinates – no line."), { station: h.station_name }, true));
+      }
     });
     notes.forEach(function (t) { pop.appendChild(el("div", "aprs-pop-note", t)); });
 
     var det = el("details");
-    det.appendChild(el("summary", "", "Rohpaket (TNC2)"));
+    det.appendChild(el("summary", "", gettext("Raw packet (TNC2)")));
     det.appendChild(el("pre", "", p.raw_tnc2));
     pop.appendChild(det);
     return pop;
@@ -272,11 +297,13 @@
     groups.forEach(function (g) {
       var p = g.packet;
       var tr = el("tr");
-      tr.appendChild(el("td", "aprs-heard", new Date(p.heard_at).toLocaleTimeString("de-AT") + " (" + Logic.formatAge(ageS(p.heard_at)) + ")"));
+      tr.appendChild(el("td", "aprs-heard", new Date(p.heard_at).toLocaleTimeString(LOCALE) + " (" + Logic.formatAge(ageS(p.heard_at)) + ")"));
       tr.appendChild(el("td", "t-mono-sm", p.source));
       tr.appendChild(el("td", "", p.packet_type));
       tr.appendChild(el("td", "aprs-log-raw", p.raw_tnc2));
-      var heard = g.stations.length > 1 ? "gehört von " + g.stations.join(", ") : p.station_name;
+      var heard = g.stations.length > 1
+        ? interpolate(gettext("heard by %(stations)s"), { stations: g.stations.join(", ") }, true)
+        : p.station_name;
       tr.appendChild(el("td", "", heard));
       logBody.appendChild(tr);
     });
@@ -330,22 +357,22 @@
         renderLog();
       })
       .catch(function () {
-        statusEl.textContent = "Aktualisierung fehlgeschlagen, neuer Versuch folgt.";
+        statusEl.textContent = gettext("Update failed, retrying shortly.");
       })
       .then(function () { if (inflight === gen) inflight = null; });
   }
 
   var STATE_LABEL = {
-    running: ["pill-online", "Läuft"],
-    idle: ["pill-muted", "Bereit"],
-    in_use: ["pill-accent", "In Benutzung"],
-    error: ["pill-error", "Fehler"],
-    not_opted_in: ["pill-muted", "Nicht aktiviert"],
-    agent_offline: ["pill-offline", "Agent offline"],
+    running: ["pill-online", gettext("Running")],
+    idle: ["pill-muted", gettext("Ready")],
+    in_use: ["pill-accent", gettext("In use")],
+    error: ["pill-error", gettext("Error")],
+    not_opted_in: ["pill-muted", gettext("Not enabled")],
+    agent_offline: ["pill-offline", gettext("Agent offline")],
   };
   var WARNING = {
-    no_igate_call: "Kein iGate-Rufzeichen: wird nicht ins APRS-IS gegated.",
-    no_coordinates: "Keine Koordinaten: wird nicht ins APRS-IS gegated.",
+    no_igate_call: gettext("No iGate callsign: not gated to APRS-IS."),
+    no_coordinates: gettext("No coordinates: not gated to APRS-IS."),
   };
 
   function renderIgates(rows) {

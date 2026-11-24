@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 
 from django.conf import settings
 from django.contrib import messages
@@ -11,7 +12,7 @@ from django.db.models import Q
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render, resolve_url
 from django.urls import reverse
-from django.utils import timezone
+from django.utils import timezone, translation
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -22,6 +23,7 @@ from django.views.generic import (
     TemplateView,
     UpdateView,
 )
+from django.views.i18n import set_language as django_set_language
 
 from apps.stations.models import StationAssignment
 from config.csrf import wants_reauth
@@ -36,8 +38,9 @@ from .forms import (
     UserCreationForm,
 )
 from .geocoding import geocode_address, lat_lon_to_locator
+from .language import is_supported_language, localized_url, set_language_cookie
 from .models import AccountAuditLog
-from .permissions import AreaPermissionMixin, can
+from .permissions import AreaPermissionMixin, can, permission_exempt
 from .visibility import directory_queryset
 
 logger = logging.getLogger(__name__)
@@ -127,6 +130,49 @@ class LoginView(auth_views.LoginView):
                 self.redirect_authenticated_user = False
         return super().dispatch(request, *args, **kwargs)
 
+    def form_valid(self, form):
+        """Log in, then continue in the user's language (cookie + URL prefix).
+
+        Unprefixed targets (``/sso/authorize/?...``) keep their URL; the
+        cookie selects the language there.
+        """
+        response = super().form_valid(form)
+        language = form.get_user().language
+        if set_language_cookie(response, language):
+            response["Location"] = localized_url(response["Location"], language)
+        return response
+
+
+@login_not_required
+@permission_exempt("locale switch")
+def set_language(request):
+    """Django's ``set_language`` + persist the choice on a logged-in user.
+
+    Mounted at Django's own path ``/i18n/setlang/`` (name ``set_language``)
+    in ``config/urls.py``. Anonymous users get the unchanged Django
+    behaviour (cookie only).
+    """
+    response = django_set_language(request)
+    language = request.POST.get("language")
+    if (
+        request.method == "POST"
+        and request.user.is_authenticated
+        and is_supported_language(language)
+        and request.user.language != language
+    ):
+        request.user.language = language
+        request.user.save(update_fields=["language"])
+    # Django's translate_url resolves ``next`` under the *active* language, so
+    # a ``next`` whose prefix differs from the cookie language comes back
+    # untranslated; resolve it under its own prefix instead (same as login).
+    if (
+        request.method == "POST"
+        and is_supported_language(language)
+        and response.has_header("Location")
+    ):
+        response["Location"] = localized_url(response["Location"], language)
+    return response
+
 
 @method_decorator(login_not_required, name="dispatch")
 class LogoutView(auth_views.LogoutView):
@@ -173,16 +219,32 @@ class ProfileView(AreaPermissionMixin, TemplateView):
             self._emit_user_updated(request, user, changed - {"email"})
             if new_email:
                 self._trigger_email_verify(request, user, new_email)
-                messages.info(
-                    request,
-                    _(
-                        "Confirmation link sent to %(new)s. "
-                        "Until you click it, %(old)s stays active."
+            new_language = (
+                user.language
+                if "language" in changed and is_supported_language(user.language)
+                else None
+            )
+            # The flash renders on the next page, which is already in the new
+            # language: build it in that language (str() — a lazy string would
+            # be evaluated later under the request's old language).
+            with translation.override(new_language) if new_language else nullcontext():
+                if new_email:
+                    messages.info(
+                        request,
+                        str(
+                            _(
+                                "Confirmation link sent to %(new)s. "
+                                "Until you click it, %(old)s stays active."
+                            )
+                        )
+                        % {"new": new_email, "old": user.email},
                     )
-                    % {"new": new_email, "old": user.email},
-                )
-            if changed - {"email"}:
-                messages.success(request, _("Identity updated."))
+                if changed - {"email"}:
+                    messages.success(request, str(_("Identity updated.")))
+            if new_language:
+                response = redirect(localized_url(reverse("accounts:profile"), new_language))
+                set_language_cookie(response, new_language)
+                return response
         else:
             for errors in form.errors.values():
                 messages.error(request, "; ".join(errors))

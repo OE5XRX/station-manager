@@ -4,9 +4,9 @@ import logging
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.urls import reverse
 from django.utils import timezone
 
+from apps.accounts.language import reverse_for_user
 from apps.webpush.dispatch import send_web_push
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def _send_email_notification(alert, recipients_qs=None):
         logger.warning(
             "Alert %s on station %s (region=%s) has no recipients. "
             "Configure Station-Admin, Region-Manager, or ensure a "
-            "Vereins-Admin has an email set.",
+            "Club admin has an email set.",
             alert.pk,
             alert.station.name,
             region,
@@ -84,14 +84,14 @@ def _send_webpush_notification(alert):
     payload = {
         "title": f"[OE5XRX] {alert.get_severity_display()}: {alert.title}",
         "body": f"{alert.station.name}: {alert.message}",
-        "url": reverse("monitoring:alert_list"),
         "severity": alert.severity,
     }
 
     count = 0
     for user in push_recipients_for_station_alert(alert.station):
+        user_payload = {**payload, "url": reverse_for_user(user, "monitoring:alert_list")}
         for subscription in user.push_subscriptions.all():
-            if send_web_push(subscription, payload):
+            if send_web_push(subscription, user_payload):
                 count += 1
     logger.info("Alert web-push delivered to %d subscription(s).", count)
 
@@ -189,7 +189,7 @@ def _test_webpush(requesting_user=None):
     payload = {
         "title": "[OE5XRX] Test notification",
         "body": "Web-Push is working correctly.",
-        "url": reverse("monitoring:alert_list"),
+        "url": reverse_for_user(requesting_user, "monitoring:alert_list"),
     }
     sent = sum(1 for sub in subscriptions if send_web_push(sub, payload))
     if sent == 0:
@@ -222,7 +222,7 @@ def _test_email(requesting_user=None):
 
     if not recipient_list:
         return False, (
-            "No recipient — set your user's email or configure a Vereins-Admin with email."
+            "No recipient — set your user's email or configure a Club admin with email."
         )
 
     try:

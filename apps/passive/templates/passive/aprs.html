@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% load i18n static %}
 
-{% block title %}{% trans "APRS" %} · {% trans "Passive Dienste" %} · OE5XRX{% endblock %}
+{% block title %}{% trans "APRS" %} · {% trans "Passive services" %} · OE5XRX{% endblock %}
 
 {% block breadcrumbs %}
   <a href="{% url 'dashboard:index' %}">OE5XRX</a>
   <span class="sep">/</span>
-  <span>{% trans "Passive Dienste" %}</span>
+  <span>{% trans "Passive services" %}</span>
   <span class="sep">/</span>
   <span class="cur">{% trans "APRS" %}</span>
 {% endblock %}
@@ -33,7 +33,7 @@
 <div class="page-head">
   <div class="page-head-main">
     <h1 class="page-title">{% trans "APRS" %}</h1>
-    <p class="page-sub">{% trans "Pakete, die die Stationen im Leerlauf auf der APRS-Frequenz mithören, und die iGates, die sie ins APRS-IS weiterreichen." %}</p>
+    <p class="page-sub">{% trans "Packets the stations hear on the APRS frequency while idle, and the iGates that pass them on to APRS-IS." %}</p>
   </div>
 </div>
 
@@ -46,10 +46,10 @@
      data-initial-tab="{{ active_tab }}">
   <div data-tabs>
     <div class="tabs" role="tablist">
-      <button type="button" class="tab{% if active_tab == 'karte' %} active{% endif %}" role="tab" data-tab="karte" aria-selected="{% if active_tab == 'karte' %}true{% else %}false{% endif %}">{% trans "Karte & Log" %}</button>
+      <button type="button" class="tab{% if active_tab == 'karte' %} active{% endif %}" role="tab" data-tab="karte" aria-selected="{% if active_tab == 'karte' %}true{% else %}false{% endif %}">{% trans "Map & log" %}</button>
       <button type="button" class="tab" role="tab" data-tab="igates" aria-selected="false">{% trans "iGates" %}</button>
       {% if can_manage %}
-      <button type="button" class="tab{% if active_tab == 'einstellungen' %} active{% endif %}" role="tab" data-tab="einstellungen" aria-selected="{% if active_tab == 'einstellungen' %}true{% else %}false{% endif %}">{% trans "Einstellungen" %}</button>
+      <button type="button" class="tab{% if active_tab == 'einstellungen' %} active{% endif %}" role="tab" data-tab="einstellungen" aria-selected="{% if active_tab == 'einstellungen' %}true{% else %}false{% endif %}">{% trans "Settings" %}</button>
       {% endif %}
     </div>
   </div>
@@ -59,26 +59,26 @@
       <div class="form-group">
         <label class="form-label" for="aprs-station">{% trans "Station" %}</label>
         <select id="aprs-station" class="form-control">
-          <option value="">{% trans "Alle Stationen" %}</option>
+          <option value="">{% trans "All stations" %}</option>
           {% for s in stations %}<option value="{{ s.pk }}">{{ s.name }}</option>{% endfor %}
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label" for="aprs-hours">{% trans "Zeitraum" %}</label>
+        <label class="form-label" for="aprs-hours">{% trans "Time range" %}</label>
         <select id="aprs-hours" class="form-control">
-          <option value="1">{% trans "Letzte Stunde" %}</option>
-          <option value="6">{% trans "Letzte 6 Stunden" %}</option>
-          <option value="24" selected>{% trans "Letzte 24 Stunden" %}</option>
-          <option value="168">{% trans "Letzte 7 Tage" %}</option>
+          <option value="1">{% trans "Last hour" %}</option>
+          <option value="6">{% trans "Last 6 hours" %}</option>
+          <option value="24" selected>{% trans "Last 24 hours" %}</option>
+          <option value="168">{% trans "Last 7 days" %}</option>
         </select>
       </div>
-      <label class="aprs-check"><input type="checkbox" id="aprs-direct-only"> {% trans "Nur direkt gehört" %}</label>
+      <label class="aprs-check"><input type="checkbox" id="aprs-direct-only"> {% trans "Heard directly only" %}</label>
       <span class="t-mono-sm t-muted" id="aprs-status" role="status" aria-live="polite"></span>
     </div>
 
     <section class="panel" style="margin-bottom:14px;">
       <div class="panel-body flush">
-        <div id="aprs-map" class="aprs-map" role="region" aria-label="{% trans 'Karte der zuletzt gehörten Positionen' %}"></div>
+        <div id="aprs-map" class="aprs-map" role="region" aria-label="{% trans 'Map of recently heard positions' %}"></div>
       </div>
     </section>
 
@@ -91,17 +91,17 @@
           <table class="t-table">
             <thead>
               <tr>
-                <th>{% trans "Zeit" %}</th>
-                <th>{% trans "Quelle" %}</th>
-                <th>{% trans "Typ" %}</th>
-                <th>{% trans "Paket" %}</th>
-                <th>{% trans "Gehört von" %}</th>
+                <th>{% trans "Time" %}</th>
+                <th>{% trans "Source" %}</th>
+                <th>{% trans "Type" %}</th>
+                <th>{% trans "Packet" %}</th>
+                <th>{% trans "Heard by" %}</th>
               </tr>
             </thead>
             <tbody id="aprs-log"></tbody>
           </table>
         </div>
-        <div id="aprs-log-empty" class="aprs-empty">{% trans "Noch keine Pakete im gewählten Zeitraum." %}</div>
+        <div id="aprs-log-empty" class="aprs-empty">{% trans "No packets in the selected time range yet." %}</div>
       </div>
     </section>
   </div>
@@ -114,10 +114,10 @@
             <thead>
               <tr>
                 <th>{% trans "Station" %}</th>
-                <th>{% trans "iGate-Rufzeichen" %}</th>
-                <th>{% trans "Zustand" %}</th>
-                <th>{% trans "Letztes Paket" %}</th>
-                <th class="num">{% trans "Pakete 24 h" %}</th>
+                <th>{% trans "iGate callsign" %}</th>
+                <th>{% trans "State" %}</th>
+                <th>{% trans "Last packet" %}</th>
+                <th class="num">{% trans "Packets 24 h" %}</th>
               </tr>
             </thead>
             <tbody id="aprs-igates"></tbody>
@@ -132,7 +132,7 @@
     <form method="post" action="{% url 'passive:aprs_settings' %}" novalidate>
       {% csrf_token %}
       <section class="panel" style="margin-bottom:14px;">
-        <div class="panel-head"><div class="panel-title"><span>{% trans "Dienst" %}</span></div></div>
+        <div class="panel-head"><div class="panel-title"><span>{% trans "Service" %}</span></div></div>
         <div class="panel-body">
           <div class="aprs-settings-grid">
             {% for field in config_form %}
@@ -148,14 +148,14 @@
               </div>
             {% endfor %}
           </div>
-          <p class="t-muted" style="font-size:12px;margin:4px 0 0;">{% trans "Leere Felder werden nicht gesetzt; das Modul behält seinen Wert." %}</p>
+          <p class="t-muted" style="font-size:12px;margin:4px 0 0;">{% trans "Empty fields are not set; the module keeps its value." %}</p>
         </div>
       </section>
 
       <section class="panel" style="margin-bottom:14px;">
-        <div class="panel-head"><div class="panel-title"><span>{% trans "Profil nach dem Lauf" %}</span></div></div>
+        <div class="panel-head"><div class="panel-title"><span>{% trans "Profile after the run" %}</span></div></div>
         <div class="panel-body">
-          <p class="t-muted" style="font-size:12px;margin-top:0;">{% trans "Wird gesetzt, wenn ein passiver Lauf endet, damit das Funkgerät nicht auf der APRS-Frequenz stehen bleibt." %}</p>
+          <p class="t-muted" style="font-size:12px;margin-top:0;">{% trans "Applied when a passive run ends so the radio does not stay on the APRS frequency." %}</p>
           <div class="aprs-settings-grid">
             {% for field in handover_form %}
               <div class="form-group">
@@ -183,7 +183,7 @@
         </div>
       </section>
 
-      <button type="submit" class="btn btn-primary">{% trans "Einstellungen speichern" %}</button>
+      <button type="submit" class="btn btn-primary">{% trans "Save settings" %}</button>
     </form>
   </div>
   {% endif %}

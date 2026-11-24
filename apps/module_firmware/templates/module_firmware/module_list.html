@@ -76,7 +76,7 @@
           <th>{% trans "Status" %}</th>
           <th>{% trans "Location" %}</th>
           <th>{% trans "Version" %}</th>
-          <th>Firmware</th>
+          <th>{% translate "Firmware" %}</th>
           <th>{% trans "Last seen" %}</th>
           <th style="width:1%;"></th>
         </tr>
@@ -106,7 +106,7 @@
             {% include "module_firmware/_update_status_pill.html" with module=module status=module.update_status compact=True nopoll=True only %}
           </td>
           <td class="t-mono" data-label="{% trans 'Last seen' %}">
-            {% if module.last_seen %}{{ module.last_seen|timesince }} {% trans "ago" %}{% else %}<span class="t-muted">{% trans "never" %}</span>{% endif %}
+            {% if module.last_seen %}{% blocktrans with since=module.last_seen|timesince %}{{ since }} ago{% endblocktrans %}{% else %}<span class="t-muted">{% trans "never" %}</span>{% endif %}
           </td>
           <td class="actions">
             <a href="{% url 'module_firmware:module_detail' module.uid %}" class="btn btn-sm btn-ghost" aria-label="{% trans 'Open' %}">

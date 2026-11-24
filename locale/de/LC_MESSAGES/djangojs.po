@@ -1,0 +1,578 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-24 19:40+0100\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: static/js/app.js:21
+msgid "Online"
+msgstr "Online"
+
+#: static/js/app.js:22
+msgid "Offline"
+msgstr "Offline"
+
+#: static/js/app.js:23
+msgid "Updating"
+msgstr "Wird aktualisiert"
+
+#: static/js/app.js:24 static/js/aprs-map.js:369
+msgid "Error"
+msgstr "Fehler"
+
+#: static/js/app.js:25
+msgid "Pending"
+msgstr "Ausstehend"
+
+#: static/js/app.js:26
+msgid "In Progress"
+msgstr "Läuft"
+
+#: static/js/app.js:27
+msgid "Completed"
+msgstr "Abgeschlossen"
+
+#: static/js/app.js:28
+msgid "Failed"
+msgstr "Fehlgeschlagen"
+
+#: static/js/app.js:29
+msgid "Cancelled"
+msgstr "Abgebrochen"
+
+#: static/js/app.js:30
+msgid "Downloading"
+msgstr "Herunterladen"
+
+#: static/js/app.js:31
+msgid "Installing"
+msgstr "Installieren"
+
+#: static/js/app.js:32
+msgid "Rebooting"
+msgstr "Neustart"
+
+#: static/js/app.js:33
+msgid "Verifying"
+msgstr "Prüfen"
+
+#: static/js/app.js:34
+msgid "Success"
+msgstr "Erfolgreich"
+
+#: static/js/app.js:35
+msgid "Rolled Back"
+msgstr "Zurückgerollt"
+
+#: static/js/app.js:36
+msgid "Superseded"
+msgstr "Ersetzt"
+
+#: static/js/app.js:241
+msgid "LIVE"
+msgstr "LIVE"
+
+#: static/js/app.js:241
+msgid "RECONNECTING"
+msgstr "VERBINDE NEU"
+
+#: static/js/app.js:277
+msgid "%(n)ss ago"
+msgstr "vor %(n)s s"
+
+#: static/js/app.js:278
+msgid "%(n)sm ago"
+msgstr "vor %(n)s min"
+
+#: static/js/app.js:279
+msgid "%(n)sh ago"
+msgstr "vor %(n)s h"
+
+#: static/js/app.js:280
+msgid "%(n)sd ago"
+msgstr "vor %(n)s Tg."
+
+#: static/js/app.js:324
+msgid "%(completed)s / %(total)s OK · %(failed)s FAIL"
+msgstr "%(completed)s / %(total)s OK · %(failed)s FEHLER"
+
+#: static/js/app.js:379
+msgid "Connecting to station #%(id)s..."
+msgstr "Verbinde mit Station #%(id)s..."
+
+#: static/js/app.js:384
+msgid "[ connected ]"
+msgstr "[ verbunden ]"
+
+#: static/js/app.js:391
+msgid "[ closed: %(reason)s ]"
+msgstr "[ geschlossen: %(reason)s ]"
+
+#: static/js/app.js:394
+msgid "rejected"
+msgstr "abgelehnt"
+
+#: static/js/app.js:400
+msgid "[ disconnected: %(code)s ]"
+msgstr "[ getrennt: %(code)s ]"
+
+#: static/js/app.js:405
+msgid "[ disconnected — giving up after %(n)s attempts; refresh to retry ]"
+msgstr ""
+"[ getrennt — Abbruch nach %(n)s Versuchen; Seite neu laden für einen neuen "
+"Versuch ]"
+
+#: static/js/app.js:410
+msgid "[ reconnecting… (%(n)s/%(max)s) ]"
+msgstr "[ verbinde neu… (%(n)s/%(max)s) ]"
+
+#: static/js/app.js:425
+msgid "[ restarting shell… ]"
+msgstr "[ starte Shell neu… ]"
+
+#: static/js/aprs-map.js:136
+msgid "heard directly"
+msgstr "direkt gehört"
+
+#: static/js/aprs-map.js:137
+msgid "via %(via)s"
+msgstr "über %(via)s"
+
+#: static/js/aprs-map.js:147
+msgid "Symbol %(symbol)s"
+msgstr "Symbol %(symbol)s"
+
+#: static/js/aprs-map.js:147
+msgid "No symbol"
+msgstr "Kein Symbol"
+
+#: static/js/aprs-map.js:153
+msgid "Last heard"
+msgstr "Zuletzt gehört"
+
+#: static/js/aprs-map.js:153
+msgid "%(when)s (%(age)s ago)"
+msgstr "%(when)s (vor %(age)s)"
+
+#: static/js/aprs-map.js:157
+msgid "Heard by"
+msgstr "Gehört von"
+
+#: static/js/aprs-map.js:158
+msgid "Path"
+msgstr "Pfad"
+
+#: static/js/aprs-map.js:159
+msgid "Comment"
+msgstr "Kommentar"
+
+#: static/js/aprs-map.js:167
+msgid ""
+"%(station)s: position unknown for %(hops)s – line drawn without these hops."
+msgstr "%(station)s: Position unbekannt für %(hops)s – Linie ohne diese Hops."
+
+#: static/js/aprs-map.js:173
+msgid "%(station)s has no coordinates – no line."
+msgstr "%(station)s hat keine Koordinaten – keine Linie."
+
+#: static/js/aprs-map.js:179
+msgid "Raw packet (TNC2)"
+msgstr "Rohpaket (TNC2)"
+
+#: static/js/aprs-map.js:305
+msgid "heard by %(stations)s"
+msgstr "gehört von %(stations)s"
+
+#: static/js/aprs-map.js:360
+msgid "Update failed, retrying shortly."
+msgstr "Aktualisierung fehlgeschlagen, neuer Versuch folgt."
+
+#: static/js/aprs-map.js:366
+msgid "Running"
+msgstr "Läuft"
+
+#: static/js/aprs-map.js:367
+msgid "Ready"
+msgstr "Bereit"
+
+#: static/js/aprs-map.js:368
+msgid "In use"
+msgstr "In Benutzung"
+
+#: static/js/aprs-map.js:370
+msgid "Not enabled"
+msgstr "Nicht aktiviert"
+
+#: static/js/aprs-map.js:371
+msgid "Agent offline"
+msgstr "Agent offline"
+
+#: static/js/aprs-map.js:374
+msgid "No iGate callsign: not gated to APRS-IS."
+msgstr "Kein iGate-Rufzeichen: wird nicht ins APRS-IS gegated."
+
+#: static/js/aprs-map.js:375
+msgid "No coordinates: not gated to APRS-IS."
+msgstr "Keine Koordinaten: wird nicht ins APRS-IS gegated."
+
+#: static/js/audio-panel.js:190
+msgid ""
+"WebCodecs is not supported in this browser. Please use a recent version of "
+"Chrome or Edge."
+msgstr ""
+"WebCodecs wird von diesem Browser nicht unterstützt. Bitte verwende eine "
+"aktuelle Version von Chrome oder Edge."
+
+#: static/js/audio-panel.js:301 static/js/control-panel.js:302
+msgid "You are not signed in."
+msgstr "Du bist nicht angemeldet."
+
+#: static/js/audio-panel.js:303
+msgid "You are not permitted to access this station's audio."
+msgstr "Du hast keine Berechtigung für das Audio dieser Station."
+
+#: static/js/audio-panel.js:304 static/js/control-panel.js:305
+msgid "Station not found."
+msgstr "Station nicht gefunden."
+
+#: static/js/audio-panel.js:445 static/js/control-logic.js:256
+msgid "Not permitted"
+msgstr "Nicht erlaubt"
+
+#: static/js/audio-panel.js:1165
+msgid "Microphone unavailable: audio worklet failed to load"
+msgstr "Mikrofon nicht verfügbar: Audio-Worklet konnte nicht geladen werden"
+
+#: static/js/audio-panel.js:1183
+msgid "Microphone unavailable: no audio context"
+msgstr "Mikrofon nicht verfügbar: kein Audio-Kontext"
+
+#: static/js/audio-panel.js:1271
+msgid "Microphone worklet crashed (processor error)"
+msgstr "Mikrofon-Worklet abgestürzt (Prozessorfehler)"
+
+#: static/js/audio-panel.js:1343
+msgid "Microphone permission denied"
+msgstr "Mikrofon-Berechtigung verweigert"
+
+#: static/js/audio-panel.js:1345
+msgid "No microphone found"
+msgstr "Kein Mikrofon gefunden"
+
+#: static/js/audio-panel.js:1348
+msgid "Microphone unavailable: %(error)s"
+msgstr "Mikrofon nicht verfügbar: %(error)s"
+
+#: static/js/audio-panel.js:1349
+msgid "unknown error"
+msgstr "unbekannter Fehler"
+
+#: static/js/control-logic.js:250
+msgid "Out of range"
+msgstr "Außerhalb des Bereichs"
+
+#: static/js/control-logic.js:251
+msgid "Invalid value"
+msgstr "Ungültiger Wert"
+
+#: static/js/control-logic.js:252
+msgid "Read-only"
+msgstr "Nur lesbar"
+
+#: static/js/control-logic.js:253
+msgid "Not allowed"
+msgstr "Nicht erlaubt"
+
+#: static/js/control-logic.js:254
+msgid "You don’t have control"
+msgstr "Du hast nicht die Bedienung"
+
+#: static/js/control-logic.js:255
+msgid "No response"
+msgstr "Keine Antwort"
+
+#: static/js/control-logic.js:298
+msgid "Agent does not support decoders"
+msgstr "Agent unterstützt keine Decoder"
+
+#: static/js/control-logic.js:299
+msgid "Station is updating"
+msgstr "Station wird aktualisiert"
+
+#: static/js/control-logic.js:300
+msgid "Station is draining"
+msgstr "Station wird entleert"
+
+#: static/js/control-logic.js:301
+msgid "Station in use"
+msgstr "Station in Benutzung"
+
+#: static/js/control-logic.js:302
+msgid "Waiting for idle"
+msgstr "Wartet auf Leerlauf"
+
+#: static/js/control-logic.js:303
+msgid "No suitable radio module"
+msgstr "Kein passendes Funkmodul"
+
+#: static/js/control-logic.js:307
+msgid "Passive: error: %(reason)s"
+msgstr "Passiv: Fehler: %(reason)s"
+
+#: static/js/control-logic.js:315
+msgid "Passive: APRS active"
+msgstr "Passiv: APRS aktiv"
+
+#: static/js/control-logic.js:316
+msgid "Passive: APRS starting"
+msgstr "Passiv: APRS startet"
+
+#: static/js/control-logic.js:317 static/js/control-logic.js:322
+msgid "Passive: in use"
+msgstr "Passiv: in Benutzung"
+
+#: static/js/control-logic.js:318
+msgid "Passive: agent offline"
+msgstr "Passiv: Agent offline"
+
+#: static/js/control-logic.js:320
+msgid "unknown"
+msgstr "unbekannt"
+
+#: static/js/control-logic.js:327
+msgid "Passive: off"
+msgstr "Passiv: aus"
+
+#: static/js/control-panel.js:304
+msgid "You are not permitted to control this station."
+msgstr "Du hast keine Berechtigung, diese Station zu bedienen."
+
+#: static/js/control-panel.js:619
+msgid "Station waiting for firmware update since %(since)s"
+msgstr "Station wartet auf Firmware-Update seit %(since)s"
+
+#: static/js/repeater-panel.js:128
+msgid "simplex"
+msgstr "Simplex"
+
+#: static/js/repeater-panel.js:154 static/js/scanner-panel.js:120
+msgid "Take control of the station first."
+msgstr "Übernimm zuerst die Bedienung der Station."
+
+#: static/js/repeater-panel.js:156 static/js/scanner-panel.js:122
+msgid "Your membership level may not change these settings."
+msgstr "Deine Mitgliedsstufe darf diese Einstellungen nicht ändern."
+
+#: static/js/repeater-panel.js:158
+msgid ""
+"This repeater is outside the module's bands, or the module went offline."
+msgstr ""
+"Dieser Repeater liegt außerhalb der Bänder des Moduls, oder das Modul ist "
+"offline gegangen."
+
+#: static/js/repeater-panel.js:160
+msgid "Cross-band repeaters need two modules and are not supported yet."
+msgstr ""
+"Cross-Band-Repeater brauchen zwei Module und werden noch nicht unterstützt."
+
+#: static/js/repeater-panel.js:162
+msgid "Release PTT before switching repeaters."
+msgstr "Lass PTT los, bevor du den Repeater wechselst."
+
+#: static/js/repeater-panel.js:164 static/js/scanner-panel.js:128
+msgid "The station connection is down. Wait for it to reconnect."
+msgstr ""
+"Die Verbindung zur Station ist unterbrochen. Warte, bis sie sich wieder "
+"verbindet."
+
+#: static/js/repeater-panel.js:166
+msgid "The station did not answer in time. Check the module settings."
+msgstr ""
+"Die Station hat nicht rechtzeitig geantwortet. Prüfe die Moduleinstellungen."
+
+#: static/js/repeater-panel.js:168
+msgid "The repeater could not be applied."
+msgstr "Der Repeater konnte nicht angewendet werden."
+
+#: static/js/repeater-panel.js:175
+msgid "Tuned to %(callsign)s."
+msgstr "Auf %(callsign)s eingestellt."
+
+#: static/js/repeater-panel.js:190
+msgid "%(callsign)s applied partly. Not set: %(caps)s."
+msgstr "%(callsign)s teilweise angewendet. Nicht gesetzt: %(caps)s."
+
+#: static/js/repeater-panel.js:437
+msgid "Cross-band – not yet supported"
+msgstr "Cross-Band – noch nicht unterstützt"
+
+#: static/js/repeater-panel.js:438
+msgid "Take control of the station to tune a repeater"
+msgstr "Übernimm die Bedienung der Station, um einen Repeater einzustellen"
+
+#: static/js/repeater-panel.js:439
+msgid "Tune %(callsign)s"
+msgstr "%(callsign)s einstellen"
+
+#: static/js/scanner-panel.js:86
+msgid "Scanning"
+msgstr "Scannt"
+
+#: static/js/scanner-panel.js:87
+msgid "Carrier"
+msgstr "Träger"
+
+#: static/js/scanner-panel.js:88
+msgid "Waiting for reply"
+msgstr "Wartet auf Antwort"
+
+#: static/js/scanner-panel.js:89
+msgid "Held"
+msgstr "Gehalten"
+
+#: static/js/scanner-panel.js:93
+msgid "You stopped the scan."
+msgstr "Du hast den Scan gestoppt."
+
+#: static/js/scanner-panel.js:94
+msgid "Another scan replaced this one."
+msgstr "Ein anderer Scan hat diesen ersetzt."
+
+#: static/js/scanner-panel.js:95
+msgid "The station connection was lost."
+msgstr "Die Verbindung zur Station ist abgerissen."
+
+#: static/js/scanner-panel.js:96
+msgid "The station agent shut down."
+msgstr "Der Stations-Agent wurde beendet."
+
+#: static/js/scanner-panel.js:97
+msgid "A module is being updated."
+msgstr "Ein Modul wird gerade aktualisiert."
+
+#: static/js/scanner-panel.js:98
+msgid ""
+"None of the channels could be reached. Check that the modules are online."
+msgstr "Keiner der Kanäle war erreichbar. Prüfe, ob die Module online sind."
+
+#: static/js/scanner-panel.js:99
+msgid "The scan list has no channel this station can tune."
+msgstr ""
+"Die Scan-Liste enthält keinen Kanal, den diese Station einstellen kann."
+
+#: static/js/scanner-panel.js:100
+msgid "The station rejected the scan request."
+msgstr "Die Station hat die Scan-Anfrage abgelehnt."
+
+#: static/js/scanner-panel.js:101
+msgid "The scan stopped because of an internal error."
+msgstr "Der Scan wurde wegen eines internen Fehlers gestoppt."
+
+#: static/js/scanner-panel.js:102
+msgid "Held while you transmit."
+msgstr "Gehalten, während du sendest."
+
+#: static/js/scanner-panel.js:103
+msgid "Held because a module setting was changed by hand."
+msgstr "Gehalten, weil eine Moduleinstellung von Hand geändert wurde."
+
+#: static/js/scanner-panel.js:108
+msgid "Held (transmitting)"
+msgstr "Gehalten (Senden)"
+
+#: static/js/scanner-panel.js:109
+msgid "Held (manual change)"
+msgstr "Gehalten (manuelle Änderung)"
+
+#: static/js/scanner-panel.js:110
+msgid "Held (by you)"
+msgstr "Gehalten (von dir)"
+
+#: static/js/scanner-panel.js:114
+msgid "The scan stopped."
+msgstr "Der Scan wurde gestoppt."
+
+#: static/js/scanner-panel.js:124
+msgid "This station has no coordinates, so a radius cannot be used."
+msgstr ""
+"Diese Station hat keine Koordinaten, daher kann kein Radius verwendet werden."
+
+#: static/js/scanner-panel.js:126
+msgid ""
+"Nothing to scan: no repeater in range or in the chosen lists fits this "
+"station's modules."
+msgstr ""
+"Nichts zu scannen: Kein Repeater in Reichweite oder in den gewählten Listen "
+"passt zu den Modulen dieser Station."
+
+#: static/js/scanner-panel.js:130
+msgid "The station did not answer in time."
+msgstr "Die Station hat nicht rechtzeitig geantwortet."
+
+#: static/js/scanner-panel.js:132
+msgid "No scan is running."
+msgstr "Es läuft kein Scan."
+
+#: static/js/scanner-panel.js:135
+msgid "The scan request was rejected. Reload the page and try again."
+msgstr ""
+"Die Scan-Anfrage wurde abgelehnt. Lade die Seite neu und versuch es noch "
+"einmal."
+
+#: static/js/scanner-panel.js:137
+msgid "The scan could not be started."
+msgstr "Der Scan konnte nicht gestartet werden."
+
+#: static/js/scanner-panel.js:340
+msgid "Enter a radius greater than 0 km."
+msgstr "Gib einen Radius größer als 0 km ein."
+
+#: static/js/scanner-panel.js:347
+msgid "Choose a radius or at least one scan list."
+msgstr "Wähle einen Radius oder mindestens eine Scan-Liste."
+
+#: static/webpush/push.js:37
+msgid "Could not remove device."
+msgstr "Gerät konnte nicht entfernt werden."
+
+#: static/webpush/push.js:47
+msgid "Device removed."
+msgstr "Gerät entfernt."
+
+#: static/webpush/push.js:51
+msgid "Could not remove device: %(error)s"
+msgstr "Gerät konnte nicht entfernt werden: %(error)s"
+
+#: static/webpush/push.js:57
+msgid "Push is not supported on this browser."
+msgstr "Push wird von diesem Browser nicht unterstützt."
+
+#: static/webpush/push.js:62
+msgid "Permission denied."
+msgstr "Berechtigung verweigert."
+
+#: static/webpush/push.js:73
+msgid "Push enabled on this device."
+msgstr "Push auf diesem Gerät aktiviert."
+
+#: static/webpush/push.js:73
+msgid "Registration failed."
+msgstr "Registrierung fehlgeschlagen."
+
+#: static/webpush/push.js:76
+msgid "Could not enable push: %(error)s"
+msgstr "Push konnte nicht aktiviert werden: %(error)s"

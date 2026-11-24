@@ -77,7 +77,7 @@ def csrf_failure(request, reason="", template_name="403_csrf.html"):
         if not request.user.is_authenticated:
             messages.warning(
                 request,
-                _("Die Sitzung ist abgelaufen – bitte erneut versuchen."),
+                _("The session has expired – please try again."),
             )
         if view_name == "accounts:login":
             target = reverse("accounts:login")

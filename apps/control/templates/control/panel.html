@@ -9,8 +9,7 @@
        data-station-id="{{ station.id }}"
        data-can-admin="{{ can_admin|yesno:'1,0' }}"
        data-ptt-default-key="{{ ptt_default_key }}"
-       data-drain-since="{% if drain.active and drain.since %}{{ drain.since.isoformat }}{% endif %}"
-       data-drain-label="{% trans "Station wartet auf Firmware-Update seit" %}">
+       data-drain-since="{% if drain.active and drain.since %}{{ drain.since.isoformat }}{% endif %}">
     {% include "control/_lock_banner.html" %}
     {% include "module_firmware/_drain_banner.html" with live=True %}
     {% comment %}Passive APRS status: filled from passive_state frames (control-panel.js _onPassive).{% endcomment %}

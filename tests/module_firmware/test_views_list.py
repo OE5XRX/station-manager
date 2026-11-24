@@ -51,8 +51,8 @@ def test_list_shows_firmware_column_with_reason_tooltip(client, applicant_user, 
     body = client.get(reverse("module_firmware:module_list")).content.decode()
     assert "<th>Firmware</th>" in body
     assert m.uid in body
-    assert "Wartet" in body
-    assert 'title="Wartet: Station-Agent kann keine Module flashen (Image zu alt)"' in body
+    assert "Waiting" in body
+    assert 'title="Waiting: station agent cannot flash modules (image too old)"' in body
     # The list does not poll (a reload is enough).
     assert 'hx-trigger="every 5s"' not in body
 

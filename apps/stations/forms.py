@@ -28,13 +28,17 @@ class StationForm(forms.ModelForm):
         widgets = {
             "name": forms.TextInput(attrs={"class": "form-control"}),
             "callsign": forms.TextInput(
-                attrs={"class": "form-control", "placeholder": "e.g. OE5XRX"}
+                attrs={"class": "form-control", "placeholder": _("e.g. OE5XRX")}
             ),
             "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
             "location_name": forms.TextInput(attrs={"class": "form-control"}),
-            "latitude": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001"}),
-            "longitude": forms.NumberInput(attrs={"class": "form-control", "step": "0.000001"}),
-            "altitude": forms.NumberInput(attrs={"class": "form-control"}),
+            "latitude": forms.NumberInput(
+                attrs={"class": "form-control", "step": "0.000001", "lang": "en"}
+            ),
+            "longitude": forms.NumberInput(
+                attrs={"class": "form-control", "step": "0.000001", "lang": "en"}
+            ),
+            "altitude": forms.NumberInput(attrs={"class": "form-control", "lang": "en"}),
             "hardware_revision": forms.TextInput(attrs={"class": "form-control"}),
             "tx_audio_ceiling_dbfs": forms.NumberInput(
                 attrs={"class": "form-control", "step": "0.5", "lang": "en"}

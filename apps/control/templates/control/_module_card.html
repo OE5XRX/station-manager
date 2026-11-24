@@ -62,8 +62,8 @@ PTT is rendered last within the card so it can span full width.
        {% if not m.firmware_updating %}x-cloak{% endif %}
        role="status"
        aria-live="polite">
-    <span class="cp-fw-updating-title">{% trans "Firmware-Update läuft" %}</span>
-    <span class="cp-fw-updating-hint">{% trans "Bedienung gesperrt, bis das Modul wieder da ist" %}</span>
+    <span class="cp-fw-updating-title">{% trans "Firmware update in progress" %}</span>
+    <span class="cp-fw-updating-hint">{% trans "Controls locked until the module is back" %}</span>
   </div>
 
   {% comment %}Module-level error (module_error / firmware_dfu_stuck events).{% endcomment %}

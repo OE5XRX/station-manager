@@ -13,6 +13,14 @@
 (function () {
   "use strict";
 
+  // i18n: globals from Django's JavaScriptCatalog; identity fallback under Node.
+  // Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
+
   var A = window.OE5XRXAudioLogic;
 
   // Reconnect backoff mirrors control-panel.js exactly.
@@ -178,9 +186,9 @@
           typeof window.AudioEncoder !== "function"
         ) {
           this.supported = false;
-          this.unsupportedReason =
-            "WebCodecs is not supported in this browser. " +
-            "Please use a recent version of Chrome or Edge.";
+          this.unsupportedReason = gettext(
+            "WebCodecs is not supported in this browser. Please use a recent version of Chrome or Edge."
+          );
           this.conn = "closed";
           return;
         }
@@ -290,10 +298,10 @@
           if (!this.unsupportedReason) {
             this.unsupportedReason =
               code === 4401
-                ? "You are not signed in."
+                ? gettext("You are not signed in.")
                 : code === 4403
-                  ? "You are not permitted to access this station's audio."
-                  : "Station not found.";
+                  ? gettext("You are not permitted to access this station's audio.")
+                  : gettext("Station not found.");
           }
           return;
         }
@@ -434,7 +442,7 @@
         var detail = msg.detail || msg.message || "";
         if (code === "forbidden") {
           // mic_open refused (no control.use) — tell the operator why TX is dead.
-          this.micError = detail || "Not permitted";
+          this.micError = detail || gettext("Not permitted");
           console.warn("[audio] forbidden:", detail);
         } else if (code === "not_locked") {
           // Transient notice, suppress flood.
@@ -1154,7 +1162,7 @@
         // panel root element (never hardcoded).
         var workletUrl = this._workletUrl;
         if (!workletUrl) {
-          this.micError = "Microphone unavailable: audio worklet failed to load";
+          this.micError = gettext("Microphone unavailable: audio worklet failed to load");
           return;
         }
 
@@ -1172,7 +1180,7 @@
           micCtx = this._audioCtx;
         }
         if (!micCtx) {
-          this.micError = "Microphone unavailable: no audio context";
+          this.micError = gettext("Microphone unavailable: no audio context");
           return;
         }
         this._micCtx = micCtx;
@@ -1260,7 +1268,7 @@
             // true, but process() never runs and wkl stays 0.
             self._micWorkletNode.onprocessorerror = function (ev) {
               console.error("[audio] mic worklet processor error", ev);
-              self.micError = "Microphone worklet crashed (processor error)";
+              self.micError = gettext("Microphone worklet crashed (processor error)");
               self._refreshTxDiag("worklet processor error");
             };
 
@@ -1332,11 +1340,15 @@
           .catch(function (e) {
             console.error("[audio] enableMic failed:", e);
             if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) {
-              self.micError = "Microphone permission denied";
+              self.micError = gettext("Microphone permission denied");
             } else if (e && e.name === "NotFoundError") {
-              self.micError = "No microphone found";
+              self.micError = gettext("No microphone found");
             } else {
-              self.micError = "Microphone unavailable: " + (e && (e.message || e.name) || "unknown error");
+              self.micError = interpolate(
+                gettext("Microphone unavailable: %(error)s"),
+                { error: (e && (e.message || e.name)) || gettext("unknown error") },
+                true
+              );
             }
             // Stop any track we already opened and drop the mic context.
             self._disableMicInternal(false);

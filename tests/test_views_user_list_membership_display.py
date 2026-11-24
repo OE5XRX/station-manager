@@ -16,10 +16,10 @@ def test_user_list_renders_membership_level_pills(
     body = response.content.decode()
 
     # Pill labels (TextChoices display values)
-    assert "Vereins-Admin" in body
-    assert "Vereins-Mitglied" in body
-    assert "Vereins-Staff" in body
-    assert "Vereins-Bewerber" in body
+    assert "Club admin" in body
+    assert "Club member" in body
+    assert "Club staff" in body
+    assert "Club applicant" in body
 
 
 @pytest.mark.django_db
@@ -40,7 +40,7 @@ def test_profile_page_renders_membership_pill(client, member_user):
 
     assert response.status_code == 200
     body = response.content.decode()
-    assert "Vereins-Mitglied" in body
+    assert "Club member" in body
 
 
 @pytest.mark.django_db
@@ -51,4 +51,4 @@ def test_user_confirm_soft_delete_renders_membership_pill(client, admin_user, me
 
     assert response.status_code == 200
     body = response.content.decode()
-    assert "Vereins-Mitglied" in body
+    assert "Club member" in body

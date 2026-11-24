@@ -11,6 +11,10 @@
 (function () {
   "use strict";
 
+  // i18n: globals from Django's JavaScriptCatalog; identity fallback under Node.
+  // Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+
   var STORAGE_PREFIX = "oe5xrx.bandmap."; // shared with the repeater panel
   var CARRIER_CAP = "carrier";
   var LISTEN_RANGE = [0.2, 60]; // seconds, same bounds the agent enforces
@@ -79,53 +83,58 @@
   }
 
   var STATE_LABELS = {
-    scanning: "Scanning",
-    active: "Carrier",
-    hang: "Waiting for reply",
-    held: "Held",
+    scanning: gettext("Scanning"),
+    active: gettext("Carrier"),
+    hang: gettext("Waiting for reply"),
+    held: gettext("Held"),
   };
 
   var REASONS = {
-    operator: "You stopped the scan.",
-    replaced: "Another scan replaced this one.",
-    disconnect: "The station connection was lost.",
-    shutdown: "The station agent shut down.",
-    module_update: "A module is being updated.",
-    no_reachable_entries: "None of the channels could be reached. Check that the modules are online.",
-    empty_scan_list: "The scan list has no channel this station can tune.",
-    invalid_scan: "The station rejected the scan request.",
-    internal_error: "The scan stopped because of an internal error.",
-    ptt: "Held while you transmit.",
-    manual: "Held because a module setting was changed by hand.",
+    operator: gettext("You stopped the scan."),
+    replaced: gettext("Another scan replaced this one."),
+    disconnect: gettext("The station connection was lost."),
+    shutdown: gettext("The station agent shut down."),
+    module_update: gettext("A module is being updated."),
+    no_reachable_entries: gettext("None of the channels could be reached. Check that the modules are online."),
+    empty_scan_list: gettext("The scan list has no channel this station can tune."),
+    invalid_scan: gettext("The station rejected the scan request."),
+    internal_error: gettext("The scan stopped because of an internal error."),
+    ptt: gettext("Held while you transmit."),
+    manual: gettext("Held because a module setting was changed by hand."),
   };
 
-  var HELD_WHY = { ptt: "transmitting", manual: "manual change", operator: "by you" };
+  // Whole labels (not "Held" + reason) so translations can reorder freely.
+  var HELD_LABELS = {
+    ptt: gettext("Held (transmitting)"),
+    manual: gettext("Held (manual change)"),
+    operator: gettext("Held (by you)"),
+  };
 
   function reasonText(code) {
-    return Object.prototype.hasOwnProperty.call(REASONS, code) ? REASONS[code] : "The scan stopped.";
+    return Object.prototype.hasOwnProperty.call(REASONS, code) ? REASONS[code] : gettext("The scan stopped.");
   }
 
   function errorText(code) {
     switch (code) {
       case "not_locked":
-        return "Take control of the station first.";
+        return gettext("Take control of the station first.");
       case "forbidden":
-        return "Your membership level may not change these settings.";
+        return gettext("Your membership level may not change these settings.");
       case "no_coordinates":
-        return "This station has no coordinates, so a radius cannot be used.";
+        return gettext("This station has no coordinates, so a radius cannot be used.");
       case "empty_scan_list":
-        return "Nothing to scan: no repeater in range or in the chosen lists fits this station's modules.";
+        return gettext("Nothing to scan: no repeater in range or in the chosen lists fits this station's modules.");
       case "not_connected":
-        return "The station connection is down. Wait for it to reconnect.";
+        return gettext("The station connection is down. Wait for it to reconnect.");
       case "timeout":
-        return "The station did not answer in time.";
+        return gettext("The station did not answer in time.");
       case "no_active_scan":
-        return "No scan is running.";
+        return gettext("No scan is running.");
       case "invalid_scan":
       case "invalid_action":
-        return "The scan request was rejected. Reload the page and try again.";
+        return gettext("The scan request was rejected. Reload the page and try again.");
       default:
-        return "The scan could not be started.";
+        return gettext("The scan could not be started.");
     }
   }
 
@@ -272,10 +281,10 @@
 
       stateLabel: function () {
         if (!this.scan) return "";
-        var base = STATE_LABELS[this.scan.state] || this.scan.state;
-        var why = HELD_WHY[this.scan.reason];
-        if (this.scan.state === "held" && why) return base + " (" + why + ")";
-        return base;
+        if (this.scan.state === "held" && Object.prototype.hasOwnProperty.call(HELD_LABELS, this.scan.reason)) {
+          return HELD_LABELS[this.scan.reason];
+        }
+        return STATE_LABELS[this.scan.state] || this.scan.state;
       },
 
       // "2 / 6" — the server may omit the total, then only the position shows.
@@ -328,14 +337,14 @@
         if (this.useRadius) {
           radius = toNumber(this.radiusKm);
           if (radius === null || radius <= 0) {
-            this._notify({ ok: false, text: "Enter a radius greater than 0 km." });
+            this._notify({ ok: false, text: gettext("Enter a radius greater than 0 km.") });
             return false;
           }
         }
         var ids = [];
         for (var i = 0; i < this.selected.length; i++) ids.push(parseInt(this.selected[i], 10));
         if (radius === null && !ids.length) {
-          this._notify({ ok: false, text: "Choose a radius or at least one scan list." });
+          this._notify({ ok: false, text: gettext("Choose a radius or at least one scan list.") });
           return false;
         }
         this._audioAnnounced = false;

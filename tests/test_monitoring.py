@@ -237,7 +237,7 @@ class TestAlertViews:
         client.force_login(staff_user)
         response = client.get(reverse("monitoring:alert_settings"))
         assert response.status_code == 200
-        assert "nur lesend" in response.content.decode()
+        assert "read-only" in response.content.decode()
         response = client.post(
             reverse("monitoring:alert_rule_update", args=[offline_alert_rule.pk]),
             {"threshold": "5"},
@@ -303,6 +303,9 @@ class TestAlertSettingsThresholdLocalization:
         from django.utils import translation
 
         client.force_login(admin_user)
+        # Explicit language choice; otherwise UserLanguageMiddleware sends the
+        # (English) user from /de/ back to /en/.
+        client.cookies["django_language"] = "de"
         with translation.override("de"):
             response = client.get(reverse("monitoring:alert_settings"))
 

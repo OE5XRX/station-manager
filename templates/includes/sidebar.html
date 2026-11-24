@@ -182,7 +182,7 @@
     </a>
     {% endif %}
     {% if can.passive_services.view %}
-    <div class="nav-sublabel">{% trans "Passive Dienste" %}</div>
+    <div class="nav-sublabel">{% trans "Passive services" %}</div>
     <a href="{% url 'passive:aprs' %}"
        class="nav-item{% if request.resolver_match.namespace == 'passive' %} active{% endif %}"
        {% if request.resolver_match.namespace == 'passive' %}aria-current="page"{% endif %}>

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import struct
 
+from django.utils.translation import gettext_lazy as _
+
 BOOT_KEY_PREFIX_LEN = 16
 # sha256(SPKI DER of MCUboot's public root-ec-p256.pem)[:8] as hex: the well-known dev key.
 DEV_KEY_HASH_PREFIX = "e30466f6b8470c1f"
@@ -79,6 +81,24 @@ NOT_UPDATABLE_NEUTRAL_TEXT = (
     "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release "
     "– SWD-Reflash an der Bench nötig"
 )
+# The German texts above are stored verbatim (convergence row last_error_message,
+# audit log) and stay as they are; the UI shows the translatable English
+# equivalents below (msgid = English, see the i18n spec).
+NOT_UPDATABLE_DEV_DISPLAY = _(
+    "Not updatable: bootloader key does not match the release (dev key) "
+    "– SWD reflash at the bench required"
+)
+NOT_UPDATABLE_OTHER_DISPLAY = _(
+    "Not updatable: bootloader key does not match the release (different key) "
+    "– SWD reflash at the bench required"
+)
+NOT_UPDATABLE_NEUTRAL_DISPLAY = _(
+    "Not updatable: bootloader key does not match the release – SWD reflash at the bench required"
+)
+KEY_UNKNOWN_HINT_DISPLAY = _(
+    "Possible cause: bootloader key does not match the release (e.g. dev key) "
+    "– module firmware too old to check."
+)
 KEY_UNKNOWN_HINT = (
     "Mögliche Ursache: Bootloader-Schlüssel passt nicht zur Release (z. B. Dev-Key) "
     "– Modul-Firmware zu alt, um das zu prüfen."
@@ -102,6 +122,15 @@ def not_updatable_text(module) -> str:
     if is_dev_key(module.reported_boot_key):
         return NOT_UPDATABLE_DEV_TEXT
     return NOT_UPDATABLE_OTHER_TEXT
+
+
+def not_updatable_display_text(module) -> str:
+    """Translated UI counterpart of :func:`not_updatable_text` (never stored)."""
+    if not module.reported_boot_key:
+        return str(NOT_UPDATABLE_NEUTRAL_DISPLAY)
+    if is_dev_key(module.reported_boot_key):
+        return str(NOT_UPDATABLE_DEV_DISPLAY)
+    return str(NOT_UPDATABLE_OTHER_DISPLAY)
 
 
 def key_hint_applies(module, release, error_mode: str) -> bool:

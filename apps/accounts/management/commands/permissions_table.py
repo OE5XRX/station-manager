@@ -9,6 +9,9 @@ HEADER = """# Berechtigungen
 
 > Generiert mit `python manage.py permissions_table > docs/permissions.md` aus
 > `apps/accounts/permissions.py`. Nicht von Hand bearbeiten — CI prüft Aktualität.
+> Die Namen sind die deutschen Übersetzungen der (englischen) Labels aus
+> `locale/de/LC_MESSAGES/django.po` — nach einer Label-Änderung erst
+> `scripts/i18n.sh make` + übersetzen, dann neu generieren.
 
 A = Applicant, M = Member, S = Staff, Ad = Admin, – = niemand.
 Ein nicht definiertes niedrigeres Verb erbt die Stufe des nächsthöheren.

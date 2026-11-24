@@ -139,4 +139,4 @@ class TestRegionAssignmentsCardRendering:
         response = client.get(reverse("accounts:user_detail", args=[applicant.pk]))
         body = response.content.decode()
         # The warning mentions the membership-level requirement
-        assert "Vereins-Bewerber" in body or "applicant" in body.lower()
+        assert "Club applicant" in body or "applicant" in body.lower()

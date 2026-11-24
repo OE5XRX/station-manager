@@ -366,7 +366,7 @@ class AlertRuleUpdateView(AreaPermissionMixin, View):
                 rule.threshold = float(data["threshold"])
             except (ValueError, TypeError):
                 return JsonResponse(
-                    {"status": "error", "message": "Invalid threshold value."},
+                    {"status": "error", "message": _("Invalid threshold value.")},
                     status=400,
                 )
 

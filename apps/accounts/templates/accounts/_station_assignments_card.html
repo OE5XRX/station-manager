@@ -1,12 +1,12 @@
 {% load i18n %}
 <section class="panel" id="station-assignments-card">
   <div class="panel-head">
-    <div class="panel-title"><span class="dot"></span>{% trans "Station-Zuordnungen" %}</div>
+    <div class="panel-title"><span class="dot"></span>{% trans "Station assignments" %}</div>
   </div>
   <div class="panel-body">
     {% if object.membership_level == "applicant" %}
       <p class="t-muted">
-        {% trans "Vereins-Bewerber cannot hold a Station-Admin or Maintainer assignment. Promote the user to Vereins-Mitglied first." %}
+        {% trans "Club applicants cannot hold a Station-Admin or Maintainer assignment. Promote the user to Club member first." %}
       </p>
     {% else %}
       {% if existing_station_assignments %}
@@ -66,10 +66,11 @@
             if (xhr.status === 409) {
               let info = {};
               try { info = JSON.parse(xhr.responseText); } catch (_) {}
-              const currentAdmin = info.current_admin_username || 'someone';
+              const currentAdmin = info.current_admin_username || "{% filter escapejs %}{% translate 'someone' %}{% endfilter %}";
+              // Whole sentence with a sentinel so translations can reorder it.
               const ok = window.confirm(
-                "{% trans 'Station already has' %} " + currentAdmin +
-                " {% trans 'as Station-Admin. Take over the role?' %}"
+                "{% filter escapejs %}{% blocktranslate with admin='__ADMIN__' %}Station already has {{ admin }} as Station-Admin. Take over the role?{% endblocktranslate %}{% endfilter %}"
+                  .replace("__ADMIN__", function () { return currentAdmin; })
               );
               if (!ok) return;
               form.querySelector('input[name=takeover]').value = '1';

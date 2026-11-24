@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="{% static 'css/tokens.css' %}" nonce="{{ csp_nonce }}">
   <link rel="stylesheet" href="{% static 'css/app.css' %}" nonce="{{ csp_nonce }}">
   <link rel="icon" href="{% static 'favicon.ico' %}" sizes="16x16 32x32 64x64" type="image/x-icon">
+  <script src="{% url 'javascript-catalog' %}" nonce="{{ csp_nonce }}"></script>
 </head>
 <body>
 
@@ -111,8 +112,8 @@
     <div class="auth-side-big">
       <em>100+</em><br>
       {% trans "remote stations" %}<br>
-      {% trans "on-air across" %} Österreich.
-      <small>{% trans "Amateurfunkclub für Remote Stationen" %}</small>
+      {% trans "on-air across Austria." %}
+      <small>{% trans "Amateur radio club for remote stations" %}</small>
     </div>
 
     <div class="auth-side-bottom">

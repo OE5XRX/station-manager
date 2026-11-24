@@ -628,8 +628,8 @@ class _ApplicantForbiddenMixin:
             raise ValidationError(
                 {
                     "user": _(
-                        "Vereins-Bewerber können keine Topology-Rolle haben. "
-                        "Den User erst zu Vereins-Mitglied promoten."
+                        "Club applicants cannot hold a topology role. "
+                        "Promote the user to Club member first."
                     ),
                 }
             )

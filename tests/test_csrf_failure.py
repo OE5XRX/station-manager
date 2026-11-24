@@ -62,7 +62,7 @@ class TestCsrfFailure:
         csrf_client.force_login(user)
         response = csrf_client.post(reverse("accounts:logout"), {})
         assert response.status_code == 403
-        assert "Sitzung abgelaufen" in response.content.decode()
+        assert "Session expired" in response.content.decode()
 
     def test_post_is_never_processed(self, csrf_client, user):
         # Even with valid credentials a bad token must not log in.
@@ -96,7 +96,7 @@ class TestReviewRegressions:
         for url in ("/i18n/setlang/", reverse("accounts:logout")):
             response = anon.post(url, {})
             assert response.status_code == 403
-            assert "Sitzung abgelaufen" in response.content.decode()
+            assert "Session expired" in response.content.decode()
 
     def test_set_password_stale_post_redirects_to_same_page(self, csrf_client):
         url = reverse("accounts:set_password", kwargs={"token": "abc"})
@@ -135,7 +135,7 @@ class TestReauthAndMessage:
     def test_expired_warning_is_rendered_on_login_page(self, csrf_client, user):
         response = csrf_client.post(reverse("accounts:login"), BAD, follow=True)
         assert response.status_code == 200
-        assert "Die Sitzung ist abgelaufen" in response.content.decode()
+        assert "The session has expired" in response.content.decode()
 
 
 @pytest.mark.django_db

@@ -16,20 +16,20 @@ DRAIN_TRANSIENT_LIMIT = 5
 class ModuleType(models.Model):
     """Registry of flashable module types (only firmware-bearing types)."""
 
-    key = models.SlugField(_("key"), unique=True, help_text=_("z. B. fm, power, device-tester"))
+    key = models.SlugField(_("key"), unique=True, help_text=_("e.g. fm, power, device-tester"))
     display_name = models.CharField(_("display name"), max_length=128)
     hw_repo = models.CharField(_("hardware repo"), max_length=200, blank=True)
     firmware_repo = models.CharField(
         _("firmware repo"),
         max_length=200,
         blank=True,
-        help_text=_("GitHub owner/repo der signierten FW-Releases, z. B. OE5XRX/FW-RemoteStation"),
+        help_text=_("GitHub owner/repo of the signed FW releases, e.g. OE5XRX/FW-RemoteStation"),
     )
     release_asset_prefix = models.CharField(
         _("release asset prefix"),
         max_length=64,
         blank=True,
-        help_text=_("Asset-Basisname vor -<variant>.signed.bin, z. B. fm-sa818"),
+        help_text=_("Asset base name before -<variant>.signed.bin, e.g. fm-sa818"),
     )
     created_at = models.DateTimeField(_("created at"), auto_now_add=True)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)

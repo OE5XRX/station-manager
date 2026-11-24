@@ -2,6 +2,9 @@
 
 > Generiert mit `python manage.py permissions_table > docs/permissions.md` aus
 > `apps/accounts/permissions.py`. Nicht von Hand bearbeiten — CI prüft Aktualität.
+> Die Namen sind die deutschen Übersetzungen der (englischen) Labels aus
+> `locale/de/LC_MESSAGES/django.po` — nach einer Label-Änderung erst
+> `scripts/i18n.sh make` + übersetzen, dann neu generieren.
 
 A = Applicant, M = Member, S = Staff, Ad = Admin, – = niemand.
 Ein nicht definiertes niedrigeres Verb erbt die Stufe des nächsthöheren.
@@ -17,9 +20,9 @@ Ein nicht definiertes niedrigeres Verb erbt die Stufe des nächsthöheren.
 | `deployments` | Deployments | A | S | S |
 | `rollouts` | Rollouts | A | Ad | Ad |
 | `images` | Images | A | Ad | Ad |
-| `provisioning` | Provisioning | Ad | Ad | Ad |
+| `provisioning` | Provisionierung | Ad | Ad | Ad |
 | `alerts` | Alarme | A | S | S |
-| `alert_rules` | Alarm-Regeln | A | Ad | Ad |
+| `alert_rules` | Alarmregeln | A | Ad | Ad |
 | `modules` | Module & Firmware | A | S | S |
 | `repeaters` | Repeater | A | S | S |
 | `passive_services` | Passive Dienste | A | Ad | Ad |

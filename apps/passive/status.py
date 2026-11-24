@@ -7,6 +7,8 @@ closed one when it ended in an error), the control lock, and the eligibility rea
 from datetime import timedelta
 
 from django.utils import timezone
+from django.utils.translation import gettext
+from django.utils.translation import gettext_lazy as _
 
 from apps.control.models import AgentConnection, ControlLock
 
@@ -20,12 +22,12 @@ ERROR_VISIBLE = timedelta(hours=24)
 QUIET_REASONS = frozenset({"disabled", "not_opted_in", "offline"})
 
 IDLE_REASON_TEXT = {
-    "agent_too_old": "Agent unterstützt keine Decoder",
-    "updating": "Station wird aktualisiert",
-    "draining": "Station wird entleert",
-    "lock_held": "Station in Benutzung",
-    "idle_wait": "Wartet auf Leerlauf",
-    "no_module": "Kein passendes Funkmodul",
+    "agent_too_old": _("Agent does not support decoders"),
+    "updating": _("Station is updating"),
+    "draining": _("Station is draining"),
+    "lock_held": _("Station in use"),
+    "idle_wait": _("Waiting for idle"),
+    "no_module": _("No suitable radio module"),
 }
 
 
@@ -59,20 +61,25 @@ def passive_badge(station) -> dict:
     run = status_run(station.pk)
     if run is not None:
         if run.state == run_states.ERROR:
-            detail = run.last_error or "unbekannt"
-            return {"label": f"Passiv: Fehler: {detail}", "level": "error"}
+            detail = run.last_error or gettext("unknown")
+            return {
+                "label": gettext("Passive: error: %(reason)s") % {"reason": detail},
+                "level": "error",
+            }
         if run.state in (run_states.RUNNING, run_states.STARTING):
             label = (
-                "Passiv: APRS aktiv" if run.state == run_states.RUNNING else "Passiv: APRS startet"
+                gettext("Passive: APRS active")
+                if run.state == run_states.RUNNING
+                else gettext("Passive: APRS starting")
             )
             return {"label": label, "level": "ok"}
         if run.state == run_states.STOPPING:
-            return {"label": "Passiv: in Benutzung", "level": "muted"}
+            return {"label": gettext("Passive: in use"), "level": "muted"}
         if run.state == run_states.AGENT_OFFLINE:
-            return {"label": "Passiv: Agent offline", "level": "off"}
+            return {"label": gettext("Passive: agent offline"), "level": "off"}
     if _lock_held(station):
-        return {"label": "Passiv: in Benutzung", "level": "muted"}
-    return {"label": "Passiv: aus", "level": "off"}
+        return {"label": gettext("Passive: in use"), "level": "muted"}
+    return {"label": gettext("Passive: off"), "level": "off"}
 
 
 def idle_reason(station) -> str | None:
@@ -115,7 +122,9 @@ def browser_frame(station) -> dict:
             "reason": run.last_error or None,
         }
     failed = recent_run_error(station.pk)
-    reason = failed.last_error or "unbekannt" if failed is not None else idle_reason(station)
+    reason = (
+        failed.last_error or gettext("unknown") if failed is not None else idle_reason(station)
+    )
     return {
         "type": "passive_state",
         "service": SERVICE,

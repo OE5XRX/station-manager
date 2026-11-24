@@ -121,7 +121,7 @@ def test_retry_then_status_is_pending(fm, station, staff_user):
     services.retry_failed(m, user=staff_user)
     s = module_update_status(m)
     assert s.state == "pending"
-    assert s.reason_text == "Update ausstehend"
+    assert s.reason_text == "Update pending"
 
 
 @pytest.mark.parametrize("state", [State.NOT_UPDATABLE, State.QUARANTINED])
@@ -200,7 +200,7 @@ def test_retry_view_success_message(client, staff_user, fm, station):
     client.force_login(staff_user)
     resp = client.post(_url("RMSG"), follow=True)
     msgs = [str(x) for x in resp.context["messages"]]
-    assert f"Update für RMSG wird erneut versucht ({TARGET})." in msgs
+    assert f"Retrying the update for RMSG ({TARGET})." in msgs
 
 
 def test_retry_view_noop_message(client, staff_user, fm, station):
@@ -208,7 +208,7 @@ def test_retry_view_noop_message(client, staff_user, fm, station):
     client.force_login(staff_user)
     resp = client.post(_url("RQ"), follow=True)
     msgs = [str(x) for x in resp.context["messages"]]
-    assert "RQ ist nicht im Fehlerzustand." in msgs
+    assert "RQ is not in a failed state." in msgs
 
 
 def test_retry_view_safe_next(client, staff_user, fm, station):

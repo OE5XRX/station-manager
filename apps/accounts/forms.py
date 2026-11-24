@@ -163,7 +163,7 @@ class UserChangeForm(BaseUserChangeForm):
         loc = self.cleaned_data.get("locator", "").strip().upper()
         if loc and not LOCATOR_REGEX.match(loc):
             raise forms.ValidationError(
-                _("Locator muss 2 Buchstaben + 2 Ziffern + 2 Buchstaben sein (z.B. JN78AB).")
+                _("Locator must be 2 letters + 2 digits + 2 letters (e.g. JN78AB).")
             )
         return loc
 
@@ -274,7 +274,7 @@ class ProfileAddressForm(forms.ModelForm):
         loc = self.cleaned_data.get("locator", "").strip().upper()
         if loc and not LOCATOR_REGEX.match(loc):
             raise forms.ValidationError(
-                _("Locator muss 2 Buchstaben + 2 Ziffern + 2 Buchstaben sein (z.B. JN78AB).")
+                _("Locator must be 2 letters + 2 digits + 2 letters (e.g. JN78AB).")
             )
         return loc
 

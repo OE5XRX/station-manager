@@ -30,11 +30,11 @@ class ApiTokenListView(AreaPermissionMixin, View):
         name = (request.POST.get("name") or "").strip()
         max_length = PersonalAccessToken._meta.get_field("name").max_length
         if not name:
-            return self._render_error(request, _("Name ist erforderlich."))
+            return self._render_error(request, _("Name is required."))
         if len(name) > max_length:
             return self._render_error(
                 request,
-                _("Name darf höchstens %(max)d Zeichen lang sein.") % {"max": max_length},
+                _("Name must be at most %(max)d characters long.") % {"max": max_length},
             )
         token, raw = PersonalAccessToken.issue(request.user, name=name)
         response = render(

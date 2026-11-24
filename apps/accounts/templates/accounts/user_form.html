@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n %}
+{% load i18n l10n %}
 
 {% block title %}{{ form_title|default:_("User") }} · OE5XRX{% endblock %}
 
@@ -108,7 +108,7 @@
     {# Profil panel — Edit-Mode only (UserCreationForm doesn't carry these) #}
     <section class="panel">
       <div class="panel-head">
-        <div class="panel-title"><span class="dot"></span>{% trans "Profil" %}</div>
+        <div class="panel-title"><span class="dot"></span>{% trans "Profile" %}</div>
       </div>
       <div class="panel-body">
         {% with field=form.avatar %}
@@ -156,7 +156,7 @@
     {# Adresse & Standort panel — Edit-Mode only #}
     <section class="panel">
       <div class="panel-head">
-        <div class="panel-title"><span class="dot"></span>{% trans "Adresse & Standort" %}</div>
+        <div class="panel-title"><span class="dot"></span>{% trans "Address & location" %}</div>
       </div>
       <div class="panel-body">
         {% with field=form.address %}
@@ -167,11 +167,11 @@
         </div>
         {% endwith %}
         <p class="t-mono t-muted" style="margin:8px 0;">
-          {% trans "Locator + lat/lon werden bei Speichern aus der Adresse berechnet." %}
+          {% trans "Locator + lat/lon are calculated from the address on save." %}
         </p>
         {% with field=form.locator %}
         <div class="form-group">
-          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }} ({% trans "manueller Override" %})</label>
+          <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }} ({% trans "manual override" %})</label>
           {{ field }}
           {% if field.errors %}<div class="form-error">{{ field.errors|join:", " }}</div>{% endif %}
         </div>
@@ -196,7 +196,7 @@
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title"><span class="dot"></span>
-          {% if object %}{% trans "User-Info" %}{% else %}{% trans "Hinweis" %}{% endif %}
+          {% if object %}{% trans "User-Info" %}{% else %}{% trans "Note" %}{% endif %}
         </div>
       </div>
       <div class="panel-body">
@@ -209,12 +209,12 @@
             {% endif %}
             <dt>{% trans "Role" %}</dt><dd>{{ object.get_membership_level_display }}</dd>
             {% if object.latitude is not None or object.longitude is not None %}
-            <dt>{% trans "Lat/Lon" %}</dt><dd class="t-mono-sm t-muted">{{ object.latitude }}, {{ object.longitude }}</dd>
+            <dt>{% trans "Lat/Lon" %}</dt><dd class="t-mono-sm t-muted">{{ object.latitude|unlocalize }}, {{ object.longitude|unlocalize }}</dd>
             {% endif %}
           </dl>
         {% else %}
           <p class="t-muted">
-            {% trans "Profil-Daten ergänzt der User selbst über sein Profil." %}
+            {% trans "Users fill in their profile data themselves via their own profile." %}
           </p>
         {% endif %}
       </div>

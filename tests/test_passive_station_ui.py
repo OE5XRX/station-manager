@@ -113,7 +113,7 @@ def test_invalid_passive_form_blocks_station_save(client, admin_user, station):
     resp = _post(client, admin_user, station, enabled="on", igate_callsign="")
     assert resp.status_code == 200
     assert not StationPassiveConfig.objects.filter(station=station).exists()
-    assert "Zum Aktivieren" in resp.content.decode()
+    assert "required to enable this" in resp.content.decode()
 
 
 @pytest.mark.django_db
@@ -158,12 +158,12 @@ def test_detail_hides_tab_when_opted_out(client, applicant_user, station):
 @pytest.mark.parametrize(
     "run_state,label,level",
     [
-        ("running", "Passiv: APRS aktiv", "ok"),
-        ("starting", "Passiv: APRS startet", "ok"),
-        ("stopping", "Passiv: in Benutzung", "muted"),
-        ("agent_offline", "Passiv: Agent offline", "off"),
-        (None, "Passiv: aus", "off"),
-        ("error", "Passiv: Fehler: sa818 timeout", "error"),
+        ("running", "Passive: APRS active", "ok"),
+        ("starting", "Passive: APRS starting", "ok"),
+        ("stopping", "Passive: in use", "muted"),
+        ("agent_offline", "Passive: agent offline", "off"),
+        (None, "Passive: off", "off"),
+        ("error", "Passive: error: sa818 timeout", "error"),
     ],
 )
 def test_badge_labels(station, run_state, label, level):
@@ -190,7 +190,7 @@ def test_badge_shows_closed_error_run(station):
 @pytest.mark.django_db
 def test_badge_in_use_when_lock_held(station, admin_user):
     ControlLock.objects.create(station=station, holder=admin_user, acquired_at=timezone.now())
-    assert passive_badge(station) == {"label": "Passiv: in Benutzung", "level": "muted"}
+    assert passive_badge(station) == {"label": "Passive: in use", "level": "muted"}
 
 
 @pytest.mark.django_db
@@ -200,7 +200,7 @@ def test_control_page_has_passive_badge_and_mute_notice(client, admin_user, stat
         reverse("control:station_control", kwargs={"pk": station.pk})
     ).content.decode()
     assert "data-passive-strip" in body
-    assert "Passiv: APRS läuft, Audio stumm" in body
+    assert "Passive: APRS running, audio muted" in body
 
 
 @pytest.mark.django_db
@@ -219,7 +219,7 @@ def test_edit_rerenders_with_clash_error_and_saves_nothing(client, admin_user, s
     )
     resp = _post(client, admin_user, b, enabled="on", igate_callsign="OE5XRX", igate_ssid="10")
     assert resp.status_code == 200
-    assert "gehört schon zur Station" in resp.content.decode()
+    assert "already belongs to station" in resp.content.decode()
     assert not StationPassiveConfig.objects.filter(station=b).exists()
 
 

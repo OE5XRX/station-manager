@@ -67,12 +67,12 @@ ok("panel shows the badge and re-emits the frame on a passive_state frame", () =
   events.length = 0;
   const c = factories.controlPanel();
   c._route(frame("running"));
-  assert.equal(c.passive.label, "Passiv: APRS aktiv");
+  assert.equal(c.passive.label, "Passive: APRS active");
   assert.equal(c.passive.level, "ok");
   assert.equal(c.passiveRunning, true);
   assert.ok(events.some((e) => e.type === "control:passive_state" && e.detail.state === "running"));
   c._route(frame("off", "idle_wait"));
-  assert.equal(c.passive.detail, "Wartet auf Leerlauf");
+  assert.equal(c.passive.detail, "Waiting for idle");
   assert.equal(c.passiveRunning, false);
 });
 

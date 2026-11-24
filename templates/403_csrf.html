@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% load i18n %}
 
-{% block title %}{% trans "Sitzung abgelaufen" %} · OE5XRX{% endblock %}
+{% block title %}{% trans "Session expired" %} · OE5XRX{% endblock %}
 
 {% block body %}
 <div class="auth-shell">
   <section class="auth-panel">
-    <h1 class="page-title">{% trans "Sitzung abgelaufen" %}</h1>
-    <p class="page-sub">{% trans "Das Formular ist veraltet (z. B. weil die Seite lange offen war oder du dich in einem anderen Tab an- oder abgemeldet hast). Bitte lade die Seite neu und versuche es erneut." %}</p>
+    <h1 class="page-title">{% trans "Session expired" %}</h1>
+    <p class="page-sub">{% trans "The form is out of date (e.g. because the page was open for a long time or you signed in or out in another tab). Please reload the page and try again." %}</p>
     <div class="row-gap-8">
-      <a class="btn btn-primary" href="{% url 'dashboard:index' %}">{% trans "Weiter" %}</a>
+      <a class="btn btn-primary" href="{% url 'dashboard:index' %}">{% trans "Continue" %}</a>
     </div>
   </section>
 </div>

@@ -1,3 +1,4 @@
+{% load i18n %}
 {% comment %}
 Firmware update status of one module (update_status.UpdateStatus).
 Expects `module` and `status`. Optional flags:
@@ -37,13 +38,13 @@ Function(), which fails open under a CSP without unsafe-eval.
   {% if not compact and status.reason_text != status.short_label %}<span class="fw-status-reason">{{ status.reason_text }}</span>{% endif %}
   {% if not compact and not card and s == "failed" and can.modules.manage %}
     <div class="fw-retry">
-      <div class="fw-retry-msg">Automatische Versuche sind ausgesetzt.</div>
+      <div class="fw-retry-msg">{% translate "Automatic attempts are suspended." %}</div>
       <form method="post"
             action="{% url 'module_firmware:module_retry_update' module.uid %}"
             class="fw-quarantine-form"
-            data-confirm="Update für {{ module.uid }} erneut versuchen?">
+            data-confirm="{% blocktranslate with uid=module.uid %}Retry the update for {{ uid }}?{% endblocktranslate %}">
         {% csrf_token %}
-        <button type="submit" class="btn btn-sm">Erneut versuchen</button>
+        <button type="submit" class="btn btn-sm">{% translate "Retry" %}</button>
       </form>
     </div>
   {% endif %}

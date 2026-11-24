@@ -10,8 +10,8 @@ from django.utils import timezone
 from apps.control.models import ControlLock
 from apps.module_firmware.mcuboot import (
     DEV_KEY_HASH_PREFIX,
-    KEY_UNKNOWN_HINT,
-    NOT_UPDATABLE_DEV_TEXT,
+    KEY_UNKNOWN_HINT_DISPLAY,
+    NOT_UPDATABLE_DEV_DISPLAY,
 )
 from apps.module_firmware.models import (
     DRAIN_TRANSIENT_LIMIT,
@@ -60,7 +60,7 @@ def test_no_target(fm, station):
     _online(station)
     m = _module(fm, station)
     s = module_update_status(m)
-    assert s.state == "no_target" and s.reason_text == "Kein Ziel"
+    assert s.state == "no_target" and s.reason_text == "No target"
     assert s.reason_code == "" and s.since is None and s.phase == ""
 
 
@@ -68,7 +68,7 @@ def test_no_open_assignment_is_no_target(fm):
     _target(fm)
     m = _module(fm, None)
     s = module_update_status(m)
-    assert s.state == UpdateState.NO_TARGET and s.reason_text == "Kein Ziel"
+    assert s.state == UpdateState.NO_TARGET and s.reason_text == "No target"
 
 
 def test_current(base):
@@ -77,7 +77,7 @@ def test_current(base):
     m.save()
     _cs(m, rel, state=State.QUARANTINED, attempts=3, last_error_mode="rolled_back")
     s = module_update_status(m)
-    assert s.state == "current" and s.reason_text == "Aktuell" and s.since is None
+    assert s.state == "current" and s.reason_text == "Up to date" and s.since is None
 
 
 def test_current_wins_over_key_mismatch(fm, station):
@@ -102,7 +102,7 @@ def test_quarantined_rolled_back_text(base):
     s = module_update_status(m)
     assert s.state == "quarantined"
     assert s.reason_code == "rolled_back"
-    assert s.reason_text == "Quarantäne (Update 3× zurückgerollt)"
+    assert s.reason_text == "Quarantine (Update rolled back 3×)"
     assert s.since == cs.updated_at
 
 
@@ -111,15 +111,15 @@ def test_quarantined_rejected_text(base):
     _cs(m, rel, state=State.QUARANTINED, attempts=0, last_error_mode="rejected")
     s = module_update_status(m)
     assert s.reason_code == "rejected"
-    assert s.reason_text == "Quarantäne (vom Modul abgelehnt)"
+    assert s.reason_text == "Quarantine (rejected by the module)"
 
 
 def test_quarantined_with_key_hint(base):
     station, rel, m = base  # neither key known -> hint applies
     _cs(m, rel, state=State.QUARANTINED, attempts=3, last_error_mode="rolled_back")
     s = module_update_status(m)
-    assert KEY_UNKNOWN_HINT in s.reason_text
-    assert s.reason_text == f"Quarantäne (Update 3× zurückgerollt – {KEY_UNKNOWN_HINT})"
+    assert str(KEY_UNKNOWN_HINT_DISPLAY) in s.reason_text
+    assert s.reason_text == f"Quarantine (Update rolled back 3× – {KEY_UNKNOWN_HINT_DISPLAY})"
 
 
 def test_not_updatable_dev_text(base):
@@ -129,7 +129,7 @@ def test_not_updatable_dev_text(base):
     cs = _cs(m, rel, state=State.NOT_UPDATABLE, reason_code="boot_key_mismatch")
     s = module_update_status(m)
     assert s.state == "not_updatable" and s.reason_code == "boot_key_mismatch"
-    assert s.reason_text == NOT_UPDATABLE_DEV_TEXT
+    assert s.reason_text == str(NOT_UPDATABLE_DEV_DISPLAY)
     assert s.since == cs.updated_at
 
 
@@ -144,14 +144,14 @@ def test_failed_shows_last_message(base):
     )
     s = module_update_status(m)
     assert s.state == "failed" and s.reason_code == "transient_limit"
-    assert s.reason_text == "Fehler: dfu-util timeout"
+    assert s.reason_text == "Error: dfu-util timeout"
     assert s.since == cs.updated_at
 
 
 def test_failed_without_message(base):
     station, rel, m = base
     _cs(m, rel, state=State.FAILED, reason_code="transient_limit")
-    assert module_update_status(m).reason_text == "Fehler: Update mehrfach fehlgeschlagen"
+    assert module_update_status(m).reason_text == "Error: Update failed repeatedly"
 
 
 def test_offline_beats_running_phase(base):
@@ -161,7 +161,7 @@ def test_offline_beats_running_phase(base):
     _cs(m, rel, phase="flashing", phase_at=timezone.now())
     s = module_update_status(m)
     assert s.state == "waiting" and s.reason_code == "station_offline"
-    assert s.reason_text == "Wartet: Station offline" and s.since is None
+    assert s.reason_text == "Waiting: station offline" and s.since is None
 
 
 def test_running_phase_text(base):
@@ -169,12 +169,15 @@ def test_running_phase_text(base):
     cs = _cs(m, rel, phase="flashing", phase_at=timezone.now())
     s = module_update_status(m)
     assert s.state == "running" and s.phase == "flashing"
-    assert s.reason_text == "Update läuft: Flashen" and s.since == cs.phase_at
+    assert s.reason_text == "Update in progress: Flashing" and s.since == cs.phase_at
 
 
 @pytest.mark.parametrize(
     "phase,text",
-    [("downloading", "Update läuft: Download"), ("verifying", "Update läuft: Prüfen")],
+    [
+        ("downloading", "Update in progress: Download"),
+        ("verifying", "Update in progress: Verifying"),
+    ],
 )
 def test_running_other_phases(base, phase, text):
     station, rel, m = base
@@ -188,7 +191,7 @@ def test_old_agent_waits(base):
     station.save(update_fields=["agent_capabilities"])
     s = module_update_status(m)
     assert s.state == "waiting" and s.reason_code == "agent_no_module_ota"
-    assert s.reason_text == "Wartet: Station-Agent kann keine Module flashen (Image zu alt)"
+    assert s.reason_text == "Waiting: station agent cannot flash modules (image too old)"
 
 
 def test_no_release_for_variant_text(fm, station):
@@ -198,7 +201,7 @@ def test_no_release_for_variant_text(fm, station):
     m = _module(fm, station, variant="vhf")
     s = module_update_status(m)
     assert s.state == "waiting" and s.reason_code == "no_release_for_variant"
-    assert s.reason_text == "Wartet: Keine Firmware 26.09.15-01 für Variante vhf vorhanden"
+    assert s.reason_text == "Waiting: no firmware 26.09.15-01 available for variant vhf"
 
 
 def test_no_release_for_empty_variant_uses_dash(fm, station):
@@ -206,7 +209,7 @@ def test_no_release_for_empty_variant_uses_dash(fm, station):
     _target(fm)
     m = _module(fm, station, variant="")
     s = module_update_status(m)
-    assert s.reason_text == "Wartet: Keine Firmware 26.09.15-01 für Variante – vorhanden"
+    assert s.reason_text == "Waiting: no firmware 26.09.15-01 available for variant –"
 
 
 def test_archived_release_counts_as_missing(base):
@@ -225,7 +228,7 @@ def test_no_artifact_sim(fm, station):
     m = _module(fm, station, synthetic=True)
     s = module_update_status(m)
     assert s.state == "waiting" and s.reason_code == "no_artifact"
-    assert s.reason_text == "Wartet: Release enthält kein passendes Artefakt (sim)"
+    assert s.reason_text == "Waiting: release has no matching artifact (sim)"
 
 
 def test_busy_station(base, admin_user):
@@ -235,7 +238,7 @@ def test_busy_station(base, admin_user):
     )
     s = module_update_status(m)
     assert s.state == "waiting" and s.reason_code == "station_busy"
-    assert s.reason_text == "Wartet: Station belegt (Bedienung aktiv)"
+    assert s.reason_text == "Waiting: station busy (in use)"
 
 
 def test_released_lock_is_not_busy(base):
@@ -248,7 +251,7 @@ def test_pending(base):
     station, rel, m = base
     cs = _cs(m, rel)
     s = module_update_status(m)
-    assert s.state == "pending" and s.reason_text == "Update ausstehend"
+    assert s.state == "pending" and s.reason_text == "Update pending"
     assert s.reason_code == "" and s.since == cs.created_at
 
 
@@ -300,14 +303,14 @@ def test_short_labels():
     from apps.module_firmware.update_status import UpdateStatus
 
     labels = {
-        "no_target": "Kein Ziel",
-        "current": "Aktuell",
-        "quarantined": "Quarantäne",
-        "not_updatable": "Nicht updatebar",
-        "failed": "Fehler",
-        "waiting": "Wartet",
-        "running": "Update läuft",
-        "pending": "Update ausstehend",
+        "no_target": "No target",
+        "current": "Up to date",
+        "quarantined": "Quarantine",
+        "not_updatable": "Not updatable",
+        "failed": "Error",
+        "waiting": "Waiting",
+        "running": "Update in progress",
+        "pending": "Update pending",
     }
     assert set(labels) == set(UpdateState.values)
     for state, label in labels.items():
@@ -423,7 +426,7 @@ def test_updating_row_at_transient_cap_shows_failed(base):
     )
     s = module_update_status(m)
     assert s.state == "failed" and s.reason_code == "transient_limit"
-    assert s.reason_text == "Fehler: dfu-util timeout" and s.since == cs.updated_at
+    assert s.reason_text == "Error: dfu-util timeout" and s.since == cs.updated_at
 
 
 def test_at_cap_row_failed_even_when_offline(base):
@@ -433,7 +436,7 @@ def test_at_cap_row_failed_even_when_offline(base):
     _cs(m, rel, transient_failures=DRAIN_TRANSIENT_LIMIT)
     s = module_update_status(m)
     assert s.state == "failed"
-    assert s.reason_text == "Fehler: Update mehrfach fehlgeschlagen"
+    assert s.reason_text == "Error: Update failed repeatedly"
 
 
 def test_below_cap_is_not_failed(base):
@@ -450,7 +453,7 @@ def test_key_mismatch_without_row_is_not_updatable(base):
     m.save()
     s = module_update_status(m)
     assert s.state == "not_updatable" and s.reason_code == "boot_key_mismatch"
-    assert s.reason_text == NOT_UPDATABLE_DEV_TEXT and s.since is None
+    assert s.reason_text == str(NOT_UPDATABLE_DEV_DISPLAY) and s.since is None
 
 
 @pytest.mark.parametrize("row_state", [State.UPDATING, State.FAILED, State.QUARANTINED])
@@ -544,6 +547,6 @@ def test_not_updatable_without_reported_key_has_neutral_text(base):
     s = module_update_status(m)
     assert s.state == "not_updatable"
     assert s.reason_text == (
-        "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release "
-        "– SWD-Reflash an der Bench nötig"
+        "Not updatable: bootloader key does not match the release "
+        "– SWD reflash at the bench required"
     )
