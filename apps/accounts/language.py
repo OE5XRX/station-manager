@@ -50,11 +50,37 @@ def localized_url(url: str, language: str) -> str:
         return translate_url(url, language)
 
 
+def language_for(user) -> str:
+    """The language to write to ``user`` in: ``user.language`` if supported,
+    else ``settings.LANGUAGE_CODE`` (also for ``None`` = a recipient without
+    an account). Never the active language — that belongs to whoever
+    triggered the message, not to the recipient."""
+    return _supported_or_default(getattr(user, "language", None))
+
+
+def _supported_or_default(language) -> str:
+    return language if is_supported_language(language) else settings.LANGUAGE_CODE
+
+
+def group_by_language(items, key=None) -> dict:
+    """Group ``items`` by recipient language, preserving order.
+
+    ``key(item)`` returns a user-like object or a language code; the default
+    treats each item as the user itself. Lets a fan-out render a message once
+    per language instead of once for everyone.
+    """
+    groups = {}
+    for item in items:
+        target = item if key is None else key(item)
+        language = (
+            _supported_or_default(target) if isinstance(target, str) else language_for(target)
+        )
+        groups.setdefault(language, []).append(item)
+    return groups
+
+
 def reverse_for_user(user, viewname, **kwargs):
     """``reverse`` under ``user.language`` — for links built without a request
     (push payloads, e-mails), which would otherwise carry the default prefix."""
-    language = getattr(user, "language", None)
-    if not is_supported_language(language):
-        return reverse(viewname, **kwargs)
-    with override(language):
+    with override(language_for(user)):
         return reverse(viewname, **kwargs)
