@@ -117,13 +117,18 @@ def _send_webpush_notification(alert):
 
     count = 0
     for user in push_recipients_for_station_alert(alert.station):
-        with override(language_for(user)):
-            user_payload = {
-                "title": _alert_title(alert),
-                "body": f"{alert.station.name}: {alert.message}",
-                "severity": alert.severity,
-                "url": reverse_for_user(user, "monitoring:alert_list"),
-            }
+        try:
+            with override(language_for(user)):
+                user_payload = {
+                    "title": _alert_title(alert),
+                    "body": f"{alert.station.name}: {alert.message}",
+                    "severity": alert.severity,
+                    "url": reverse_for_user(user, "monitoring:alert_list"),
+                }
+        except Exception:
+            # One user's render failure must not cost the others their push.
+            logger.exception("Failed to render alert web-push for user %s.", user.pk)
+            continue
         for subscription in user.push_subscriptions.all():
             if send_web_push(subscription, user_payload):
                 count += 1
@@ -158,16 +163,16 @@ def _send_telegram_notification(alert):
         return
 
     severity_emoji = "\u26a0\ufe0f" if alert.severity == "warning" else "\U0001f6a8"
-    # Telegram goes to one shared chat: write it in the site language.
-    with override(settings.LANGUAGE_CODE):
-        message = (
-            f"{severity_emoji} *{alert.get_severity_display()}*: "
-            f"{_telegram_md_escape(alert.title)}\n"
-            + _("Station: %(station)s") % {"station": _telegram_md_escape(alert.station.name)}
-            + f"\n\n{_telegram_md_escape(alert.message)}"
-        )
-
     try:
+        # Telegram goes to one shared chat: write it in the site language.
+        with override(settings.LANGUAGE_CODE):
+            message = (
+                f"{severity_emoji} *{alert.get_severity_display()}*: "
+                f"{_telegram_md_escape(alert.title)}\n"
+                + _("Station: %(station)s") % {"station": _telegram_md_escape(alert.station.name)}
+                + f"\n\n{_telegram_md_escape(alert.message)}"
+            )
+
         import telegram
 
         bot = telegram.Bot(token=token)

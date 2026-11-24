@@ -385,3 +385,53 @@ def test_test_email_partial_failure_names_the_failing_language(email_on):
     assert ok is False
     assert err == "de: smtp down"
     assert [m.to for m in mail.outbox] == [["en1@x"]]
+
+
+@pytest.mark.django_db
+def test_push_render_failure_for_one_user_does_not_block_others(settings, caplog):
+    from apps.monitoring import notifications
+
+    settings.ALERT_EMAIL_ENABLED = False
+    settings.ALERT_TELEGRAM_ENABLED = False
+    settings.ALERT_WEBPUSH_ENABLED = True
+    de = _admin("de1", "de", User.NotifyChannel.PUSH)
+    en = _admin("en1", "en", User.NotifyChannel.PUSH)
+    for u in (de, en):
+        PushSubscription.objects.create(
+            user=u, endpoint=f"https://push.example/{u.pk}", p256dh="p", auth="a"
+        )
+    real = notifications._alert_title
+
+    def flaky(alert):
+        if translation.get_language() == "de":
+            raise ValueError("bad catalog")
+        return real(alert)
+
+    with (
+        mock.patch.object(notifications, "_alert_title", side_effect=flaky),
+        mock.patch.object(notifications, "send_web_push", return_value=True) as m,
+    ):
+        send_alert_notifications(_alert())
+
+    assert [call.args[0].user_id for call in m.call_args_list] == [en.pk]
+    assert any(r.levelname == "ERROR" and r.exc_info for r in caplog.records)
+
+
+@pytest.mark.django_db
+def test_telegram_render_failure_is_logged_not_raised(settings, caplog):
+    settings.ALERT_EMAIL_ENABLED = False
+    settings.ALERT_WEBPUSH_ENABLED = False
+    settings.ALERT_TELEGRAM_ENABLED = True
+    settings.TELEGRAM_BOT_TOKEN = "t"
+    settings.TELEGRAM_CHAT_ID = "c"
+    fake = types.ModuleType("telegram")
+    fake.Bot = mock.MagicMock()
+    with (
+        mock.patch.dict(sys.modules, {"telegram": fake}),
+        mock.patch(
+            "apps.monitoring.notifications._telegram_md_escape", side_effect=ValueError("boom")
+        ),
+    ):
+        send_alert_notifications(_alert())
+    fake.Bot.return_value.send_message.assert_not_called()
+    assert any(r.levelname == "ERROR" and r.exc_info for r in caplog.records)
