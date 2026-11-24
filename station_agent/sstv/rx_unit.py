@@ -203,9 +203,13 @@ class RxUnit:
                     self._publish(events)
                     if eof:
                         break
+            server.close()  # no new client during the final drain
             await self._close_client()
         finally:
+            # wait_closed() waits for every connection: abort whatever is still
+            # open (e.g. after an exception in the loop), or the unit never exits.
             server.close()
+            server.abort_clients()
             await server.wait_closed()
         return 0
 

@@ -381,3 +381,52 @@ def test_unit_exits_with_a_stalled_real_client(monkeypatch):
     assert unit.join(timeout=30) == 0
     assert time.monotonic() - t0 < 15
     sock.close()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_stdin_error_with_a_connected_client_does_not_hang():
+    registered = threading.Event()
+
+    class _BrokenStdin:
+        def read(self, n):
+            registered.wait(10)  # fail only once the agent is connected
+            raise OSError("stdin gone")
+
+    unit = _Unit(_free_port(), stdin=_BrokenStdin())
+    sock = unit.connect()
+    unit.wait_client()
+    registered.set()
+    unit.thread.join(10)
+    assert not unit.thread.is_alive(), "rx_unit hung after a stdin error"
+    assert unit.rc is None  # the error propagated (crash -> systemd restart)
+    sock.close()
+
+
+def test_no_new_client_during_the_final_drain(monkeypatch):
+    monkeypatch.setattr(rx_unit, "DRAIN_TIMEOUT_S", 3.0)
+    m = MODES["robot36"]
+    pcm = _pcm(m, _picture(m))
+    unit = _Unit(_free_port())
+    stalled = socket.socket()
+    stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+    assert unit.ready.wait(5)
+    stalled.connect(("127.0.0.1", unit.port))
+    unit.wait_client()
+    for _ in range(8):
+        unit.write(pcm)
+    unit.close_stdin()
+    # The final drain has started once the unit has handed off its client.
+    deadline = time.monotonic() + 20
+    while unit.unit.has_client:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    try:  # the agent reconnecting during the drain
+        late = socket.create_connection(("127.0.0.1", unit.port), timeout=1)
+    except OSError:
+        late = None  # refused: fine, the unit stopped listening
+    t0 = time.monotonic()
+    assert unit.join(timeout=20) == 0
+    assert time.monotonic() - t0 < 10
+    for s in (stalled, late):
+        if s:
+            s.close()
