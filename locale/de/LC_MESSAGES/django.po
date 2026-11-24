@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 19:40+0100\n"
+"POT-Creation-Date: 2026-11-24 20:37+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -9934,6 +9934,105 @@ msgstr ""
 #: templates/403_csrf.html:12
 msgid "Continue"
 msgstr "Weiter"
+
+#: templates/accounts/emails/reset.body.txt:1
+#: templates/accounts/emails/verify.body.txt:1
+#: templates/accounts/emails/welcome.body.txt:1
+#, python-format
+msgid "Hi %(name)s,"
+msgstr "Hallo %(name)s,"
+
+#: templates/accounts/emails/reset.body.txt:3
+msgid "Someone requested a password reset for your account on OE5XRX."
+msgstr ""
+"Jemand hat für dein OE5XRX-Konto das Zurücksetzen des Passworts angefordert."
+
+#: templates/accounts/emails/reset.body.txt:5
+msgid "Set a new password here:"
+msgstr "Hier kannst du ein neues Passwort festlegen:"
+
+#: templates/accounts/emails/reset.body.txt:8
+msgid ""
+"This link is valid for 24 hours. If you didn't request this, you can\n"
+"ignore this email — your current password stays unchanged."
+msgstr ""
+"Dieser Link ist 24 Stunden gültig. Wenn du das nicht angefordert hast,\n"
+"kannst du diese E-Mail ignorieren — dein aktuelles Passwort bleibt "
+"unverändert."
+
+#: templates/accounts/emails/reset.body.txt:11
+#: templates/accounts/emails/verify.body.txt:14
+#: templates/accounts/emails/welcome.body.txt:11
+msgid "73,"
+msgstr "73,"
+
+#: templates/accounts/emails/reset.body.txt:12
+#: templates/accounts/emails/verify.body.txt:15
+#: templates/accounts/emails/welcome.body.txt:12
+msgid "The OE5XRX team"
+msgstr "Das OE5XRX-Team"
+
+#: templates/accounts/emails/reset.subject.txt:1
+msgid "Password reset for your OE5XRX account"
+msgstr "Passwort für dein OE5XRX-Konto zurücksetzen"
+
+#: templates/accounts/emails/verify.body.txt:3
+#, python-format
+msgid ""
+"You requested to change your OE5XRX account email\n"
+"from %(old_email)s to %(new_email)s."
+msgstr ""
+"Du hast angefordert, die E-Mail-Adresse deines OE5XRX-Kontos\n"
+"von %(old_email)s auf %(new_email)s zu ändern."
+
+#: templates/accounts/emails/verify.body.txt:6
+msgid "Confirm the change:"
+msgstr "Bestätige die Änderung:"
+
+#: templates/accounts/emails/verify.body.txt:9
+#, python-format
+msgid ""
+"This link is valid for 24 hours. Until you click it, your old address\n"
+"(%(old_email)s) remains active for login and notifications."
+msgstr ""
+"Dieser Link ist 24 Stunden gültig. Bis du ihn anklickst, bleibt deine alte "
+"Adresse\n"
+"(%(old_email)s) für Anmeldung und Benachrichtigungen aktiv."
+
+#: templates/accounts/emails/verify.body.txt:12
+msgid "If you didn't request this, ignore this email — no change will happen."
+msgstr ""
+"Wenn du das nicht angefordert hast, ignoriere diese E-Mail — es wird nichts "
+"geändert."
+
+#: templates/accounts/emails/verify.subject.txt:1
+msgid "Confirm your new email for OE5XRX"
+msgstr "Bestätige deine neue E-Mail-Adresse für OE5XRX"
+
+#: templates/accounts/emails/welcome.body.txt:3
+msgid "An admin"
+msgstr "Ein Admin"
+
+#: templates/accounts/emails/welcome.body.txt:3
+#, python-format
+msgid "%(actor)s just created your OE5XRX account."
+msgstr "%(actor)s hat gerade dein OE5XRX-Konto angelegt."
+
+#: templates/accounts/emails/welcome.body.txt:5
+msgid "Set your password and start using the station-manager:"
+msgstr "Leg dein Passwort fest und leg mit dem Station-Manager los:"
+
+#: templates/accounts/emails/welcome.body.txt:8
+msgid ""
+"This link is valid for 7 days. If you didn't expect this email, you can\n"
+"safely ignore it."
+msgstr ""
+"Dieser Link ist 7 Tage gültig. Wenn du diese E-Mail nicht erwartet hast,\n"
+"kannst du sie einfach ignorieren."
+
+#: templates/accounts/emails/welcome.subject.txt:1
+msgid "Welcome to OE5XRX — set your password"
+msgstr "Willkommen bei OE5XRX — leg dein Passwort fest"
 
 #: templates/accounts/notification_settings.html:4
 #: templates/accounts/notification_settings.html:9

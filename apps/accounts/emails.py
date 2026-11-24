@@ -8,8 +8,9 @@ module that changes — all callers remain on ``send_account_email``.
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.utils import translation
 
-from .language import reverse_for_user
+from .language import language_for, reverse_for_user
 
 
 def _absolute_link(user, url_name, **kwargs):
@@ -46,8 +47,11 @@ def send_account_email(user, kind, context):
         "site_url": getattr(settings, "SITE_URL", ""),
         **context,
     }
-    subject = render_to_string(f"accounts/emails/{kind}.subject.txt", ctx).strip()
-    body = render_to_string(f"accounts/emails/{kind}.body.txt", ctx)
+    # The recipient's language, never the active one: the request belongs
+    # to whoever triggered the mail (e.g. an admin creating the account).
+    with translation.override(language_for(user)):
+        subject = render_to_string(f"accounts/emails/{kind}.subject.txt", ctx).strip()
+        body = render_to_string(f"accounts/emails/{kind}.body.txt", ctx)
     to_email = context.get("override_to") or user.email
     send_mail(
         subject=subject,

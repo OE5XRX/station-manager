@@ -1,13 +1,13 @@
-Hi {{ user.first_name|default:user.username }},
+{% load i18n %}{% autoescape off %}{% blocktrans with name=user.first_name|default:user.username %}Hi {{ name }},{% endblocktrans %}
 
-{{ actor|default:"An admin" }} just created your OE5XRX account.
+{% trans "An admin" as default_actor %}{% blocktrans with actor=actor|default:default_actor %}{{ actor }} just created your OE5XRX account.{% endblocktrans %}
 
-Set your password and start using the station-manager:
+{% blocktrans %}Set your password and start using the station-manager:{% endblocktrans %}
 {{ link }}
 
-This link is valid for 7 days. If you didn't expect this email, you can
-safely ignore it.
+{% blocktrans %}This link is valid for 7 days. If you didn't expect this email, you can
+safely ignore it.{% endblocktrans %}
 
-73,
-The OE5XRX team
-{{ site_url }}
+{% trans "73," %}
+{% trans "The OE5XRX team" %}
+{{ site_url }}{% endautoescape %}
