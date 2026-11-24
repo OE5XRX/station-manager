@@ -95,9 +95,9 @@ def test_login_page_renders_in_language(client, lang):
 @pytest.mark.django_db
 def test_js_catalog_german(client):
     body = client.get("/de/jsi18n/").content.decode()
-    # djangojs.po: "Updating" -> "Wird aktualisiert", "Failed" -> "Fehlgeschlagen"
+    # djangojs.po: "Updating" -> "Wird aktualisiert", "Error" -> "Fehler"
     assert '"Updating": "Wird aktualisiert"' in body
-    assert '"Failed": "Fehlgeschlagen"' in body
+    assert '"Error": "Fehler"' in body
 
 
 @pytest.mark.django_db
