@@ -306,6 +306,9 @@ def test_drain_timeout_on_exit(monkeypatch):
         def abort(self):
             self.aborted = True
 
+        def set_write_buffer_limits(self, high=None, low=None):
+            pass
+
     class _HangingWriter:
         closed = False
         transport = _Transport()
@@ -430,3 +433,27 @@ def test_no_new_client_during_the_final_drain(monkeypatch):
     for s in (stalled, late):
         if s:
             s.close()
+
+
+def test_slow_reader_still_gets_the_final_lines(monkeypatch):
+    # At EOF the agent lags (data still queued in the unit's own write buffer):
+    # the final drain must deliver everything, including the closing "end".
+    monkeypatch.setattr(rx_unit, "DRAIN_TIMEOUT_S", 10.0)
+    m = MODES["robot36"]
+    pcm = _pcm(m, _picture(m))
+    unit = _Unit(_free_port())
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+    assert unit.ready.wait(5)
+    sock.connect(("127.0.0.1", unit.port))
+    unit.wait_client()
+    # Tiny kernel send buffer on the unit's side: the backlog stays in userspace.
+    server_sock = unit.unit._client.transport.get_extra_info("socket")
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    unit.write(pcm)
+    unit.close_stdin()
+    time.sleep(1.0)  # not reading until well after EOF
+    lines = _read_lines(sock)
+    assert unit.join() == 0
+    assert lines[-1] == {"t": "end", "complete": True, "rows": 240}
+    sock.close()

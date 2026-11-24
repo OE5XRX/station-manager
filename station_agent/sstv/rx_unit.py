@@ -182,13 +182,20 @@ class RxUnit:
         writer, self._client = self._client, None
         if writer is None:
             return
+
+        async def flush() -> None:
+            # drain() only waits for the low-water mark; with limits at 0 it
+            # returns once everything (incl. the final "end") is on the socket.
+            writer.transport.set_write_buffer_limits(high=0)
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
         try:
-            await asyncio.wait_for(writer.drain(), DRAIN_TIMEOUT_S)
+            await asyncio.wait_for(flush(), DRAIN_TIMEOUT_S)
         except (TimeoutError, ConnectionError, OSError):
             logger.warning("sstv client did not take the final lines in time")
             _drop(writer)
-            return
-        writer.close()
 
     async def run(self, started: Callable[["RxUnit"], None] | None = None) -> int:
         server = await asyncio.start_server(self._on_client, HOST, self.port)
