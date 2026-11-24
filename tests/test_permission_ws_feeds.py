@@ -431,3 +431,13 @@ def test_with_status_labels_unknown_code_falls_back_to_raw():
     out = with_status_labels({"status": "weird", "result": {"status": "x"}})
     assert out["status_label"] == "weird"
     assert out["result"]["status_label"] == "x"
+
+
+def test_with_status_labels_without_status_or_result_is_unchanged():
+    from apps.deployments.consumers import with_status_labels
+
+    data = {"deployment_id": 1, "progress": {"percentage": 50}}
+    assert with_status_labels(data) == data
+    # Result without a status gets no label; input is not mutated.
+    data = {"result": {"id": 2}}
+    assert with_status_labels(data) == {"result": {"id": 2}}
