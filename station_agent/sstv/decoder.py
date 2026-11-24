@@ -6,7 +6,8 @@ Pipeline, per block of audio:
    the 1100..2300 Hz SSTV band), low-pass FIR, then the phase step between
    consecutive samples is the instantaneous frequency. Output is aligned to
    the input sample index (FIR group delay removed).
-2. **Leader/VIS state machine** (idle). A VIS is accepted only with *both*
+2. **Leader/VIS detection** — always running, also during a picture (a new
+   VIS ends the running picture). A VIS is accepted only with *both*
    300 ms 1900 Hz leader halves, the 1200 Hz break between them, a 1200 Hz
    start and stop bit and seven data bits with correct even parity, all at
    the nominal 30 ms bit timing. The leader also yields the receiver's
@@ -171,10 +172,11 @@ class StreamDecoder:
         self._n_in = 0
         self._f = np.zeros(0)
         self._f0 = -((_LP_TAPS - 1) // 2)  # absolute index of self._f[0]
-        self._search_from = self._f0
         self._vis_cursor = self._f0
         self._mode: Mode | None = None
         self._final_end: int | None = None
+        self._barrier: int | None = None  # a new VIS: decode only lines ending before it
+        self._keep_from: float = self._f0  # oldest audio the running picture still needs
 
     @property
     def _end(self) -> int:
@@ -197,8 +199,26 @@ class StreamDecoder:
             self._pending_n = 0
             self._demodulate(x)
         events: list[Event] = []
-        while self._decode_line(events) if self._mode else self._search_vis(events):
-            pass
+        while True:
+            found = self._scan_vis()
+            if found is not None:
+                mode, p, offset = found
+                if self._mode is not None:
+                    # Lines that end before the new leader still belong to the
+                    # running picture; then it ends (incomplete if cut short).
+                    self._barrier = p - self._ms(2 * LEADER_MS + BREAK_MS)
+                    while self._mode is not None and self._decode_line(events):
+                        pass
+                    self._barrier = None
+                    if self._mode is not None:
+                        self._finish(events, complete_ok=False)
+                self._start_picture(mode, p, offset)
+                events.append(Start(mode))
+            while self._mode is not None and self._decode_line(events):
+                pass
+            if found is None:
+                break
+        self._trim_buffer()
         return events
 
     def _demodulate(self, x: np.ndarray) -> None:
@@ -219,14 +239,19 @@ class StreamDecoder:
     def _ms(self, ms: float) -> int:
         return round(ms * self._spm)
 
-    def _search_vis(self, events: list[Event]) -> bool:
+    def _vis_span(self) -> tuple[int, int, int]:
         h = self._smooth // 2
         pre = self._ms(2 * LEADER_MS + BREAK_MS - 5)  # p - pre .. p: leaders + break
         post = self._ms(VIS_BITS * VIS_BIT_MS + 5)  # p .. p + post: the VIS bits
-        p_lo = max(self._f0 + pre + h, self._search_from + pre - self._ms(10), self._vis_cursor)
+        return h, pre, post
+
+    def _scan_vis(self):
+        """Search the not yet scanned audio for a VIS -> (mode, p, offset) or None."""
+        h, pre, post = self._vis_span()
+        p_lo = max(self._f0 + pre + h, self._vis_cursor)
         p_hi = self._end - post - h
         if p_hi <= p_lo:
-            return False
+            return None
         base = p_lo - pre  # absolute index of fs[0]
         f = self._seg(base - h, p_hi + post + h)
         c = np.concatenate([[0.0], np.cumsum(f)])
@@ -244,13 +269,19 @@ class StreamDecoder:
         for jj in j[crossing & leader2]:
             found = self._check_vis(int(jj), base, fs, frac)
             if found is not None:
-                mode, p, offset = found
-                self._start_picture(mode, p, offset)
-                events.append(Start(mode))
-                return True
+                # Past both the candidate and the refined edge: never re-detect it.
+                self._vis_cursor = max(base + int(jj), found[1]) + 1
+                return found
         self._vis_cursor = p_hi
-        self._trim(p_hi - pre - h - 1)
-        return False
+        return None
+
+    def _trim_buffer(self) -> None:
+        """Drop audio that neither the VIS scan nor the running picture needs."""
+        h, pre, _ = self._vis_span()
+        keep = self._vis_cursor - pre - h - 1
+        if self._mode is not None:
+            keep = min(keep, math.floor(self._keep_from) - 4)
+        self._trim(keep)
 
     def _check_vis(self, j: int, base: int, fs: np.ndarray, frac):
         """Validate a candidate start-bit edge at fs index ``j``."""
@@ -309,14 +340,17 @@ class StreamDecoder:
         self._guard = max(2, self._sync_len // 2)
         # Absolute (fractional) start of line 0.
         self._t0 = p + VIS_BITS * VIS_BIT_MS * spm + mode.start_ms * spm
-        self._last_good_start = self._t0  # start of the last line with a good sync
         self._good: list[tuple[int, float]] = []
         self._outliers: list[tuple[int, float]] = []
         self._missing = 0
         self._miss_limit = max(_LOSS_MIN_LINES, math.ceil(_LOSS_MS / mode.line_ms))
         self._emitted = 0
         self._unconfirmed: list[Row] = []
+        # Lines rendered into _unconfirmed: (line, Robot 36 held state before it),
+        # so a relock can render them again at the corrected timing.
+        self._pending_lines: list[tuple[int, object]] = []
         self._held: tuple[np.ndarray, np.ndarray] | None = None  # Robot 36 even line
+        self._keep_from = self._t0
         self._layouts = []
         for parity in (0, 1):
             layout, off = [], 0.0
@@ -375,52 +409,69 @@ class StreamDecoder:
             return False
         if self._final_end is not None and line_end > self._final_end + 2:
             return False
+        if self._barrier is not None and line_end > self._barrier + 2:
+            return False
 
         pos, quality = self._find_sync(pred, window)
         good = quality >= _SYNC_MIN_QUALITY
+        relocked = False
         if good:
             tol = max(4.0, 0.002 * self._line_len)
             if self._fit(k) is not None and abs(pos - pred) > tol:
-                good = self._relock(k, pos - pred, tol)
+                good = relocked = self._relock(k, pos - pred, tol)
             else:
                 self._outliers = []
             if good:
                 self._good.append((k, pos))
-        fit = self._fit(k)
-        # Measured line length -> time scale of the sender (sample-rate offset).
-        scale = min(max(fit[1] / self._line_len, 0.98), 1.02) if fit else 1.0
-        if fit is not None:
-            pos = fit[0]
-        elif not good:
-            pos = pred
+        if relocked:
+            # The held-back lines were placed with the old timing: redo them.
+            self._render_pending()
 
-        start = pos - self._sync_off * scale
-        for row in self._rows(k, start, scale):
-            self._unconfirmed.append(row)
+        start, scale = self._placement(k, pred if not good else pos)
+        self._pending_lines.append((k, self._held))
+        self._unconfirmed.extend(self._rows(k, start, scale))
         if good:
             self._confirm(events)
             self._missing = 0
-            self._last_good_start = start
         else:
             self._missing += 1
 
         self._line += 1
         if self._missing >= self._miss_limit:
-            # Search for a new VIS from the last good line on: a picture that
-            # started while this one was fading out must not be lost.
-            self._finish(events, self._last_good_start, complete_ok=False)
+            self._finish(events, complete_ok=False)
             return True
         if self._line == mode.lines:
             if self._missing <= 2:
                 self._confirm(events)
-            self._finish(events, start + self._line_len * scale, complete_ok=True)
+            self._finish(events, complete_ok=True)
             return True
+        # Audio still needed: the next line's sync search, and every held-back
+        # line (a relock renders them again).
         keep = start + self._line_len * scale - self._ms(_WIDE_SYNC_WINDOW_MS) - 2 * self._guard
-        # Keep audio back to the last good line: if the signal dies inside it,
-        # a new VIS may start right there (see the loss branch above).
-        keep = min(keep, self._last_good_start - self._ms(10))
-        self._trim(math.floor(keep) - 4)
+        if self._pending_lines:
+            first = self._pending_lines[0][0]
+            keep = min(keep, self._placement(first, self._predict(first))[0])
+        self._keep_from = keep - self._ms(2)
         return True
+
+    def _placement(self, k: int, fallback: float) -> tuple[float, float]:
+        """Line start and time scale of line ``k`` (regression if available)."""
+        fit = self._fit(k)
+        if fit is None:
+            return fallback - self._sync_off, 1.0
+        # Measured line length -> time scale of the sender (sample-rate offset).
+        scale = min(max(fit[1] / self._line_len, 0.98), 1.02)
+        return fit[0] - self._sync_off * scale, scale
+
+    def _render_pending(self) -> None:
+        if not self._pending_lines:
+            return
+        self._held = self._pending_lines[0][1]
+        rows: list[Row] = []
+        for k, _ in self._pending_lines:
+            start, scale = self._placement(k, self._predict(k))
+            rows.extend(self._rows(k, start, scale))
+        self._unconfirmed = rows
 
     def _relock(self, k: int, residual: float, tol: float) -> bool:
         """A sync far from the fit: accept only after several agreeing lines."""
@@ -443,13 +494,12 @@ class StreamDecoder:
         events.extend(self._unconfirmed)
         self._emitted += len(self._unconfirmed)
         self._unconfirmed = []
+        self._pending_lines = []
 
-    def _finish(self, events: list[Event], end: float, complete_ok: bool) -> None:
+    def _finish(self, events: list[Event], complete_ok: bool) -> None:
         complete = complete_ok and self._emitted == self._mode.height
         events.append(End(complete=complete, rows=self._emitted))
         self._mode = None
-        self._search_from = math.floor(end) - self._ms(5)
-        self._vis_cursor = self._search_from
 
     def _levels(self, start: float, offset: float, length: float) -> np.ndarray:
         """Mean frequency of each pixel of a scan -> levels 0..255."""

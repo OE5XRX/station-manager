@@ -311,4 +311,29 @@ def test_relock_after_a_timing_jump_keeps_decoding():
     assert events[-1] == End(complete=True, rows=256)
     _, got = _rows(events, m)
     err = np.abs(got.astype(int) - pic.astype(int)).mean(axis=(1, 2))
+    # Row 100 holds the jump itself (its audio is broken). The rows after it
+    # were decoded while the relock was still unconfirmed; they are rendered
+    # again at the corrected timing, so they must be clean too.
+    assert err[95:100].max() < 12
+    assert err[101:110].max() < 12
     assert err[110:].mean() < 12
+
+
+@pytest.mark.parametrize("shift", [-4, 0, 4])
+def test_same_mode_picture_aligned_with_a_lost_one(shift):
+    # The second picture's syncs land exactly where the lost one's would be:
+    # its VIS must still end the old picture instead of being glued into it.
+    rng = np.random.default_rng(12)
+    m = MODES["martin1"]
+    _, pcm = _clean("martin1")
+    line = m.line_ms * SR / 1000
+    # The first picture is cut so that the second one's line 0 starts exactly
+    # where the first one's line 76 would (VIS blocks have the same length).
+    cut = round(76 * line) + shift
+    audio = np.concatenate([_noise(0.5, rng, 300), pcm[:cut], pcm, _noise(1.0, rng, 300)])
+    events = _run(_awgn(audio, 20, rng))
+    kinds = [(type(e).__name__) for e in events if not isinstance(e, Row)]
+    assert kinds == ["Start", "End", "Start", "End"]
+    ends = [e for e in events if isinstance(e, End)]
+    assert ends[0].complete is False and ends[0].rows <= 76 - 2
+    assert ends[1] == End(complete=True, rows=256)
