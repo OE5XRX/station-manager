@@ -854,7 +854,8 @@ class StationAgent:
                 lambda slot: router_backend.resolve_node(slot, "rx"),
                 # One sstv_image can be ~0.9 MB (sstv.MAX_PNG_B64): the default 1 MB bound
                 # would leave no room for anything else. SSTV stops on link loss, so an
-                # outage adds at most one partial picture per slot.
+                # outage leaves at most two pictures per slot unacked (one that just ended
+                # plus the partial one); evictions are logged by the spool.
                 spool=Spool(max_bytes=4_000_000),
                 loop_executor=ThreadPoolExecutor(
                     max_workers=2, thread_name_prefix="decoder-units"

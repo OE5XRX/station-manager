@@ -49,7 +49,7 @@ MAX_LINE_BYTES = 64 * 1024
 # PD 120/180 picture (640x496 RGB) is ~1.3 MB as base64 PNG, so the PNG is re-encoded with
 # fewer bits per channel until its base64 fits this budget (leaves room for the JSON frame).
 MAX_PNG_B64 = 900_000
-# Bits per channel tried in order; 2 bits always fits (worst case ~0.45 MB base64).
+# Bits per channel tried in order (pure noise fits at 5 bits; 2 bits always fits).
 DEPTHS = (8, 6, 5, 4, 3, 2)
 
 Emit = Callable[[str, bool, dict], Awaitable[None]]
@@ -182,8 +182,13 @@ class SstvDecoderPlugin:
                 return
             if picture.verifying and set(picture.rows) - picture.verified:
                 # The unit's picture ended without the rows we hold beyond the replay: it is
-                # not ours (ours ended unseen). Ours goes out partial, the replay is the new one.
-                picture = await self._split(slot, picture, emit)
+                # not ours (ours ended unseen). Ours goes out partial, the replay is the new
+                # one — unless it is too small to keep (no ghost sstv_start for it).
+                picture = await self._split(slot, picture, emit, keep_new=False)
+                if picture is None:
+                    return
+            if self._pictures.get(slot) is not picture:
+                return  # finalize took it while we were waiting
             del self._pictures[slot]
             complete = msg.get("complete") is True and len(picture.rows) == picture.height
             await self._close(slot, picture, complete, emit)
@@ -206,7 +211,11 @@ class SstvDecoderPlugin:
             await self._close(slot, current, False, emit)
         await self._new_picture(slot, mode.key, emit)
 
-    async def _new_picture(self, slot, mode_key, emit, rows=None) -> _Picture:
+    async def _new_picture(self, slot, mode_key, emit, rows=None) -> _Picture | None:
+        """Open a picture; None if the decoder is being stopped (checked here because
+        every caller may have awaited an image emit, during which finalize ran)."""
+        if slot in self._finalizing:
+            return None
         mode = MODES[mode_key]
         picture = _Picture(uuid.uuid4().hex, mode.key, mode.width, mode.height, self._now())
         if rows:
@@ -224,16 +233,21 @@ class SstvDecoderPlugin:
         )
         for index in sorted(picture.rows):
             await self._line(picture, index, picture.rows[index], emit)
-        return picture
+        return picture if self._pictures.get(slot) is picture else None
 
-    async def _split(self, slot: int, old: _Picture, emit: Emit) -> _Picture:
+    async def _split(
+        self, slot: int, old: _Picture, emit: Emit, *, keep_new: bool = True
+    ) -> _Picture | None:
         """The replay is a different picture than ``old``: finalise ``old`` partial and
-        start a new picture from the replayed rows (the verified ones are identical)."""
-        del self._pictures[slot]
+        start a new picture from the replayed rows (the verified ones are identical).
+        ``keep_new=False`` (the replay already ended): skip a new picture below the 10 %
+        rule. None when no new picture was opened."""
+        self._pictures.pop(slot, None)
         await self._close(slot, old, False, emit)
-        return await self._new_picture(
-            slot, old.mode, emit, {i: old.rows[i] for i in old.verified}
-        )
+        rows = {i: old.rows[i] for i in old.verified}
+        if not keep_new and len(rows) < MIN_ROWS_FRACTION * old.height:
+            return None
+        return await self._new_picture(slot, old.mode, emit, rows)
 
     async def _on_row(self, slot: int, msg: dict, emit: Emit) -> None:
         picture = self._pictures.get(slot)
@@ -260,6 +274,8 @@ class SstvDecoderPlugin:
             if stored is not None or any(i < index for i in set(picture.rows) - picture.verified):
                 # A row differs, or the replay skipped a row we hold: not our picture.
                 picture = await self._split(slot, picture, emit)
+                if picture is None:
+                    return
             else:
                 picture.verifying = False  # past what we had: the replay matched
         if picture.rows.get(index) == rgb:

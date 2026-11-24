@@ -44,6 +44,9 @@ class _Instance:
     runtime_task: asyncio.Task | None = None
     stopping: bool = False
     link: int = 0  # connection generation whose start request created this instance
+    # Stopped because its link dropped: its output goes to the spool only (never live on a
+    # newer connection, where on_connected re-sends it in order after the snapshot).
+    link_lost: bool = False
 
 
 class DecoderHost:
@@ -111,6 +114,7 @@ class DecoderHost:
                 and getattr(self._plugins.get(inst.decoder), "stop_on_link_loss", False)
             ]
             for slot in doomed:
+                self._instances[slot].link_lost = True
                 try:
                     await self._stop_locked(slot, "link_lost")
                 except asyncio.CancelledError:
@@ -131,6 +135,8 @@ class DecoderHost:
         return await asyncio.get_running_loop().run_in_executor(self._executor, fn, *args)
 
     async def _state(self, inst: _Instance, state: str, detail: str | None = None) -> None:
+        if inst.link_lost:
+            return  # the next connection's snapshot reports it
         await self._send(protocol.build_decoder_state(inst.decoder, inst.slot, state, detail))
 
     # -- lifecycle ------------------------------------------------------------
@@ -366,8 +372,10 @@ class DecoderHost:
     async def _emit(self, inst: _Instance, kind: str, reliable: bool, data: dict) -> None:
         ts = self._now()
         if reliable:
-            await self._send(self._spool.add(inst.decoder, inst.slot, kind, data, ts))
-        elif self._send_fn is not None:
+            frame = self._spool.add(inst.decoder, inst.slot, kind, data, ts)
+            if not inst.link_lost:
+                await self._send(frame)
+        elif self._send_fn is not None and not inst.link_lost:
             frame = protocol.build_decoder_output(
                 inst.decoder, inst.slot, self._spool.epoch, 0, kind, False, data, ts
             )

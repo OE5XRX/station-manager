@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections import OrderedDict
 from collections.abc import Iterable
 
 from station_agent import protocol
+
+logger = logging.getLogger(__name__)
 
 
 class Spool:
@@ -38,9 +41,19 @@ class Spool:
         self._items[self._seq] = (frame, size)
         self._bytes += size
         while self._items and (len(self._items) > self.max_items or self._bytes > self.max_bytes):
-            _, (_, old_size) = self._items.popitem(last=False)
+            _, (old, old_size) = self._items.popitem(last=False)
             self._bytes -= old_size
             self.dropped += 1
+            # Every big frame (an SSTV picture), but small ones only now and then: a long
+            # outage drops one APRS frame per new one.
+            if old_size > 64 * 1024 or self.dropped % 100 == 1:
+                logger.warning(
+                    "decoder spool full: dropped unacked %s/%s frame (%d bytes, %d total)",
+                    old.get("decoder"),
+                    old.get("kind"),
+                    old_size,
+                    self.dropped,
+                )
         return frame
 
     def ack(self, epoch: str, seqs: Iterable[int]) -> int:
