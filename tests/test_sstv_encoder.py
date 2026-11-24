@@ -113,3 +113,31 @@ def test_encode_pd180_under_3s():
     t0 = time.perf_counter()
     encode(m, rgb)
     assert time.perf_counter() - t0 < 3.0
+
+
+def test_server_side_modules_are_pure_stdlib():
+    # The server imports modes/encoder/png; numpy is a station/dev-only dependency.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys; sys.modules['numpy'] = None; "
+        "import station_agent.sstv.modes, station_agent.sstv.encoder, station_agent.sstv.png"
+    )
+    subprocess.run(
+        [sys.executable, "-c", code], check=True, cwd=Path(__file__).resolve().parent.parent
+    )
+
+
+def test_server_code_never_imports_the_decoder():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    offenders = [
+        str(p.relative_to(root))
+        for top in ("apps", "config")
+        for p in (root / top).rglob("*.py")
+        if "sstv.decoder" in p.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
