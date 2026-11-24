@@ -29,7 +29,8 @@ _DEAD_STATES = {"failed", "inactive"}
 ABSENT_POLLS_BEFORE_STOP = 3
 
 # Upper bound for a plugin's ``finalize`` (e.g. SSTV encoding the partial picture) during a
-# stop: a slow or hung finalize must never keep the unit (and the RX node) busy.
+# stop: a slow or hung finalize must never keep the unit (and the RX node) busy. (The SSTV
+# plugin encodes in a shielded task, so its picture is still spooled after a timeout.)
 FINALIZE_TIMEOUT_S = 2.0
 
 

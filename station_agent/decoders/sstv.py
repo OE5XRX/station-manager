@@ -44,6 +44,13 @@ CONNECT_GIVE_UP_S = 20.0
 MAX_EMPTY_SESSIONS = 5
 # A line is at most one row of PD 120/180: 640 * 3 bytes base64 + JSON, far below this.
 MAX_LINE_BYTES = 64 * 1024
+# The server (daphne) closes the control WebSocket on a message above 1 MiB, and a reliable
+# frame that never fits would be re-sent from the spool after every reconnect. A noisy
+# PD 120/180 picture (640x496 RGB) is ~1.3 MB as base64 PNG, so the PNG is re-encoded with
+# fewer bits per channel until its base64 fits this budget (leaves room for the JSON frame).
+MAX_PNG_B64 = 900_000
+# Bits per channel tried in order; 2 bits always fits (worst case ~0.45 MB base64).
+DEPTHS = (8, 6, 5, 4, 3, 2)
 
 Emit = Callable[[str, bool, dict], Awaitable[None]]
 
@@ -57,8 +64,9 @@ class _Picture:
     heard_at: float
     rows: dict[int, bytes] = field(default_factory=dict)
     # Set by a replayed "start" after a reconnect: rows are compared with the stored ones
-    # until the replay reaches rows we did not have yet.
+    # until the replay reaches rows we did not have yet; ``verified`` = indices that matched.
     verifying: bool = False
+    verified: set[int] = field(default_factory=set)
 
 
 def _valid_start(msg: dict):
@@ -89,6 +97,10 @@ class SstvDecoderPlugin:
         self._monotonic = monotonic
         self._executor = executor
         self._pictures: dict[int, _Picture] = {}  # slot -> picture being received
+        # slot -> image emits in flight (encoding a finished picture); finalize waits for them.
+        self._closing: dict[int, set[asyncio.Task]] = {}
+        # Slots whose decoder is being stopped: the reader's further lines are ignored.
+        self._finalizing: set[int] = set()
 
     def env(self, slot: int, params: dict, rx_node: str) -> dict[str, str]:
         return {
@@ -114,6 +126,7 @@ class SstvDecoderPlugin:
 
     async def run(self, slot: int, emit: Emit) -> None:
         self._pictures.pop(slot, None)  # never inherit a picture from an earlier run
+        self._finalizing.discard(slot)
         port = SSTV_PORT_BASE + slot
         empty_sessions = 0
         while True:
@@ -149,6 +162,8 @@ class SstvDecoderPlugin:
     # -- events -------------------------------------------------------------------
 
     async def _handle(self, slot: int, line: bytes, emit: Emit, first: bool) -> None:
+        if slot in self._finalizing:
+            return  # being stopped: no new picture, no rows the final image cannot carry
         try:
             msg = json.loads(line)
         except (UnicodeDecodeError, ValueError):
@@ -162,10 +177,16 @@ class SstvDecoderPlugin:
         elif kind == "row":
             await self._on_row(slot, msg, emit)
         elif kind == "end":
-            picture = self._pictures.pop(slot, None)
-            if picture is not None:
-                complete = msg.get("complete") is True and len(picture.rows) == picture.height
-                await self._emit_image(picture, complete, emit)
+            picture = self._pictures.get(slot)
+            if picture is None:
+                return
+            if picture.verifying and set(picture.rows) - picture.verified:
+                # The unit's picture ended without the rows we hold beyond the replay: it is
+                # not ours (ours ended unseen). Ours goes out partial, the replay is the new one.
+                picture = await self._split(slot, picture, emit)
+            del self._pictures[slot]
+            complete = msg.get("complete") is True and len(picture.rows) == picture.height
+            await self._close(slot, picture, complete, emit)
 
     async def _on_start(self, slot: int, msg: dict, emit: Emit, *, replay: bool) -> None:
         mode = _valid_start(msg)
@@ -178,13 +199,15 @@ class SstvDecoderPlugin:
                 # Probably the unit replaying our picture after a reconnect: keep it and
                 # check the replayed rows against what we have.
                 current.verifying = True
+                current.verified = set()
                 return
             # A new picture while one is open: its "end" got lost (e.g. while disconnected).
             del self._pictures[slot]
-            await self._emit_image(current, False, emit)
-        await self._new_picture(slot, mode, emit)
+            await self._close(slot, current, False, emit)
+        await self._new_picture(slot, mode.key, emit)
 
-    async def _new_picture(self, slot, mode, emit, rows=None) -> _Picture:
+    async def _new_picture(self, slot, mode_key, emit, rows=None) -> _Picture:
+        mode = MODES[mode_key]
         picture = _Picture(uuid.uuid4().hex, mode.key, mode.width, mode.height, self._now())
         if rows:
             picture.rows.update(rows)
@@ -199,7 +222,18 @@ class SstvDecoderPlugin:
                 "height": picture.height,
             },
         )
+        for index in sorted(picture.rows):
+            await self._line(picture, index, picture.rows[index], emit)
         return picture
+
+    async def _split(self, slot: int, old: _Picture, emit: Emit) -> _Picture:
+        """The replay is a different picture than ``old``: finalise ``old`` partial and
+        start a new picture from the replayed rows (the verified ones are identical)."""
+        del self._pictures[slot]
+        await self._close(slot, old, False, emit)
+        return await self._new_picture(
+            slot, old.mode, emit, {i: old.rows[i] for i in old.verified}
+        )
 
     async def _on_row(self, slot: int, msg: dict, emit: Emit) -> None:
         picture = self._pictures.get(slot)
@@ -220,20 +254,16 @@ class SstvDecoderPlugin:
             return
         if picture.verifying:
             stored = picture.rows.get(index)
-            if stored is None:
-                picture.verifying = False  # past what we had: the replay matched
-            elif stored == rgb:
-                return  # replayed row we already hold (and already showed)
+            if stored == rgb:
+                picture.verified.add(index)  # replayed row we already hold (and showed)
+                return
+            if stored is not None or any(i < index for i in set(picture.rows) - picture.verified):
+                # A row differs, or the replay skipped a row we hold: not our picture.
+                picture = await self._split(slot, picture, emit)
             else:
-                # Different picture than ours (ours ended unseen): finalise ours, keep the
-                # replayed rows that matched (they are the new picture's) and go on.
-                del self._pictures[slot]
-                await self._emit_image(picture, False, emit)
-                mode = MODES[picture.mode]
-                kept = {i: r for i, r in picture.rows.items() if i < index}
-                picture = await self._new_picture(slot, mode, emit, kept)
-                for i in sorted(kept):
-                    await self._line(picture, i, kept[i], emit)
+                picture.verifying = False  # past what we had: the replay matched
+        if picture.rows.get(index) == rgb:
+            return  # repeated row: nothing new to show
         picture.rows[index] = rgb
         await self._line(picture, index, rgb, emit)
 
@@ -248,6 +278,20 @@ class SstvDecoderPlugin:
             },
         )
 
+    # -- final picture ----------------------------------------------------------------
+
+    async def _close(self, slot: int, picture: _Picture, complete: bool, emit: Emit) -> None:
+        await self._background(slot, self._emit_image(picture, complete, emit))
+
+    async def _background(self, slot: int, coro) -> None:
+        """Run an image emit in its own task: neither a reader cancelled mid-encode nor the
+        host's finalize timeout loses the picture (it is spooled when done)."""
+        task = asyncio.ensure_future(coro)
+        tasks = self._closing.setdefault(slot, set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        await asyncio.shield(task)
+
     async def _emit_image(self, picture: _Picture, complete: bool, emit: Emit) -> None:
         if len(picture.rows) < MIN_ROWS_FRACTION * picture.height:
             logger.info(
@@ -257,12 +301,10 @@ class SstvDecoderPlugin:
                 picture.height,
             )
             return
-        stride = picture.width * 3
-        black = bytes(stride)  # missing rows stay black
-        rgb = b"".join(picture.rows.get(y, black) for y in range(picture.height))
+        rows = dict(picture.rows)
         # zlib on ~1 MB (PD 120/180) takes a while on a CM4: off the control event loop.
-        png = await asyncio.get_running_loop().run_in_executor(
-            self._executor, encode_png, picture.width, picture.height, rgb
+        png_b64, depth = await asyncio.get_running_loop().run_in_executor(
+            self._executor, _encode, picture.width, picture.height, rows
         )
         await emit(
             "sstv_image",
@@ -271,14 +313,39 @@ class SstvDecoderPlugin:
                 "picture_id": picture.picture_id,
                 "mode": picture.mode,
                 "complete": complete,
-                "rows": len(picture.rows),
+                "rows": len(rows),
                 "heard_at": picture.heard_at,
-                "png": base64.b64encode(png).decode("ascii"),
+                "depth": depth,
+                "png": png_b64,
             },
         )
 
     async def finalize(self, slot: int, emit: Emit) -> None:
         """The host is stopping this decoder: save the picture so far (partial)."""
+        self._finalizing.add(slot)
         picture = self._pictures.pop(slot, None)
-        if picture is not None:
-            await self._emit_image(picture, False, emit)
+        pending = list(self._closing.get(slot, ()))
+
+        async def last() -> None:
+            if pending:  # a picture that just ended is still being encoded: keep the order
+                await asyncio.wait(pending)
+            if picture is not None:
+                await self._emit_image(picture, False, emit)
+
+        await self._background(slot, last())
+
+
+def _encode(width: int, height: int, rows: dict[int, bytes]) -> tuple[str, int]:
+    """Base64 PNG of the rows (missing ones black) and the bits per channel it kept."""
+    black = bytes(width * 3)
+    rgb = b"".join(rows.get(y, black) for y in range(height))
+    for depth in DEPTHS:
+        data = rgb if depth == 8 else rgb.translate(_MASKS[depth])
+        png_b64 = base64.b64encode(encode_png(width, height, data)).decode("ascii")
+        if len(png_b64) <= MAX_PNG_B64:
+            return png_b64, depth
+    raise ValueError(f"sstv picture {width}x{height} does not fit {MAX_PNG_B64} bytes")
+
+
+# Byte tables keeping the top ``depth`` bits of every channel value.
+_MASKS = {d: bytes(v & (0xFF << (8 - d)) & 0xFF for v in range(256)) for d in DEPTHS}

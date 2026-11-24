@@ -509,3 +509,71 @@ def test_reconnect_does_not_stop_decoder_when_first_scan_misses(tmp_path):
     states = [m["state"] for m in second if m["type"] == "decoder_state"]
     assert "stopped" not in states
     assert units.calls.count(("start", "aprs", 1)) == 1
+
+
+class _LinkBoundPlugin:
+    """Stands in for SSTV: must not outlive the control link; emits a final image."""
+
+    name = "sstv"
+    stop_on_link_loss = True
+
+    def env(self, slot, params, rx_node):
+        return {"OE5XRX_SLOT": str(slot)}
+
+    async def run(self, slot, emit):
+        await asyncio.Event().wait()
+
+    async def finalize(self, slot, emit):
+        await emit("sstv_image", True, {"picture_id": "p1"})
+
+
+def test_link_loss_stops_link_bound_decoder_and_resends_its_output(tmp_path):
+    from station_agent.decoders.host import DecoderHost
+
+    units = _FakeUnits()
+    conns = []
+    done = asyncio.Event()
+
+    async def server(ws):
+        conn = []
+        conns.append(conn)
+        idx = len(conns)
+        async for raw in ws:
+            msg = json.loads(raw)
+            conn.append(msg)
+            if idx == 1 and msg["type"] == "decoder_snapshot":
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "decoder_start",
+                            "decoder": "sstv",
+                            "slot": 1,
+                            "params": {},
+                            "request_id": "d1",
+                        }
+                    )
+                )
+            elif idx == 1 and msg["type"] == "decoder_state" and msg["state"] == "running":
+                await ws.close()
+                return
+            elif idx == 2 and msg["type"] == "decoder_output":
+                done.set()
+
+    def factory():
+        return DecoderHost(units, {"sstv": _LinkBoundPlugin()}, lambda slot: "node.rx")
+
+    _run_client(
+        tmp_path,
+        server,
+        lambda cfg: None,
+        {"decoder_host_factory": factory},
+        done,
+    )
+    second = conns[1]
+    snapshot = next(m for m in second if m["type"] == "decoder_snapshot")
+    assert snapshot["decoders"] == []
+    output = next(m for m in second if m["type"] == "decoder_output")
+    assert output["kind"] == "sstv_image" and output["data"] == {"picture_id": "p1"}
+    assert second.index(snapshot) < second.index(output)
+    assert ("stop", "sstv", 1) in units.calls
