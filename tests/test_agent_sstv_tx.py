@@ -1234,3 +1234,27 @@ def test_stale_artefacts_removed_at_startup(tmp_path):
     (rt / "keep.txt").write_bytes(b"x")
     _manager(tmp_path)
     assert sorted(p.name for p in rt.iterdir()) == ["keep.txt"]
+
+
+def test_raising_key_and_unconfirmed_unkey_reported(fw, tmp_path):
+    def fail(sc, module, op, cap, token, trace):
+        if (op, cap, token) == ("do", "ptt", "true"):
+            sc.execute(module, op, cap, token, trace)
+            raise OSError("line dropped after the key went out")
+        if (op, cap, token) == ("do", "ptt", "false"):
+            return {"ok": False, "error": "timeout"}
+        return sc.execute(module, op, cap, token, trace)
+
+    transport = _failing_transport(fail)
+    mgr = _manager(tmp_path)
+    b, col = _broker(fw, mgr)
+    b._transport_factory = transport
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+        assert not b.slot_busy(1)
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "unkey_unconfirmed")
+    assert transport.calls.count(("do", "ptt", "false")) == 2
