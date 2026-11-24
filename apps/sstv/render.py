@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 from django.conf import settings
 from django.utils.translation import gettext as _
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageMath, ImageOps, UnidentifiedImageError
 
 from station_agent.sstv.modes import Mode
 
@@ -21,6 +21,11 @@ ALLOWED_FORMATS = ("JPEG", "PNG", "WEBP", "GIF")
 MAX_IMAGE_PIXELS = 40_000_000
 # JPEGs are decoded at a reduced scale (DCT draft) when far larger than any mode.
 _JPEG_DRAFT_SIZE = (1280, 1280)
+# Right after decoding, every picture is cut to the working size before any
+# further copy (transpose, composite): the centre at most 2:1 (wider than any
+# mode, so the later cover-crop sees the same region), short side >= 1024 px.
+_MAX_ASPECT = 2
+_WORK_SHORT_SIDE = 1024
 
 _FONT_PATH = settings.BASE_DIR / "static" / "fonts" / "IBMPlexSans-Bold.woff2"
 _LOCAL_TZ = zoneinfo.ZoneInfo("Europe/Vienna")
@@ -73,7 +78,7 @@ def load_upload(f, *, max_bytes: int = 15 * 1024 * 1024) -> Image.Image:
         width, height = img.size
         if width * height > MAX_IMAGE_PIXELS:
             raise bomb
-        if img.format == "JPEG":
+        if img.format in ("JPEG", "MPO"):  # phone JPEGs with a second frame open as MPO
             img.draft(None, _JPEG_DRAFT_SIZE)
         img.load()
     except Image.DecompressionBombError:
@@ -82,7 +87,38 @@ def load_upload(f, *, max_bytes: int = 15 * 1024 * 1024) -> Image.Image:
         raise
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, EOFError):
         raise _unsupported() from None
-    return _to_rgb(_upright(img))
+    return _to_rgb(_upright(_shrink(_reducible(img))))
+
+
+def _reducible(img: Image.Image) -> Image.Image:
+    """8-bit modes ``reduce()`` supports; transparency becomes an alpha channel."""
+    if img.mode == "I" or img.mode.startswith("I;16"):
+        # 16-bit greyscale: scale to 8 bit (a plain convert would clip to white).
+        wide = img.convert("I")
+        grey = wide.point(lambda v: v * (1 / 256)).convert("L")
+        key = img.info.get("transparency")
+        if not isinstance(key, int):
+            return grey
+        alpha = ImageMath.lambda_eval(lambda a: (a["x"] != key) * 255, x=wide).convert("L")
+        merged = Image.merge("LA", (grey, alpha))
+        merged.info = {k: v for k, v in img.info.items() if k != "transparency"}  # keep EXIF
+        return merged
+    if img.mode in ("P", "1"):
+        return img.convert("RGBA" if "transparency" in img.info else "RGB")
+    return img
+
+
+def _shrink(img: Image.Image) -> Image.Image:
+    """Centre at most ``_MAX_ASPECT``:1, then integer-reduce to the working size."""
+    w, h = img.size
+    if w > _MAX_ASPECT * h:
+        x0 = (w - _MAX_ASPECT * h) // 2
+        img = img.crop((x0, 0, x0 + _MAX_ASPECT * h, h))
+    elif h > _MAX_ASPECT * w:
+        y0 = (h - _MAX_ASPECT * w) // 2
+        img = img.crop((0, y0, w, y0 + _MAX_ASPECT * w))
+    factor = min(img.size) // _WORK_SHORT_SIDE
+    return img.reduce(factor) if factor >= 2 else img
 
 
 def _upright(img: Image.Image) -> Image.Image:
@@ -98,9 +134,6 @@ def _to_rgb(img: Image.Image) -> Image.Image:
         canvas = Image.new("RGBA", rgba.size, (*_BLACK, 255))
         canvas.alpha_composite(rgba)
         return canvas.convert("RGB")
-    if img.mode == "I" or img.mode.startswith("I;16"):
-        # 16-bit greyscale: scale to 8 bit (a plain convert would clip to white).
-        img = img.convert("I").point(lambda v: v * (1 / 256)).convert("L")
     return img.convert("RGB")
 
 

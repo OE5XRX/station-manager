@@ -381,3 +381,57 @@ def test_large_jpeg_is_decoded_reduced_but_fits():
     assert img.width >= 1280 and img.height >= 1280 and img.width < 6000
     out = render.fit_to_mode(img, MODES["pd180"])
     assert out.size == (640, 496)
+
+
+# --- memory: big pictures are cut to the working size right after decoding ----
+
+
+def test_big_png_is_reduced_after_decoding():
+    big = Image.new("RGBA", (8000, 5000), (10, 200, 30, 255))
+    img = render.load_upload(_file(_encode(big, "PNG")))
+    assert img.mode == "RGB" and 1024 <= min(img.size) < 2048
+    assert img.size == (8000 // 4, 5000 // 4)
+    assert img.getpixel((10, 10)) == (10, 200, 30)
+
+
+def test_panorama_keeps_only_the_centre_two_to_one():
+    pano = Image.new("L", (9000, 1000), 0)
+    pano.paste(255, (4000, 0, 5000, 1000))  # white centre
+    img = render.load_upload(_file(_encode(pano, "PNG")))
+    assert img.size == (2000, 1000)
+    assert img.getpixel((1000, 500)) == (255, 255, 255)
+    out = render.fit_to_mode(img, MODES["martin1"])
+    reference = render.fit_to_mode(pano.convert("RGB"), MODES["martin1"])
+    assert out.tobytes() == reference.tobytes()
+
+
+def test_exif_rotation_survives_the_shrink():
+    img = Image.new("RGB", (3000, 2200), (255, 0, 0))
+    img.paste((0, 0, 255), (1500, 0, 3000, 2200))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    out = render.load_upload(_file(_encode(img, "PNG", exif=exif.tobytes())))
+    assert out.size == (1100, 1500)
+    top, bottom = out.getpixel((550, 50)), out.getpixel((550, 1450))
+    assert top[0] > 200 and top[2] < 60, top
+    assert bottom[2] > 200 and bottom[0] < 60, bottom
+
+
+def test_mpo_phone_jpeg_is_decoded_reduced():
+    frames = [Image.new("RGB", (6000, 4000), (255, 0, 0)), Image.new("RGB", (64, 48))]
+    data = _encode(frames[0], "MPO", save_all=True, append_images=frames[1:])
+    assert Image.open(io.BytesIO(data)).format == "MPO"
+    img = render.load_upload(_file(data))
+    assert img.size == (3000, 2000)
+    r, g, b = img.getpixel((10, 10))
+    assert r > 200 and g < 60 and b < 60
+
+
+def test_sixteen_bit_greyscale_with_transparency_is_scaled():
+    img = Image.new("I;16", (4, 4), 30000)
+    for xy in [(x, y) for x in range(2) for y in range(4)]:
+        img.putpixel(xy, 40000)  # the tRNS key: transparent (paste() mangles I;16 ints)
+    out = render.load_upload(_file(_encode(img, "PNG", transparency=40000)))
+    assert out.getpixel((0, 0)) == (0, 0, 0)
+    r, g, b = out.getpixel((3, 0))
+    assert 110 <= r <= 124 and r == g == b
