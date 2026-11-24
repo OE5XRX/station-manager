@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 20:37+0100\n"
+"POT-Creation-Date: 2026-11-24 20:41+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -6045,6 +6045,113 @@ msgstr "Schwellwert-Zustand"
 #: apps/monitoring/models.py:263
 msgid "threshold states"
 msgstr "Schwellwert-Zustände"
+
+#: apps/monitoring/notifications.py:78
+#, python-format
+msgid "[OE5XRX] %(severity)s: %(title)s"
+msgstr "[OE5XRX] %(severity)s: %(title)s"
+
+#: apps/monitoring/notifications.py:91 apps/monitoring/notifications.py:159
+#, python-format
+msgid "Station: %(station)s"
+msgstr "Station: %(station)s"
+
+#: apps/monitoring/notifications.py:93
+#, python-format
+msgid "Severity: %(severity)s"
+msgstr "Schweregrad: %(severity)s"
+
+#: apps/monitoring/notifications.py:95
+#, python-format
+msgid "Alert: %(title)s"
+msgstr "Alarm: %(title)s"
+
+#: apps/monitoring/notifications.py:97
+#, python-format
+msgid "Time: %(time)s"
+msgstr "Zeit: %(time)s"
+
+#: apps/monitoring/notifications.py:195
+#, python-format
+msgid "Unknown channel: %(channel)s"
+msgstr "Unbekannter Kanal: %(channel)s"
+
+#: apps/monitoring/notifications.py:207
+msgid "Web-Push is not enabled (no VAPID keys configured)."
+msgstr "Web-Push ist nicht aktiviert (keine VAPID-Keys konfiguriert)."
+
+#: apps/monitoring/notifications.py:210
+msgid "No requesting user to send the test push to."
+msgstr "Kein anfragender Benutzer, an den der Test-Push gehen kann."
+
+#: apps/monitoring/notifications.py:215
+msgid ""
+"No push device registered — open this app from the home screen and enable "
+"push on this device first."
+msgstr ""
+"Kein Push-Gerät registriert — öffne die App zuerst über den Homescreen und "
+"aktiviere Push auf diesem Gerät."
+
+#: apps/monitoring/notifications.py:223 apps/monitoring/notifications.py:268
+msgid "[OE5XRX] Test notification"
+msgstr "[OE5XRX] Testbenachrichtigung"
+
+#: apps/monitoring/notifications.py:224
+msgid "Web-Push is working correctly."
+msgstr "Web-Push funktioniert."
+
+#: apps/monitoring/notifications.py:230
+msgid ""
+"Push delivery failed for all your registered devices — a device subscription "
+"may have expired (re-enable push here), or the push service rejected the "
+"request (check the VAPID config and server logs)."
+msgstr ""
+"Push-Zustellung an alle deine registrierten Geräte fehlgeschlagen — ein "
+"Geräte-Abo ist eventuell abgelaufen (aktiviere Push hier neu), oder der Push-"
+"Dienst hat die Anfrage abgelehnt (prüf die VAPID-Konfiguration und die "
+"Server-Logs)."
+
+#: apps/monitoring/notifications.py:245
+msgid "Email notifications are not enabled (ALERT_EMAIL_ENABLED)."
+msgstr "E-Mail-Benachrichtigungen sind nicht aktiviert (ALERT_EMAIL_ENABLED)."
+
+#: apps/monitoring/notifications.py:262
+msgid ""
+"No recipient — set your user's email or configure a Club admin with email."
+msgstr ""
+"Kein Empfänger — hinterlege deine E-Mail-Adresse oder richte einen Vereins-"
+"Admin mit E-Mail-Adresse ein."
+
+#: apps/monitoring/notifications.py:270
+#, python-format
+msgid ""
+"This is a test notification from OE5XRX Station Manager.\n"
+"Sent at: %(time)s\n"
+"\n"
+"If you received this, email notifications are working correctly."
+msgstr ""
+"Das ist eine Testbenachrichtigung vom OE5XRX Station Manager.\n"
+"Gesendet: %(time)s\n"
+"\n"
+"Wenn du sie bekommen hast, funktionieren die E-Mail-Benachrichtigungen."
+
+#: apps/monitoring/notifications.py:292
+msgid "Telegram notifications are not enabled (ALERT_TELEGRAM_ENABLED)."
+msgstr ""
+"Telegram-Benachrichtigungen sind nicht aktiviert (ALERT_TELEGRAM_ENABLED)."
+
+#: apps/monitoring/notifications.py:298
+msgid "Telegram bot token or chat ID not configured."
+msgstr "Telegram-Bot-Token oder Chat-ID nicht konfiguriert."
+
+#: apps/monitoring/notifications.py:302
+#, python-format
+msgid ""
+"Test notification successful.\n"
+"Sent at: %(time)s"
+msgstr ""
+"Testbenachrichtigung erfolgreich.\n"
+"Gesendet: %(time)s"
 
 #: apps/monitoring/rules.py:78
 msgid ""
