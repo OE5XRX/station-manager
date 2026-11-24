@@ -154,12 +154,14 @@ Spec: `docs/superpowers/specs/2026-11-24-i18n-de-design.md` (dort auch Glossar +
 - **`.mo` wird nie committet** (gitignored): Dockerfile, CI und die Test-Session-Fixture (`tests/conftest.py`)
   kompilieren selbst.
 - **Sprache ↔ User:** `User.language` ist die Wahrheit; Cookie, Sprach-Switcher (`/i18n/setlang/`, eigener View),
-  Login und `UserLanguageMiddleware` (eingeloggt ohne passenden Cookie → Redirect auf das `/<lang>/`-Präfix)
-  halten sie synchron. In Tests `user.language` oder `client.cookies["django_language"]` setzen.
+  Login und `UserLanguageMiddleware` halten sie synchron (eingeloggt **ohne** Cookie → einmal Redirect auf das
+  `/<lang>/`-Präfix; mit abweichendem Cookie → nur Cookie nachziehen, nie Redirect — explizite Präfix-Links
+  bleiben). WebSockets haben kein Präfix: `AreaConsumerMixin.dispatch` aktiviert `User.language`. In Tests `user.language` oder `client.cookies["django_language"]` setzen.
 - **JS:** Katalog unter `/<lang>/jsi18n/` (vor `app.js` eingebunden). Jede JS-Datei hat einen Shim
   (`var gettext = globalThis.gettext || …`), in klassischen Scripts **funktionslokal** (`var` im IIFE — sonst
   globale Kollision), damit Node-Tests ohne Katalog laufen. Browser cachen den Katalog nur 5 min
-  (+ `Last-Modified`), serverseitig 24 h.
+  (+ `Last-Modified` → 304); **kein** serverseitiges `cache_page` (Vary: Cookie + Query-String-Keys würden den
+  geteilten LocMem-Cache fluten).
 - **Zahlen in Attributen/JS** müssen maschinenlesbar bleiben (`de` macht `0,5`): `{% localize off %}` bzw.
   `|unlocalize`, `NumberInput` mit `lang="en"`. `tests/test_i18n_locale_formats.py` scannt gerenderte Seiten.
 - `{{ x|timesince }} ago` nie zusammenstückeln → **ein** `{% blocktrans %}` (Wortstellung im Deutschen).

@@ -21,6 +21,7 @@ from channels.db import database_sync_to_async
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.db import transaction
+from django.utils import translation
 from django.utils.translation import gettext_lazy as _
 from rest_framework.permissions import BasePermission
 
@@ -497,6 +498,20 @@ class AreaConsumerMixin:
     area: str | None = None
     connect_verb: str = "view"
     _recheck_task: asyncio.Task | None = None
+
+    async def dispatch(self, message):
+        # WS frames carry no locale prefix: user-visible texts (denied frames,
+        # error messages) follow the user's User.language. asyncio tasks spawned
+        # while handling a frame (rechecks, timeouts) inherit the context.
+        from apps.accounts.language import is_supported_language
+
+        user = self.scope.get("user")
+        language = getattr(user, "language", None) if user and user.is_authenticated else None
+        if not is_supported_language(language):
+            await super().dispatch(message)
+            return
+        with translation.override(language):
+            await super().dispatch(message)
 
     async def fresh_user(self):
         # database_sync_to_async closes stale/broken DB connections around the call.

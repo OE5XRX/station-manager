@@ -323,11 +323,13 @@ class UserLanguageMiddleware:
     * on a ``GET`` to a locale-prefixed UI page whose prefix differs from
       ``user.language`` (not HTMX) redirects once to the translated URL.
 
-    Once the cookie exists it does nothing — an explicit ``/en/...`` link is
-    respected. Machine surfaces (:pyattr:`EXEMPT_PATH_PREFIXES`, the JS
-    catalogue) are never touched; WebSockets don't run through HTTP
-    middleware. A cookie the view itself set (switcher, profile) wins.
-    Placed directly after ``AuthenticationMiddleware``.
+    Once the cookie exists it never redirects — an explicit ``/en/...`` link is
+    respected — but a cookie that differs from ``user.language`` is re-set (a
+    change made on another device reaches this browser). Machine surfaces
+    (:pyattr:`EXEMPT_PATH_PREFIXES`, the JS catalogue) are never touched;
+    WebSockets don't run through HTTP middleware. A cookie the view itself
+    set (switcher, profile) wins. Placed directly after
+    ``AuthenticationMiddleware``.
     """
 
     EXEMPT_PATH_PREFIXES: Final[tuple[str, ...]] = (

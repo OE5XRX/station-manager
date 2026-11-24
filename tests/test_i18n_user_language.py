@@ -364,3 +364,31 @@ def test_middleware_anonymous_untouched(client):
     r = client.get(_login_url("en"))
     assert r.status_code == 200
     assert COOKIE not in r.cookies
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("language", "expected"), [("de", "de"), ("en", "en"), ("xx", None)])
+def test_area_consumer_dispatch_activates_user_language(django_user_model, language, expected):
+    """Every AreaConsumerMixin consumer (control, audio, terminal, status) handles
+    frames under User.language — WS has no locale prefix."""
+    import asyncio
+
+    from django.utils import translation
+
+    from apps.accounts.permissions import AreaConsumerMixin
+
+    class _Base:
+        async def dispatch(self, message):
+            self.seen = translation.get_language()
+
+    class _Consumer(AreaConsumerMixin, _Base):
+        pass
+
+    user = django_user_model.objects.create(username=f"ws-{language}", language=language)
+    consumer = _Consumer()
+    consumer.scope = {"user": user}
+    asyncio.run(consumer.dispatch({"type": "websocket.receive"}))
+    if expected is None:
+        assert consumer.seen == translation.get_language()  # left untouched
+    else:
+        assert consumer.seen == expected
