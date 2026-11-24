@@ -542,7 +542,7 @@ class ModuleOta:
 
     def _busy(self, slot: int) -> bool:
         if self._control is not None and self._control.slot_busy(slot):
-            logger.info("module_ota: slot %s busy (PTT); retry next cycle", slot)
+            logger.info("module_ota: slot %s busy (PTT/SSTV TX); retry next cycle", slot)
             return True
         if self._audio is not None and self._audio.slot_active(slot):
             logger.info("module_ota: slot %s has live TX/diag audio; retry next cycle", slot)
