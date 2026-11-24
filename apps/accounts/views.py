@@ -162,6 +162,15 @@ def set_language(request):
     ):
         request.user.language = language
         request.user.save(update_fields=["language"])
+    # Django's translate_url resolves ``next`` under the *active* language, so
+    # a ``next`` whose prefix differs from the cookie language comes back
+    # untranslated; resolve it under its own prefix instead (same as login).
+    if (
+        request.method == "POST"
+        and is_supported_language(language)
+        and response.has_header("Location")
+    ):
+        response["Location"] = localized_url(response["Location"], language)
     return response
 
 

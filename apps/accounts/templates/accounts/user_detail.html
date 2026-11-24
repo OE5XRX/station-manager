@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n %}
+{% load i18n l10n %}
 
 {% block title %}{{ object.username }} · OE5XRX{% endblock %}
 
@@ -238,7 +238,7 @@
           {% if is_admin_view %}
             {% if object.latitude is not None or object.longitude is not None %}
               <dt>{% trans "Lat/Lon (debug)" %}</dt>
-              <dd class="t-mono-sm t-muted">{{ object.latitude }}, {{ object.longitude }}</dd>
+              <dd class="t-mono-sm t-muted">{{ object.latitude|unlocalize }}, {{ object.longitude|unlocalize }}</dd>
             {% endif %}
           {% endif %}
           {% if "is_directory_visible" in visible_fields %}

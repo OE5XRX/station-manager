@@ -7,7 +7,7 @@ import logging
 import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from django.utils import timezone
+from django.utils import timezone, translation
 from django.utils.translation import gettext
 
 from apps.accounts.permissions import (
@@ -86,6 +86,9 @@ _SCAN_ERRORS = {
 
 # Agent scan states that tune a module: the operator mic must follow (gate tx route).
 _SCAN_TUNED_STATES = frozenset({"active", "held"})
+
+
+_LANGUAGE_CODES = frozenset(code for code, _name in django.conf.settings.LANGUAGES)
 
 
 class AgentControlConsumer(AsyncWebsocketConsumer):
@@ -901,6 +904,14 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     """
 
     area = "control"
+
+    async def dispatch(self, message):
+        # WS frames have no locale prefix; user-visible error texts follow the
+        # operator's User.language (asyncio tasks spawned here inherit it).
+        user = self.scope.get("user")
+        language = getattr(user, "language", None) if user and user.is_authenticated else None
+        with translation.override(language if language in _LANGUAGE_CODES else None):
+            await super().dispatch(message)
 
     async def connect(self):
         self.station_id = self.scope["url_route"]["kwargs"]["station_id"]

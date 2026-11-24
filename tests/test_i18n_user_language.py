@@ -290,12 +290,31 @@ def test_middleware_matching_prefix_only_sets_cookie(client, de_user):
 
 
 @pytest.mark.django_db
-def test_middleware_with_cookie_does_nothing(client, de_user):
+def test_middleware_with_cookie_never_redirects_but_syncs_cookie(client, de_user):
+    """Explicit prefix is respected; the cookie follows User.language (other device)."""
     client.force_login(de_user)
     client.cookies[COOKIE] = "en"
     r = client.get("/en/stations/")
     assert r.status_code == 200
+    assert r.cookies[COOKIE].value == "de"
+
+
+@pytest.mark.django_db
+def test_middleware_with_matching_cookie_does_nothing(client, de_user):
+    client.force_login(de_user)
+    client.cookies[COOKIE] = "de"
+    r = client.get("/en/stations/")
+    assert r.status_code == 200
     assert COOKIE not in r.cookies
+
+
+@pytest.mark.django_db
+def test_switcher_next_with_other_prefix_than_cookie_is_translated(client, member_user):
+    client.force_login(member_user)
+    client.cookies[COOKIE] = "de"
+    r = client.post("/i18n/setlang/", {"language": "de", "next": "/en/accounts/profile/"})
+    assert r.status_code == 302
+    assert r["Location"] == "/de/accounts/profile/"
 
 
 @pytest.mark.django_db

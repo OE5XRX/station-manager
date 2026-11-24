@@ -362,17 +362,23 @@ class UserLanguageMiddleware:
             set_language_cookie,
         )
 
+        # Path check first: exempt paths never touch the (lazy) user/session.
+        if self._is_exempt_path(request.path):
+            return self.get_response(request)
         user = getattr(request, "user", None)
-        if (
-            user is None
-            or not user.is_authenticated
-            or settings.LANGUAGE_COOKIE_NAME in request.COOKIES
-            or not is_supported_language(user.language)
-            or self._is_exempt_path(request.path)
-        ):
+        if user is None or not user.is_authenticated or not is_supported_language(user.language):
             return self.get_response(request)
 
         language = user.language
+        cookie = request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME)
+        if cookie is not None:
+            # Cookie present: an explicit prefixed URL is respected (no
+            # redirect), but the cookie follows User.language so a change made
+            # on another device reaches this browser too.
+            response = self.get_response(request)
+            if cookie != language and settings.LANGUAGE_COOKIE_NAME not in response.cookies:
+                set_language_cookie(response, language)
+            return response
         if request.method == "GET" and request.headers.get("HX-Request") != "true":
             path_language = get_language_from_path(request.path_info)
             if path_language and path_language != language:

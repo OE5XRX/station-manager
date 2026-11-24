@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n %}
+{% load i18n l10n %}
 
 {% block title %}{{ form_title|default:_("User") }} · OE5XRX{% endblock %}
 
@@ -209,7 +209,7 @@
             {% endif %}
             <dt>{% trans "Role" %}</dt><dd>{{ object.get_membership_level_display }}</dd>
             {% if object.latitude is not None or object.longitude is not None %}
-            <dt>{% trans "Lat/Lon" %}</dt><dd class="t-mono-sm t-muted">{{ object.latitude }}, {{ object.longitude }}</dd>
+            <dt>{% trans "Lat/Lon" %}</dt><dd class="t-mono-sm t-muted">{{ object.latitude|unlocalize }}, {{ object.longitude|unlocalize }}</dd>
             {% endif %}
           </dl>
         {% else %}

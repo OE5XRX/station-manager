@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n static station_audit %}
+{% load i18n static station_audit l10n %}
 
 {% block title %}{{ station.name }} · OE5XRX{% endblock %}
 
@@ -87,7 +87,7 @@
     <div class="summary-item">
       <div class="summary-key">{% trans "Coordinates" %}</div>
       <div class="summary-val mono">
-        {% if station.latitude and station.longitude %}{{ station.latitude }}, {{ station.longitude }}{% else %}—{% endif %}
+        {% if station.latitude and station.longitude %}{{ station.latitude|unlocalize }}, {{ station.longitude|unlocalize }}{% else %}—{% endif %}
       </div>
     </div>
     <div class="summary-item">

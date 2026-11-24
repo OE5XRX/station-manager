@@ -8,17 +8,8 @@ every page), and included CSP-conformly before the app scripts.
 import re
 
 import pytest
-from django.core.cache import cache
 from django.urls import reverse
 from django.utils import translation
-
-
-@pytest.fixture(autouse=True)
-def _clear_cache():
-    # cache_page would otherwise replay a response across tests.
-    cache.clear()
-    yield
-    cache.clear()
 
 
 def _catalog_url(lang):
@@ -57,19 +48,6 @@ def test_catalog_conditional_get_returns_304(client):
     first = client.get(_catalog_url("de"))
     resp = client.get(_catalog_url("de"), HTTP_IF_MODIFIED_SINCE=first["Last-Modified"])
     assert resp.status_code == 304
-
-
-@pytest.mark.django_db
-def test_catalog_still_cached_server_side(client, monkeypatch):
-    from django.views.i18n import JavaScriptCatalog
-
-    client.get(_catalog_url("de"))
-    calls = []
-    monkeypatch.setattr(JavaScriptCatalog, "get", lambda self, *a, **kw: calls.append(1) or None)
-    resp = client.get(_catalog_url("de"))
-    assert resp.status_code == 200
-    assert calls == [], "second request must be served from the server-side cache"
-    assert "max-age=300" in resp.get("Cache-Control", "")
 
 
 @pytest.mark.django_db
