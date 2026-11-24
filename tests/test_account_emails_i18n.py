@@ -1,7 +1,10 @@
 """Account e-mails go out in the recipient's language, not the request's."""
 
+from unittest import mock
+
 import pytest
 from django.core import mail
+from django.template import base as template_base
 from django.utils import translation
 
 from apps.accounts.emails import send_account_email
@@ -147,3 +150,22 @@ def test_plain_text_body_is_not_html_escaped():
     assert "Hi Tom & O'Brien," in body
     assert "Ann <admin> just created" in body
     assert "&#x27;" not in body and "&amp;" not in body
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", list(CASES))
+def test_subject_is_not_html_escaped(kind):
+    """A translation with ' or & must not reach the subject as &#x27;/&amp;."""
+    subjects = {
+        "Welcome to OE5XRX — set your password",
+        "Password reset for your OE5XRX account",
+        "Confirm your new email for OE5XRX",
+    }
+    real = template_base.gettext_lazy
+
+    def fake(msgid):
+        return "Tom & O'Brien's subject" if msgid in subjects else real(msgid)
+
+    with mock.patch.object(template_base, "gettext_lazy", fake):
+        send_account_email(_user("en", username=f"S{kind}"), kind, dict(CASES[kind][0]))
+    assert mail.outbox[0].subject == "Tom & O'Brien's subject"
