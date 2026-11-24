@@ -19,6 +19,7 @@ TEST_FILES = [
     REPO_ROOT / "tests" / "js" / "control-panel-firmware.test.mjs",
     REPO_ROOT / "tests" / "js" / "control-panel-passive.test.mjs",
     REPO_ROOT / "tests" / "js" / "control-panel-scope.test.mjs",
+    REPO_ROOT / "tests" / "js" / "i18n-shim.test.mjs",
 ]
 
 

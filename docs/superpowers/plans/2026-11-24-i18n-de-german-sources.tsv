@@ -1,0 +1,36 @@
+Agent does not support decoders	Agent unterstützt keine Decoder
+Station is updating	Station wird aktualisiert
+Station is draining	Station wird entleert
+Station in use	Station in Benutzung
+Waiting for idle	Wartet auf Leerlauf
+No suitable radio module	Kein passendes Funkmodul
+Passive: APRS active	Passiv: APRS aktiv
+Passive: APRS starting	Passiv: APRS startet
+Passive: in use	Passiv: in Benutzung
+Passive: agent offline	Passiv: Agent offline
+Passive: error: %(reason)s	Passiv: Fehler: %(reason)s
+Passive: off	Passiv: aus
+unknown	unbekannt
+Station waiting for firmware update since %(since)s	Station wartet auf Firmware-Update seit %(since)s
+heard directly	direkt gehört
+via %(via)s	über %(via)s
+Symbol %(symbol)s	Symbol %(symbol)s
+No symbol	Kein Symbol
+Last heard	Zuletzt
+%(when)s (%(age)s ago)	%(when)s (vor %(age)s)
+Heard by	Gehört von
+Path	Pfad
+Comment	Kommentar
+%(station)s: position unknown for %(hops)s – line drawn without these hops.	%(station)s: Position unbekannt für %(hops)s – Linie ohne diese Hops.
+%(station)s has no coordinates – no line.	%(station)s hat keine Koordinaten – keine Linie.
+Raw packet (TNC2)	Rohpaket (TNC2)
+heard by %(stations)s	gehört von %(stations)s
+Update failed, retrying shortly.	Aktualisierung fehlgeschlagen, neuer Versuch folgt.
+Running	Läuft
+Ready	Bereit
+In use	In Benutzung
+Error	Fehler
+Not enabled	Nicht aktiviert
+Agent offline	Agent offline
+No iGate callsign: not gated to APRS-IS.	Kein iGate-Rufzeichen: wird nicht ins APRS-IS gegated.
+No coordinates: not gated to APRS-IS.	Keine Koordinaten: wird nicht ins APRS-IS gegated.

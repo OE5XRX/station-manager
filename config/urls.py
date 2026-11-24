@@ -1,7 +1,10 @@
 from django.conf import settings
 from django.conf.urls.i18n import i18n_patterns
 from django.contrib import admin
+from django.contrib.auth.decorators import login_not_required
 from django.urls import include, path
+from django.views.decorators.cache import cache_page
+from django.views.i18n import JavaScriptCatalog
 from oauth2_provider import urls as dot_urls
 
 from apps.accounts.views import set_language
@@ -49,6 +52,14 @@ urlpatterns = [
 ]
 
 urlpatterns += i18n_patterns(
+    # JS translation catalog: the language comes from the prefix, so the
+    # cache key (URL) is per language. Public (the login page uses it) and
+    # exempt from the privacy-notice gate (a script can't follow a redirect).
+    path(
+        "jsi18n/",
+        login_not_required(cache_page(86400)(JavaScriptCatalog.as_view())),
+        name="javascript-catalog",
+    ),
     path("admin/", admin.site.urls),
     path("accounts/", include("apps.accounts.urls")),
     path("sso-admin/", include("apps.sso.urls")),

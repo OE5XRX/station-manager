@@ -27,6 +27,12 @@
     }
   </script>
 
+  {% comment %}
+    JS translation catalog (gettext/ngettext/interpolate globals) — in <head>
+    so it precedes app.js, page scripts and inline scripts alike.
+  {% endcomment %}
+  <script src="{% url 'javascript-catalog' %}" nonce="{{ csp_nonce }}"></script>
+
   {% block extra_head %}{% endblock %}
 </head>
 <body>

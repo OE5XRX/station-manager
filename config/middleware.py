@@ -250,7 +250,7 @@ class PrivacyAckMiddleware(MiddlewareMixin):
     #: Views reachable while un-acknowledged (matched on the resolved
     #: ``view_name``, i.e. independent of the locale prefix).
     EXEMPT_VIEW_NAMES: Final[frozenset[str]] = frozenset(
-        {"accounts:logout", "accounts:privacy_ack", "set_language"}
+        {"accounts:logout", "accounts:privacy_ack", "set_language", "javascript-catalog"}
     )
 
     _EXEMPT_PREFIXES_NORMALISED: Final[tuple[str, ...]] = tuple(

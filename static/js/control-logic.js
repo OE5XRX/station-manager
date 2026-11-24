@@ -17,6 +17,15 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
+  // i18n: Django's JavaScriptCatalog (/<lang>/jsi18n/) defines these globals in
+  // the browser; under Node (tests/js) they are absent and we fall back to
+  // identity. Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
+
   // ---------------------------------------------------------------------------
   // §7 envelope
   // ---------------------------------------------------------------------------
@@ -238,13 +247,13 @@
   // ---------------------------------------------------------------------------
 
   var ERROR_MESSAGES = {
-    out_of_range: "Out of range",
-    bad_value: "Invalid value",
-    read_only: "Read-only",
-    wrong_op: "Not allowed",
-    not_locked: "You don’t have control",
-    timeout: "No response",
-    forbidden: "Not permitted",
+    out_of_range: gettext("Out of range"),
+    bad_value: gettext("Invalid value"),
+    read_only: gettext("Read-only"),
+    wrong_op: gettext("Not allowed"),
+    not_locked: gettext("You don’t have control"),
+    timeout: gettext("No response"),
+    forbidden: gettext("Not permitted"),
   };
 
   function errorMessage(code) {
@@ -286,32 +295,36 @@
   // -- Passive services (APRS decoder while the station idles) ---------------
   // Reasons the supervisor publishes for a station that is set up but not running.
   var PASSIVE_IDLE_TEXT = {
-    agent_too_old: "Agent unterstützt keine Decoder",
-    updating: "Station wird aktualisiert",
-    draining: "Station wird entleert",
-    lock_held: "Station in Benutzung",
-    idle_wait: "Wartet auf Leerlauf",
-    no_module: "Kein passendes Funkmodul",
+    agent_too_old: gettext("Agent does not support decoders"),
+    updating: gettext("Station is updating"),
+    draining: gettext("Station is draining"),
+    lock_held: gettext("Station in use"),
+    idle_wait: gettext("Waiting for idle"),
+    no_module: gettext("No suitable radio module"),
   };
 
+  function passiveErrorLabel(reason) {
+    return interpolate(gettext("Passive: error: %(reason)s"), { reason: reason }, true);
+  }
+
   // Badge for a `passive_state` frame: {label, level: ok|muted|off|error, detail}.
-  // Same wording as the server-rendered badge (apps/passive/status.py).
+  // Same wording as the server-rendered badge (apps/passive/status.py); msgids English.
   function passiveBadge(frame) {
     var state = frame && frame.state;
     var reason = (frame && frame.reason) || "";
-    if (state === "running") return { label: "Passiv: APRS aktiv", level: "ok", detail: "" };
-    if (state === "starting") return { label: "Passiv: APRS startet", level: "ok", detail: "" };
-    if (state === "stopping") return { label: "Passiv: in Benutzung", level: "muted", detail: "" };
-    if (state === "agent_offline") return { label: "Passiv: Agent offline", level: "off", detail: "" };
+    if (state === "running") return { label: gettext("Passive: APRS active"), level: "ok", detail: "" };
+    if (state === "starting") return { label: gettext("Passive: APRS starting"), level: "ok", detail: "" };
+    if (state === "stopping") return { label: gettext("Passive: in use"), level: "muted", detail: "" };
+    if (state === "agent_offline") return { label: gettext("Passive: agent offline"), level: "off", detail: "" };
     if (state === "error") {
-      return { label: "Passiv: Fehler: " + (reason || "unbekannt"), level: "error", detail: "" };
+      return { label: passiveErrorLabel(reason || gettext("unknown")), level: "error", detail: "" };
     }
-    if (reason === "lock_held") return { label: "Passiv: in Benutzung", level: "muted", detail: "" };
+    if (reason === "lock_held") return { label: gettext("Passive: in use"), level: "muted", detail: "" };
     // Idle ("off"): a known wait reason explains itself, any other code is a failed start.
     if (reason && !PASSIVE_IDLE_TEXT[reason]) {
-      return { label: "Passiv: Fehler: " + reason, level: "error", detail: "" };
+      return { label: passiveErrorLabel(reason), level: "error", detail: "" };
     }
-    return { label: "Passiv: aus", level: "off", detail: PASSIVE_IDLE_TEXT[reason] || "" };
+    return { label: gettext("Passive: off"), level: "off", detail: PASSIVE_IDLE_TEXT[reason] || "" };
   }
 
   // Should the browser RX mixer be muted for this frame?

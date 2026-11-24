@@ -611,6 +611,7 @@ EXEMPT_URL_NAMESPACES: dict[str, str] = {
 _OIDC = "oidc: protocol endpoint"
 EXEMPT_URL_NAMES: dict[str, str] = {
     "set_language": "locale switch",
+    "javascript-catalog": "i18n: public JS translation catalog, no data",
     "api:schema": "api-docs: public OpenAPI schema, no data",
     "api:docs": "api-docs: public OpenAPI schema, no data",
     **{

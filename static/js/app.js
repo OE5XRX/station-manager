@@ -5,6 +5,42 @@
 (function () {
   "use strict";
 
+  // i18n: globals from Django's JavaScriptCatalog (loaded before this file);
+  // identity fallback under Node (tests/js) or if the catalog failed to load.
+  // Function-scoped so classic <script> files never collide.
+  var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
+  function fmt(text, values) { return interpolate(text, values, true); }
+
+  // Live pill labels for server status codes (same wording as the models'
+  // choices); an unknown code falls back to the raw code.
+  var STATUS_LABELS = {
+    online: gettext("Online"),
+    offline: gettext("Offline"),
+    updating: gettext("Updating"),
+    error: gettext("Error"),
+    pending: gettext("Pending"),
+    in_progress: gettext("In Progress"),
+    completed: gettext("Completed"),
+    failed: gettext("Failed"),
+    cancelled: gettext("Cancelled"),
+    downloading: gettext("Downloading"),
+    installing: gettext("Installing"),
+    rebooting: gettext("Rebooting"),
+    verifying: gettext("Verifying"),
+    success: gettext("Success"),
+    rolled_back: gettext("Rolled Back"),
+    superseded: gettext("Superseded"),
+  };
+  function statusLabel(code) {
+    var c = String(code);
+    var label = Object.prototype.hasOwnProperty.call(STATUS_LABELS, c) ? STATUS_LABELS[c] : c.replace(/_/g, " ");
+    return label.toUpperCase();
+  }
+
   // ---------------------------------------------------------------------------
   // Theme
   // ---------------------------------------------------------------------------
@@ -202,7 +238,7 @@
     function setBadge(on) {
       document.querySelectorAll("[data-ws-indicator]").forEach(function (b) {
         b.classList.toggle("is-live", on);
-        b.textContent = on ? "LIVE" : "RECONNECTING";
+        b.textContent = on ? gettext("LIVE") : gettext("RECONNECTING");
       });
     }
     connect();
@@ -224,7 +260,7 @@
     var statusCell = row.querySelector("[data-station-status]");
     if (statusCell) {
       var status = String(data.status || "offline");
-      setPill(statusCell, status, status.toUpperCase());
+      setPill(statusCell, status, statusLabel(status));
     }
     var verCell = row.querySelector("[data-station-version]");
     if (verCell && data.current_os_version) verCell.textContent = data.current_os_version;
@@ -238,10 +274,10 @@
     try {
       var d = new Date(iso);
       var diff = (Date.now() - d.getTime()) / 1000;
-      if (diff < 60) return Math.floor(diff) + "s ago";
-      if (diff < 3600) return Math.floor(diff / 60) + "m ago";
-      if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
-      return Math.floor(diff / 86400) + "d ago";
+      if (diff < 60) return fmt(gettext("%(n)ss ago"), { n: Math.floor(diff) });
+      if (diff < 3600) return fmt(gettext("%(n)sm ago"), { n: Math.floor(diff / 60) });
+      if (diff < 86400) return fmt(gettext("%(n)sh ago"), { n: Math.floor(diff / 3600) });
+      return fmt(gettext("%(n)sd ago"), { n: Math.floor(diff / 86400) });
     } catch (_) { return "-"; }
   }
 
@@ -285,15 +321,16 @@
       var pctLabel = d.querySelector("[data-deployment-pct]");
       if (pctLabel) pctLabel.textContent = data.progress.percentage + "%";
       var totals = d.querySelector("[data-deployment-totals]");
-      if (totals) totals.textContent =
-        data.progress.completed + " / " + data.progress.total + " OK · " + data.progress.failed + " FAIL";
+      if (totals) totals.textContent = fmt(gettext("%(completed)s / %(total)s OK · %(failed)s FAIL"), {
+        completed: data.progress.completed, total: data.progress.total, failed: data.progress.failed,
+      });
     }
     if (data.status) {
       var s = d.querySelector("[data-deployment-status]");
       if (s) {
         var st = String(data.status).replace("_", "-");
         s.className = "pill pill-" + st;
-        s.textContent = String(data.status).replace("_", " ").toUpperCase();
+        s.textContent = statusLabel(data.status);
       }
     }
     if (data.result) {
@@ -302,7 +339,7 @@
         var sc = row.querySelector("[data-result-status]");
         if (sc) {
           sc.className = "pill pill-" + String(data.result.status);
-          sc.textContent = String(data.result.status).toUpperCase().replace("_", " ");
+          sc.textContent = statusLabel(data.result.status);
         }
       }
     }
@@ -339,37 +376,38 @@
 
     function connect() {
       var proto = location.protocol === "https:" ? "wss:" : "ws:";
-      term.write(color("Connecting to station #" + stationId + "...", "90") + "\r\n");
+      term.write(color(fmt(gettext("Connecting to station #%(id)s..."), { id: stationId }), "90") + "\r\n");
       ws = new WebSocket(proto + "//" + location.host + "/ws/terminal/" + stationId + "/");
 
       ws.addEventListener("open", function () {
         attempts = 0; backoff = 1000;
-        term.write(color("[ connected ]", "32") + "\r\n");
+        term.write(color(gettext("[ connected ]"), "32") + "\r\n");
       });
       ws.addEventListener("message", function (ev) {
         try {
           var payload = JSON.parse(ev.data);
           if (payload.type === "output") term.write(payload.data);
           else if (payload.type === "closed")
-            term.write("\r\n" + color("[ closed: " + (payload.reason || "") + " ]", "31") + "\r\n");
+            term.write("\r\n" + color(fmt(gettext("[ closed: %(reason)s ]"), { reason: payload.reason || "" }), "31") + "\r\n");
           else if (payload.type === "error") {
             userClosed = true;  // an operational reject is not worth retrying
-            term.write("\r\n" + color("[ " + (payload.message || payload.reason || "rejected") + " ]", "31") + "\r\n");
+            term.write("\r\n" + color("[ " + (payload.message || payload.reason || gettext("rejected")) + " ]", "31") + "\r\n");
           }
         } catch (_) {}
       });
       ws.addEventListener("close", function (ev) {
         if (userClosed) {
-          term.write("\r\n" + color("[ disconnected: " + ev.code + " ]", "33") + "\r\n");
+          term.write("\r\n" + color(fmt(gettext("[ disconnected: %(code)s ]"), { code: ev.code }), "33") + "\r\n");
           return;
         }
         if (attempts >= MAX_ATTEMPTS) {
-          term.write("\r\n" + color("[ disconnected — giving up after " + MAX_ATTEMPTS +
-            " attempts; refresh to retry ]", "31") + "\r\n");
+          term.write("\r\n" + color(fmt(
+            gettext("[ disconnected — giving up after %(n)s attempts; refresh to retry ]"), { n: MAX_ATTEMPTS }
+          ), "31") + "\r\n");
           return;
         }
         attempts += 1;
-        term.write("\r\n" + color("[ reconnecting… (" + attempts + "/" + MAX_ATTEMPTS + ") ]", "33") + "\r\n");
+        term.write("\r\n" + color(fmt(gettext("[ reconnecting… (%(n)s/%(max)s) ]"), { n: attempts, max: MAX_ATTEMPTS }), "33") + "\r\n");
         setTimeout(connect, backoff);
         backoff = Math.min(backoff * 2, BACKOFF_MAX);
       });
@@ -384,7 +422,7 @@
     if (restartBtn) {
       restartBtn.addEventListener("click", function () {
         if (ws && ws.readyState === WebSocket.OPEN) {
-          term.write("\r\n" + color("[ restarting shell… ]", "33") + "\r\n");
+          term.write("\r\n" + color(gettext("[ restarting shell… ]"), "33") + "\r\n");
           ws.send(JSON.stringify({ type: "restart" }));
         }
       });

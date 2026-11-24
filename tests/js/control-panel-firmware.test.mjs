@@ -154,7 +154,7 @@ ok("lock frame drain.since drives the station drain banner", () => {
   const since = "2026-10-18T08:05:00+00:00";
   c._route({ type: "lock", state: "free", you_hold: false, drain: { since } });
   assert.equal(c.drainSince, since);
-  assert.equal(c.drainText(), "Station wartet auf Firmware-Update seit " + L.formatLocalDateTime(since));
+  assert.equal(c.drainText(), "Station waiting for firmware update since " + L.formatLocalDateTime(since));
   c._route({ type: "lock", state: "free", you_hold: false, drain: null });
   assert.equal(c.drainSince, null);
   assert.equal(c.drainText(), "");

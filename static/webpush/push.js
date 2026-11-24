@@ -1,5 +1,9 @@
 // Registers this browser for Web-Push and POSTs the subscription.
 (function () {
+  // i18n: globals from Django's JavaScriptCatalog; identity fallback if it failed to load.
+  const gettext = globalThis.gettext || ((s) => s);
+  const interpolate = globalThis.interpolate ||
+    ((fmt, obj) => fmt.replace(/%\(\s*([^)]+)\s*\)s/g, (m, k) => String(obj[k])));
   const section = document.getElementById('push-section');
   const btn = document.getElementById('enable-push');
   const status = document.getElementById('push-status');
@@ -30,7 +34,7 @@
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
         body: JSON.stringify({ endpoint }),
       });
-      if (!res.ok) { status.textContent = 'Could not remove device.'; return; }
+      if (!res.ok) { status.textContent = gettext('Could not remove device.'); return; }
       // Best-effort: unsubscribe browser-side if this endpoint matches current subscription.
       if ('serviceWorker' in navigator) {
         try {
@@ -40,21 +44,22 @@
         } catch (_) { /* ignore */ }
       }
       row.remove();
-      status.textContent = 'Device removed.';
-      setTimeout(() => { if (status.textContent === 'Device removed.') status.textContent = ''; }, 3000);
+      const removed = gettext('Device removed.');
+      status.textContent = removed;
+      setTimeout(() => { if (status.textContent === removed) status.textContent = ''; }, 3000);
     } catch (e) {
-      status.textContent = 'Could not remove device: ' + e.message;
+      status.textContent = interpolate(gettext('Could not remove device: %(error)s'), { error: e.message }, true);
     }
   });
 
   btn.addEventListener('click', async function () {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      status.textContent = 'Push is not supported on this browser.';
+      status.textContent = gettext('Push is not supported on this browser.');
       return;
     }
     try {
       const perm = await Notification.requestPermission();
-      if (perm !== 'granted') { status.textContent = 'Permission denied.'; return; }
+      if (perm !== 'granted') { status.textContent = gettext('Permission denied.'); return; }
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
@@ -65,10 +70,10 @@
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
         body: JSON.stringify(sub.toJSON()),
       });
-      status.textContent = res.ok ? 'Push enabled on this device.' : 'Registration failed.';
+      status.textContent = res.ok ? gettext('Push enabled on this device.') : gettext('Registration failed.');
       if (res.ok) setTimeout(() => location.reload(), 800);
     } catch (e) {
-      status.textContent = 'Could not enable push: ' + e.message;
+      status.textContent = interpolate(gettext('Could not enable push: %(error)s'), { error: e.message }, true);
     }
   });
 })();
