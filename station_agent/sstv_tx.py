@@ -25,11 +25,13 @@ import os
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 from station_agent import protocol as proto
+from station_agent.audio.opus_bridge import _PIN_STREAM
 from station_agent.audio.tx_settings import clamp_ceiling
 
 logger = logging.getLogger(__name__)
@@ -40,9 +42,11 @@ MAX_DURATION_S = 600.0
 HARD_STOP_MARGIN_S = 5.0
 SAMPLE_RATE = 8000
 RUNTIME_DIR = "/run/oe5xrx/sstv-tx"
-# The voice chain's limiter peaks at 0.9 of the ceiling; SSTV tones are full scale.
-_VOICE_PEAK = 0.9
-_DOWNLOAD_TIMEOUT_S = 30
+# The server's SSTV encoder (station_agent/sstv encode()) peaks at 0.9 full scale; dividing it
+# out puts the tone peaks exactly at the ceiling. Change both together.
+_ENCODER_PEAK = 0.9
+# Whole download, not per read: a trickling body must not hold the slot in "downloading".
+DOWNLOAD_DEADLINE_S = 180.0
 _CHUNK = 64 * 1024
 _KILL_WAIT_S = 2.0
 _SEEN_IDS = 256
@@ -57,7 +61,7 @@ SLOT_BUSY = "slot_busy"
 
 def tx_gain(ceiling_dbfs) -> float:
     """Linear gain that puts full-scale SSTV tones at the station's TX ceiling."""
-    return 10 ** (clamp_ceiling(ceiling_dbfs) / 20) / _VOICE_PEAK
+    return 10 ** (clamp_ceiling(ceiling_dbfs) / 20) / _ENCODER_PEAK
 
 
 def build_play_argv(path: str, tx_node: str, gain: float) -> list[str]:
@@ -81,6 +85,8 @@ def build_play_argv(path: str, tx_node: str, gain: float) -> list[str]:
         "!",
         "pipewiresink",
         f"target-object={tx_node}",
+        # Never fall back to the default sink: the tones would key another slot's audio.
+        _PIN_STREAM,
     ]
 
 
@@ -119,6 +125,9 @@ class SstvTxSession:
         self._reason = "stopped"
         # Tells the download thread to give up (it cannot be cancelled from the loop).
         self._cancel_download = threading.Event()
+        self._download_deadline = 0.0
+        self._last_progress = 0.0
+        self._progress_task: asyncio.Task | None = None
         self.task: asyncio.Task | None = None
 
     def abort(self, reason: str) -> None:
@@ -156,7 +165,7 @@ class SstvTxSession:
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
-        state, detail, progress = "error", "internal", 0.0
+        state, detail = "error", "internal"
         fd, tmp = None, None
         keyed = False
         proc = None
@@ -165,10 +174,15 @@ class SstvTxSession:
             os.makedirs(self._mgr.runtime_dir, mode=0o700, exist_ok=True)
             fd, tmp = tempfile.mkstemp(prefix="tx-", suffix=".pcm", dir=self._mgr.runtime_dir)
             dl_fd, fd = fd, None  # the download thread owns (and closes) the descriptor
-            _, err = await self._until_stopped(
-                loop.run_in_executor(self._mgr.executor, self._download, dl_fd)
+            self._download_deadline = time.monotonic() + self._mgr.download_deadline_s
+            finished, err = await self._until_stopped(
+                loop.run_in_executor(self._mgr.executor, self._download, dl_fd),
+                timeout=self._mgr.download_deadline_s,
             )
             self._check_stopped()
+            if not finished:
+                self._cancel_download.set()
+                raise _SessionEndError("error", "download_timeout")
             if err:
                 raise _SessionEndError("error", err)
             _, node = await self._until_stopped(
@@ -186,13 +200,15 @@ class SstvTxSession:
                 raise _SessionEndError("error", err)
             keyed_at = loop.time()
             self._check_stopped()
-            await self._emit("keyed", 0.0)
+            # Not awaited inline (like the progress frames): a stalled send must not delay
+            # the player or the hard stop while the transmitter is up.
+            self._progress_task = asyncio.ensure_future(self._emit("keyed", 0.0))
             try:
                 proc = await self._mgr.spawn(build_play_argv(tmp, node, gain))
             except Exception:  # noqa: BLE001 — missing/broken player
                 logger.exception("sstv_tx: starting the player failed")
                 raise _SessionEndError("error", "player_failed")
-            state, detail, progress = await self._play(proc, keyed_at)
+            state, detail = await self._play(proc, keyed_at)
         except _SessionEndError as fail:
             state, detail = fail.state, fail.detail
         except asyncio.CancelledError:
@@ -203,7 +219,9 @@ class SstvTxSession:
             state, detail = "error", "internal"
         finally:
             await self._cleanup(proc, keyed, fd, tmp)
-            await self._emit(state, progress, detail)
+            if self._progress_task is not None:
+                self._progress_task.cancel()
+            await self._emit(state, self._last_progress, detail)
             logger.info("sstv_tx: %s ended %s (%s)", self.tx_id, state, detail)
 
     async def _play(self, proc, keyed_at: float):
@@ -213,25 +231,31 @@ class SstvTxSession:
         try:
             while True:
                 remaining = deadline - loop.time()
+                self._update_progress(keyed_at)
                 if remaining <= 0:
-                    return "aborted", "hard_stop", self._progress(keyed_at)
+                    return "aborted", "hard_stop"
                 finished, rc = await self._until_stopped(
                     wait, timeout=min(remaining, self._mgr.progress_interval_s)
                 )
+                self._update_progress(keyed_at)
                 if finished:
                     if rc == 0:
-                        return "done", None, 1.0
-                    return "error", f"player_failed rc={rc}", self._progress(keyed_at)
+                        self._last_progress = 1.0
+                        return "done", None
+                    return "error", f"player_failed rc={rc}"
                 self._check_stopped()
-                if loop.time() < deadline:
-                    await self._emit("keyed", self._progress(keyed_at))
+                # Fire-and-forget: a stalled WebSocket send must never delay the hard stop.
+                if self._progress_task is None or self._progress_task.done():
+                    self._progress_task = asyncio.ensure_future(
+                        self._emit("keyed", self._last_progress)
+                    )
         finally:
             if not wait.done():
                 wait.cancel()
 
-    def _progress(self, keyed_at: float) -> float:
+    def _update_progress(self, keyed_at: float) -> None:
         elapsed = asyncio.get_running_loop().time() - keyed_at
-        return max(0.0, min(1.0, elapsed / self.duration_s))
+        self._last_progress = max(0.0, min(1.0, elapsed / self.duration_s))
 
     async def _cleanup(self, proc, keyed: bool, fd, tmp) -> None:
         # Order matters: stop the audio, drive the transmitter low, then tidy up.
@@ -267,7 +291,8 @@ class SstvTxSession:
         with os.fdopen(fd, "wb") as out:
             if self._cancel_download.is_set():
                 return "cancelled"
-            resp = self._mgr.http_get(self._url_path)
+            # identity: Content-Length and the streamed bytes must both be the raw PCM size.
+            resp = self._mgr.http_get(self._url_path, {"Accept-Encoding": "identity"})
             if resp is None:
                 return "download_failed"
             try:
@@ -280,6 +305,8 @@ class SstvTxSession:
                 for chunk in resp.iter_content(_CHUNK):
                     if self._cancel_download.is_set():
                         return "cancelled"
+                    if time.monotonic() > self._download_deadline:
+                        return "download_timeout"
                     total += len(chunk)
                     if total > self._size:
                         return "size_mismatch"
@@ -307,7 +334,7 @@ class SstvTxManager:
     def __init__(
         self,
         *,
-        http_get: Callable[[str], object],
+        http_get: Callable[[str, dict], object],
         server_url: str,
         ceiling_dbfs: Callable[[], float],
         tx_node: Callable[[int], str | None],
@@ -315,6 +342,7 @@ class SstvTxManager:
         spawn: Callable[[list[str]], Awaitable] = _spawn_player,
         hard_stop_margin_s: float = HARD_STOP_MARGIN_S,
         progress_interval_s: float = 1.0,
+        download_deadline_s: float = DOWNLOAD_DEADLINE_S,
     ):
         self._http_get = http_get
         self._server_url = server_url.rstrip("/")
@@ -324,6 +352,7 @@ class SstvTxManager:
         self._spawn = spawn
         self._margin = hard_stop_margin_s
         self.progress_interval_s = progress_interval_s
+        self.download_deadline_s = download_deadline_s
         # Own pool: a stalled download must not tie up the default executor that serves
         # serial I/O (commands, PTT, telemetry). Two workers so a download thread still
         # draining after an abort never blocks the next session.
@@ -339,8 +368,8 @@ class SstvTxManager:
     async def spawn(self, argv: list[str]):
         return await self._spawn(argv)
 
-    def http_get(self, path: str):
-        return self._http_get(path)
+    def http_get(self, path: str, headers: dict):
+        return self._http_get(path, headers)
 
     def _url_path(self, url) -> str | None:
         """Server-relative path of *url*, or None if it points anywhere but our server.

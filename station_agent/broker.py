@@ -374,11 +374,13 @@ class Broker:
         is_ptt = op == "do" and self._is_ptt_cap(cap)
         if self._sstv_tx is not None and self._sstv_tx.owns(slot):
             # The station owns this slot's transmitter for an SSTV transmission: no voice key
-            # and no setting change under it (SSTV spec §5.2). A voice unkey always goes
-            # through — it ends the SSTV transmission first.
+            # and no setting change under it (SSTV spec §5.2). A voice key cannot exist here
+            # (each refuses the other), so a voice unkey — e.g. the release of a refused PTT
+            # tap — is acknowledged without touching the transmitter; sstv_tx_stop aborts.
             if is_ptt and value is False:
-                await self._sstv_tx.abort("ptt_off", slot=slot)
-            elif (is_ptt and value is True) or op == "set":
+                await self._send(proto.build_result(request_id, True, value="false"))
+                return
+            if (is_ptt and value is True) or op == "set":
                 await self._send(proto.build_result(request_id, False, error=("sstv_busy", "")))
                 return
         # Spec §7.4: PTT while scanning, or a hand retune of a scanned module, holds the scan

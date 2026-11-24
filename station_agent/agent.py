@@ -856,7 +856,9 @@ class StationAgent:
         # SSTV TX (spec §5.4): artefact over the signed client, played at the calibrated TX
         # ceiling into the slot's TX node.
         sstv_tx = SstvTxManager(
-            http_get=lambda path: http_client.request("GET", path, stream=True),
+            http_get=lambda path, headers: http_client.request(
+                "GET", path, stream=True, headers=headers
+            ),
             server_url=config.server_url,
             ceiling_dbfs=lambda: tx_settings.ceiling_dbfs,
             tx_node=router_backend.tx_sink_node,

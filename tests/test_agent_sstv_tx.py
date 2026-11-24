@@ -65,10 +65,12 @@ class FakeResponse:
 class FakeHttp:
     def __init__(self, body=AUDIO, **kw):
         self.body, self.kw, self.paths, self.responses = body, kw, [], []
+        self.headers = []
         self.block = None  # threading.Event: the GET blocks until it is set
 
-    def get(self, path):
+    def get(self, path, headers):
         self.paths.append(path)
+        self.headers.append(headers)
         if self.block is not None:
             self.block.wait(5)
         resp = FakeResponse(self.body, **self.kw)
@@ -205,6 +207,7 @@ def test_happy_path(fw, tmp_path):
     assert _ptt(fw, "true") == 1 and _ptt(fw, "false") == 1
     assert fw.state["fm"]["ptt"] == "false"
     assert http.paths == [PATH]
+    assert http.headers == [{"Accept-Encoding": "identity"}]
     assert http.responses[0].closed
     argv = player.argvs[0]
     assert "target-object=alsa_output.slot1" in argv
@@ -322,6 +325,8 @@ def test_tx_stop_frame(fw, tmp_path):
     assert col.states()[-1] == ("aborted", "stopped")
     assert player.procs[0].killed
     _assert_low(fw)
+    final = [m for m in col.sent if m["type"] == "sstv_tx_state"][-1]
+    assert 0.0 < final["progress"] < 1.0  # where it was stopped, not 0
 
 
 def test_tx_stop_during_download_never_keys(fw, tmp_path):
@@ -344,6 +349,75 @@ def test_tx_stop_during_download_never_keys(fw, tmp_path):
     assert col.states()[-1] == ("aborted", "stopped")
     assert _ptt(fw, "true") == 0
     assert list((tmp_path / "rt").iterdir()) == []
+
+
+def test_download_deadline_never_keys(fw, tmp_path):
+    import threading
+
+    http = FakeHttp()
+    http.block = threading.Event()
+    mgr = _manager(tmp_path, http, download_deadline_s=0.1)
+    b, col = _broker(fw, mgr)
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+        assert not b.slot_busy(1) and mgr.active is None
+        http.block.set()
+        await asyncio.sleep(0.1)
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "download_timeout")
+    assert _ptt(fw, "true") == 0
+
+
+def test_key_timeout_still_drives_ptt_low(fw, tmp_path):
+    class LandedButTimedOut:
+        # The key reaches the module, but its reply is lost: the broker sees a timeout.
+        def __init__(self, path):
+            self._sc = SlotControl(path, timeout=2.0)
+
+        def execute(self, module, op, cap, token=None, trace=False):
+            result = self._sc.execute(module, op, cap, token, trace)
+            if (op, cap, token) == ("do", "ptt", "true"):
+                return {"ok": False, "error": "timeout"}
+            return result
+
+    player = FakePlayer("ok")
+    mgr = _manager(tmp_path, player=player)
+    b, col = _broker(fw, mgr)
+    b._transport_factory = LandedButTimedOut
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+        assert not b.slot_busy(1)
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "timeout")
+    assert player.argvs == []
+    _assert_low(fw)
+
+
+def test_control_client_shuts_the_manager_down(tmp_path):
+    from station_agent.control_client import ControlClient
+    from tests.test_control_client import _FakeConfig, _gen_key
+
+    class Mgr:
+        shut = False
+
+        async def shutdown(self):
+            Mgr.shut = True
+
+    cfg = _FakeConfig("http://127.0.0.1:9", 1, _gen_key(tmp_path), str(tmp_path))
+    client = ControlClient(cfg, sstv_tx=Mgr())
+
+    async def no_loop():
+        return None
+
+    client._run_loop = no_loop
+    asyncio.run(client._run_async())
+    assert Mgr.shut
 
 
 def test_ws_disconnect_aborts(fw, tmp_path):
@@ -499,16 +573,21 @@ def test_voice_ptt_and_settings_refused_during_session(fw, tmp_path):
         await _until_keyed(col)
         await b.handle(cmd("k1", "ptt", "do", True))
         await b.handle(cmd("s1", "frequency", "set", 145.5))
-        assert fw.state["fm"]["ptt"] == "true"
-        # A voice unkey always goes through — and ends the SSTV session.
+        # The release of the refused tap is acked but neither unkeys nor ends the session.
         await b.handle(cmd("k2", "ptt", "do", False))
+        await asyncio.sleep(0.05)
+        assert fw.state["fm"]["ptt"] == "true"
+        assert mgr.active is not None
+        await b.handle({"v": 1, "type": "sstv_tx_stop", "tx_id": "t1"})
         await mgr.wait_idle()
 
     asyncio.run(scenario())
     assert col.result("k1")["error"]["code"] == "sstv_busy"
     assert col.result("s1")["error"]["code"] == "sstv_busy"
     assert col.result("k2")["ok"] is True
-    assert col.states()[-1] == ("aborted", "ptt_off")
+    assert _ptt(fw, "true") == 1 and _ptt(fw, "false") == 1
+    assert not any(b"set frequency" in line for line in fw.received)
+    assert col.states()[-1] == ("aborted", "stopped")
     assert not [m for m in col.sent if m.get("event") == "ptt_auto_unkey"]
     _assert_low(fw)
 
@@ -617,4 +696,7 @@ def test_play_argv_gain():
         "sample-rate=8000 num-channels=1 ! audioconvert ! audioresample ! "
         "volume volume=0.556" in joined
     )
-    assert joined.endswith("! pipewiresink target-object=alsa_output.slot1")
+    assert joined.endswith(
+        "! pipewiresink target-object=alsa_output.slot1 "
+        "stream-properties=props,node.dont-reconnect=true,node.dont-fallback=true"
+    )
