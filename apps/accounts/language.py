@@ -8,7 +8,7 @@ switcher, the profile form and ``config.middleware.UserLanguageMiddleware``.
 from urllib.parse import unquote, urlsplit
 
 from django.conf import settings
-from django.urls import translate_url
+from django.urls import reverse, translate_url
 from django.utils.translation import get_language_from_path, override
 
 
@@ -48,3 +48,13 @@ def localized_url(url: str, language: str) -> str:
         return url
     with override(path_language):
         return translate_url(url, language)
+
+
+def reverse_for_user(user, viewname, **kwargs):
+    """``reverse`` under ``user.language`` — for links built without a request
+    (push payloads, e-mails), which would otherwise carry the default prefix."""
+    language = getattr(user, "language", None)
+    if not is_supported_language(language):
+        return reverse(viewname, **kwargs)
+    with override(language):
+        return reverse(viewname, **kwargs)

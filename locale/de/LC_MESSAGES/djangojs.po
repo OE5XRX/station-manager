@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 18:37+0100\n"
+"POT-Creation-Date: 2026-11-24 19:40+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -30,7 +30,7 @@ msgstr "Offline"
 msgid "Updating"
 msgstr "Wird aktualisiert"
 
-#: static/js/app.js:24 static/js/aprs-map.js:367
+#: static/js/app.js:24 static/js/aprs-map.js:369
 msgid "Error"
 msgstr "Fehler"
 
@@ -144,88 +144,88 @@ msgstr "[ verbinde neu… (%(n)s/%(max)s) ]"
 msgid "[ restarting shell… ]"
 msgstr "[ starte Shell neu… ]"
 
-#: static/js/aprs-map.js:134
+#: static/js/aprs-map.js:136
 msgid "heard directly"
 msgstr "direkt gehört"
 
-#: static/js/aprs-map.js:135
+#: static/js/aprs-map.js:137
 msgid "via %(via)s"
 msgstr "über %(via)s"
 
-#: static/js/aprs-map.js:145
+#: static/js/aprs-map.js:147
 msgid "Symbol %(symbol)s"
 msgstr "Symbol %(symbol)s"
 
-#: static/js/aprs-map.js:145
+#: static/js/aprs-map.js:147
 msgid "No symbol"
 msgstr "Kein Symbol"
 
-#: static/js/aprs-map.js:151
+#: static/js/aprs-map.js:153
 msgid "Last heard"
 msgstr "Zuletzt gehört"
 
-#: static/js/aprs-map.js:151
+#: static/js/aprs-map.js:153
 msgid "%(when)s (%(age)s ago)"
 msgstr "%(when)s (vor %(age)s)"
 
-#: static/js/aprs-map.js:155
+#: static/js/aprs-map.js:157
 msgid "Heard by"
 msgstr "Gehört von"
 
-#: static/js/aprs-map.js:156
+#: static/js/aprs-map.js:158
 msgid "Path"
 msgstr "Pfad"
 
-#: static/js/aprs-map.js:157
+#: static/js/aprs-map.js:159
 msgid "Comment"
 msgstr "Kommentar"
 
-#: static/js/aprs-map.js:165
+#: static/js/aprs-map.js:167
 msgid ""
 "%(station)s: position unknown for %(hops)s – line drawn without these hops."
 msgstr "%(station)s: Position unbekannt für %(hops)s – Linie ohne diese Hops."
 
-#: static/js/aprs-map.js:171
+#: static/js/aprs-map.js:173
 msgid "%(station)s has no coordinates – no line."
 msgstr "%(station)s hat keine Koordinaten – keine Linie."
 
-#: static/js/aprs-map.js:177
+#: static/js/aprs-map.js:179
 msgid "Raw packet (TNC2)"
 msgstr "Rohpaket (TNC2)"
 
-#: static/js/aprs-map.js:303
+#: static/js/aprs-map.js:305
 msgid "heard by %(stations)s"
 msgstr "gehört von %(stations)s"
 
-#: static/js/aprs-map.js:358
+#: static/js/aprs-map.js:360
 msgid "Update failed, retrying shortly."
 msgstr "Aktualisierung fehlgeschlagen, neuer Versuch folgt."
 
-#: static/js/aprs-map.js:364
+#: static/js/aprs-map.js:366
 msgid "Running"
 msgstr "Läuft"
 
-#: static/js/aprs-map.js:365
+#: static/js/aprs-map.js:367
 msgid "Ready"
 msgstr "Bereit"
 
-#: static/js/aprs-map.js:366
+#: static/js/aprs-map.js:368
 msgid "In use"
 msgstr "In Benutzung"
 
-#: static/js/aprs-map.js:368
+#: static/js/aprs-map.js:370
 msgid "Not enabled"
 msgstr "Nicht aktiviert"
 
-#: static/js/aprs-map.js:369
+#: static/js/aprs-map.js:371
 msgid "Agent offline"
 msgstr "Agent offline"
 
-#: static/js/aprs-map.js:372
+#: static/js/aprs-map.js:374
 msgid "No iGate callsign: not gated to APRS-IS."
 msgstr "Kein iGate-Rufzeichen: wird nicht ins APRS-IS gegated."
 
-#: static/js/aprs-map.js:373
+#: static/js/aprs-map.js:375
 msgid "No coordinates: not gated to APRS-IS."
 msgstr "Keine Koordinaten: wird nicht ins APRS-IS gegated."
 

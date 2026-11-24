@@ -122,7 +122,9 @@ def browser_frame(station) -> dict:
             "reason": run.last_error or None,
         }
     failed = recent_run_error(station.pk)
-    reason = failed.last_error or "unknown" if failed is not None else idle_reason(station)
+    reason = (
+        failed.last_error or gettext("unknown") if failed is not None else idle_reason(station)
+    )
     return {
         "type": "passive_state",
         "service": SERVICE,

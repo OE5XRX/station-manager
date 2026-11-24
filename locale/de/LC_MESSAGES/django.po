@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 18:43+0100\n"
+"POT-Creation-Date: 2026-11-24 19:40+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -437,15 +437,15 @@ msgstr "Passwort zurücksetzen"
 msgid "Email verification"
 msgstr "E-Mail-Bestätigung"
 
-#: apps/accounts/permissions.py:62 apps/dashboard/apps.py:8
+#: apps/accounts/permissions.py:63 apps/dashboard/apps.py:8
 msgid "Dashboard"
 msgstr "Dashboard"
 
-#: apps/accounts/permissions.py:63
+#: apps/accounts/permissions.py:64
 msgid "Own profile"
 msgstr "Eigenes Profil"
 
-#: apps/accounts/permissions.py:65
+#: apps/accounts/permissions.py:66
 #: apps/accounts/templates/accounts/user_detail.html:278
 #: apps/audit/templates/audit/audit_list.html:30 apps/stations/apps.py:8
 #: apps/stations/templates/stations/group_confirm_delete.html:23
@@ -467,41 +467,41 @@ msgstr "Eigenes Profil"
 msgid "Stations"
 msgstr "Stationen"
 
-#: apps/accounts/permissions.py:68
+#: apps/accounts/permissions.py:69
 msgid "Create/edit stations, logbook, photos, station audit"
 msgstr "Stationen anlegen/bearbeiten, Logbuch, Fotos, Stations-Audit"
 
-#: apps/accounts/permissions.py:71
+#: apps/accounts/permissions.py:72
 msgid "Station control"
 msgstr "Stationssteuerung"
 
-#: apps/accounts/permissions.py:76
+#: apps/accounts/permissions.py:77
 msgid "Operate a station (lock, PTT, microphone)"
 msgstr "Station bedienen (Sperre, PTT, Mikrofon)"
 
-#: apps/accounts/permissions.py:77
+#: apps/accounts/permissions.py:78
 msgid "Calibrate a station (filters, volume, audio diagnostics)"
 msgstr "Station kalibrieren (Filter, Lautstärke, Audio-Diagnose)"
 
-#: apps/accounts/permissions.py:80
+#: apps/accounts/permissions.py:81
 #: apps/stations/templates/stations/station_detail.html:114
 #: apps/tunnel/apps.py:8
 msgid "Terminal"
 msgstr "Terminal"
 
-#: apps/accounts/permissions.py:80
+#: apps/accounts/permissions.py:81
 msgid "Open a root shell"
 msgstr "Root-Shell öffnen"
 
-#: apps/accounts/permissions.py:82
+#: apps/accounts/permissions.py:83
 msgid "Regions & assignments"
 msgstr "Regionen & Zuweisungen"
 
-#: apps/accounts/permissions.py:85
+#: apps/accounts/permissions.py:86
 msgid "Manage regions and assignments"
 msgstr "Regionen und Zuweisungen verwalten"
 
-#: apps/accounts/permissions.py:88
+#: apps/accounts/permissions.py:89
 #: apps/dashboard/templates/dashboard/index.html:70 apps/deployments/apps.py:8
 #: apps/deployments/templates/deployments/deployment_detail.html:7
 #: apps/deployments/templates/deployments/deployment_form.html:7
@@ -515,34 +515,34 @@ msgstr "Regionen und Zuweisungen verwalten"
 msgid "Deployments"
 msgstr "Deployments"
 
-#: apps/accounts/permissions.py:91
+#: apps/accounts/permissions.py:92
 msgid "Trigger/cancel deployments"
 msgstr "Deployments auslösen/abbrechen"
 
-#: apps/accounts/permissions.py:94 apps/rollouts/apps.py:8
+#: apps/accounts/permissions.py:95 apps/rollouts/apps.py:8
 msgid "Rollouts"
 msgstr "Rollouts"
 
-#: apps/accounts/permissions.py:97
+#: apps/accounts/permissions.py:98
 msgid "Edit rollout sequence, group upgrade"
 msgstr "Rollout-Sequenz bearbeiten, Gruppen-Upgrade"
 
-#: apps/accounts/permissions.py:100 apps/images/apps.py:8
+#: apps/accounts/permissions.py:101 apps/images/apps.py:8
 #: apps/rollouts/templates/rollouts/upgrade_dashboard.html:43
 #: templates/includes/sidebar.html:165
 msgid "Images"
 msgstr "Images"
 
-#: apps/accounts/permissions.py:103
+#: apps/accounts/permissions.py:104
 msgid "Import/archive images, mark as latest"
 msgstr "Images importieren/archivieren, als neueste markieren"
 
-#: apps/accounts/permissions.py:105 apps/provisioning/apps.py:8
+#: apps/accounts/permissions.py:106 apps/provisioning/apps.py:8
 #: apps/provisioning/templates/provisioning/_provisioning_section.html:5
 msgid "Provisioning"
 msgstr "Provisionierung"
 
-#: apps/accounts/permissions.py:107
+#: apps/accounts/permissions.py:108
 #: apps/monitoring/templates/monitoring/alert_list.html:4
 #: apps/monitoring/templates/monitoring/alert_list.html:9
 #: apps/monitoring/templates/monitoring/alert_list.html:16
@@ -552,25 +552,25 @@ msgstr "Provisionierung"
 msgid "Alerts"
 msgstr "Alarme"
 
-#: apps/accounts/permissions.py:107
+#: apps/accounts/permissions.py:108
 msgid "Acknowledge/resolve alerts"
 msgstr "Alarme quittieren/auflösen"
 
-#: apps/accounts/permissions.py:110
+#: apps/accounts/permissions.py:111
 #: apps/monitoring/templates/monitoring/alert_settings.html:4
 #: apps/monitoring/templates/monitoring/alert_settings.html:16
 msgid "Alert rules"
 msgstr "Alarmregeln"
 
-#: apps/accounts/permissions.py:113
+#: apps/accounts/permissions.py:114
 msgid "Configure alert rules and notifications"
 msgstr "Alarmregeln und Benachrichtigungen konfigurieren"
 
-#: apps/accounts/permissions.py:116
+#: apps/accounts/permissions.py:117
 msgid "Modules & firmware"
 msgstr "Module & Firmware"
 
-#: apps/accounts/permissions.py:121
+#: apps/accounts/permissions.py:122
 msgid ""
 "Confirm modules, import/archive firmware, module types, target versions, "
 "release quarantine"
@@ -578,7 +578,7 @@ msgstr ""
 "Module bestätigen, Firmware importieren/archivieren, Modultypen, Soll-"
 "Versionen, Release-Quarantäne"
 
-#: apps/accounts/permissions.py:127
+#: apps/accounts/permissions.py:128
 #: apps/control/templates/control/_repeater_panel.html:18
 #: apps/repeaters/apps.py:9
 #: apps/repeaters/templates/repeaters/repeater_confirm_deactivate.html:9
@@ -591,11 +591,11 @@ msgstr ""
 msgid "Repeaters"
 msgstr "Repeater"
 
-#: apps/accounts/permissions.py:130
+#: apps/accounts/permissions.py:131
 msgid "Create/edit repeaters"
 msgstr "Repeater anlegen/bearbeiten"
 
-#: apps/accounts/permissions.py:133 apps/passive/apps.py:9
+#: apps/accounts/permissions.py:134 apps/passive/apps.py:9
 #: apps/passive/templates/passive/aprs.html:4
 #: apps/passive/templates/passive/aprs.html:9
 #: apps/stations/templates/stations/station_form.html:106
@@ -603,11 +603,11 @@ msgstr "Repeater anlegen/bearbeiten"
 msgid "Passive services"
 msgstr "Passive Dienste"
 
-#: apps/accounts/permissions.py:136
+#: apps/accounts/permissions.py:137
 msgid "Manage passive services"
 msgstr "Passive Dienste verwalten"
 
-#: apps/accounts/permissions.py:138
+#: apps/accounts/permissions.py:139
 #: apps/accounts/templates/accounts/user_confirm_soft_delete.html:7
 #: apps/accounts/templates/accounts/user_detail.html:13
 #: apps/accounts/templates/accounts/user_form.html:7
@@ -618,21 +618,21 @@ msgstr "Passive Dienste verwalten"
 msgid "Users"
 msgstr "Benutzer"
 
-#: apps/accounts/permissions.py:138
+#: apps/accounts/permissions.py:139
 msgid "Manage users"
 msgstr "Benutzer verwalten"
 
-#: apps/accounts/permissions.py:139
+#: apps/accounts/permissions.py:140
 #: apps/accounts/templates/accounts/api_token_created.html:11
 #: apps/accounts/templates/accounts/user_detail.html:184
 msgid "API tokens"
 msgstr "API-Tokens"
 
-#: apps/accounts/permissions.py:139
+#: apps/accounts/permissions.py:140
 msgid "Create API tokens"
 msgstr "API-Tokens erstellen"
 
-#: apps/accounts/permissions.py:140
+#: apps/accounts/permissions.py:141
 #: apps/accounts/templates/accounts/user_detail.html:375
 #: apps/audit/templates/audit/audit_list.html:4
 #: apps/audit/templates/audit/audit_list.html:9
@@ -641,32 +641,32 @@ msgstr "API-Tokens erstellen"
 msgid "Audit log"
 msgstr "Audit-Log"
 
-#: apps/accounts/permissions.py:141
+#: apps/accounts/permissions.py:142
 msgid "SSO administration"
 msgstr "SSO-Verwaltung"
 
-#: apps/accounts/permissions.py:144
+#: apps/accounts/permissions.py:145
 msgid "view"
 msgstr "ansehen"
 
-#: apps/accounts/permissions.py:144
+#: apps/accounts/permissions.py:145
 msgid "operate"
 msgstr "bedienen"
 
-#: apps/accounts/permissions.py:144
+#: apps/accounts/permissions.py:145
 msgid "manage"
 msgstr "verwalten"
 
-#: apps/accounts/permissions.py:186
+#: apps/accounts/permissions.py:187
 msgid "nobody"
 msgstr "niemand"
 
-#: apps/accounts/permissions.py:272
+#: apps/accounts/permissions.py:273
 #, python-format
 msgid "Permission denied — %(what)s is not available to anyone."
 msgstr "Keine Berechtigung — %(what)s ist für niemanden freigegeben."
 
-#: apps/accounts/permissions.py:276
+#: apps/accounts/permissions.py:277
 #, python-format
 msgid ""
 "Permission denied — %(what)s requires %(need)s, you are %(have)s. If you "
@@ -675,7 +675,7 @@ msgstr ""
 "Keine Berechtigung — %(what)s erfordert %(need)s, du bist %(have)s. Wenn du "
 "glaubst, dass das falsch ist, wende dich an einen Admin."
 
-#: apps/accounts/permissions.py:552
+#: apps/accounts/permissions.py:567
 msgid "Permission could not be checked."
 msgstr "Berechtigung konnte nicht geprüft werden."
 
@@ -1788,11 +1788,11 @@ msgstr "Topologie"
 msgid "DELETED %(date)s"
 msgstr "GELÖSCHT %(date)s"
 
-#: apps/accounts/views.py:199
+#: apps/accounts/views.py:209
 msgid "Unknown form."
 msgstr "Unbekanntes Formular."
 
-#: apps/accounts/views.py:215
+#: apps/accounts/views.py:236
 #, python-format
 msgid ""
 "Confirmation link sent to %(new)s. Until you click it, %(old)s stays active."
@@ -1800,27 +1800,27 @@ msgstr ""
 "Bestätigungslink an %(new)s gesendet. Bis du ihn anklickst, bleibt %(old)s "
 "aktiv."
 
-#: apps/accounts/views.py:221
+#: apps/accounts/views.py:243
 msgid "Identity updated."
 msgstr "Identität aktualisiert."
 
-#: apps/accounts/views.py:270
+#: apps/accounts/views.py:292
 msgid "Profile updated."
 msgstr "Profil aktualisiert."
 
-#: apps/accounts/views.py:290
+#: apps/accounts/views.py:312
 msgid "Address updated."
 msgstr "Adresse aktualisiert."
 
-#: apps/accounts/views.py:374
+#: apps/accounts/views.py:396
 msgid "Password updated successfully."
 msgstr "Passwort erfolgreich aktualisiert."
 
-#: apps/accounts/views.py:429
+#: apps/accounts/views.py:451
 msgid "Password set. Welcome to OE5XRX."
 msgstr "Passwort gesetzt. Willkommen bei OE5XRX."
 
-#: apps/accounts/views.py:454
+#: apps/accounts/views.py:476
 msgid ""
 "Link invalid or expired. Ask an admin for a new Welcome link, or request a "
 "password reset."
@@ -1828,28 +1828,28 @@ msgstr ""
 "Link ungültig oder abgelaufen. Bitte einen Admin um einen neuen Willkommens-"
 "Link oder fordere ein Zurücksetzen des Passworts an."
 
-#: apps/accounts/views.py:492 apps/accounts/views.py:518
-#: apps/accounts/views.py:521
+#: apps/accounts/views.py:514 apps/accounts/views.py:540
+#: apps/accounts/views.py:543
 msgid "Email verification link invalid or expired."
 msgstr "Link zur E-Mail-Bestätigung ungültig oder abgelaufen."
 
-#: apps/accounts/views.py:497
+#: apps/accounts/views.py:519
 msgid "Email verification token has no target address."
 msgstr "Das Token zur E-Mail-Bestätigung hat keine Zieladresse."
 
-#: apps/accounts/views.py:529 apps/accounts/views.py:549
+#: apps/accounts/views.py:551 apps/accounts/views.py:571
 #, python-format
 msgid "Cannot verify: another account is already using %(email)s."
 msgstr ""
 "Bestätigung nicht möglich: %(email)s wird bereits von einem anderen Konto "
 "verwendet."
 
-#: apps/accounts/views.py:563
+#: apps/accounts/views.py:585
 #, python-format
 msgid "Email updated to %(email)s."
 msgstr "E-Mail-Adresse auf %(email)s geändert."
 
-#: apps/accounts/views.py:648
+#: apps/accounts/views.py:670
 #, python-format
 msgid ""
 "If %(email)s is a registered account, a password reset link has been sent. "
@@ -1858,48 +1858,48 @@ msgstr ""
 "Falls %(email)s zu einem registrierten Konto gehört, wurde ein Link zum "
 "Zurücksetzen des Passworts gesendet. Sieh in deinem Posteingang nach."
 
-#: apps/accounts/views.py:692
+#: apps/accounts/views.py:714
 msgid "User already has a password set."
 msgstr "Der Benutzer hat bereits ein Passwort gesetzt."
 
-#: apps/accounts/views.py:697
+#: apps/accounts/views.py:719
 msgid "Cannot resend Welcome: user is deactivated. Re-activate first."
 msgstr ""
 "Willkommens-Mail kann nicht erneut gesendet werden: Benutzer ist "
 "deaktiviert. Aktiviere ihn zuerst wieder."
 
-#: apps/accounts/views.py:703
+#: apps/accounts/views.py:725
 msgid "Cannot resend Welcome: user has no email address. Set one first."
 msgstr ""
 "Willkommens-Mail kann nicht erneut gesendet werden: Benutzer hat keine E-"
 "Mail-Adresse. Trag zuerst eine ein."
 
-#: apps/accounts/views.py:724
+#: apps/accounts/views.py:746
 msgid "Welcome link re-sent."
 msgstr "Willkommens-Link erneut gesendet."
 
-#: apps/accounts/views.py:857
+#: apps/accounts/views.py:879
 #, python-format
 msgid "User created. Welcome link sent to %(email)s."
 msgstr "Benutzer angelegt. Willkommens-Link an %(email)s gesendet."
 
-#: apps/accounts/views.py:863
+#: apps/accounts/views.py:885
 msgid "Create User"
 msgstr "Benutzer anlegen"
 
-#: apps/accounts/views.py:905
+#: apps/accounts/views.py:927
 msgid "User updated successfully."
 msgstr "Benutzer erfolgreich aktualisiert."
 
-#: apps/accounts/views.py:929
+#: apps/accounts/views.py:951
 msgid "Edit User"
 msgstr "Benutzer bearbeiten"
 
-#: apps/accounts/views.py:1049
+#: apps/accounts/views.py:1071
 msgid "You cannot delete your own account."
 msgstr "Du kannst dein eigenes Konto nicht löschen."
 
-#: apps/accounts/views.py:1079
+#: apps/accounts/views.py:1101
 #, python-format
 msgid ""
 "User soft-deleted. Free positions:\n"
@@ -1910,11 +1910,11 @@ msgstr ""
 "%(lines)s\n"
 "Bei Bedarf neu zuweisen."
 
-#: apps/accounts/views.py:1083
+#: apps/accounts/views.py:1105
 msgid "User soft-deleted."
 msgstr "Benutzer soft-gelöscht."
 
-#: apps/accounts/views.py:1128
+#: apps/accounts/views.py:1150
 #, python-format
 msgid ""
 "Cannot restore: another active user (%(other)s) is using %(email)s. Either "
@@ -1924,7 +1924,7 @@ msgstr ""
 "verwendet %(email)s. Ändere zuerst die E-Mail-Adresse von %(other)s oder "
 "aktualisiere die E-Mail-Adresse von %(name)s vor dem Wiederherstellen."
 
-#: apps/accounts/views.py:1151
+#: apps/accounts/views.py:1173
 #, python-format
 msgid ""
 "Cannot restore: another active user is using callsign %(name)s. Soft-delete "
@@ -1933,7 +1933,7 @@ msgstr ""
 "Wiederherstellen nicht möglich: Ein anderer aktiver Benutzer verwendet das "
 "Rufzeichen %(name)s. Soft-lösche oder benenne ihn zuerst um."
 
-#: apps/accounts/views.py:1189
+#: apps/accounts/views.py:1211
 #, python-format
 msgid ""
 "Cannot restore %(name)s: a conflicting active user was created in the "
@@ -1943,7 +1943,7 @@ msgstr ""
 "kollidierender aktiver Benutzer angelegt. Lade die Seite neu, um den "
 "aktuellen Stand zu sehen."
 
-#: apps/accounts/views.py:1199
+#: apps/accounts/views.py:1221
 #, python-format
 msgid ""
 "User %(name)s restored. Topology assignments were revoked at delete-time and "
@@ -1952,7 +1952,7 @@ msgstr ""
 "Benutzer %(name)s wiederhergestellt. Topologie-Zuweisungen wurden beim "
 "Löschen widerrufen und müssen neu vergeben werden."
 
-#: apps/accounts/views.py:1294
+#: apps/accounts/views.py:1316
 msgid "User permanently purged."
 msgstr "Benutzer endgültig gelöscht."
 
@@ -3133,7 +3133,7 @@ msgstr "Zuletzt gehört"
 #: apps/stations/templates/stations/station_detail.html:408
 #, python-format
 msgid "%(since)s ago"
-msgstr "vor %(since)s"
+msgstr "%(since)s her"
 
 #: apps/dashboard/templates/dashboard/index.html:175
 #: apps/dashboard/templates/dashboard/index.html:177
@@ -4195,7 +4195,7 @@ msgstr "Letzte 10"
 #: apps/module_firmware/templates/module_firmware/_import_jobs.html:41
 #, python-format
 msgid "done %(since)s ago"
-msgstr "fertig vor %(since)s"
+msgstr "fertig, %(since)s her"
 
 #: apps/images/templates/images/image_list.html:304
 #: apps/module_firmware/templates/module_firmware/_import_jobs.html:62
@@ -6764,7 +6764,7 @@ msgstr "Wartet auf Leerlauf"
 msgid "No suitable radio module"
 msgstr "Kein passendes Funkmodul"
 
-#: apps/passive/status.py:64
+#: apps/passive/status.py:64 apps/passive/status.py:126
 msgid "unknown"
 msgstr "unbekannt"
 
@@ -8967,7 +8967,7 @@ msgstr[1] "%(n)s Metriken überschritten"
 #: apps/stations/templates/stations/station_detail.html:382
 #, python-format
 msgid "Updated %(since)s ago"
-msgstr "Aktualisiert vor %(since)s"
+msgstr "Aktualisiert: %(since)s her"
 
 #: apps/stations/templates/stations/_metrics_panel.html:38
 msgid "Minimum, average and maximum over the last heartbeat interval"
@@ -9398,7 +9398,7 @@ msgstr "Ja, dauerhaft löschen"
 #: apps/stations/templates/stations/station_detail.html:36
 #, python-format
 msgid "Last heard %(since)s ago"
-msgstr "Zuletzt gehört vor %(since)s"
+msgstr "Zuletzt gehört: %(since)s her"
 
 #: apps/stations/templates/stations/station_detail.html:60
 msgid "Reported OS version"

@@ -68,3 +68,23 @@ def test_webpush_disabled_skips_push(settings):
     with mock.patch("apps.monitoring.notifications.send_web_push", return_value=True) as m:
         send_alert_notifications(_alert(s))
     assert m.call_count == 0
+
+
+@pytest.mark.django_db
+def test_push_url_uses_each_recipients_language_prefix(settings):
+    settings.ALERT_EMAIL_ENABLED = False
+    settings.ALERT_WEBPUSH_ENABLED = True
+    de = _admin("de", User.NotifyChannel.PUSH)
+    de.language = "de"
+    de.save(update_fields=["language"])
+    en = _admin("en", User.NotifyChannel.PUSH)
+    for u in (de, en):
+        PushSubscription.objects.create(
+            user=u, endpoint=f"https://push.example/{u.username}", p256dh="p", auth="a"
+        )
+    s = Station.objects.create(name="OE5A", callsign="OE5A")
+    with mock.patch("apps.monitoring.notifications.send_web_push", return_value=True) as m:
+        send_alert_notifications(_alert(s))
+    urls = {call.args[0].endpoint: call.args[1]["url"] for call in m.call_args_list}
+    assert urls["https://push.example/de"].startswith("/de/")
+    assert urls["https://push.example/en"].startswith("/en/")
