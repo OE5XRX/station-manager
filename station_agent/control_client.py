@@ -423,7 +423,8 @@ class ControlClient:
             self._forget_pending.add(slot)
 
     def slot_busy(self, slot: int, timeout: float = SLOT_BUSY_TIMEOUT_S) -> bool:
-        """Thread-safe: True while *slot* is keyed (PTT) on the control plane.
+        """Thread-safe: True while *slot* is keyed (PTT) or reserved by an SSTV transmission
+        (download included) on the control plane.
 
         Not connected (no broker / loop) ⇒ no PTT is possible ⇒ False. If the control loop
         does not answer within *timeout* — or the query fails in any other way — the answer

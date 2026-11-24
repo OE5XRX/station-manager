@@ -154,7 +154,7 @@ class Broker:
                 or self._ptt_inflight
                 or self._unkeying
                 or self._sstv_ptt
-                or (self._sstv_tx is not None and self._sstv_tx.active is not None)
+                or self._sstv_reserves_scanned_slot()
             ),
             paused=slot_pause.paused_slots,
             ts=self._ts,
@@ -944,6 +944,13 @@ class Broker:
         """True while any module on *slot* is keyed, being keyed, or being unkeyed, or an SSTV
         transmission owns the slot (from its ack on, download included). Loop-only."""
         return self._keyed(slot) or (self._sstv_tx is not None and self._sstv_tx.owns(slot))
+
+    def _sstv_reserves_scanned_slot(self) -> bool:
+        # Scanner predicate: an SSTV session that has not keyed yet (download) only parks a
+        # scan that would retune ITS slot; once keyed, _sstv_ptt parks every scan like a voice
+        # key does.
+        s = self._sstv_tx.active if self._sstv_tx is not None else None
+        return s is not None and s.slot in self.scanner.active_slots()
 
     def _keyed(self, slot: int) -> bool:
         return any(

@@ -876,3 +876,189 @@ def test_play_argv_gain():
         "! pipewiresink target-object=alsa_output.slot1 "
         "stream-properties=props,node.dont-reconnect=true,node.dont-fallback=true"
     )
+
+
+# --- scanner, never-sent key, disconnect order ---------------------------------------
+
+
+def _scan_rig(tmp_path, http):
+    """Broker over two fake slots with scanner-capable modules (1: SSTV, 2: elsewhere)."""
+    from tests.test_scanner import FM_CAPS as SCAN_CAPS
+
+    fws = {n: FakeFirmware({"fm": {**FM, "capabilities": SCAN_CAPS}}) for n in (1, 2)}
+    for f in fws.values():
+        f.start()
+    mgr = _manager(tmp_path, http, player=FakePlayer("ok", 0.05))
+    col = Collector()
+    b = Broker(
+        col,
+        transport_factory=lambda p: SlotControl(p, timeout=2.0),
+        dead_man_timeout=5.0,
+        scan_poll_s=0.01,
+        sstv_tx=mgr,
+    )
+    b.set_inventory(
+        [
+            {
+                "slot": n,
+                "control": f.control_path,
+                "modules": [{"id": "fm", "identity": FM["identity"], "capabilities": SCAN_CAPS}],
+            }
+            for n, f in fws.items()
+        ]
+    )
+    return fws, mgr, b, col
+
+
+def _scan(slot, scan_id="s1"):
+    from tests.test_scanner import _entry, _scan_start
+
+    entries = [
+        _entry("a", slot=slot, rx=145.6, tx=145.0),
+        _entry("b", slot=slot, rx=145.7, tx=145.1),
+    ]
+    return _scan_start(entries, listen_s=0.02, hang_s=0.02, scan_id=scan_id)
+
+
+def _scan_states(col):
+    return [m["state"] for m in col.sent if m["type"] == "scan_state"]
+
+
+def _retunes(f):
+    return sum(1 for line in f.received if b" set rx_frequency " in line)
+
+
+@pytest.mark.parametrize("scan_first", [True, False])
+def test_scan_on_sstv_slot_never_retunes_before_the_key(tmp_path, scan_first):
+    import threading
+
+    http = FakeHttp()
+    http.block = threading.Event()
+    fws, mgr, b, col = _scan_rig(tmp_path, http)
+
+    async def scenario():
+        if scan_first:
+            await b.handle(_scan(1))
+            await asyncio.sleep(0.1)  # the scan is cycling slot 1
+        await b.handle(_start())  # download blocks
+        if not scan_first:
+            await b.handle(_scan(1))
+        await asyncio.sleep(0.1)
+        assert "held" in _scan_states(col)
+        before = _retunes(fws[1])
+        await asyncio.sleep(0.2)
+        assert _retunes(fws[1]) == before  # parked: no retune between ack and key
+        http.block.set()
+        await mgr.wait_idle()
+        await b.stop()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        for f in fws.values():
+            f.stop()
+    assert col.states()[-1][0] == "done"
+
+
+def test_download_does_not_park_a_scan_on_another_slot(tmp_path):
+    import threading
+
+    http = FakeHttp()
+    http.block = threading.Event()
+    fws, mgr, b, col = _scan_rig(tmp_path, http)
+
+    async def scenario():
+        await b.handle(_start())  # SSTV on slot 1, download blocks
+        await b.handle(_scan(2))
+        loop = asyncio.get_running_loop()
+        end = loop.time() + 3.0
+        while _retunes(fws[2]) < 3:  # still cycling slot 2
+            assert loop.time() < end, "the scan on slot 2 was parked"
+            await asyncio.sleep(0.01)
+        assert "held" not in _scan_states(col)
+        http.block.set()
+        await mgr.wait_idle()
+        await b.stop()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        for f in fws.values():
+            f.stop()
+
+
+def test_key_refused_before_device_open_writes_nothing(fw, tmp_path):
+    import threading
+
+    from station_agent import slot_pause
+
+    http = FakeHttp()
+    http.block = threading.Event()
+    mgr = _manager(tmp_path, http)
+    b, col = _broker(fw, mgr)
+
+    async def scenario():
+        await b.handle(_start())
+        await asyncio.sleep(0.05)
+        slot_pause.pause(1, None)  # module OTA takes the slot after the ack
+        try:
+            http.block.set()
+            await mgr.wait_idle()
+        finally:
+            slot_pause.resume(1)
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "updating")
+    assert _ptt(fw, "true") == 0 and _ptt(fw, "false") == 0  # never touched the flasher's line
+
+
+def test_disconnect_unkeys_voice_before_waiting_for_sstv(tmp_path, monkeypatch):
+    # A player that ignores the kill makes the SSTV teardown slow (bounded by _KILL_WAIT_S);
+    # the voice PTT on another slot must still be unkeyed right away, not after it.
+    monkeypatch.setattr(sstv_tx, "_KILL_WAIT_S", 0.5)
+    player = FakePlayer("hang")
+    fws, mgr, b, _ = _scan_rig(tmp_path, FakeHttp())
+    mgr._spawn = player.spawn
+    stamps = {}
+
+    async def send(msg):
+        now = asyncio.get_running_loop().time()
+        if msg.get("event") == "ptt_auto_unkey":
+            stamps["voice"] = now
+        if msg["type"] == "sstv_tx_state":
+            if msg["state"] == "keyed":
+                stamps.setdefault("keyed", now)
+            elif msg["state"] == "aborted":
+                stamps["sstv"] = now
+
+    b._send = send
+
+    async def scenario():
+        await b.handle(_start(duration_s=30))
+        while "keyed" not in stamps:
+            await asyncio.sleep(0.01)
+        player.procs[0].kill = lambda: None  # stubborn: survives the kill
+        await b.handle(
+            {
+                "v": 1,
+                "type": "command",
+                "request_id": "k2",
+                "slot": 2,
+                "module": "fm",
+                "capability": "ptt",
+                "op": "do",
+                "value": True,
+            }
+        )
+        t0 = asyncio.get_running_loop().time()
+        await b.on_disconnect()
+        return t0
+
+    try:
+        t0 = asyncio.run(scenario())
+    finally:
+        for f in fws.values():
+            f.stop()
+    assert stamps["voice"] - t0 < 0.3
+    assert stamps["sstv"] - t0 >= 0.4  # on_disconnect still waited for the SSTV teardown
+    assert fws[1].state["fm"]["ptt"] == "false" and fws[2].state["fm"]["ptt"] == "false"
