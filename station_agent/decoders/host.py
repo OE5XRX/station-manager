@@ -77,6 +77,7 @@ class DecoderHost:
         self._reconcile_task: asyncio.Task | None = None
         self._link_lost_tasks: set[asyncio.Task] = set()
         self._link = 0  # bumped on every attach()
+        self._snapshot_link = 0  # the link whose snapshot (and spool resend) has gone out
 
     @property
     def decoders(self) -> frozenset[str]:
@@ -114,13 +115,20 @@ class DecoderHost:
                 and getattr(self._plugins.get(inst.decoder), "stop_on_link_loss", False)
             ]
             for slot in doomed:
-                self._instances[slot].link_lost = True
+                inst = self._instances[slot]
+                inst.link_lost = True
                 try:
-                    await self._stop_locked(slot, "link_lost")
+                    err = await self._stop_locked(slot, "link_lost")
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # noqa: BLE001 - must not end silently
                     logger.exception("stopping decoder on slot %s after link loss failed", slot)
+                    err = "failed"
+                if err:
+                    # Still tracked (state 'error'): it belongs to the current link now, so a
+                    # retried stop is reported normally.
+                    inst.link_lost = False
+                    inst.link = self._link
 
     async def _send(self, msg: dict) -> None:
         send = self._send_fn
@@ -366,6 +374,10 @@ class DecoderHost:
         async with self._lock:
             snapshot = self.running()
         await self._send(protocol.build_decoder_snapshot(snapshot))
+        # From here on, late output of link-lost instances goes out live (after the snapshot);
+        # anything spooled before is in the resend below. (A frame in both is deduplicated
+        # by the server on (epoch, seq).)
+        self._snapshot_link = self._link
         for frame in self._spool.pending():
             await self._send(frame)
 
@@ -373,7 +385,10 @@ class DecoderHost:
         ts = self._now()
         if reliable:
             frame = self._spool.add(inst.decoder, inst.slot, kind, data, ts)
-            if not inst.link_lost:
+            # A link-lost instance's output (e.g. a picture finished after a finalize
+            # timeout) must not overtake the next connection's snapshot, nor be stranded
+            # in the spool once that snapshot and the resend have gone out.
+            if not inst.link_lost or self._snapshot_link == self._link:
                 await self._send(frame)
         elif self._send_fn is not None and not inst.link_lost:
             frame = protocol.build_decoder_output(

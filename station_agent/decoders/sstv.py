@@ -232,6 +232,8 @@ class SstvDecoderPlugin:
             },
         )
         for index in sorted(picture.rows):
+            if self._pictures.get(slot) is not picture:
+                return None  # finalize took it while an emit was suspended
             await self._line(picture, index, picture.rows[index], emit)
         return picture if self._pictures.get(slot) is picture else None
 

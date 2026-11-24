@@ -1075,3 +1075,200 @@ def test_link_lost_output_never_goes_live_on_new_connection(monkeypatch):
     assert len(images) == 1 and images[0]["data"]["rows"] == 60
     seqs = [f["seq"] for f in live.frames if f["type"] == "decoder_output"]
     assert seqs == sorted(seqs)
+
+
+# -- round-3 review ------------------------------------------------------------------------
+
+
+def test_link_lost_image_after_finalize_timeout_reaches_new_link(monkeypatch):
+    """Finalize timed out, the new link's snapshot + resend already went out: the picture
+    finished afterwards is sent live, not stranded in the spool."""
+    entered = _slow_encode(monkeypatch, 0.3)
+    monkeypatch.setattr("station_agent.decoders.host.FINALIZE_TIMEOUT_S", 0.05)
+
+    async def go():
+        async with FakeUnit() as unit:
+            host, _ = _host(_plugin(unit))
+            old = Sent()
+            host.attach(old)
+            await host.start("sstv", 1, {}, "r1")
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(60)])
+            await wait_for(lambda: len(old.outputs("sstv_line")) == 60)
+            host.detach()
+            host.on_link_lost()
+            await wait_for(entered.is_set)
+            await wait_for(lambda: not host._link_lost_tasks)  # finalize timed out
+            live = Sent()
+            host.attach(live)
+            await host.on_connected()
+            resent = len(live.outputs("sstv_image"))
+            await wait_for(lambda: live.outputs("sstv_image"))
+            return resent, live
+
+    resent, live = run(go())
+    assert resent == 0
+    assert live.frames[0]["type"] == "decoder_snapshot"
+    assert [f["data"]["rows"] for f in live.outputs("sstv_image")] == [60]
+
+
+def test_failed_link_loss_stop_reports_later_stop():
+    from station_agent.decoders.units import DecoderUnitError
+
+    class FlakyUnits(FakeUnits):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        def stop(self, decoder, slot):
+            super().stop(decoder, slot)
+            if self.fail:
+                self.fail = False
+                raise DecoderUnitError("busy")
+
+    async def go():
+        units = FlakyUnits()
+        host = DecoderHost(units, {"sstv": BlockingSstv()}, lambda slot: "rx", spool=Spool())
+        host.attach(Sent())
+        await host.start("sstv", 1, {}, "r1")
+        host.detach()
+        host.on_link_lost()
+        await wait_for(lambda: not host._link_lost_tasks)
+        live = Sent()
+        host.attach(live)
+        await host.on_connected()
+        await host.stop("sstv", 1, "r2")
+        return live, host
+
+    live, host = run(go())
+    snapshot = live.frames[0]
+    assert snapshot["decoders"] == [{"decoder": "sstv", "slot": 1, "state": "error"}]
+    states = [f for f in live.frames if f["type"] == "decoder_state"]
+    assert [s["state"] for s in states] == ["stopped"] and host.running() == []
+
+
+class BlockingSstv(BlockingAprs):
+    name = "sstv"
+    stop_on_link_loss = True
+
+
+def test_on_connected_right_after_link_loss_waits_for_the_stop():
+    async def go():
+        async with FakeUnit() as unit:
+            host, _ = _host(_plugin(unit))
+            host.attach(Sent())
+            await host.start("sstv", 1, {}, "r1")
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(40)])
+            await wait_for(lambda: host._plugins["sstv"]._pictures.get(1) is not None)
+            await asyncio.sleep(0.05)
+            host.detach()
+            host.on_link_lost()
+            live = Sent()
+            host.attach(live)
+            await host.on_connected()  # no wait in between
+            return live
+
+    live = run(go())
+    assert live.frames[0] == {"v": 1, "type": "decoder_snapshot", "decoders": []}
+    assert [f["data"]["rows"] for f in live.outputs("sstv_image")] == [40]
+
+
+def test_link_lost_unreliable_output_never_live():
+    gate = asyncio.Event
+
+    class LateEmitter(BlockingSstv):
+        def __init__(self):
+            self.release = None
+
+        async def finalize(self, slot, emit):
+            await self.release.wait()
+            await emit("x_line", False, {"n": 1})
+            await emit("x_image", True, {"n": 2})
+
+    async def go():
+        plugin = LateEmitter()
+        plugin.release = gate()
+        host = DecoderHost(FakeUnits(), {"sstv": plugin}, lambda slot: "rx", spool=Spool())
+        host.attach(Sent())
+        await host.start("sstv", 1, {}, "r1")
+        host.detach()
+        host.on_link_lost()
+        await asyncio.sleep(0.01)
+        live = Sent()
+        host.attach(live)  # new link before the late output
+        plugin.release.set()
+        await wait_for(lambda: not host._link_lost_tasks)
+        before = list(live.frames)
+        await host.on_connected()
+        return before, live
+
+    before, live = run(go())
+    assert before == []  # neither the line nor the image went out before the snapshot
+    kinds = [f.get("kind") for f in live.frames if f["type"] == "decoder_output"]
+    assert kinds == ["x_image"]
+
+
+def test_finalize_runs_before_the_reader_is_cancelled():
+    order = []
+
+    class Recording(BlockingAprs):
+        name = "sstv"
+
+        async def run(self, slot, emit):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                order.append("cancelled")
+                raise
+
+        async def finalize(self, slot, emit):
+            order.append("finalize")
+
+    async def go():
+        host, _ = _host(Recording())
+        host.attach(Sent())
+        await host.start("sstv", 1, {}, "r1")
+        await asyncio.sleep(0.01)
+        await host.stop("sstv", 1, "r2")
+
+    run(go())
+    assert order == ["finalize", "cancelled"]
+
+
+def test_finalize_while_split_opens_new_picture():
+    """finalize lands while the reader is suspended in the new picture's sstv_start emit:
+    the reader must not go on with the picture finalize already took."""
+
+    async def go():
+        async with FakeUnit() as unit:
+            plugin = _plugin(unit, sleep=lambda s: asyncio.sleep(0))
+            emits, blocked, release = Emits(), asyncio.Event(), asyncio.Event()
+
+            async def emit(kind, reliable, data):
+                await emits(kind, reliable, data)
+                if kind == "sstv_start" and len(emits.of("sstv_start")) == 2:
+                    blocked.set()
+                    await release.wait()
+
+            task = asyncio.create_task(plugin.run(1, emit))
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(40)])
+            await wait_for(lambda: len(emits.of("sstv_line")) == 40)
+            w.transport.abort()
+            w2 = await unit.client()
+            # rows 0..29 match, row 30 differs -> split; new picture gets rows 0..29
+            await send(w2, _start(), *[_row_line(i) for i in range(30)], _row_line(30, salt=9))
+            await wait_for(blocked.is_set)
+            lines_before = len(emits.of("sstv_line"))
+            await plugin.finalize(1, emits)
+            release.set()
+            await asyncio.sleep(0.05)
+            task.cancel()
+            return plugin, emits, lines_before
+
+    plugin, emits, lines_before = run(go())
+    assert plugin._pictures == {}
+    # No line for row 30 (nor the replayed rows) after finalize took the new picture.
+    assert len(emits.of("sstv_line")) == lines_before
+    assert [i["rows"] for i in emits.of("sstv_image")] == [40, 30]
