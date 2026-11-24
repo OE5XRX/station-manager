@@ -9,7 +9,8 @@ ceiling (never through the voice DSP chain) and unkeys.
 
 The transmitter must never stay keyed. Every way out of :meth:`SstvTxSession.run` unkeys:
 playback end, the hard stop at ``duration_s + HARD_STOP_MARGIN_S`` (independent of the
-server), ``sstv_tx_stop``, control-WS loss, a player crash, agent shutdown and a voice unkey.
+server), ``sstv_tx_stop``, control-WS loss, a player crash and agent shutdown. An unkey the
+module never confirms ends the session as ``error``/``unkey_unconfirmed``.
 A ``tx_id`` is accepted only once per agent process, so a reconnecting server that replays an
 old ``sstv_tx_start`` never re-keys.
 """
@@ -49,6 +50,9 @@ _ENCODER_PEAK = 0.9
 DOWNLOAD_DEADLINE_S = 180.0
 _CHUNK = 64 * 1024
 _KILL_WAIT_S = 2.0
+# Per socket read: bounds how long a download thread lingers after an abort or the deadline
+# (it cannot be interrupted mid-read), so stragglers never pin the small executor for long.
+_READ_TIMEOUT_S = 10
 _SEEN_IDS = 256
 
 _SHA_RE = re.compile(r"[0-9a-f]{64}")
@@ -218,7 +222,8 @@ class SstvTxSession:
             logger.exception("sstv_tx: session %s failed", self.tx_id)
             state, detail = "error", "internal"
         finally:
-            await self._cleanup(proc, keyed, fd, tmp)
+            if not await self._cleanup(proc, keyed, fd, tmp, detail or state):
+                state, detail = "error", "unkey_unconfirmed"
             if self._progress_task is not None:
                 self._progress_task.cancel()
             await self._emit(state, self._last_progress, detail)
@@ -257,8 +262,10 @@ class SstvTxSession:
         elapsed = asyncio.get_running_loop().time() - keyed_at
         self._last_progress = max(0.0, min(1.0, elapsed / self.duration_s))
 
-    async def _cleanup(self, proc, keyed: bool, fd, tmp) -> None:
-        # Order matters: stop the audio, drive the transmitter low, then tidy up.
+    async def _cleanup(self, proc, keyed: bool, fd, tmp, reason: str) -> bool:
+        """Stop the audio, drive the transmitter low, tidy up (in that order). Returns False
+        if the unkey was not confirmed by the module."""
+        unkeyed = True
         try:
             if proc is not None and proc.returncode is None:
                 try:
@@ -267,11 +274,12 @@ class SstvTxSession:
                     pass
             if keyed:
                 try:
-                    await asyncio.shield(
-                        self._radio.unkey_session(self.slot, self.module, self._reason)
+                    unkeyed = await asyncio.shield(
+                        self._radio.unkey_session(self.slot, self.module, reason)
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("sstv_tx: unkey failed for %s", self.tx_id)
+                    unkeyed = False
             if proc is not None:
                 try:
                     await asyncio.wait_for(proc.wait(), _KILL_WAIT_S)
@@ -285,6 +293,7 @@ class SstvTxSession:
                     os.unlink(tmp)
                 except FileNotFoundError:
                     pass
+        return unkeyed
 
     def _download(self, fd: int) -> str | None:
         """Blocking: stream the artefact into *fd*. Returns an error detail or None."""
@@ -292,7 +301,9 @@ class SstvTxSession:
             if self._cancel_download.is_set():
                 return "cancelled"
             # identity: Content-Length and the streamed bytes must both be the raw PCM size.
-            resp = self._mgr.http_get(self._url_path, {"Accept-Encoding": "identity"})
+            resp = self._mgr.http_get(
+                self._url_path, {"Accept-Encoding": "identity"}, _READ_TIMEOUT_S
+            )
             if resp is None:
                 return "download_failed"
             try:
@@ -334,7 +345,7 @@ class SstvTxManager:
     def __init__(
         self,
         *,
-        http_get: Callable[[str, dict], object],
+        http_get: Callable[[str, dict, float], object],
         server_url: str,
         ceiling_dbfs: Callable[[], float],
         tx_node: Callable[[int], str | None],
@@ -368,8 +379,8 @@ class SstvTxManager:
     async def spawn(self, argv: list[str]):
         return await self._spawn(argv)
 
-    def http_get(self, path: str, headers: dict):
-        return self._http_get(path, headers)
+    def http_get(self, path: str, headers: dict, timeout: float):
+        return self._http_get(path, headers, timeout)
 
     def _url_path(self, url) -> str | None:
         """Server-relative path of *url*, or None if it points anywhere but our server.
@@ -471,14 +482,16 @@ class SstvTxManager:
         if s is not None and msg.get("tx_id") == s.tx_id:
             s.abort("stopped")
 
-    async def abort(self, reason: str, slot=None) -> None:
-        """Abort the running session (optionally only if it is on *slot*) and wait until the
-        transmitter is low."""
+    def request_abort(self, reason: str) -> None:
+        """Signal the running session to end; :meth:`wait_idle` waits for the unkey."""
         s = self.active
-        if s is None or (slot is not None and s.slot != slot):
-            return
-        s.abort(reason)
-        await asyncio.gather(s.task, return_exceptions=True)
+        if s is not None:
+            s.abort(reason)
+
+    async def abort(self, reason: str) -> None:
+        """Abort the running session and wait until the transmitter is low."""
+        self.request_abort(reason)
+        await self.wait_idle()
 
     async def wait_idle(self) -> None:
         s = self._session

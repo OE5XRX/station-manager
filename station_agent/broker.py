@@ -150,7 +150,11 @@ class Broker:
             self._send,
             poll_s=scan_poll_s,
             ptt_active=lambda: bool(
-                self._ptt or self._ptt_inflight or self._unkeying or self._sstv_ptt
+                self._ptt
+                or self._ptt_inflight
+                or self._unkeying
+                or self._sstv_ptt
+                or (self._sstv_tx is not None and self._sstv_tx.active is not None)
             ),
             paused=slot_pause.paused_slots,
             ts=self._ts,
@@ -937,7 +941,11 @@ class Broker:
 
     # --- PTT dead-man ----------------------------------------------------------
     def slot_busy(self, slot: int) -> bool:
-        """True while any module on *slot* is keyed, being keyed, or being unkeyed. Loop-only."""
+        """True while any module on *slot* is keyed, being keyed, or being unkeyed, or an SSTV
+        transmission owns the slot (from its ack on, download included). Loop-only."""
+        return self._keyed(slot) or (self._sstv_tx is not None and self._sstv_tx.owns(slot))
+
+    def _keyed(self, slot: int) -> bool:
         return any(
             s == slot
             for s, _ in (*self._ptt, *self._ptt_inflight, *self._unkeying, *self._sstv_ptt)
@@ -1005,14 +1013,22 @@ class Broker:
         if self._sstv_tx is None:
             await self._send(proto.build_result(rid, False, error=("unsupported", "")))
             return
+        slot, module = msg.get("slot"), msg.get("module")
+        if self._valid_slot(slot) and slot_pause.is_paused(slot):
+            await self._send(proto.build_result(rid, False, error=("updating", "")))
+            return
         await self._sstv_tx.handle_start(self, self._send, msg)
+        if self._sstv_tx.owns(slot) and slot in self.scanner.active_slots():
+            # The session owns the slot from its ack on: park the scan now, so it can never
+            # retune the radio between the download and the key.
+            await self.scanner.hold("ptt", keyed=(slot, module))
 
     async def key_session(self, slot, module) -> str | None:
         """Key *module* for a station-owned transmission. Returns an error code or None.
 
         Unlike a voice ``do ptt true`` this arms no keepalive dead-man: the caller owns the
         PTT and MUST call :meth:`unkey_session` on every exit path. Refused while anything
-        on the slot is keyed (voice PTT or another session).
+        on the slot is keyed (voice PTT or another key_session).
         """
         if not _valid_addr(slot, module) or (slot, module) in self._virtual:
             return proto.VALIDATION_FAILED
@@ -1022,7 +1038,7 @@ class Broker:
         cap = desc.index_capabilities(descriptor).get("ptt")
         if cap is None or not self._is_ptt_cap(cap):
             return proto.UNKNOWN_CAPABILITY
-        if self.slot_busy(slot):
+        if self._keyed(slot):
             return "slot_busy"
         # Claimed synchronously with the busy check: no voice key can slip in between.
         self._sstv_ptt.add((slot, module))
@@ -1033,34 +1049,49 @@ class Broker:
             await self.unkey_session(slot, module, "key_failed")
             raise
         if not result.get("ok"):
-            # A timed-out key may still have landed: drive the transmitter low regardless.
-            await self.unkey_session(slot, module, "key_failed")
-            return result.get("error") or proto.TIMEOUT
+            error = result.get("error") or proto.TIMEOUT
+            if error in self._KEY_NEVER_SENT:
+                # Refused before the device was opened: nothing to drive low, and a failsafe
+                # write would hit a line the module flasher owns.
+                self._sstv_ptt.discard((slot, module))
+            else:
+                # A timed-out (or otherwise failed) key may still have landed: drive it low.
+                await self.unkey_session(slot, module, "key_failed")
+            return error
         return None
 
-    async def unkey_session(self, slot, module, reason) -> None:
-        """Fail-safe unkey of a :meth:`key_session` PTT. No-op if this session does not
-        hold it. The slot stays busy until the unkey has reached the device."""
+    # _execute refuses these before opening the control device.
+    _KEY_NEVER_SENT = frozenset(("updating", proto.UNKNOWN_SLOT))
+
+    async def unkey_session(self, slot, module, reason) -> bool:
+        """Fail-safe unkey of a :meth:`key_session` PTT (one retry). Returns False if the
+        module never confirmed it. No-op (True) if no session holds it. The slot stays busy
+        until the unkey attempts are over."""
         if (slot, module) not in self._sstv_ptt:
-            return
+            return True
+        result: dict = {}
         try:
-            result = await self._execute(slot, module, "do", "ptt", "false", failsafe=True)
+            for _attempt in range(2):
+                result = await self._execute(slot, module, "do", "ptt", "false", failsafe=True)
+                if result.get("ok"):
+                    return True
         finally:
             self._sstv_ptt.discard((slot, module))
-        if not result.get("ok"):
-            logger.warning(
-                "broker: SSTV unkey (%s) on slot %s module %s not confirmed (%s)",
-                reason,
-                slot,
-                module,
-                result.get("error"),
-            )
+        logger.error(
+            "broker: SSTV unkey (%s) on slot %s module %s NOT confirmed (%s)",
+            reason,
+            slot,
+            module,
+            result.get("error"),
+        )
+        return False
 
     async def on_disconnect(self) -> None:
-        # Station-owned SSTV TX first: losing the link means losing the operator's way to
-        # stop the transmitter, so it stops (SSTV spec §5.4 step 7).
+        # Station-owned SSTV TX: losing the link means losing the operator's way to stop the
+        # transmitter, so it stops (SSTV spec §5.4 step 7). Signalled now, awaited after the
+        # voice unkeys below so they are not delayed by the SSTV teardown.
         if self._sstv_tx is not None:
-            await self._sstv_tx.abort("ws_disconnect")
+            self._sstv_tx.request_abort("ws_disconnect")
         cancelled_tasks = []
         for (slot, module), entry in list(self._ptt.items()):
             if entry["task"] is not None:
@@ -1068,6 +1099,8 @@ class Broker:
                 cancelled_tasks.append(entry["task"])
             del self._ptt[(slot, module)]
             await self._unkey(slot, module, entry["cap"], "ws_disconnect")
+        if self._sstv_tx is not None:
+            await self._sstv_tx.wait_idle()
         # Dead-man (spec §7.2): no server, no scan — the module stays on its current entry.
         await self.scanner.stop("disconnect")
         for task in cancelled_tasks:

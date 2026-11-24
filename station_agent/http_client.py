@@ -37,6 +37,7 @@ class HttpClient:
         timeout: int = DEFAULT_TIMEOUT,
         stream: bool = False,
         headers: dict | None = None,
+        allow_redirects: bool = True,
     ) -> requests.Response | None:
         """Send an authenticated HTTP request to the server.
 
@@ -48,6 +49,8 @@ class HttpClient:
             stream: If True, stream the response body.
             headers: Optional extra headers to merge into the outgoing request
                 (e.g. a Range header for resumable downloads).
+            allow_redirects: Follow HTTP redirects (requests' default). Pass False when the
+                response must come from the configured server itself.
 
         Returns:
             The requests.Response object, or None on connection failure.
@@ -82,6 +85,7 @@ class HttpClient:
                 headers=headers_out,
                 timeout=timeout,
                 stream=stream,
+                allow_redirects=allow_redirects,
             )
             return response
         except requests.ConnectionError:

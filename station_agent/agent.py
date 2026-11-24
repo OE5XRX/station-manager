@@ -856,8 +856,10 @@ class StationAgent:
         # SSTV TX (spec §5.4): artefact over the signed client, played at the calibrated TX
         # ceiling into the slot's TX node.
         sstv_tx = SstvTxManager(
-            http_get=lambda path, headers: http_client.request(
-                "GET", path, stream=True, headers=headers
+            # No redirects: the artefact must come from our server, and a redirect would carry
+            # the device signature headers elsewhere.
+            http_get=lambda path, headers, timeout: http_client.request(
+                "GET", path, stream=True, headers=headers, timeout=timeout, allow_redirects=False
             ),
             server_url=config.server_url,
             ceiling_dbfs=lambda: tx_settings.ceiling_dbfs,

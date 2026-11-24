@@ -68,7 +68,8 @@ class FakeHttp:
         self.headers = []
         self.block = None  # threading.Event: the GET blocks until it is set
 
-    def get(self, path, headers):
+    def get(self, path, headers, timeout):
+        assert timeout <= 30
         self.paths.append(path)
         self.headers.append(headers)
         if self.block is not None:
@@ -515,15 +516,190 @@ def test_second_start_refused_sstv_busy(fw, tmp_path):
 
     async def scenario():
         await b.handle(_start(duration_s=30))
-        await b.handle(_start(rid="r2", tx_id="t2"))
+        await b.handle(_start(rid="r2", tx_id="t2"))  # while t1 downloads
+        await _until_keyed(col)
+        await b.handle(_start(rid="r3", tx_id="t3"))  # while t1 is keyed
         await b.handle({"v": 1, "type": "sstv_tx_stop", "tx_id": "t1"})
         await mgr.wait_idle()
 
     asyncio.run(scenario())
     assert col.result("r1")["ok"] is True
     assert col.result("r2")["error"]["code"] == "sstv_busy"
-    assert col.states("t2") == []
-    assert _ptt(fw, "true") <= 1
+    assert col.result("r3")["error"]["code"] == "sstv_busy"
+    assert col.states("t2") == [] and col.states("t3") == []
+    assert _ptt(fw, "true") == 1 and _ptt(fw, "false") == 1
+
+
+def test_slot_reserved_during_download(fw, tmp_path):
+    import threading
+
+    http = FakeHttp()
+    http.block = threading.Event()
+    mgr = _manager(tmp_path, http)
+    b, col = _broker(fw, mgr)
+
+    async def scenario():
+        await b.handle(_start())
+        await asyncio.sleep(0.05)
+        assert b.slot_busy(1)  # module OTA and the scanner see the slot as busy
+        await b.handle(
+            {
+                "v": 1,
+                "type": "apply_preset",
+                "request_id": "p1",
+                "slot": 1,
+                "module": "fm",
+                "values": {"tx_frequency": 145.8},
+            }
+        )
+        await b.handle(
+            {
+                "v": 1,
+                "type": "command",
+                "request_id": "s1",
+                "slot": 1,
+                "module": "fm",
+                "capability": "frequency",
+                "op": "set",
+                "value": 145.8,
+            }
+        )
+        http.block.set()
+        await mgr.wait_idle()
+        assert not b.slot_busy(1)
+
+    asyncio.run(scenario())
+    assert col.result("p1")["ok"] is False
+    assert col.result("s1")["error"]["code"] == "sstv_busy"
+    assert not any(b"frequency" in line for line in fw.received)
+    assert col.states()[-1][0] == "done"
+
+
+def test_refused_while_slot_paused_for_module_ota(fw, tmp_path):
+    from station_agent import slot_pause
+
+    http = FakeHttp()
+    mgr = _manager(tmp_path, http)
+    b, col = _broker(fw, mgr)
+    slot_pause.pause(1, None)
+    try:
+        asyncio.run(b.handle(_start()))
+    finally:
+        slot_pause.resume(1)
+    assert col.result("r1")["error"]["code"] == "updating"
+    assert http.paths == []
+
+
+def _failing_transport(fail):
+    class Transport:
+        calls: list = []
+
+        def __init__(self, path):
+            self._sc = SlotControl(path, timeout=2.0)
+
+        def execute(self, module, op, cap, token=None, trace=False):
+            Transport.calls.append((op, cap, token))
+            return fail(self._sc, module, op, cap, token, trace)
+
+    return Transport
+
+
+def test_unconfirmed_unkey_reported_as_error(fw, tmp_path):
+    def fail(sc, module, op, cap, token, trace):
+        if (op, cap, token) == ("do", "ptt", "false"):
+            return {"ok": False, "error": "timeout"}  # the module never confirms the unkey
+        return sc.execute(module, op, cap, token, trace)
+
+    transport = _failing_transport(fail)
+    mgr = _manager(tmp_path, player=FakePlayer("ok", 0.05))
+    b, col = _broker(fw, mgr)
+    b._transport_factory = transport
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "unkey_unconfirmed")
+    assert transport.calls.count(("do", "ptt", "false")) == 2  # one retry
+
+
+def test_key_raising_still_drives_ptt_low(fw, tmp_path):
+    def fail(sc, module, op, cap, token, trace):
+        result = sc.execute(module, op, cap, token, trace)
+        if (op, cap, token) == ("do", "ptt", "true"):
+            raise OSError("line dropped after the key went out")
+        return result
+
+    mgr = _manager(tmp_path)
+    b, col = _broker(fw, mgr)
+    b._transport_factory = _failing_transport(fail)
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+        assert not b.slot_busy(1)
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "internal")
+    _assert_low(fw)
+
+
+def test_cancelled_session_still_unkeys(fw, tmp_path):
+    mgr = _manager(tmp_path, player=FakePlayer("hang"))
+    b, col = _broker(fw, mgr)
+
+    async def scenario():
+        await b.handle(_start(duration_s=30))
+        await _until_keyed(col)
+        mgr.active.task.cancel()
+        await mgr.wait_idle()
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("aborted", "cancelled")
+    _assert_low(fw)
+
+
+def test_stalled_send_never_delays_hard_stop(fw, tmp_path):
+    player = FakePlayer("hang")
+    mgr = _manager(tmp_path, player=player, hard_stop_margin_s=0.2)
+    sent = []
+    stall = asyncio.Event()  # never set
+
+    async def send(msg):
+        if msg["type"] == "sstv_tx_state" and msg["state"] == "keyed":
+            await stall.wait()  # the WebSocket is wedged for every keyed/progress frame
+        sent.append(msg)
+
+    b = Broker(
+        send,
+        transport_factory=lambda p: SlotControl(p, timeout=2.0),
+        now=lambda: 1.0,
+        sstv_tx=mgr,
+    )
+    b.set_inventory(
+        [
+            {
+                "slot": 1,
+                "control": fw.control_path,
+                "modules": [{"id": "fm", "identity": FM["identity"], "capabilities": FM_CAPS}],
+            }
+        ]
+    )
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await b.handle(_start(duration_s=0.1))
+        await mgr.wait_idle()
+        return loop.time() - t0
+
+    elapsed = asyncio.run(scenario())
+    assert elapsed < 1.5
+    final = [m for m in sent if m["type"] == "sstv_tx_state"][-1]
+    assert (final["state"], final["detail"]) == ("aborted", "hard_stop")
+    _assert_low(fw)
 
 
 def test_refused_while_voice_ptt_keyed(fw, tmp_path):
