@@ -303,6 +303,9 @@ class TestAlertSettingsThresholdLocalization:
         from django.utils import translation
 
         client.force_login(admin_user)
+        # Explicit language choice; otherwise UserLanguageMiddleware sends the
+        # (English) user from /de/ back to /en/.
+        client.cookies["django_language"] = "de"
         with translation.override("de"):
             response = client.get(reverse("monitoring:alert_settings"))
 

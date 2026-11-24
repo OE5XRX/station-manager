@@ -4,6 +4,7 @@ from django.contrib import admin
 from django.urls import include, path
 from oauth2_provider import urls as dot_urls
 
+from apps.accounts.views import set_language
 from apps.sso.views import AppGrantAuthorizationView
 
 # Only DOT's protocol endpoints are mounted. DOT's management_urlpatterns
@@ -27,6 +28,11 @@ urlpatterns = [
         "api/v1/module-firmware/",
         include(("apps.module_firmware.api_urls", "module_firmware_api")),
     ),
+    # Our switcher (persists User.language) at Django's own path and name,
+    # BEFORE Django's include — first match wins; the include stays so the
+    # stock route keeps existing. LoginRequiredMiddleware's allow-list and
+    # PrivacyAckMiddleware match this exact path / name.
+    path("i18n/setlang/", set_language, name="set_language"),
     path("i18n/", include("django.conf.urls.i18n")),
     # Override DOT's authorize endpoint with our AppGrant-gated version
     # BEFORE the DOT include — Django picks the first match.

@@ -22,6 +22,7 @@ from django.views.generic import (
     TemplateView,
     UpdateView,
 )
+from django.views.i18n import set_language as django_set_language
 
 from apps.stations.models import StationAssignment
 from config.csrf import wants_reauth
@@ -36,8 +37,9 @@ from .forms import (
     UserCreationForm,
 )
 from .geocoding import geocode_address, lat_lon_to_locator
+from .language import is_supported_language, localized_url, set_language_cookie
 from .models import AccountAuditLog
-from .permissions import AreaPermissionMixin, can
+from .permissions import AreaPermissionMixin, can, permission_exempt
 from .visibility import directory_queryset
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,40 @@ class LoginView(auth_views.LoginView):
                 self.redirect_authenticated_user = False
         return super().dispatch(request, *args, **kwargs)
 
+    def form_valid(self, form):
+        """Log in, then continue in the user's language (cookie + URL prefix).
+
+        Unprefixed targets (``/sso/authorize/?...``) keep their URL; the
+        cookie selects the language there.
+        """
+        response = super().form_valid(form)
+        language = form.get_user().language
+        if set_language_cookie(response, language):
+            response["Location"] = localized_url(response["Location"], language)
+        return response
+
+
+@login_not_required
+@permission_exempt("locale switch")
+def set_language(request):
+    """Django's ``set_language`` + persist the choice on a logged-in user.
+
+    Mounted at Django's own path ``/i18n/setlang/`` (name ``set_language``)
+    in ``config/urls.py``. Anonymous users get the unchanged Django
+    behaviour (cookie only).
+    """
+    response = django_set_language(request)
+    language = request.POST.get("language")
+    if (
+        request.method == "POST"
+        and request.user.is_authenticated
+        and is_supported_language(language)
+        and request.user.language != language
+    ):
+        request.user.language = language
+        request.user.save(update_fields=["language"])
+    return response
+
 
 @method_decorator(login_not_required, name="dispatch")
 class LogoutView(auth_views.LogoutView):
@@ -183,6 +219,10 @@ class ProfileView(AreaPermissionMixin, TemplateView):
                 )
             if changed - {"email"}:
                 messages.success(request, _("Identity updated."))
+            if "language" in changed and is_supported_language(user.language):
+                response = redirect(localized_url(reverse("accounts:profile"), user.language))
+                set_language_cookie(response, user.language)
+                return response
         else:
             for errors in form.errors.values():
                 messages.error(request, "; ".join(errors))

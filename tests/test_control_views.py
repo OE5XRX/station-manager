@@ -174,6 +174,9 @@ def test_number_input_min_max_dot_decimal_under_de_locale(client, station, opera
         online=True,
     )
     client.force_login(operator)
+    # Explicit language choice; otherwise UserLanguageMiddleware sends the
+    # (English) user from /de/ back to /en/.
+    client.cookies["django_language"] = "de"
     with translation.override("de"):
         html = _render(client, station).decode()
 

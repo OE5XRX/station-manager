@@ -251,6 +251,9 @@ class TestDelete:
 class TestSettingsPage:
     def test_sections_and_number_inputs(self, client, admin_user, rule):
         client.force_login(admin_user)
+        # Explicit language choice; otherwise UserLanguageMiddleware sends the
+        # (English) user from /de/ back to /en/.
+        client.cookies["django_language"] = "de"
         with translation.override("de"):
             resp = client.get(reverse("monitoring:alert_settings"))
         assert resp.status_code == 200
