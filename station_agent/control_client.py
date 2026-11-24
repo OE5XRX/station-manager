@@ -305,6 +305,9 @@ class ControlClient:
                 await broker.on_disconnect()
                 if self._decoder_host is not None:
                     self._decoder_host.detach()
+                    # SSTV must not outlive the link (the server frees the lock); its partial
+                    # picture is spooled and delivered after the reconnect.
+                    self._decoder_host.on_link_lost()
                 self._broker = None
                 self._ws = None
 

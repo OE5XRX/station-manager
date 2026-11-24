@@ -1,0 +1,645 @@
+"""SSTV decoder plugin (agent side) against a fake unit speaking the rx_unit protocol."""
+
+import asyncio
+import base64
+import json
+import zlib
+
+import pytest
+
+from station_agent import decoders
+from station_agent.broker import Broker
+from station_agent.decoders import sstv as sstv_mod
+from station_agent.decoders.host import DecoderHost
+from station_agent.decoders.spool import Spool
+from station_agent.decoders.sstv import SstvDecoderPlugin
+from station_agent.sstv.modes import MODES
+
+MODE = MODES["martin1"]  # 320 x 256
+W, H = MODE.width, MODE.height
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def _row(i: int, salt: int = 0) -> bytes:
+    return bytes(((i + salt + x) % 256) for x in range(W * 3))
+
+
+def _start(mode=MODE) -> dict:
+    return {"t": "start", "mode": mode.key, "width": mode.width, "height": mode.height}
+
+
+def _row_line(i: int, salt: int = 0) -> dict:
+    return {"t": "row", "i": i, "rgb": base64.b64encode(_row(i, salt)).decode("ascii")}
+
+
+def _end(complete: bool, rows: int) -> dict:
+    return {"t": "end", "complete": complete, "rows": rows}
+
+
+def _png_rows(png: bytes) -> list[bytes]:
+    """Decode our own PNG writer's output (filter 0) into rows; checks the size."""
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat, size = 8, b"", None
+    while pos < len(png):
+        n = int.from_bytes(png[pos : pos + 4], "big")
+        kind = png[pos + 4 : pos + 8]
+        data = png[pos + 8 : pos + 8 + n]
+        if kind == b"IHDR":
+            size = (int.from_bytes(data[:4], "big"), int.from_bytes(data[4:8], "big"))
+        elif kind == b"IDAT":
+            idat += data
+        pos += 12 + n
+    w, h = size
+    raw = zlib.decompress(idat)
+    stride = w * 3 + 1
+    assert len(raw) == stride * h
+    return [raw[y * stride + 1 : (y + 1) * stride] for y in range(h)], (w, h)
+
+
+class FakeUnit:
+    """TCP server on an ephemeral port; each accepted client gets the queued lines."""
+
+    def __init__(self):
+        self.sessions: asyncio.Queue = asyncio.Queue()
+        self.server = None
+        self.port = None
+
+    async def __aenter__(self):
+        self.server = await asyncio.start_server(self._client, "127.0.0.1", 0)
+        self.port = self.server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc):
+        self.server.close()
+        self.server.abort_clients()
+        await self.server.wait_closed()
+
+    async def _client(self, reader, writer):
+        await self.sessions.put(writer)
+
+    async def client(self, timeout=3.0) -> asyncio.StreamWriter:
+        return await asyncio.wait_for(self.sessions.get(), timeout)
+
+    async def connect(self, host, port, **kw):
+        assert host == "127.0.0.1"
+        return await asyncio.open_connection(host, self.port, **kw)
+
+
+async def send(writer, *msgs):
+    writer.write(b"".join(json.dumps(m).encode() + b"\n" for m in msgs))
+    await writer.drain()
+
+
+class Emits:
+    def __init__(self):
+        self.items = []
+
+    async def __call__(self, kind, reliable, data):
+        self.items.append((kind, reliable, data))
+
+    def of(self, kind):
+        return [d for k, _, d in self.items if k == kind]
+
+
+async def wait_for(cond, timeout=3.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not cond():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not reached")
+        await asyncio.sleep(0.01)
+
+
+def _plugin(unit, **kw):
+    return SstvDecoderPlugin(connect=unit.connect, now=lambda: 123.0, **kw)
+
+
+def test_port_base_matches_rx_unit():
+    pytest.importorskip("numpy")
+    from station_agent.sstv import rx_unit
+
+    assert sstv_mod.SSTV_PORT_BASE == rx_unit.SSTV_PORT_BASE
+
+
+def test_env():
+    env = SstvDecoderPlugin().env(2, {}, "rx.node")
+    assert env == {
+        "OE5XRX_DECODER": "sstv",
+        "OE5XRX_SLOT": "2",
+        "OE5XRX_RX_NODE": "rx.node",
+        "OE5XRX_SSTV_PORT": "8202",
+        "OE5XRX_SAMPLE_RATE": "8000",
+    }
+    assert SstvDecoderPlugin.stop_on_link_loss is True
+
+
+def test_full_picture():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(H)], _end(True, H))
+            await wait_for(lambda: emits.of("sstv_image"))
+            task.cancel()
+            return emits
+
+    emits = run(go())
+    kinds = [(k, r) for k, r, _ in emits.items]
+    assert kinds[0] == ("sstv_start", True)
+    assert kinds[1 : H + 1] == [("sstv_line", False)] * H
+    assert kinds[H + 1 :] == [("sstv_image", True)]
+    start = emits.of("sstv_start")[0]
+    assert start["mode"] == "martin1" and (start["width"], start["height"]) == (W, H)
+    assert len(start["picture_id"]) == 32
+    lines = emits.of("sstv_line")
+    assert [d["row"] for d in lines] == list(range(H))
+    assert all(d["picture_id"] == start["picture_id"] for d in lines)
+    assert lines[5]["rgb"] == _row_line(5)["rgb"]
+    image = emits.of("sstv_image")[0]
+    assert image["picture_id"] == start["picture_id"]
+    assert image["mode"] == "martin1"
+    assert image["complete"] is True and image["rows"] == H
+    assert image["heard_at"] == 123.0
+    rows, size = _png_rows(base64.b64decode(image["png"]))
+    assert size == (W, H)
+    assert rows == [_row(i) for i in range(H)]
+
+
+def test_end_incomplete_keeps_rows_and_10_percent_rule():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            # Lost picture with 100 rows -> saved incomplete; then one with 20 rows -> dropped.
+            await send(w, _start(), *[_row_line(i) for i in range(100)], _end(False, 100))
+            await send(w, _start(), *[_row_line(i) for i in range(20)], _end(False, 20))
+            await send(w, _start(), _row_line(0))  # marker: everything before is handled
+            await wait_for(lambda: len(emits.of("sstv_start")) == 3)
+            task.cancel()
+            return emits
+
+    emits = run(go())
+    images = emits.of("sstv_image")
+    assert len(images) == 1
+    assert images[0]["complete"] is False and images[0]["rows"] == 100
+    rows, _ = _png_rows(base64.b64decode(images[0]["png"]))
+    assert rows[99] == _row(99) and rows[100] == bytes(W * 3)
+
+
+def test_end_complete_with_missing_rows_is_incomplete():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(H - 1)], _end(True, H))
+            await wait_for(lambda: emits.of("sstv_image"))
+            task.cancel()
+            return emits.of("sstv_image")[0]
+
+    image = run(go())
+    assert image["complete"] is False and image["rows"] == H - 1
+
+
+def test_invalid_lines_are_ignored():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            w.write(b"not json\n[1,2]\n")
+            await send(
+                w,
+                {"t": "row", "i": 0, "rgb": _row_line(0)["rgb"]},  # row before start
+                {"t": "start", "mode": "nope", "width": W, "height": H},
+                {"t": "start", "mode": "martin1", "width": 1, "height": H},
+                _start(),
+                {"t": "row", "i": H, "rgb": _row_line(0)["rgb"]},  # out of range
+                {"t": "row", "i": True, "rgb": _row_line(0)["rgb"]},
+                {"t": "row", "i": 1, "rgb": "!!!"},  # bad base64
+                {"t": "row", "i": 1, "rgb": base64.b64encode(b"short").decode()},
+                _row_line(2),
+            )
+            await wait_for(lambda: emits.of("sstv_line"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            return emits
+
+    emits = run(go())
+    assert len(emits.of("sstv_start")) == 1
+    assert [d["row"] for d in emits.of("sstv_line")] == [2]
+
+
+def test_replay_after_reconnect_keeps_picture():
+    """The unit replays start + all rows to a new client: still one picture."""
+
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit, sleep=lambda s: asyncio.sleep(0)), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(50)])
+            await wait_for(lambda: len(emits.of("sstv_line")) == 50)
+            w.transport.abort()  # connection hiccup
+            w2 = await unit.client()
+            await send(w2, _start(), *[_row_line(i) for i in range(80)])
+            await send(w2, *[_row_line(i) for i in range(80, H)], _end(True, H))
+            await wait_for(lambda: emits.of("sstv_image"))
+            task.cancel()
+            return emits
+
+    emits = run(go())
+    assert len(emits.of("sstv_start")) == 1
+    # Replayed rows already shown are not re-emitted.
+    assert [d["row"] for d in emits.of("sstv_line")] == list(range(H))
+    images = emits.of("sstv_image")
+    assert len(images) == 1 and images[0]["complete"] is True
+    assert images[0]["picture_id"] == emits.of("sstv_start")[0]["picture_id"]
+
+
+def test_replay_of_a_different_picture_splits():
+    """Ours ended unseen while disconnected and a new one of the same mode began."""
+
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit, sleep=lambda s: asyncio.sleep(0)), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(60)])
+            await wait_for(lambda: len(emits.of("sstv_line")) == 60)
+            w.transport.abort()
+            w2 = await unit.client()
+            await send(w2, _start(), *[_row_line(i, salt=7) for i in range(H)], _end(True, H))
+            await wait_for(lambda: len(emits.of("sstv_image")) == 2)
+            task.cancel()
+            return emits
+
+    emits = run(go())
+    starts = emits.of("sstv_start")
+    assert len(starts) == 2 and starts[0]["picture_id"] != starts[1]["picture_id"]
+    first, second = emits.of("sstv_image")
+    assert first["picture_id"] == starts[0]["picture_id"]
+    assert first["complete"] is False and first["rows"] == 60
+    assert second["picture_id"] == starts[1]["picture_id"]
+    assert second["complete"] is True
+    rows, _ = _png_rows(base64.b64decode(second["png"]))
+    assert rows == [_row(i, salt=7) for i in range(H)]
+
+
+def test_new_start_while_open_finalizes_old():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin, emits = _plugin(unit), Emits()
+            task = asyncio.create_task(plugin.run(1, emits))
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(40)], _start())
+            await wait_for(lambda: len(emits.of("sstv_start")) == 2)
+            task.cancel()
+            return emits
+
+    emits = run(go())
+    images = emits.of("sstv_image")
+    assert len(images) == 1 and images[0]["rows"] == 40 and images[0]["complete"] is False
+
+
+# -- through the host --------------------------------------------------------------------
+
+
+class FakeUnits:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, decoder, slot, env):
+        self.calls.append(("start", decoder, slot))
+
+    def stop(self, decoder, slot):
+        self.calls.append(("stop", decoder, slot))
+
+    def state(self, decoder, slot):
+        return "active"
+
+    def stop_all(self):
+        pass
+
+
+class BlockingAprs:
+    name = "aprs"
+
+    def env(self, slot, params, rx_node):
+        return {}
+
+    async def run(self, slot, emit):
+        await asyncio.Event().wait()
+
+
+class Sent:
+    def __init__(self):
+        self.frames = []
+
+    async def __call__(self, msg):
+        self.frames.append(msg)
+
+    def outputs(self, kind):
+        return [f for f in self.frames if f["type"] == "decoder_output" and f["kind"] == kind]
+
+
+def _host(plugin, *extra, spool=None):
+    units = FakeUnits()
+    plugins = {p.name: p for p in (plugin, *extra)}
+    host = DecoderHost(units, plugins, lambda slot: "rx", spool=spool or Spool(epoch="E"))
+    return host, units
+
+
+def test_stop_midpicture_finalizes_partial():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin = _plugin(unit)
+            host, units = _host(plugin)
+            sent = Sent()
+            host.attach(sent)
+            await host.start("sstv", 1, {}, "r1")
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(100)])
+            await wait_for(lambda: len(sent.outputs("sstv_line")) == 100)
+            await host.stop("sstv", 1, "r2")
+            return sent, units
+
+    sent, units = run(go())
+    images = sent.outputs("sstv_image")
+    assert len(images) == 1
+    frame = images[0]
+    assert frame["reliable"] is True and frame["seq"] >= 1
+    data = frame["data"]
+    assert data["complete"] is False and data["rows"] == 100
+    rows, size = _png_rows(base64.b64decode(data["png"]))
+    assert size == (W, H)
+    assert rows[:100] == [_row(i) for i in range(100)]
+    assert all(r == bytes(W * 3) for r in rows[100:])
+    # finalize ran before the unit was stopped, the image before the "stopped" state.
+    idx_image = sent.frames.index(frame)
+    idx_stopped = next(
+        i
+        for i, f in enumerate(sent.frames)
+        if f["type"] == "decoder_state" and f["state"] == "stopped"
+    )
+    assert idx_image < idx_stopped
+    assert ("stop", "sstv", 1) in units.calls
+
+
+def test_under_10_percent_discarded():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin = _plugin(unit)
+            host, _ = _host(plugin)
+            sent = Sent()
+            host.attach(sent)
+            await host.start("sstv", 1, {}, "r1")
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(20)])  # 20/256 < 10 %
+            await wait_for(lambda: len(sent.outputs("sstv_line")) == 20)
+            await host.stop("sstv", 1, "r2")
+            return sent
+
+    sent = run(go())
+    assert sent.outputs("sstv_image") == []
+    assert len(sent.outputs("sstv_start")) == 1
+
+
+def test_finalize_timeout_does_not_block_stop(monkeypatch):
+    class Hung:
+        name = "sstv"
+
+        def env(self, slot, params, rx_node):
+            return {}
+
+        async def run(self, slot, emit):
+            await asyncio.Event().wait()
+
+        async def finalize(self, slot, emit):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr("station_agent.decoders.host.FINALIZE_TIMEOUT_S", 0.05)
+
+    async def go():
+        host, units = _host(Hung())
+        sent = Sent()
+        host.attach(sent)
+        await host.start("sstv", 1, {}, "r1")
+        await asyncio.wait_for(host.stop("sstv", 1, "r2"), 2)
+        return units, host
+
+    units, host = run(go())
+    assert ("stop", "sstv", 1) in units.calls and host.running() == []
+
+
+def test_finalize_error_does_not_block_stop():
+    class Broken(BlockingAprs):
+        name = "sstv"
+
+        async def finalize(self, slot, emit):
+            raise RuntimeError("boom")
+
+    async def go():
+        host, units = _host(Broken())
+        host.attach(Sent())
+        await host.start("sstv", 1, {}, "r1")
+        await host.stop("sstv", 1, "r2")
+        return units, host
+
+    units, host = run(go())
+    assert ("stop", "sstv", 1) in units.calls and host.running() == []
+
+
+def test_link_lost_stops_sstv_but_not_aprs():
+    async def go():
+        async with FakeUnit() as unit:
+            plugin = _plugin(unit)
+            host, units = _host(plugin, BlockingAprs())
+            sent = Sent()
+            host.attach(sent)
+            await host.start("aprs", 1, {}, "r1")
+            await host.start("sstv", 2, {}, "r2")
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(60)])
+            await wait_for(lambda: len(sent.outputs("sstv_line")) == 60)
+
+            host.detach()
+            host.on_link_lost()
+            await wait_for(lambda: all(r["decoder"] != "sstv" for r in host.running()))
+            running = host.running()
+            pending = list(host._spool.pending())
+            before = len(sent.frames)
+
+            sent2 = Sent()
+            host.attach(sent2)
+            await host.on_connected()
+            return running, pending, before, sent, sent2, units
+
+    running, pending, before, sent, sent2, units = run(go())
+    assert running == [{"decoder": "aprs", "slot": 1, "state": "running"}]
+    assert ("stop", "sstv", 2) in units.calls and ("stop", "aprs", 1) not in units.calls
+    # The partial picture went to the spool, not to the dead link ...
+    assert sent.outputs("sstv_image") == [] and len(sent.frames) == before
+    spooled = [f for f in pending if f["kind"] == "sstv_image"]
+    assert len(spooled) == 1 and spooled[0]["data"]["rows"] == 60
+    # ... and is delivered after the reconnect, after a snapshot without sstv.
+    assert sent2.frames[0]["type"] == "decoder_snapshot"
+    assert all(d["decoder"] != "sstv" for d in sent2.frames[0]["decoders"])
+    assert [f["data"]["rows"] for f in sent2.outputs("sstv_image")] == [60]
+
+
+def test_link_lost_leaves_decoder_of_new_connection():
+    async def go():
+        async with FakeUnit() as unit:
+            host, units = _host(_plugin(unit))
+            host.attach(Sent())
+            host.detach()
+            host.on_link_lost()  # nothing ran on the old link
+            host.attach(Sent())
+            await host.start("sstv", 1, {}, "r1")
+            await host.on_connected()
+            await asyncio.sleep(0.05)
+            return host.running(), units
+
+    running, units = run(go())
+    assert running == [{"decoder": "sstv", "slot": 1, "state": "running"}]
+    assert ("stop", "sstv", 1) not in units.calls
+
+
+def test_lines_not_spooled():
+    async def go():
+        async with FakeUnit() as unit:
+            spool = Spool(epoch="E")
+            host, _ = _host(_plugin(unit), spool=spool)
+            await host.start("sstv", 1, {}, "r1")  # no link attached at all
+            w = await unit.client()
+            await send(w, _start(), *[_row_line(i) for i in range(30)], _end(False, 30))
+            await wait_for(lambda: any(f["kind"] == "sstv_image" for f in spool.pending()))
+            kinds = [f["kind"] for f in spool.pending()]
+            await host.shutdown()
+            return kinds
+
+    kinds = run(go())
+    assert kinds == ["sstv_start", "sstv_image"]
+
+
+# -- feature advertisement ---------------------------------------------------------------
+
+
+class Collector:
+    def __init__(self):
+        self.sent = []
+
+    async def __call__(self, msg):
+        self.sent.append(msg)
+
+
+def _inventory_features(plugins, sstv_tx=object()):
+    host = DecoderHost(FakeUnits(), plugins, lambda slot: "rx")
+
+    async def go():
+        col = Collector()
+        b = Broker(col, decoder_host=host, sstv_tx=sstv_tx)
+        await b.emit_inventory()
+        return [m for m in col.sent if m["type"] == "inventory"][0].get("features")
+
+    return run(go())
+
+
+def test_feature_advertised():
+    features = _inventory_features({"aprs": BlockingAprs(), "sstv": SstvDecoderPlugin()})
+    assert features == [decoders.FEATURE, decoders.SSTV_FEATURE]
+
+
+def test_feature_not_advertised_without_plugin_or_tx():
+    assert _inventory_features({"aprs": BlockingAprs()}) == [decoders.FEATURE]
+    assert _inventory_features({"sstv": SstvDecoderPlugin()}, sstv_tx=None) == [decoders.FEATURE]
+
+
+# -- end to end: encoder audio -> real rx_unit -> plugin -> host -> PNG ------------------
+
+
+def test_e2e_real_unit_robot36():
+    np = pytest.importorskip("numpy")
+    import os
+    import socket
+    import threading
+
+    from station_agent.sstv import rx_unit
+    from station_agent.sstv.encoder import encode
+
+    mode = MODES["robot36"]
+    x = np.linspace(40, 215, mode.width)
+    y = np.linspace(40, 215, mode.height)[:, None]
+    shape = (mode.height, mode.width)
+    pic = np.rint(
+        np.stack(
+            [
+                np.broadcast_to(x, shape),
+                np.broadcast_to(y, shape),
+                np.broadcast_to(255 - x, shape),
+            ],
+            axis=2,
+        )
+    ).astype(np.uint8)
+    pcm = encode(mode, pic.tobytes()) + b"\x00\x00" * 4000
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    r, w = os.pipe()
+    stdin, feeder = os.fdopen(r, "rb"), os.fdopen(w, "wb")
+    ready = threading.Event()
+    unit_ref = {}
+
+    def started(unit):
+        unit_ref["unit"] = unit
+        ready.set()
+
+    thread = threading.Thread(
+        target=rx_unit.main,
+        args=(["--port", str(port), "--rate", "8000"],),
+        kwargs={"stdin": stdin, "started": started},
+        daemon=True,
+    )
+    thread.start()
+    assert ready.wait(5)
+
+    async def connect(host, _port, **kw):
+        return await asyncio.open_connection(host, port, **kw)
+
+    async def go():
+        plugin = SstvDecoderPlugin(connect=connect)
+        host, _ = _host(plugin)
+        sent = Sent()
+        host.attach(sent)
+        await host.start("sstv", 1, {}, "r1")
+        await wait_for(lambda: unit_ref["unit"].has_client, 5)
+
+        def feed():
+            with feeder:  # EOF flushes the decoder: the unit sends the final "end"
+                feeder.write(pcm)
+
+        await asyncio.get_running_loop().run_in_executor(None, feed)
+        await wait_for(lambda: sent.outputs("sstv_image"), 60)
+        await host.stop("sstv", 1, "r2")
+        return sent
+
+    sent = run(go())
+    thread.join(10)
+    starts = sent.outputs("sstv_start")
+    images = sent.outputs("sstv_image")
+    assert len(starts) == 1 and len(images) == 1
+    data = images[0]["data"]
+    assert data["picture_id"] == starts[0]["data"]["picture_id"]
+    assert data["mode"] == "robot36" and data["complete"] is True
+    assert data["rows"] == mode.height
+    assert len(sent.outputs("sstv_line")) == mode.height
+    rows, size = _png_rows(base64.b64decode(data["png"]))
+    assert size == (mode.width, mode.height)
+    got = np.frombuffer(b"".join(rows), dtype=np.uint8).reshape(pic.shape)
+    assert np.mean(np.abs(got.astype(int) - pic.astype(int))) < 12
