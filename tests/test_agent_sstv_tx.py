@@ -58,11 +58,8 @@ class FakeResponse:
         self.raw = self  # requests' urllib3 response; the agent reads it with read1()
         self._pos = 0
         self.trickle_s = None  # set: one byte per read1, after this delay (a stalling server)
-        self.reads_after_close = 0
 
     def read1(self, amt):
-        if self.closed:
-            self.reads_after_close += 1
         if self.trickle_s is not None:
             time.sleep(self.trickle_s)
             amt = 1
@@ -654,7 +651,7 @@ def test_key_raising_still_drives_ptt_low(fw, tmp_path):
         assert not b.slot_busy(1)
 
     asyncio.run(scenario())
-    assert col.states()[-1] == ("error", "internal")
+    assert col.states()[-1] == ("error", "key_failed")
     _assert_low(fw)
 
 
@@ -1151,3 +1148,89 @@ def test_raising_unkey_attempt_is_retried(fw, tmp_path):
     assert col.states()[-1][0] == "done"
     assert transport.calls.count(("do", "ptt", "false")) == 2
     _assert_low(fw)
+
+
+def test_download_thread_honours_its_own_deadline(tmp_path):
+    """The worker-side deadline check (no cancel flag set) ends a trickling body itself."""
+    http = FakeHttp()
+    http.trickle_s = 0.0
+    mgr = _manager(tmp_path, http)
+    frame = mgr._validate(_start())
+    session = sstv_tx.SstvTxSession(mgr, None, None, frame)
+    session._download_deadline = time.monotonic() - 1  # already past
+    fd, path = sstv_tx.tempfile.mkstemp(dir=tmp_path)
+    assert session._download(fd) == "download_timeout"
+    assert http.responses[0].closed
+
+
+def test_download_falls_back_to_read_without_read1(tmp_path):
+    class OldRaw:
+        def __init__(self, body):
+            self._body, self._pos = body, 0
+
+        def read(self, amt):
+            out = self._body[self._pos : self._pos + amt]
+            self._pos += len(out)
+            return out
+
+    http = FakeHttp()
+    real_get = http.get
+
+    def get(path, headers, timeout):
+        resp = real_get(path, headers, timeout)
+        resp.raw = OldRaw(AUDIO)
+        return resp
+
+    mgr = _manager(tmp_path, http)
+    mgr._http_get = get
+    frame = mgr._validate(_start())
+    session = sstv_tx.SstvTxSession(mgr, None, None, frame)
+    session._download_deadline = time.monotonic() + 10
+    fd, path = sstv_tx.tempfile.mkstemp(dir=tmp_path)
+    assert session._download(fd) is None
+
+
+def test_key_timeout_and_unconfirmed_unkey_reported(fw, tmp_path):
+    def fail(sc, module, op, cap, token, trace):
+        result = sc.execute(module, op, cap, token, trace)
+        if op == "do" and cap == "ptt":
+            return {"ok": False, "error": "timeout"}  # key lands, nothing ever confirms
+        return result
+
+    transport = _failing_transport(fail)
+    mgr = _manager(tmp_path)
+    b, col = _broker(fw, mgr)
+    b._transport_factory = transport
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "unkey_unconfirmed")
+    assert transport.calls.count(("do", "ptt", "false")) == 2
+
+
+def test_unsafe_runtime_dir_never_keys(fw, tmp_path):
+    rt = tmp_path / "rt"
+    rt.mkdir()
+    rt.chmod(0o777)
+    mgr = _manager(tmp_path)
+    b, col = _broker(fw, mgr)
+
+    async def scenario():
+        await b.handle(_start())
+        await mgr.wait_idle()
+
+    asyncio.run(scenario())
+    assert col.states()[-1] == ("error", "runtime_dir_unsafe")
+    assert _ptt(fw, "true") == 0
+
+
+def test_stale_artefacts_removed_at_startup(tmp_path):
+    rt = tmp_path / "rt"
+    rt.mkdir()
+    (rt / "tx-old.pcm").write_bytes(b"x")
+    (rt / "keep.txt").write_bytes(b"x")
+    _manager(tmp_path)
+    assert sorted(p.name for p in rt.iterdir()) == ["keep.txt"]

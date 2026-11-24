@@ -1052,7 +1052,12 @@ class Broker:
         try:
             await self.scanner.hold("ptt", keyed=(slot, module))
             result = await self._execute(slot, module, "do", "ptt", "true")
-        except BaseException:
+        except Exception:
+            logger.exception("broker: SSTV key on slot %s module %s raised", slot, module)
+            if not await self.unkey_session(slot, module, "key_failed"):
+                return "unkey_unconfirmed"
+            return "key_failed"
+        except BaseException:  # cancellation: still drive it low, then propagate
             await self.unkey_session(slot, module, "key_failed")
             raise
         if not result.get("ok"):
@@ -1061,9 +1066,10 @@ class Broker:
                 # Refused before the device was opened: nothing to drive low, and a failsafe
                 # write would hit a line the module flasher owns.
                 self._sstv_ptt.discard((slot, module))
-            else:
-                # A timed-out (or otherwise failed) key may still have landed: drive it low.
-                await self.unkey_session(slot, module, "key_failed")
+            elif not await self.unkey_session(slot, module, "key_failed"):
+                # A timed-out (or otherwise failed) key may still have landed, and the
+                # failsafe unkey was not confirmed either: report that, not the key error.
+                return "unkey_unconfirmed"
             return error
         return None
 

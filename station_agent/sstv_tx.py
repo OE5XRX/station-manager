@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import glob
 import hashlib
 import logging
 import math
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -50,8 +52,10 @@ _ENCODER_PEAK = 0.9
 DOWNLOAD_DEADLINE_S = 180.0
 _CHUNK = 64 * 1024
 _KILL_WAIT_S = 2.0
-# Per socket read. Each loop step is ONE recv (read1), so the thread re-checks abort and the
-# download deadline at least this often — a trickling body cannot pin the small executor.
+# Per socket read. In the body each loop step is ONE recv (read1), so the thread re-checks
+# abort and the download deadline at least this often. Header parsing (and chunked framing)
+# is inside requests/urllib3 and only bounded per recv; the event loop never waits for it
+# (the session ends at the deadline regardless), only the worker thread can linger.
 _READ_TIMEOUT_S = 10
 _SEEN_IDS = 256
 
@@ -175,7 +179,7 @@ class SstvTxSession:
         proc = None
         try:
             await self._emit("downloading", 0.0)
-            os.makedirs(self._mgr.runtime_dir, mode=0o700, exist_ok=True)
+            self._mgr.ensure_runtime_dir()
             fd, tmp = tempfile.mkstemp(prefix="tx-", suffix=".pcm", dir=self._mgr.runtime_dir)
             dl_fd, fd = fd, None  # the download thread owns (and closes) the descriptor
             self._download_deadline = time.monotonic() + self._mgr.download_deadline_s
@@ -375,8 +379,26 @@ class SstvTxManager:
         self._seen: collections.OrderedDict[str, None] = collections.OrderedDict()
         self._session: SstvTxSession | None = None
         self._closed = False
+        # Leftovers of a previous agent process that died mid-transmission (SIGKILL/OOM).
+        for stale in glob.glob(os.path.join(runtime_dir, "tx-*.pcm")):
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
 
     # --- helpers ------------------------------------------------------------
+    def ensure_runtime_dir(self) -> None:
+        """Create the artefact dir and refuse one that others could write to: the player
+        reopens the verified file by name, so nobody else may swap it."""
+        os.makedirs(self.runtime_dir, mode=0o700, exist_ok=True)
+        st = os.lstat(self.runtime_dir)
+        if (
+            not stat.S_ISDIR(st.st_mode)
+            or st.st_uid != os.getuid()
+            or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise _SessionEndError("error", "runtime_dir_unsafe")
+
     def hard_stop_after(self, duration_s: float) -> float:
         return duration_s + self._margin
 

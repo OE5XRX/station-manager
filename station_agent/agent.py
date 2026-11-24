@@ -920,7 +920,9 @@ class StationAgent:
         if control_client is not None:
             control_client.stop()
         if control_thread is not None:
-            control_thread.join(timeout=5)
+            # Long enough for an SSTV TX teardown (kill wait + two fail-safe unkey attempts at
+            # the slot command timeout) to finish before the daemon thread is abandoned.
+            control_thread.join(timeout=20)
 
         # Stop the audio supervisor + client on shutdown
         audio.stop()
