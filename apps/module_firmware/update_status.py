@@ -27,11 +27,18 @@ from operator import or_
 
 from django.db import models
 from django.db.models import Q
+from django.utils.translation import gettext
+from django.utils.translation import gettext_lazy as _
 
 from apps.control.models import ControlLock
 
 from .drain import artifact_for, executable_artifact
-from .mcuboot import KEY_UNKNOWN_HINT, boot_key_mismatch, key_hint_applies, not_updatable_text
+from .mcuboot import (
+    KEY_UNKNOWN_HINT_DISPLAY,
+    boot_key_mismatch,
+    key_hint_applies,
+    not_updatable_display_text,
+)
 from .models import (
     DRAIN_TRANSIENT_LIMIT,
     ModuleAssignmentHistory,
@@ -91,25 +98,40 @@ _SHORT_LABELS = {
 }
 
 
+# English, translatable short labels for the UI (``UpdateStatus.short_label``).
+# ``_SHORT_LABELS`` above stays German: ``state_label`` only feeds stored audit
+# messages (reconciler / reconcile API), which are written in German.
+_DISPLAY_LABELS = {
+    UpdateState.NO_TARGET.value: _("No target"),
+    UpdateState.CURRENT.value: _("Up to date"),
+    UpdateState.QUARANTINED.value: _("Quarantine"),
+    UpdateState.NOT_UPDATABLE.value: _("Not updatable"),
+    UpdateState.FAILED.value: _("Error"),
+    UpdateState.WAITING.value: _("Waiting"),
+    UpdateState.RUNNING.value: _("Update in progress"),
+    UpdateState.PENDING.value: _("Update pending"),
+}
+
+
 def state_label(state: str, default: str | None = None) -> str:
-    """German short label of a display state. Convergence-row states that share
-    a value (quarantined / failed / not_updatable) resolve too; anything else
-    falls back to ``default`` (or the raw value)."""
+    """German short label of a display state (for stored audit messages only).
+    Convergence-row states that share a value (quarantined / failed /
+    not_updatable) resolve too; anything else falls back to ``default`` (or the raw value)."""
     return _SHORT_LABELS.get(state, state if default is None else default)
 
 
 _PHASE_TEXT = {
-    CS.Phase.DOWNLOADING.value: "Download",
-    CS.Phase.FLASHING.value: "Flashen",
-    CS.Phase.VERIFYING.value: "Prüfen",
+    CS.Phase.DOWNLOADING.value: _("Download"),
+    CS.Phase.FLASHING.value: _("Flashing"),
+    CS.Phase.VERIFYING.value: _("Verifying"),
 }
 
 _WAIT_TEXT = {
-    WaitReason.STATION_OFFLINE.value: "Wartet: Station offline",
-    WaitReason.AGENT_NO_MODULE_OTA.value: (
-        "Wartet: Station-Agent kann keine Module flashen (Image zu alt)"
+    WaitReason.STATION_OFFLINE.value: _("Waiting: station offline"),
+    WaitReason.AGENT_NO_MODULE_OTA.value: _(
+        "Waiting: station agent cannot flash modules (image too old)"
     ),
-    WaitReason.STATION_BUSY.value: "Wartet: Station belegt (Bedienung aktiv)",
+    WaitReason.STATION_BUSY.value: _("Waiting: station busy (in use)"),
 }
 
 
@@ -118,7 +140,7 @@ class UpdateStatus:
     state: str  # UpdateState
     phase: str  # "" or Phase value
     reason_code: str  # "" or one of REASON_CODES
-    reason_text: str  # full German display line
+    reason_text: str  # full display line (translated)
     since: datetime | None
 
     def __post_init__(self):
@@ -134,26 +156,32 @@ class UpdateStatus:
 
     @property
     def short_label(self) -> str:
-        return state_label(self.state, "")
+        return str(_DISPLAY_LABELS.get(self.state, ""))
 
 
-_NO_TARGET = UpdateStatus(UpdateState.NO_TARGET, "", "", "Kein Ziel", None)
-_CURRENT = UpdateStatus(UpdateState.CURRENT, "", "", "Aktuell", None)
+def _no_target() -> UpdateStatus:
+    return UpdateStatus(UpdateState.NO_TARGET, "", "", gettext("No target"), None)
+
+
+def _current() -> UpdateStatus:
+    return UpdateStatus(UpdateState.CURRENT, "", "", gettext("Up to date"), None)
 
 
 def _waiting(reason: str, text: str | None = None) -> UpdateStatus:
-    return UpdateStatus(UpdateState.WAITING, "", reason, text or _WAIT_TEXT[str(reason)], None)
+    return UpdateStatus(
+        UpdateState.WAITING, "", reason, text or str(_WAIT_TEXT[str(reason)]), None
+    )
 
 
 def _quarantine_status(module, release, row) -> UpdateStatus:
     mode = row.last_error_mode
     if mode == _MODE.REJECTED:
-        text = "Quarantäne (vom Modul abgelehnt)"
+        text = gettext("Quarantine (rejected by the module)")
     else:
-        detail = f"Update {row.attempts}× zurückgerollt"
+        detail = gettext("Update rolled back %(attempts)s×") % {"attempts": row.attempts}
         if key_hint_applies(module, release, mode):
-            detail += f" – {KEY_UNKNOWN_HINT}"
-        text = f"Quarantäne ({detail})"
+            detail += f" – {KEY_UNKNOWN_HINT_DISPLAY}"
+        text = gettext("Quarantine (%(detail)s)") % {"detail": detail}
     code = mode if mode in REASON_CODES else ""
     return UpdateStatus(UpdateState.QUARANTINED, "", code, text, row.updated_at)
 
@@ -161,9 +189,9 @@ def _quarantine_status(module, release, row) -> UpdateStatus:
 def _decide(module, station, target, release, row, busy_station_ids) -> UpdateStatus:
     """Priority table of spec §4 — first match wins."""
     if station is None or target is None:
-        return _NO_TARGET
+        return _no_target()
     if (module.last_reported_version or "") == target.version:
-        return _CURRENT
+        return _current()
 
     # Mirror reconciler._decide (§5.2/§5.3) on the row fields so the display
     # never disagrees with what the next reconcile / check would decide — even
@@ -175,7 +203,7 @@ def _decide(module, station, target, release, row, busy_station_ids) -> UpdateSt
             UpdateState.NOT_UPDATABLE,
             "",
             CS.ReasonCode.BOOT_KEY_MISMATCH,
-            not_updatable_text(module),
+            not_updatable_display_text(module),
             since,
         )
 
@@ -199,16 +227,20 @@ def _decide(module, station, target, release, row, busy_station_ids) -> UpdateSt
             UpdateState.NOT_UPDATABLE,
             "",
             CS.ReasonCode.BOOT_KEY_MISMATCH,
-            not_updatable_text(module),
+            not_updatable_display_text(module),
             since,
         )
     at_cap = (
         state == _ROW.UPDATING and not released and row.transient_failures >= DRAIN_TRANSIENT_LIMIT
     )
     if state == _ROW.FAILED or at_cap:
-        message = row.last_error_message or "Update mehrfach fehlgeschlagen"
+        message = row.last_error_message or gettext("Update failed repeatedly")
         return UpdateStatus(
-            UpdateState.FAILED, "", CS.ReasonCode.TRANSIENT_LIMIT, f"Fehler: {message}", since
+            UpdateState.FAILED,
+            "",
+            CS.ReasonCode.TRANSIENT_LIMIT,
+            gettext("Error: %(message)s") % {"message": message},
+            since,
         )
 
     if not station.is_online:
@@ -217,7 +249,11 @@ def _decide(module, station, target, release, row, busy_station_ids) -> UpdateSt
     if row is not None and row.phase:
         label = _PHASE_TEXT.get(row.phase, row.phase)
         return UpdateStatus(
-            UpdateState.RUNNING, row.phase, "", f"Update läuft: {label}", row.phase_at
+            UpdateState.RUNNING,
+            row.phase,
+            "",
+            gettext("Update in progress: %(phase)s") % {"phase": label},
+            row.phase_at,
         )
 
     backends = station.module_ota_backends()
@@ -227,18 +263,20 @@ def _decide(module, station, target, release, row, busy_station_ids) -> UpdateSt
     if release is None:
         return _waiting(
             WaitReason.NO_RELEASE_FOR_VARIANT,
-            f"Wartet: Keine Firmware {target.version} für Variante "
-            f"{module.variant or '–'} vorhanden",
+            gettext("Waiting: no firmware %(version)s available for variant %(variant)s")
+            % {"version": target.version, "variant": module.variant or "–"},
         )
     if executable_artifact(module, release, backends) is None:
         return _waiting(
-            WaitReason.NO_ARTIFACT, f"Wartet: Release enthält kein passendes Artefakt ({artifact})"
+            WaitReason.NO_ARTIFACT,
+            gettext("Waiting: release has no matching artifact (%(artifact)s)")
+            % {"artifact": artifact},
         )
     if station.pk in busy_station_ids:
         return _waiting(WaitReason.STATION_BUSY)
 
     return UpdateStatus(
-        UpdateState.PENDING, "", "", "Update ausstehend", row.created_at if row else None
+        UpdateState.PENDING, "", "", gettext("Update pending"), row.created_at if row else None
     )
 
 

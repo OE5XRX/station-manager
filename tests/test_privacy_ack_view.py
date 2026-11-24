@@ -54,7 +54,7 @@ def test_get_renders_summary_and_link(ack_client):
     assert r.status_code == 200
     text = r.text
     assert POLICY_URL in text
-    assert "Zur Kenntnis genommen" in text
+    assert "Acknowledged" in text
     assert 'name="next" value="/en/"' in text
     assert 'rel="noopener"' in text
     assert "info@oe5xrx.org" in text

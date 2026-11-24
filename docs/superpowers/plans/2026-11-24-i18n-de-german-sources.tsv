@@ -34,3 +34,231 @@ Not enabled	Nicht aktiviert
 Agent offline	Agent offline
 No iGate callsign: not gated to APRS-IS.	Kein iGate-Rufzeichen: wird nicht ins APRS-IS gegated.
 No coordinates: not gated to APRS-IS.	Keine Koordinaten: wird nicht ins APRS-IS gegated.
+Avatar must be at most 2 MB.	Avatar darf max. 2 MB sein.
+Image is too large (too many pixels).	Bild ist zu groß (zu viele Pixel).
+File is not a valid image.	Datei ist kein gültiges Bild.
+Locator must be 2 letters + 2 digits + 2 letters (e.g. JN78AB).	Locator muss 2 Buchstaben + 2 Ziffern + 2 Buchstaben sein (z.B. JN78AB).
+Email only	Nur E-Mail
+Push only	Nur Push
+Email and push	E-Mail und Push
+Club applicant	Vereins-Bewerber
+Club member	Vereins-Mitglied
+Club staff	Vereins-Staff
+Club admin	Vereins-Admin
+Own profile	Eigenes Profil
+Stations	Stationen
+Create/edit stations, logbook, photos, station audit	Stationen anlegen/bearbeiten, Logbuch, Fotos, Station-Audit
+Station control	Stationssteuerung
+Operate a station (lock, PTT, microphone)	Station bedienen (Lock, PTT, Mikrofon)
+Calibrate a station (filters, volume, audio diagnostics)	Station kalibrieren (Filter, Lautstärke, Audio-Diagnose)
+Open a root shell	Root-Shell öffnen
+Regions & assignments	Regionen & Zuweisungen
+Manage regions and assignments	Regionen und Zuweisungen verwalten
+Trigger/cancel deployments	Deployments auslösen/abbrechen
+Edit rollout sequence, group upgrade	Rollout-Sequenz bearbeiten, Gruppen-Upgrade
+Import/archive images, mark as latest	Images importieren/archivieren/als Latest markieren
+Alerts	Alarme
+Acknowledge/resolve alerts	Alarme quittieren/auflösen
+Alert rules	Alarm-Regeln
+Configure alert rules and notifications	Alarm-Regeln und Benachrichtigungen konfigurieren
+Modules & firmware	Module & Firmware
+Repeaters	Repeater
+Create/edit repeaters	Repeater anlegen/bearbeiten
+Passive services	Passive Dienste
+Manage passive services	Passive Dienste verwalten
+Users	Benutzer
+Manage users	Benutzer verwalten
+API tokens	API-Tokens
+Create API tokens	API-Tokens erstellen
+Audit log	Audit-Log
+SSO administration	SSO-Verwaltung
+view	ansehen
+operate	bedienen
+manage	verwalten
+nobody	niemand
+Permission denied — %(what)s is not available to anyone.	Keine Berechtigung — %(what)s ist für niemanden freigegeben.
+Permission could not be checked.	Berechtigung konnte nicht geprüft werden.
+Create new token	Neues Token erstellen
+Token name	Token-Name
+e.g. ci-script	z.B. ci-script
+A descriptive name that identifies the token.	Ein beschreibender Name, der das Token identifiziert.
+Create token	Token erstellen
+Active tokens	Aktive Tokens
+Prefix	Präfix
+Created	Erstellt
+Last used	Zuletzt genutzt
+Expires	Läuft ab
+never	nie
+No tokens created yet.	Noch keine Tokens erstellt.
+Club role	Vereins-Rolle
+Demote to Club applicant requires removing all topology assignments first.	Demote to Vereins-Bewerber requires removing all topology assignments first.
+Club applicants cannot hold a Region-Manager assignment. Promote the user to Club member first.	Vereins-Bewerber cannot hold a Region-Manager assignment. Promote the user to Vereins-Mitglied first.
+Station assignments	Station-Zuordnungen
+Club applicants cannot hold a Station-Admin or Maintainer assignment. Promote the user to Club member first.	Vereins-Bewerber cannot hold a Station-Admin or Maintainer assignment. Promote the user to Vereins-Mitglied first.
+Token created	Token erstellt
+Token created:	Token erstellt:
+Copy the token now — it will never be shown again.	Kopiere den Token jetzt — er wird nie wieder angezeigt.
+Your new token	Dein neues Token
+Copy this token now and store it safely. It will never be shown again.	Kopiere dieses Token jetzt und bewahre es sicher auf. Es wird nie wieder angezeigt.
+Copy	Kopieren
+Prefix for recognition	Präfix zur Wiedererkennung
+Back to the token list	Zurück zur Token-Liste
+Amateur radio club for remote stations	Amateurfunkclub für Remote Stationen
+Privacy	Datenschutz
+What we store and for how long.	Was wir speichern und wie lange.
+The Station Manager logs who operates a station and when. Before you continue, here is a short summary.	Der Station-Manager protokolliert, wer eine Station wann bedient. Bevor es weitergeht, hier das Wichtigste in Kürze.
+Operation log	Betriebsprotokoll
+Control of a station, PTT, commands, changes to stations and start/end of terminal sessions.	Kontrolle über eine Station, PTT, Befehle, Änderungen an Stationen und Beginn/Ende von Terminal-Sessions.
+12 months	12 Monate
+IP address and location for logins and sessions	IP-Adresse und Ort bei Logins und Sessions
+The approximate location comes from a local database, not from an external service. Only admins can see IP addresses.	Der ungefähre Ort kommt aus einer lokalen Datenbank, nicht von einem externen Dienst. IP-Adressen sehen nur Admins.
+90 days	90 Tage
+Audio and terminal content	Audio und Terminal-Inhalte
+What happens on the air or in the terminal is not recorded.	Was über Funk oder im Terminal läuft, wird nicht aufgezeichnet.
+never stored	nie gespeichert
+Questions, access requests or deletion:	Fragen, Auskunft oder Löschung:
+Full privacy policy	Vollständige Datenschutzerklärung
+Acknowledged	Zur Kenntnis genommen
+Sign out	Abmelden
+No audio.	Kein Audio.
+No terminal content.	Keine Terminal-Inhalte.
+We only store who operated what and when	Gespeichert wird nur, wer wann was bedient hat
+IP address and location	IP-Adresse und Ort
+Policy	Erklärung
+Manage your identity, profile, contact details and location.	Verwalte deine Identität, Profil, Kontaktdaten und Standort.
+Enter your real name — other members see it in the directory.	Trag deinen Real-Namen ein — andere Mitglieder sehen ihn im Verzeichnis.
+Profile	Profil
+Upload a profile picture.	Lade ein Profilbild hoch.
+Briefly introduce yourself (max. 500 characters).	Stell dich kurz vor (max. 500 Zeichen).
+QTH name? That is your radio location label.	QTH-Name? Das ist dein Funker-Standort-Label.
+Visible in the member directory	Im Mitgliederverzeichnis sichtbar
+If off, other members only see callsign + role + avatar.	Wenn aus, sehen andere Mitglieder nur Callsign + Rolle + Avatar.
+Address & location	Adresse & Standort
+Enter your address — locator and lat/lon are calculated automatically.	Trag deine Adresse ein — Locator und lat/lon werden automatisch berechnet.
+Locator + lat/lon are calculated from the address on save.	Locator + lat/lon werden bei Speichern aus der Adresse berechnet.
+manual override	manueller Override
+Change password	Passwort ändern
+Members	Mitglieder
+Club	Verein
+Member	Mitglied
+This member has hidden their profile from the directory.	Dieses Mitglied hat sein Profil im Verzeichnis verborgen.
+Member since	Mitglied seit
+Roles & topology	Rollen & Topologie
+Note	Hinweis
+Users fill in their profile data themselves via their own profile.	Profil-Daten ergänzt der User selbst über sein Profil.
+Member directory	Mitgliederverzeichnis
+Club members with contact details and roles.	Vereinsmitglieder mit Kontaktdaten und Funktionen.
+Name is required.	Name ist erforderlich.
+Name must be at most %(max)d characters long.	Name darf höchstens %(max)d Zeichen lang sein.
+Denials	Verweigerungen
+Reset filter	Filter zurücksetzen
+Passive: APRS running, audio muted	Passiv: APRS läuft, Audio stumm
+Listen in	Mithören
+Firmware update in progress	Firmware-Update läuft
+Controls locked until the module is back	Bedienung gesperrt, bis das Modul wieder da ist
+Access denials (24 h)	Zugriffsverweigerungen (24 h)
+View denials	Verweigerungen ansehen
+Firmware updates	Firmware-Updates
+Convergence	Konvergenz
+no station	ohne Station
+since	seit
+waiting	wartet
+waiting since	wartet seit
+e.g. fm, power, device-tester	z. B. fm, power, device-tester
+GitHub owner/repo of the signed FW releases, e.g. OE5XRX/FW-RemoteStation	GitHub owner/repo der signierten FW-Releases, z. B. OE5XRX/FW-RemoteStation
+Asset base name before -<variant>.signed.bin, e.g. fm-sa818	Asset-Basisname vor -<variant>.signed.bin, z. B. fm-sa818
+Retrying the update for %(uid)s (%(versions)s).	Update für %(uid)s wird erneut versucht (%(versions)s).
+%(uid)s is not in a failed state.	%(uid)s ist nicht im Fehlerzustand.
+Passively listen to and gate APRS	Passiv APRS mithören und gaten
+iGate callsign	iGate-Rufzeichen
+Invalid callsign (without SSID, e.g. OE5XRX).	Ungültiges Rufzeichen (ohne SSID, z. B. OE5XRX).
+A callsign is required to enable this.	Zum Aktivieren ist ein Rufzeichen nötig.
+An SSID (0–15) is required to enable this.	Zum Aktivieren ist eine SSID nötig (0–15).
+%(call)s-%(ssid)s already belongs to station %(station)s.	%(call)s-%(ssid)s gehört schon zur Station %(station)s.
+No iGate callsign: packets are collected but not gated to APRS-IS.	Kein iGate-Rufzeichen: die Pakete werden gesammelt, aber nicht ins APRS-IS gegated.
+Heard directly only	Nur direkt gehört
+Map of recently heard positions	Karte der zuletzt gehörten Positionen
+Last heard (24 hours)	Zuletzt gehört (24 Stunden)
+All stations	Alle Stationen
+Time	Zeit
+Source	Quelle
+Type	Typ
+Packet	Paket
+Nothing heard in the last 24 hours. The service only starts when the station is idle.	Seit 24 Stunden wurde nichts gehört. Der Dienst startet erst, wenn die Station im Leerlauf ist.
+Packets the stations hear on the APRS frequency while idle, and the iGates that pass them on to APRS-IS.	Pakete, die die Stationen im Leerlauf auf der APRS-Frequenz mithören, und die iGates, die sie ins APRS-IS weiterreichen.
+Map & log	Karte & Log
+Settings	Einstellungen
+Time range	Zeitraum
+Last hour	Letzte Stunde
+Last 6 hours	Letzte 6 Stunden
+Last 24 hours	Letzte 24 Stunden
+Last 7 days	Letzte 7 Tage
+No packets in the selected time range yet.	Noch keine Pakete im gewählten Zeitraum.
+State	Zustand
+Last packet	Letztes Paket
+Packets 24 h	Pakete 24 h
+Service	Dienst
+Empty fields are not set; the module keeps its value.	Leere Felder werden nicht gesetzt; das Modul behält seinen Wert.
+Profile after the run	Profil nach dem Lauf
+Applied when a passive run ends so the radio does not stay on the APRS frequency.	Wird gesetzt, wenn ein passiver Lauf endet, damit das Funkgerät nicht auf der APRS-Frequenz stehen bleibt.
+Save settings	Einstellungen speichern
+Control	Steuerung
+While idle, the station listens on the APRS frequency and passes heard packets on to APRS-IS under the iGate callsign. As soon as someone uses the station, the service stops.	Im Leerlauf hört die Station auf der APRS-Frequenz mit und reicht gehörte Pakete über das iGate-Rufzeichen ins APRS-IS weiter. Sobald jemand die Station benutzt, wird der Dienst beendet.
+0–15, usually 10. Callsign and SSID belong to exactly one station.	0–15, üblich ist 10. Rufzeichen und SSID gehören genau einer Station.
+Callsign and SSID already belong to another station.	Rufzeichen und SSID gehören schon zu einer anderen Station.
+The session has expired – please try again.	Die Sitzung ist abgelaufen – bitte erneut versuchen.
+Permission denied	Keine Berechtigung
+You do not have permission for this action.	Für diese Aktion fehlt dir die Berechtigung.
+If you think this is wrong, contact an admin.	Wenn du glaubst, dass das falsch ist, wende dich an einen Admin.
+Back	Zurück
+To the overview	Zur Übersicht
+Session expired	Sitzung abgelaufen
+The form is out of date (e.g. because the page was open for a long time or you signed in or out in another tab). Please reload the page and try again.	Das Formular ist veraltet (z. B. weil die Seite lange offen war oder du dich in einem anderen Tab an- oder abgemeldet hast). Bitte lade die Seite neu und versuche es erneut.
+Continue	Weiter
+You can view this area but not change it.	Du kannst diesen Bereich ansehen, aber nicht ändern.
+read-only	nur lesend
+Revoked	Widerrufen
+Revoke	Widerrufen
+Permission denied — %(what)s requires %(need)s, you are %(have)s. If you think this is wrong, contact an admin.	Keine Berechtigung — %(what)s erfordert %(need)s, du bist %(have)s. Wenn du glaubst, dass das falsch ist, wende dich an einen Admin.
+Confirm modules, import/archive firmware, module types, target versions, release quarantine	Module bestätigen, Firmware importieren/archivieren, Modultypen, Soll-Versionen, Quarantäne freigeben
+Permission denied — taking over control requires %(manage)s or a Station-Admin/Region-Manager assignment (with the right to operate).	Keine Berechtigung — Übernehmen der Steuerung erfordert %(manage)s oder eine Station-Admin-/Region-Manager-Zuweisung (mit Bedien-Recht).
+Club applicants cannot hold a topology role. Promote the user to Club member first.	Vereins-Bewerber können keine Topology-Rolle haben. Den User erst zu Vereins-Mitglied promoten.
+<strong>%(what)s</strong> requires <strong>%(need)s</strong>, you are <strong>%(have)s</strong>.	<strong>%(what)s</strong> erfordert <strong>%(need)s</strong>, du bist <strong>%(have)s</strong>.
+on-air across Austria.	on-air in ganz Österreich.
+No target	Kein Ziel
+Up to date	Aktuell
+Quarantine	Quarantäne
+Not updatable	Nicht updatebar
+Waiting	Wartet
+Update in progress	Update läuft
+Update pending	Update ausstehend
+Download	Download
+Flashing	Flashen
+Verifying	Prüfen
+Waiting: station offline	Wartet: Station offline
+Waiting: station agent cannot flash modules (image too old)	Wartet: Station-Agent kann keine Module flashen (Image zu alt)
+Waiting: station busy (in use)	Wartet: Station belegt (Bedienung aktiv)
+Quarantine (rejected by the module)	Quarantäne (vom Modul abgelehnt)
+Update rolled back %(attempts)s×	Update %(attempts)s× zurückgerollt
+Quarantine (%(detail)s)	Quarantäne (%(detail)s)
+Update failed repeatedly	Update mehrfach fehlgeschlagen
+Error: %(message)s	Fehler: %(message)s
+Update in progress: %(phase)s	Update läuft: %(phase)s
+Waiting: no firmware %(version)s available for variant %(variant)s	Wartet: Keine Firmware %(version)s für Variante %(variant)s vorhanden
+Waiting: release has no matching artifact (%(artifact)s)	Wartet: Release enthält kein passendes Artefakt (%(artifact)s)
+Not updatable: bootloader key does not match the release (dev key) – SWD reflash at the bench required	Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (Dev-Key) – SWD-Reflash an der Bench nötig
+Not updatable: bootloader key does not match the release (different key) – SWD reflash at the bench required	Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (anderer Schlüssel) – SWD-Reflash an der Bench nötig
+Not updatable: bootloader key does not match the release – SWD reflash at the bench required	Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release – SWD-Reflash an der Bench nötig
+Possible cause: bootloader key does not match the release (e.g. dev key) – module firmware too old to check.	Mögliche Ursache: Bootloader-Schlüssel passt nicht zur Release (z. B. Dev-Key) – Modul-Firmware zu alt, um das zu prüfen.
+Automatic attempts are suspended.	Automatische Versuche sind ausgesetzt.
+Retry the update for %(uid)s?	Update für %(uid)s erneut versuchen?
+Retry	Erneut versuchen
+Bootloader key	Bootloader-Schlüssel
+The bootloader uses the publicly known development key	Der Bootloader nutzt den öffentlich bekannten Entwicklungs-Schlüssel
+Dev key	Dev-Key
+Firmware update pending — new control is blocked until the update has finished.	Firmware-Update ausstehend — neue Steuerung ist gesperrt, bis das Update abgeschlossen ist.
+Archive	Archivieren
+Restore	Wiederherstellen
+Confirm registration	Registrierung bestätigen
+starting	startet
+stopping	beendet

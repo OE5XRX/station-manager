@@ -265,9 +265,9 @@ def test_igates_last_packet_not_limited_to_24h(client, applicant_user, station):
 @pytest.mark.parametrize(
     "run_state,lock,expected",
     [
-        ("starting", False, ("running", "startet")),
+        ("starting", False, ("running", "starting")),
         ("stopping", True, ("in_use", "")),
-        ("stopping", False, ("idle", "beendet")),
+        ("stopping", False, ("idle", "stopping")),
         ("agent_offline", True, ("agent_offline", "")),
         ("running", True, ("running", "")),
         (None, True, ("in_use", "")),

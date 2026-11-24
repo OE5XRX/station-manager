@@ -94,9 +94,9 @@ class User(AbstractUser):
     )
 
     class NotifyChannel(models.TextChoices):
-        EMAIL = "email", _("Nur E-Mail")
-        PUSH = "push", _("Nur Push")
-        BOTH = "both", _("E-Mail und Push")
+        EMAIL = "email", _("Email only")
+        PUSH = "push", _("Push only")
+        BOTH = "both", _("Email and push")
 
     notify_channel = models.CharField(
         _("notification channel"),
@@ -107,10 +107,10 @@ class User(AbstractUser):
     )
 
     class MembershipLevel(models.TextChoices):
-        APPLICANT = "applicant", _("Vereins-Bewerber")
-        MEMBER = "member", _("Vereins-Mitglied")
-        STAFF = "staff", _("Vereins-Staff")
-        ADMIN = "admin", _("Vereins-Admin")
+        APPLICANT = "applicant", _("Club applicant")
+        MEMBER = "member", _("Club member")
+        STAFF = "staff", _("Club staff")
+        ADMIN = "admin", _("Club admin")
 
     membership_level = models.CharField(
         _("membership level"),

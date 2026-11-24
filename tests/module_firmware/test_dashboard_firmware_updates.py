@@ -195,7 +195,7 @@ def test_dashboard_renders_waiting_and_dfu_stuck(client, fm):
     assert [e.module.uid for e in resp.context["fw_dfu_stuck"]] == ["S1"]
     body = resp.content.decode()
     assert "data-fw-updates" in body
-    assert "wartet seit" in body
+    assert "waiting since" in body
     assert reverse("stations:station_detail", args=[s.pk]) in body
     assert "S1" in body and "Power-Cycle" in body
 

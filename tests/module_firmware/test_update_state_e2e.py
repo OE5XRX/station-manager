@@ -19,6 +19,8 @@ from apps.module_firmware.drain import pending_updates
 from apps.module_firmware.mcuboot import (
     DEV_KEY_HASH_PREFIX,
     KEY_UNKNOWN_HINT,
+    KEY_UNKNOWN_HINT_DISPLAY,
+    NOT_UPDATABLE_DEV_DISPLAY,
     NOT_UPDATABLE_DEV_TEXT,
     parse_boot_key_hash,
 )
@@ -222,7 +224,7 @@ def test_ac1_old_agent_shows_waiting_not_updating(agent, fm, bearer, client, sta
     assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0
     assert pending_updates(agent.station) == []
 
-    text = "Wartet: Station-Agent kann keine Module flashen (Image zu alt)"
+    text = "Waiting: station agent cannot flash modules (image too old)"
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "waiting"
     assert st["state"] != "running"
@@ -236,7 +238,7 @@ def test_ac1_old_agent_shows_waiting_not_updating(agent, fm, bearer, client, sta
     agent.heartbeat(DFU)
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "pending"
-    assert st["reason_text"] == "Update ausstehend"
+    assert st["reason_text"] == "Update pending"
     assert agent.check().status_code == 200
 
 
@@ -293,16 +295,16 @@ def test_ac2_phases_visible_and_audited_once(agent, fm, bearer, client, staff_us
     (cid,) = cids
     assert _lifecycle(m) == [E.MODULE_FLASH_INSTRUCTED]
 
-    labels = {"downloading": "Download", "flashing": "Flashen", "verifying": "Prüfen"}
+    labels = {"downloading": "Download", "flashing": "Flashing", "verifying": "Verifying"}
     for phase, repeats in (("downloading", 2), ("flashing", 1), ("verifying", 2)):
         for _ in range(repeats):
             assert agent.status(cid, phase).status_code == 200
         st = _api_status(bearer, staff_user, m)
         assert st["state"] == "running"
         assert st["phase"] == phase
-        assert st["reason_text"] == f"Update läuft: {labels[phase]}"
+        assert st["reason_text"] == f"Update in progress: {labels[phase]}"
         assert st["since"] is not None
-        assert f"Update läuft: {labels[phase]}" in _detail_html(client, staff_user, m)
+        assert f"Update in progress: {labels[phase]}" in _detail_html(client, staff_user, m)
         # No check poll here: the agent never polls check with a flash in flight
         # (run_once is sequential; a marker routes to recovery). A check after a
         # progress POST is a restarted attempt — see the crash test below.
@@ -312,7 +314,7 @@ def test_ac2_phases_visible_and_audited_once(agent, fm, bearer, client, staff_us
     assert agent.commit(cid, TARGET).status_code == 200
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "current"
-    assert st["reason_text"] == "Aktuell"
+    assert st["reason_text"] == "Up to date"
     assert st["phase"] == ""
     assert agent.check().status_code == 204
 
@@ -381,7 +383,7 @@ def test_ac3_five_transients_failed_then_retry(agent, fm, bearer, client, staff_
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "failed"
     assert st["reason_code"] == "transient_limit"
-    assert st["reason_text"] == "Fehler: dfu timeout"
+    assert st["reason_text"] == "Error: dfu timeout"
     assert pending_updates(agent.station) == []
     assert _count(m, E.MODULE_FLASH_GAVE_UP) == 1
     assert _count(m, E.MODULE_FLASH_FAILED) == DRAIN_TRANSIENT_LIMIT
@@ -405,8 +407,8 @@ def test_ac3_five_transients_failed_then_retry(agent, fm, bearer, client, staff_
     assert _api_status(bearer, staff_user, m)["state"] == "failed"
 
     detail = _detail_html(client, staff_user, m)
-    assert "Fehler: dfu timeout" in detail
-    assert "Erneut versuchen" in detail
+    assert "Error: dfu timeout" in detail
+    assert "Retry" in detail
 
     # Staff retries via the GUI.
     client.force_login(staff_user)
@@ -420,7 +422,7 @@ def test_ac3_five_transients_failed_then_retry(agent, fm, bearer, client, staff_
 
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "pending"
-    assert st["reason_text"] == "Update ausstehend"
+    assert st["reason_text"] == "Update pending"
     assert [cs.pk for cs in pending_updates(agent.station)] == [cid]
 
     resp = agent.check()
@@ -459,10 +461,10 @@ def test_ac4_dev_key_vs_prod_release(agent, fm, bearer, client, staff_user):
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "not_updatable"
     assert st["reason_code"] == "boot_key_mismatch"
-    assert st["reason_text"] == NOT_UPDATABLE_DEV_TEXT
+    assert st["reason_text"] == str(NOT_UPDATABLE_DEV_DISPLAY)
     assert st["reason_text"] == (
-        "Nicht updatebar: Bootloader-Schlüssel passt nicht zur Release (Dev-Key) "
-        "– SWD-Reflash an der Bench nötig"
+        "Not updatable: bootloader key does not match the release (dev key) "
+        "– SWD reflash at the bench required"
     )
     assert _count(m, E.MODULE_NOT_UPDATABLE) == 1
     assert _count(m, E.MODULE_FLASH_INSTRUCTED) == 0
@@ -476,10 +478,10 @@ def test_ac4_dev_key_vs_prod_release(agent, fm, bearer, client, staff_user):
     assert resp.json()["reported_boot_key"] == DEV_KEY_HASH_PREFIX
 
     detail = _detail_html(client, staff_user, m)
-    assert NOT_UPDATABLE_DEV_TEXT in detail
+    assert str(NOT_UPDATABLE_DEV_DISPLAY) in detail
     assert DEV_KEY_HASH_PREFIX in detail
     assert "Dev-Key" in detail
-    assert "Erneut versuchen" not in detail  # retry is for failed only
+    assert "Retry" not in detail  # retry is for failed only
 
 
 @pytest.mark.django_db
@@ -491,7 +493,7 @@ def test_ac4b_bench_reflash_makes_updatable_again(agent, fm, bearer, staff_user)
     agent.inventory(OLD, boot_key=prod)
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "pending"
-    assert st["reason_text"] == "Update ausstehend"
+    assert st["reason_text"] == "Update pending"
     assert len(pending_updates(agent.station)) == 1
     assert _count(m, E.MODULE_UPDATABLE_AGAIN) == 1
     assert _count(m, E.MODULE_NOT_UPDATABLE) == 1
@@ -546,13 +548,15 @@ def test_ac5_no_boot_key_legacy_path_with_hint(agent, fm, bearer, client, staff_
     st = _api_status(bearer, staff_user, m)
     assert st["state"] == "quarantined"
     assert st["reason_code"] == "rolled_back"
-    assert KEY_UNKNOWN_HINT in st["reason_text"]
+    assert str(KEY_UNKNOWN_HINT_DISPLAY) in st["reason_text"]
     assert KEY_UNKNOWN_HINT == (
         "Mögliche Ursache: Bootloader-Schlüssel passt nicht zur Release (z. B. Dev-Key) "
         "– Modul-Firmware zu alt, um das zu prüfen."
     )
-    assert st["reason_text"].startswith(f"Quarantäne (Update {QUARANTINE_ATTEMPT_LIMIT}×")
-    assert KEY_UNKNOWN_HINT in _detail_html(client, staff_user, m)
+    assert st["reason_text"].startswith(
+        f"Quarantine (Update rolled back {QUARANTINE_ATTEMPT_LIMIT}×"
+    )
+    assert str(KEY_UNKNOWN_HINT_DISPLAY) in _detail_html(client, staff_user, m)
 
 
 # -------------------------------------------------------------------------- AC7
@@ -579,22 +583,22 @@ def test_ac7_visibility_unchanged(agent, fm, bearer, client, anon_client, applic
 
     # Applicant: sees the state (HTML + API) but gets no retry button.
     detail = _detail_html(client, applicant_user, m)
-    assert "Fehler: dfu timeout" in detail
-    assert "Erneut versuchen" not in detail
+    assert "Error: dfu timeout" in detail
+    assert "Retry" not in detail
     assert reverse("module_firmware:module_retry_update", args=[m.uid]) not in detail
-    assert "Fehler: dfu timeout" in _partial_html(client, applicant_user, m)
+    assert "Error: dfu timeout" in _partial_html(client, applicant_user, m)
     client.force_login(applicant_user)
     listing = client.get(reverse("module_firmware:module_list"))
     assert listing.status_code == 200
     listing_html = listing.content.decode()
     assert m.uid in listing_html
-    assert "Fehler: dfu timeout" in listing_html  # pill / tooltip in the list
+    assert "Error: dfu timeout" in listing_html  # pill / tooltip in the list
     # API read: applicants read via session (their tokens are not accepted).
     resp = session(applicant_user).get(reverse("api:module-detail", args=[m.pk]))
     assert resp.status_code == 200
     st = resp.json()["update_status"]
     assert st["state"] == "failed"
-    assert st["reason_text"] == "Fehler: dfu timeout"
+    assert st["reason_text"] == "Error: dfu timeout"
 
     # ...and cannot retry (GUI or API): no state change, no audit.
     resp = client.post(reverse("module_firmware:module_retry_update", args=[m.uid]))

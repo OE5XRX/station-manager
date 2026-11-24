@@ -131,7 +131,7 @@ class TestStationAssignmentsCardRendering:
         response = client.get(reverse("accounts:user_detail", args=[franz.pk]))
         body = response.content.decode()
         assert response.status_code == 200
-        assert "Station-Zuordnungen" in body or "Station Assignments" in body
+        assert "Station assignments" in body
         assert "OE5A" in body
         assert "OE5B" in body
 
@@ -157,6 +157,6 @@ class TestStationAssignmentsCardRendering:
         response = client.get(reverse("accounts:user_detail", args=[applicant.pk]))
         body = response.content.decode()
         # Match a string unique to the station-card's APPLICANT branch
-        # (the region-card's APPLICANT warning also contains "Vereins-Bewerber",
+        # (the region-card's APPLICANT warning also contains "Club applicant",
         # so we need a station-specific substring to verify this card renders).
         assert "Station-Admin or Maintainer" in body

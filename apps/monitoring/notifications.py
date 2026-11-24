@@ -43,7 +43,7 @@ def _send_email_notification(alert, recipients_qs=None):
         logger.warning(
             "Alert %s on station %s (region=%s) has no recipients. "
             "Configure Station-Admin, Region-Manager, or ensure a "
-            "Vereins-Admin has an email set.",
+            "Club admin has an email set.",
             alert.pk,
             alert.station.name,
             region,
@@ -222,7 +222,7 @@ def _test_email(requesting_user=None):
 
     if not recipient_list:
         return False, (
-            "No recipient — set your user's email or configure a Vereins-Admin with email."
+            "No recipient — set your user's email or configure a Club admin with email."
         )
 
     try:

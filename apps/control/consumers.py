@@ -1498,8 +1498,8 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             # Override is an assignment rule, not an area right: same forbidden frame
             # shape, but no PERMISSION_DENIED audit (require() is deliberately not used).
             message = gettext(
-                "Keine Berechtigung — Übernehmen der Steuerung erfordert %(manage)s oder "
-                "eine Station-Admin-/Region-Manager-Zuweisung (mit Bedien-Recht)."
+                "Permission denied — taking over control requires %(manage)s or "
+                "a Station-Admin/Region-Manager assignment (with the right to operate)."
             ) % {"manage": level_label(required_level("control", "manage"))}
             await self.send(
                 text_data=json.dumps({"type": "error", "code": "forbidden", "message": message})
@@ -1525,7 +1525,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 {
                     "type": "error",
                     "code": "firmware_update_pending",
-                    "message": lock.FIRMWARE_DRAIN_MESSAGE,
+                    "message": str(lock.FIRMWARE_DRAIN_MESSAGE),
                 }
             )
         )

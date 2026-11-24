@@ -1,12 +1,12 @@
 {% load i18n %}
 <section class="panel" id="station-assignments-card">
   <div class="panel-head">
-    <div class="panel-title"><span class="dot"></span>{% trans "Station-Zuordnungen" %}</div>
+    <div class="panel-title"><span class="dot"></span>{% trans "Station assignments" %}</div>
   </div>
   <div class="panel-body">
     {% if object.membership_level == "applicant" %}
       <p class="t-muted">
-        {% trans "Vereins-Bewerber cannot hold a Station-Admin or Maintainer assignment. Promote the user to Vereins-Mitglied first." %}
+        {% trans "Club applicants cannot hold a Station-Admin or Maintainer assignment. Promote the user to Club member first." %}
       </p>
     {% else %}
       {% if existing_station_assignments %}

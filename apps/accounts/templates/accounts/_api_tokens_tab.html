@@ -5,25 +5,25 @@ Erwartet ``tokens`` (PersonalAccessTokens von request.user).
 {% endcomment %}
 <section class="panel">
   <div class="panel-head">
-    <div class="panel-title"><span class="dot"></span>{% trans "Neues Token erstellen" %}</div>
+    <div class="panel-title"><span class="dot"></span>{% trans "Create new token" %}</div>
   </div>
   <div class="panel-body">
     <form method="post" action="{% url 'accounts:api_tokens' %}">
       {% csrf_token %}
       <div class="form-group">
-        <label class="form-label" for="id_token_name">{% trans "Token-Name" %}</label>
+        <label class="form-label" for="id_token_name">{% trans "Token name" %}</label>
         <input
           class="form-control"
           type="text"
           id="id_token_name"
           name="name"
-          placeholder="{% trans "z.B. ci-script" %}"
+          placeholder="{% trans "e.g. ci-script" %}"
           required
         >
-        <div class="form-help">{% trans "Ein beschreibender Name, der das Token identifiziert." %}</div>
+        <div class="form-help">{% trans "A descriptive name that identifies the token." %}</div>
       </div>
       <div class="panel-foot row-gap-8">
-        <button type="submit" class="btn btn-primary">{% trans "Token erstellen" %}</button>
+        <button type="submit" class="btn btn-primary">{% trans "Create token" %}</button>
       </div>
     </form>
   </div>
@@ -31,7 +31,7 @@ Erwartet ``tokens`` (PersonalAccessTokens von request.user).
 
 <section class="panel">
   <div class="panel-head">
-    <div class="panel-title"><span class="dot"></span>{% trans "Aktive Tokens" %}</div>
+    <div class="panel-title"><span class="dot"></span>{% trans "Active tokens" %}</div>
   </div>
   <div class="panel-body">
     {% if tokens %}
@@ -39,10 +39,10 @@ Erwartet ``tokens`` (PersonalAccessTokens von request.user).
         <thead>
           <tr>
             <th>{% trans "Name" %}</th>
-            <th>{% trans "Präfix" %}</th>
-            <th>{% trans "Erstellt" %}</th>
-            <th>{% trans "Zuletzt genutzt" %}</th>
-            <th>{% trans "Läuft ab" %}</th>
+            <th>{% trans "Prefix" %}</th>
+            <th>{% trans "Created" %}</th>
+            <th>{% trans "Last used" %}</th>
+            <th>{% trans "Expires" %}</th>
             <th></th>
           </tr>
         </thead>
@@ -53,14 +53,14 @@ Erwartet ``tokens`` (PersonalAccessTokens von request.user).
               <td class="t-mono">{{ t.prefix }}…</td>
               <td class="t-mono-sm">{{ t.created_at|date:"Y-m-d H:i" }}</td>
               <td class="t-mono-sm">{{ t.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
-              <td class="t-mono-sm">{% if t.expires_at %}{{ t.expires_at|date:"Y-m-d H:i" }}{% else %}{% trans "nie" %}{% endif %}</td>
+              <td class="t-mono-sm">{% if t.expires_at %}{{ t.expires_at|date:"Y-m-d H:i" }}{% else %}{% trans "never" %}{% endif %}</td>
               <td>
                 {% if t.revoked_at %}
-                  <span class="pill pill-muted">{% trans "Widerrufen" %}</span>
+                  <span class="pill pill-muted">{% trans "Revoked" %}</span>
                 {% else %}
                   <form method="post" action="{% url 'accounts:api_token_revoke' t.pk %}">
                     {% csrf_token %}
-                    <button type="submit" class="btn btn-sm btn-danger">{% trans "Widerrufen" %}</button>
+                    <button type="submit" class="btn btn-sm btn-danger">{% trans "Revoke" %}</button>
                   </form>
                 {% endif %}
               </td>
@@ -69,7 +69,7 @@ Erwartet ``tokens`` (PersonalAccessTokens von request.user).
         </tbody>
       </table>
     {% else %}
-      <p class="t-muted">{% trans "Noch keine Tokens erstellt." %}</p>
+      <p class="t-muted">{% trans "No tokens created yet." %}</p>
     {% endif %}
   </div>
 </section>

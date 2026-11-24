@@ -21,7 +21,7 @@ def test_below_staff_sees_station_detail_without_edit_or_audit(client, station, 
     assert reverse("stations:station_edit", args=[station.pk]) not in html
     assert 'data-tab="audit"' not in html
     assert 'data-tab-panel="audit"' not in html
-    assert "nur lesend" in html
+    assert "read-only" in html
 
 
 def test_staff_sees_audit_tab_and_edit(client, station):
@@ -29,7 +29,7 @@ def test_staff_sees_audit_tab_and_edit(client, station):
     html = client.get(reverse("stations:station_detail", args=[station.pk])).content.decode()
     assert reverse("stations:station_edit", args=[station.pk]) in html
     assert 'data-tab="audit"' in html
-    assert "nur lesend" not in html
+    assert "read-only" not in html
 
 
 @pytest.mark.parametrize("level", ["applicant", "member"])
@@ -74,7 +74,7 @@ def test_applicant_sees_region_list_read_only(client):
     r = client.get(reverse("stations:region_list"))
     assert r.status_code == 200
     assert reverse("stations:region_create") not in r.content.decode()
-    assert "nur lesend" in r.content.decode()
+    assert "read-only" in r.content.decode()
 
 
 def test_staff_cannot_open_region_create(client):
@@ -94,7 +94,7 @@ def test_tag_list_readable_by_member_with_readonly_badge(client):
     _login(client, "member")
     r = client.get(reverse("stations:tag_list"))
     assert r.status_code == 200
-    assert "nur lesend" in r.content.decode()
+    assert "read-only" in r.content.decode()
 
 
 def test_member_cannot_create_tag(client):

@@ -405,7 +405,7 @@ class TestUpgradeDashboard:
         client.force_login(staff_user)
         response = client.get(reverse("rollouts:upgrade_dashboard"))
         assert response.status_code == 200
-        assert "nur lesend" in response.content.decode()
+        assert "read-only" in response.content.decode()
 
     def test_dashboard_renders_active_deployment_status(
         self, client, admin_user, station, image_release, make_rollout_group

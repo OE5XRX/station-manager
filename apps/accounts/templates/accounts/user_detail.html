@@ -8,7 +8,7 @@
   <span class="sep">/</span>
   {% if audience != "applicant" %}
     {% if is_member_view %}
-      <a href="{% url 'accounts:user_list' %}">{% trans "Mitglieder" %}</a>
+      <a href="{% url 'accounts:user_list' %}">{% trans "Members" %}</a>
     {% else %}
       <a href="{% url 'accounts:user_list' %}">{% trans "Users" %}</a>
     {% endif %}
@@ -33,7 +33,7 @@
   <div class="page-head-main">
     <div class="page-eyebrow">
       {% if is_member_view %}
-        {% trans "Verein" %} · {% trans "Mitglied" %}
+        {% trans "Club" %} · {% trans "Member" %}
       {% else %}
         {% trans "User" %} · #{{ object.pk|stringformat:"03d" }}
       {% endif %}
@@ -122,7 +122,7 @@
     <div class="panel-body">
       <div class="empty">
         <div class="empty-title">
-          {% trans "Dieses Mitglied hat sein Profil im Verzeichnis verborgen." %}
+          {% trans "This member has hidden their profile from the directory." %}
         </div>
       </div>
     </div>
@@ -150,7 +150,7 @@
   {% endif %}
   {% if "date_joined_year" in visible_fields %}
     <div class="summary-item">
-      <div class="summary-key">{% trans "Mitglied seit" %}</div>
+      <div class="summary-key">{% trans "Member since" %}</div>
       <div class="summary-val mono">{{ object.date_joined|date:"Y" }}</div>
     </div>
   {% endif %}
@@ -168,7 +168,7 @@
       {% trans "Overview" %}
     </button>
     <button type="button" class="tab" data-tab="topology" aria-selected="false">
-      {% trans "Rollen & Topologie" %}
+      {% trans "Roles & topology" %}
     </button>
     {% if is_admin_view or is_self_view %}
       <button type="button" class="tab" data-tab="sso" aria-selected="false">
@@ -180,7 +180,7 @@
     {% endif %}
     {% if is_own_page %}
       <button type="button" class="tab" data-tab="api-tokens" aria-selected="false">
-        {% trans "API-Tokens" %}
+        {% trans "API tokens" %}
       </button>
     {% endif %}
   </div>
@@ -223,7 +223,7 @@
             <dt>{% trans "Language" %}</dt><dd>{{ object.get_language_display }}</dd>
           {% endif %}
           {% if "date_joined_year" in visible_fields %}
-            <dt>{% trans "Mitglied seit" %}</dt><dd class="t-mono">{{ object.date_joined|date:"Y" }}</dd>
+            <dt>{% trans "Member since" %}</dt><dd class="t-mono">{{ object.date_joined|date:"Y" }}</dd>
           {% endif %}
           {% if "last_login" in visible_fields and object.last_login %}
             <dt>{% trans "Last login" %}</dt><dd class="t-mono-sm">{{ object.last_login|date:"Y-m-d H:i" }}</dd>

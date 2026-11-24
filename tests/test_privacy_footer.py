@@ -22,7 +22,7 @@ def test_footer_on_anonymous_pages(client, settings, name):
     r = client.get(reverse(name))
     assert r.status_code == 200
     assert POLICY_HREF in r.text
-    assert "Datenschutz" in r.text
+    assert "Privacy" in r.text
 
 
 @pytest.mark.django_db

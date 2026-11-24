@@ -10,6 +10,7 @@ from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
+from django.utils.translation import gettext_lazy
 
 from apps.accounts.permissions import can
 
@@ -17,8 +18,8 @@ from .models import ControlLock
 
 # Refusal text for new control grants while a module firmware update drains the
 # station (Teilbereich D). Consumers send it with code "firmware_update_pending".
-FIRMWARE_DRAIN_MESSAGE = (
-    "Firmware-Update ausstehend — neue Steuerung ist gesperrt, bis das Update abgeschlossen ist."
+FIRMWARE_DRAIN_MESSAGE = gettext_lazy(
+    "Firmware update pending — new control is blocked until the update has finished."
 )
 
 

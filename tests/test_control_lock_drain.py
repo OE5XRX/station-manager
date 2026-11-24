@@ -162,7 +162,6 @@ def test_drain_check_uses_fresh_station_row():
 def test_firmware_drain_message():
     from apps.control import lock
 
-    assert lock.FIRMWARE_DRAIN_MESSAGE == (
-        "Firmware-Update ausstehend — neue Steuerung ist gesperrt, bis das Update "
-        "abgeschlossen ist."
+    assert str(lock.FIRMWARE_DRAIN_MESSAGE) == (
+        "Firmware update pending — new control is blocked until the update has finished."
     )

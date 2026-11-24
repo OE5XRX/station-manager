@@ -36,4 +36,4 @@ def test_membership_level_display_labels():
     user = User.objects.create_user(username="u", password="x")
     user.membership_level = User.MembershipLevel.STAFF
     user.save(update_fields=["membership_level"])
-    assert user.get_membership_level_display() == "Vereins-Staff"
+    assert user.get_membership_level_display() == "Club staff"

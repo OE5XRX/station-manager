@@ -60,90 +60,88 @@ A, M, S, AD = Level.APPLICANT, Level.MEMBER, Level.STAFF, Level.ADMIN
 
 AREAS: dict[str, Area] = {
     "dashboard": Area(_("Dashboard"), view=A),
-    "profile": Area(_("Eigenes Profil"), use=A),
+    "profile": Area(_("Own profile"), use=A),
     "stations": Area(
-        _("Stationen"),
+        _("Stations"),
         view=A,
         manage=S,
-        verb_labels={"manage": _("Stationen anlegen/bearbeiten, Logbuch, Fotos, Station-Audit")},
+        verb_labels={"manage": _("Create/edit stations, logbook, photos, station audit")},
     ),
     "control": Area(
-        _("Stationssteuerung"),
+        _("Station control"),
         view=A,
         use=M,
         manage=S,
         verb_labels={
-            "use": _("Station bedienen (Lock, PTT, Mikrofon)"),
-            "manage": _("Station kalibrieren (Filter, Lautstärke, Audio-Diagnose)"),
+            "use": _("Operate a station (lock, PTT, microphone)"),
+            "manage": _("Calibrate a station (filters, volume, audio diagnostics)"),
         },
     ),
-    "terminal": Area(_("Terminal"), use=AD, verb_labels={"use": _("Root-Shell öffnen")}),
+    "terminal": Area(_("Terminal"), use=AD, verb_labels={"use": _("Open a root shell")}),
     "topology": Area(
-        _("Regionen & Zuweisungen"),
+        _("Regions & assignments"),
         view=A,
         manage=AD,
-        verb_labels={"manage": _("Regionen und Zuweisungen verwalten")},
+        verb_labels={"manage": _("Manage regions and assignments")},
     ),
     "deployments": Area(
         _("Deployments"),
         view=A,
         manage=S,
-        verb_labels={"manage": _("Deployments auslösen/abbrechen")},
+        verb_labels={"manage": _("Trigger/cancel deployments")},
     ),
     "rollouts": Area(
         _("Rollouts"),
         view=A,
         manage=AD,
-        verb_labels={"manage": _("Rollout-Sequenz bearbeiten, Gruppen-Upgrade")},
+        verb_labels={"manage": _("Edit rollout sequence, group upgrade")},
     ),
     "images": Area(
         _("Images"),
         view=A,
         manage=AD,
-        verb_labels={"manage": _("Images importieren/archivieren/als Latest markieren")},
+        verb_labels={"manage": _("Import/archive images, mark as latest")},
     ),
     "provisioning": Area(_("Provisioning"), manage=AD),
     "alerts": Area(
-        _("Alarme"), view=A, manage=S, verb_labels={"manage": _("Alarme quittieren/auflösen")}
+        _("Alerts"), view=A, manage=S, verb_labels={"manage": _("Acknowledge/resolve alerts")}
     ),
     "alert_rules": Area(
-        _("Alarm-Regeln"),
+        _("Alert rules"),
         view=A,
         manage=AD,
-        verb_labels={"manage": _("Alarm-Regeln und Benachrichtigungen konfigurieren")},
+        verb_labels={"manage": _("Configure alert rules and notifications")},
     ),
     "modules": Area(
-        _("Module & Firmware"),
+        _("Modules & firmware"),
         view=A,
         manage=S,
         verb_labels={
             "manage": _(
-                "Module bestätigen, Firmware importieren/archivieren, Modultypen, "
-                "Soll-Versionen, Quarantäne freigeben"
+                "Confirm modules, import/archive firmware, module types, "
+                "target versions, release quarantine"
             )
         },
     ),
     "repeaters": Area(
-        _("Repeater"),
+        _("Repeaters"),
         view=A,
         manage=S,
-        verb_labels={"manage": _("Repeater anlegen/bearbeiten")},
+        verb_labels={"manage": _("Create/edit repeaters")},
     ),
     "passive_services": Area(
-        _("Passive Dienste"),
+        _("Passive services"),
         view=A,
         manage=AD,
-        verb_labels={"manage": _("Passive Dienste verwalten")},
+        verb_labels={"manage": _("Manage passive services")},
     ),
-    "users": Area(
-        _("Benutzer"), view=M, manage=AD, verb_labels={"manage": _("Benutzer verwalten")}
-    ),
-    "api_tokens": Area(_("API-Tokens"), use=M, verb_labels={"use": _("API-Tokens erstellen")}),
-    "audit": Area(_("Audit-Log"), view=AD),
-    "sso": Area(_("SSO-Verwaltung"), manage=AD),
+    "users": Area(_("Users"), view=M, manage=AD, verb_labels={"manage": _("Manage users")}),
+    "api_tokens": Area(_("API tokens"), use=M, verb_labels={"use": _("Create API tokens")}),
+    "audit": Area(_("Audit log"), view=AD),
+    "sso": Area(_("SSO administration"), manage=AD),
 }
 
-_DEFAULT_VERB_LABELS = {"view": _("ansehen"), "use": _("bedienen"), "manage": _("verwalten")}
+_DEFAULT_VERB_LABELS = {"view": _("view"), "use": _("operate"), "manage": _("manage")}
 
 
 def _validate_areas(areas: dict[str, Area]) -> None:
@@ -185,7 +183,7 @@ def level_of(user) -> Level | None:
 
 def level_label(level: Level | None) -> str:
     if level is None:
-        return str(_("niemand"))
+        return str(_("nobody"))
     from apps.accounts.models import User
 
     return str(User.MembershipLevel(level.slug).label)
@@ -271,12 +269,12 @@ class AreaDenied(PermissionDenied):
         what = verb_label(self.area, self.verb)
         if self.required_level is None:
             return str(
-                _("Keine Berechtigung — %(what)s ist für niemanden freigegeben.") % {"what": what}
+                _("Permission denied — %(what)s is not available to anyone.") % {"what": what}
             )
         return str(
             _(
-                "Keine Berechtigung — %(what)s erfordert %(need)s, du bist %(have)s. "
-                "Wenn du glaubst, dass das falsch ist, wende dich an einen Admin."
+                "Permission denied — %(what)s requires %(need)s, you are %(have)s. "
+                "If you think this is wrong, contact an admin."
             )
             % {
                 "what": what,
@@ -551,7 +549,7 @@ class AreaConsumerMixin:
                             {
                                 "type": "error",
                                 "code": "recheck_failed",
-                                "message": str(_("Berechtigung konnte nicht geprüft werden.")),
+                                "message": str(_("Permission could not be checked.")),
                             }
                         )
                     )

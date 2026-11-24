@@ -65,7 +65,7 @@ def test_group_list_visible_to_applicant_readonly(
     assert 'data-group-step="1"' in html
     assert reverse("stations:group_create") not in html
     assert reverse("stations:group_edit", args=[group.pk]) not in html
-    assert "nur lesend" in html
+    assert "read-only" in html
 
 
 def test_group_list_query_count_is_constant(

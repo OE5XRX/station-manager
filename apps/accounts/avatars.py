@@ -25,7 +25,7 @@ def validate_avatar_upload(file):
     if file is None:
         return
     if file.size > MAX_AVATAR_BYTES:
-        raise ValidationError(_("Avatar darf max. 2 MB sein."))
+        raise ValidationError(_("Avatar must be at most 2 MB."))
 
     # Pillow's verify() reads the file-header and confirms format.
     from PIL import Image, UnidentifiedImageError
@@ -38,9 +38,9 @@ def validate_avatar_upload(file):
         # dimensions that would blow up memory on decode. Pillow raises
         # this before we ever materialise the pixels. Convert to a
         # user-visible validation error so the upload fails safely.
-        raise ValidationError(_("Bild ist zu groß (zu viele Pixel).")) from exc
+        raise ValidationError(_("Image is too large (too many pixels).")) from exc
     except (UnidentifiedImageError, OSError) as exc:
-        raise ValidationError(_("Datei ist kein gültiges Bild.")) from exc
+        raise ValidationError(_("File is not a valid image.")) from exc
     finally:
         # img.verify() consumes the file cursor; reset so the
         # subsequent save-pipeline can read from the start.

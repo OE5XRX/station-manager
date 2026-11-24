@@ -393,7 +393,7 @@ class TestUserDetailViewTemplateRendering:
         body = resp.content.decode()
         # The Membership-Card title renders (pill view), but the
         # "Set membership level" form does NOT.
-        assert "Vereins-Rolle" in body
+        assert "Club role" in body
         assert "Set membership level" not in body
         # And the HTMX-POST endpoint URL is not rendered for self
         assert reverse("accounts:membership_set", kwargs={"pk": admin.pk}) not in body

@@ -33,7 +33,7 @@ def test_require_raises_with_levels_and_logs(member):
     exc = ei.value
     assert (exc.area, exc.verb) == ("images", "manage")
     assert exc.required_level == Level.ADMIN and exc.actual_level == Level.MEMBER
-    assert "Vereins-Admin" in str(exc) and "Vereins-Mitglied" in str(exc)
+    assert "Club admin" in str(exc) and "Club member" in str(exc)
     row = AccountAuditLog.objects.get(event_type=DENIED)
     assert row.actor == member
     assert row.ip_address == "10.0.0.9"

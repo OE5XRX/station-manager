@@ -6,7 +6,6 @@ pending module firmware update is through. Expects `drain`
 the controlPanel Alpine component (lock frame `drain.since`) and is always
 rendered so it can appear later; the server-rendered text is the first paint.
 {% endcomment %}
-{% trans "Station wartet auf Firmware-Update seit" as drain_label %}
 {% if live %}
 <div class="fw-drain-banner"
      x-show="drainSince"
@@ -14,11 +13,11 @@ rendered so it can appear later; the server-rendered text is the first paint.
      role="status"
      aria-live="polite">
   <span class="dot" aria-hidden="true"></span>
-  <span x-text="drainText()">{% if drain.active %}{{ drain_label }} {{ drain.since|date:"d.m.Y H:i" }}{% endif %}</span>
+  <span x-text="drainText()">{% if drain.active %}{% blocktrans with since=drain.since|date:"d.m.Y H:i" %}Station waiting for firmware update since {{ since }}{% endblocktrans %}{% endif %}</span>
 </div>
 {% elif drain.active %}
 <div class="fw-drain-banner" role="status">
   <span class="dot" aria-hidden="true"></span>
-  <span>{{ drain_label }} {{ drain.since|date:"d.m.Y H:i" }}</span>
+  <span>{% blocktrans with since=drain.since|date:"d.m.Y H:i" %}Station waiting for firmware update since {{ since }}{% endblocktrans %}</span>
 </div>
 {% endif %}

@@ -14,7 +14,7 @@
   <div class="page-head-main">
     <div class="page-eyebrow">{% trans "Your account" %}</div>
     <h1 class="page-title">{% trans "Profile" %}</h1>
-    <p class="page-sub">{% trans "Verwalte deine Identität, Profil, Kontaktdaten und Standort." %}</p>
+    <p class="page-sub">{% trans "Manage your identity, profile, contact details and location." %}</p>
   </div>
 </div>
 
@@ -33,7 +33,7 @@
             <div class="onboarding-hint" role="note">
               <span class="onboarding-hint-icon">👤</span>
               <span class="onboarding-hint-text">
-                {% trans "Trag deinen Real-Namen ein — andere Mitglieder sehen ihn im Verzeichnis." %}
+                {% trans "Enter your real name — other members see it in the directory." %}
               </span>
             </div>
           {% endif %}
@@ -69,25 +69,25 @@
       <input type="hidden" name="form_name" value="profile">
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title"><span class="dot"></span>{% trans "Profil" %}</div>
+          <div class="panel-title"><span class="dot"></span>{% trans "Profile" %}</div>
         </div>
         <div class="panel-body">
           {% if onboarding_hints.avatar_missing %}
             <div class="onboarding-hint" role="note">
               <span class="onboarding-hint-icon">📷</span>
-              <span class="onboarding-hint-text">{% trans "Lade ein Profilbild hoch." %}</span>
+              <span class="onboarding-hint-text">{% trans "Upload a profile picture." %}</span>
             </div>
           {% endif %}
           {% if onboarding_hints.bio_missing %}
             <div class="onboarding-hint" role="note">
               <span class="onboarding-hint-icon">✍️</span>
-              <span class="onboarding-hint-text">{% trans "Stell dich kurz vor (max. 500 Zeichen)." %}</span>
+              <span class="onboarding-hint-text">{% trans "Briefly introduce yourself (max. 500 characters)." %}</span>
             </div>
           {% endif %}
           {% if onboarding_hints.qth_missing %}
             <div class="onboarding-hint" role="note">
               <span class="onboarding-hint-icon">📍</span>
-              <span class="onboarding-hint-text">{% trans "QTH-Name? Das ist dein Funker-Standort-Label." %}</span>
+              <span class="onboarding-hint-text">{% trans "QTH name? That is your radio location label." %}</span>
             </div>
           {% endif %}
           <div class="form-group">
@@ -116,10 +116,10 @@
           <div class="form-group">
             <label class="form-label">
               {{ profile_form.is_directory_visible }}
-              {% trans "Im Mitgliederverzeichnis sichtbar" %}
+              {% trans "Visible in the member directory" %}
             </label>
             <div class="form-help">
-              {% trans "Wenn aus, sehen andere Mitglieder nur Callsign + Rolle + Avatar." %}
+              {% trans "If off, other members only see callsign + role + avatar." %}
             </div>
           </div>
         </div>
@@ -135,13 +135,13 @@
       <input type="hidden" name="form_name" value="address">
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title"><span class="dot"></span>{% trans "Adresse & Standort" %}</div>
+          <div class="panel-title"><span class="dot"></span>{% trans "Address & location" %}</div>
         </div>
         <div class="panel-body">
           {% if onboarding_hints.address_missing %}
             <div class="onboarding-hint" role="note">
               <span class="onboarding-hint-icon">🏠</span>
-              <span class="onboarding-hint-text">{% trans "Trag deine Adresse ein — Locator und lat/lon werden automatisch berechnet." %}</span>
+              <span class="onboarding-hint-text">{% trans "Enter your address — locator and lat/lon are calculated automatically." %}</span>
             </div>
           {% endif %}
           <div class="form-group">
@@ -150,11 +150,11 @@
             {% if address_form.address.errors %}<div class="form-error">{{ address_form.address.errors|join:", " }}</div>{% endif %}
           </div>
           <p class="t-mono t-muted" style="margin:8px 0;">
-            {% trans "Locator + lat/lon werden bei Speichern aus der Adresse berechnet." %}
+            {% trans "Locator + lat/lon are calculated from the address on save." %}
           </p>
           <div class="form-group">
             <label class="form-label" for="{{ address_form.locator.id_for_label }}">
-              {% trans "Locator" %} ({% trans "manueller Override" %})
+              {% trans "Locator" %} ({% trans "manual override" %})
             </label>
             {{ address_form.locator }}
             {% if address_form.locator.errors %}<div class="form-error">{{ address_form.locator.errors|join:", " }}</div>{% endif %}
@@ -171,7 +171,7 @@
       {% csrf_token %}
       <section class="panel">
         <div class="panel-head">
-          <div class="panel-title"><span class="dot"></span>{% trans "Passwort ändern" %}</div>
+          <div class="panel-title"><span class="dot"></span>{% trans "Change password" %}</div>
         </div>
         <div class="panel-body">
           {% for field in password_form %}

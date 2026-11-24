@@ -38,14 +38,14 @@ def test_partial_polls_only_while_live(client, applicant_user, base):
     resp = client.get(_url(m))
     assert resp.status_code == 200
     body = resp.content.decode()
-    assert "Update ausstehend" in body
+    assert "Update pending" in body
     assert POLL in body
     assert reverse("module_firmware:module_update_status", args=[m.uid]) in body
 
     m.last_reported_version = rel.version
     m.save(update_fields=["last_reported_version"])
     body = client.get(_url(m)).content.decode()
-    assert "Aktuell" in body
+    assert "Up to date" in body
     assert POLL not in body
     assert "hx-get" not in body
 
@@ -56,7 +56,7 @@ def test_partial_compact_passes_through(client, applicant_user, base):
     _cs(m, rel, phase="flashing")
     client.force_login(applicant_user)
     body = client.get(_url(m, compact=True)).content.decode()
-    assert "Update läuft: Flashen" in body
+    assert "Update in progress: Flashing" in body
     # The polled URL keeps the compact flag so the swap renders the same shape.
     assert "compact=1" in body
     assert POLL in body
@@ -68,7 +68,7 @@ def test_partial_failed_does_not_poll(client, applicant_user, base):
     _cs(m, rel, state=State.FAILED, last_error_message="dfu-util timeout")
     client.force_login(applicant_user)
     body = client.get(_url(m)).content.decode()
-    assert "Fehler: dfu-util timeout" in body
+    assert "Error: dfu-util timeout" in body
     assert POLL not in body
 
 
@@ -118,7 +118,7 @@ def test_partial_card_mode_always_polls(client, applicant_user, base):
     m.last_reported_version = rel.version
     m.save(update_fields=["last_reported_version"])
     body = client.get(url).content.decode()  # current -> settled, still slow-polls
-    assert "Aktuell" in body
+    assert "Up to date" in body
     assert CARD_SETTLED in body
     assert "hx-get" in body
 
@@ -160,7 +160,7 @@ def test_polling_pills_carry_visibility_marker_and_no_eval_filter(client, applic
     assert VISIBLE_ONLY not in client.get(_url(m)).content.decode()  # settled detail: no poll
 
 
-RETRY = "Erneut versuchen"
+RETRY = ">Retry<"
 
 
 @pytest.mark.django_db
@@ -174,7 +174,7 @@ def test_partial_failed_shows_retry_form_to_staff(client, staff_user, base):
     body = client.get(_url(m), HTTP_HX_REQUEST="true").content.decode()
     assert body.count(RETRY) == 1
     assert reverse("module_firmware:module_retry_update", args=[m.uid]) in body
-    assert f'data-confirm="Update für {m.uid} erneut versuchen?"' in body
+    assert f'data-confirm="Retry the update for {m.uid}?"' in body
     assert 'name="csrfmiddlewaretoken"' in body
     # compact (list/card) never carries the form
     assert RETRY not in client.get(_url(m, compact=True)).content.decode()
@@ -186,7 +186,7 @@ def test_partial_failed_hides_retry_form_from_applicant(client, applicant_user, 
     _cs(m, rel, state=State.FAILED, last_error_message="dfu-util timeout")
     client.force_login(applicant_user)
     body = client.get(_url(m)).content.decode()
-    assert "Fehler: dfu-util timeout" in body
+    assert "Error: dfu-util timeout" in body
     assert RETRY not in body
 
 

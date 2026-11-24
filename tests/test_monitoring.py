@@ -237,7 +237,7 @@ class TestAlertViews:
         client.force_login(staff_user)
         response = client.get(reverse("monitoring:alert_settings"))
         assert response.status_code == 200
-        assert "nur lesend" in response.content.decode()
+        assert "read-only" in response.content.decode()
         response = client.post(
             reverse("monitoring:alert_rule_update", args=[offline_alert_rule.pk]),
             {"threshold": "5"},

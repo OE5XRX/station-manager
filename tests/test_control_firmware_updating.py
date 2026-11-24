@@ -23,7 +23,7 @@ from tests.module_firmware.update_status_helpers import _module, _online, _relea
 
 DRAIN_STATUS = "apps.module_firmware.drain.drain_status"
 INGEST = "apps.control.registry.ingest_module"
-BANNER = "Station wartet auf Firmware-Update seit"
+BANNER = "Station waiting for firmware update since"
 # 2026-10-18 08:05 UTC == 10:05 Europe/Vienna (CEST).
 SINCE = datetime(2026, 10, 18, 8, 5, tzinfo=UTC)
 ACTIVE = DrainStatus(active=True, since=SINCE, module_uids=("uid-1",))
@@ -292,7 +292,7 @@ def test_control_panel_card_renders_updating_banner(client):
     client.force_login(_member("fwcard"))
     with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
         body = client.get(reverse("control:station_control", args=[station.pk])).content.decode()
-    assert "Firmware-Update läuft" in body
+    assert "Firmware update in progress" in body
     # First paint already shows the updating state (no x-cloak on its strip).
     assert "cp-module-card is-updating" in body
 
@@ -468,8 +468,8 @@ def test_control_card_shows_update_pill(client, applicant_user):
     client.force_login(_member("fwcard3"))
     with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
         body = client.get(reverse("control:station_control", args=[station.pk])).content.decode()
-    assert "Wartet" in body
-    assert 'title="Wartet: Station-Agent kann keine Module flashen (Image zu alt)"' in body
+    assert "Waiting" in body
+    assert 'title="Waiting: station agent cannot flash modules (image too old)"' in body
     # Live (waiting) -> the card pill self-polls the compact partial.
     url = reverse("module_firmware:module_update_status", args=[tracked.uid])
     assert f"{url}?compact=1&amp;card=1" in body
@@ -500,7 +500,7 @@ def test_control_card_settled_pill_keeps_slow_poll_and_refresh_event(client):
     client.force_login(_member("fwcard4"))
     with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
         body = client.get(reverse("control:station_control", args=[station.pk])).content.decode()
-    assert "Aktuell" in body
+    assert "Up to date" in body
     url = reverse("module_firmware:module_update_status", args=[tracked.uid])
     assert f'hx-get="{url}?compact=1&amp;card=1"' in body
     assert f'hx-trigger="{CARD_SETTLED_TRIGGER}"' in body
@@ -524,7 +524,7 @@ def test_control_card_pill_uses_open_assignment_station(client):
         station=here, slot="slot0", module_id="fm0", type="fm", online=True, tracked_module=tracked
     )
     expected = module_update_status(tracked).reason_text
-    assert expected == "Wartet: Station offline"
+    assert expected == "Waiting: station offline"
     client.force_login(_member("fwcard5"))
     with mock.patch(DRAIN_STATUS, return_value=INACTIVE):
         body = client.get(reverse("control:station_control", args=[here.pk])).content.decode()
