@@ -21,6 +21,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext
 from django.views import View
 
 from apps.accounts.permissions import AreaPermissionMixin
@@ -52,7 +53,7 @@ class RegionAssignmentCreateView(AreaPermissionMixin, View):
             return HttpResponseBadRequest(str(e))
         except IntegrityError:
             # uniq_user_role_per_region constraint
-            return HttpResponseBadRequest("Assignment already exists.")
+            return HttpResponseBadRequest(gettext("Assignment already exists."))
         return JsonResponse({"success": True})
 
 

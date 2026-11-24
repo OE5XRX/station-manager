@@ -14,7 +14,7 @@
 
   <div class="page-head">
     <div class="page-head-main">
-      <div class="page-eyebrow">{% trans "Mission Control" %} · FLEET OVERVIEW</div>
+      <div class="page-eyebrow">{% trans "Mission Control" %} · {% translate "FLEET OVERVIEW" %}</div>
       <h1 class="page-title">{% trans "Good" %} {% now "H" as hour %}{% if hour < "12" %}{% trans "morning" %}{% elif hour < "18" %}{% trans "afternoon" %}{% else %}{% trans "evening" %}{% endif %}, {{ user.first_name|default:user.username }}.</h1>
       <p class="page-sub">{% blocktrans with online=stations_online total=station_count %}{{ online }} of {{ total }} stations are transmitting right now. Deployments and alerts are below.{% endblocktrans %}</p>
     </div>
@@ -252,7 +252,7 @@
               <a href="{% url 'deployments:deployment_detail' d.pk %}" style="display:block;padding:12px 18px;border-bottom:1px solid var(--line);color:inherit;text-decoration:none;">
                 <div class="row-split">
                   <div class="stack-gap-2" style="min-width:0;">
-                    <div class="t-mono-sm t-muted">DEPLOY #{{ d.pk }}</div>
+                    <div class="t-mono-sm t-muted">{% blocktranslate with pk=d.pk %}DEPLOY #{{ pk }}{% endblocktranslate %}</div>
                     <div class="truncate" style="font-weight:600;color:var(--ink-0);font-size:13px;">{{ d.image_tag }} · {{ d.image_channel }}</div>
                   </div>
                   <span class="pill pill-{{ d.status|slugify }}">{{ d.get_status_display|upper }}</span>

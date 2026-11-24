@@ -102,7 +102,7 @@ class CustomApplicationAdmin(DefaultApplicationAdmin):
             )
         )
 
-    @admin.display(description="Active grants", ordering="_active_grants")
+    @admin.display(description=_("Active grants"), ordering="_active_grants")
     def active_grants(self, obj):
         return obj._active_grants
 

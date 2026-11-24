@@ -158,15 +158,15 @@
         </td>
         {% if is_admin_view %}
           <td class="t-mono-sm t-muted" data-label="{% trans 'Last login' %}">
-            {{ u.last_login|date:"Y-m-d H:i"|default:"never" }}
+            {% if u.last_login %}{{ u.last_login|date:"Y-m-d H:i" }}{% else %}{% trans "never" %}{% endif %}
           </td>
           <td data-label="{% trans 'Status' %}">
             {% if u.deleted_at %}
-              <span class="pill pill-muted">DELETED {{ u.deleted_at|date:"Y-m-d" }}</span>
+              <span class="pill pill-muted">{% blocktranslate with date=u.deleted_at|date:"Y-m-d" %}DELETED {{ date }}{% endblocktranslate %}</span>
             {% elif u.is_active %}
-              <span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
+              <span class="pill pill-online"><span class="dot"></span>{% translate "ACTIVE" %}</span>
             {% else %}
-              <span class="pill pill-violet">INACTIVE</span>
+              <span class="pill pill-violet">{% translate "INACTIVE" %}</span>
             {% endif %}
           </td>
         {% endif %}

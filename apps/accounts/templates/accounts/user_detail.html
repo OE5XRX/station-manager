@@ -68,7 +68,7 @@
       {% endif %}
       {# is_active pill — Admin or Self, and only when not active #}
       {% if not object.is_active and is_admin_view or not object.is_active and is_self_view %}
-        <span class="pill pill-offline">INACTIVE</span>
+        <span class="pill pill-offline">{% translate "INACTIVE" %}</span>
       {% endif %}
       {# language pill — Self + Admin #}
       {% if is_admin_view or is_self_view %}
@@ -231,8 +231,8 @@
           {% if "is_active" in visible_fields %}
             <dt>{% trans "Active" %}</dt>
             <dd>
-              {% if object.is_active %}<span class="pill pill-online"><span class="dot"></span>ACTIVE</span>
-              {% else %}<span class="pill pill-offline">INACTIVE</span>{% endif %}
+              {% if object.is_active %}<span class="pill pill-online"><span class="dot"></span>{% translate "ACTIVE" %}</span>
+              {% else %}<span class="pill pill-offline">{% translate "INACTIVE" %}</span>{% endif %}
             </dd>
           {% endif %}
           {% if is_admin_view %}

@@ -1307,7 +1307,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             frame = {
                 "type": "error",
                 "code": "forbidden",
-                "message": "Command could not be authorized",
+                "message": gettext("Command could not be authorized"),
             }
             if request_id is not None:
                 frame["request_id"] = request_id

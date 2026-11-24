@@ -51,12 +51,12 @@ class ProfileForm(forms.Form):
     rx_tone = forms.CharField(
         label=_("RX tone (CTCSS)"),
         required=False,
-        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "none"}),
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": _("none")}),
     )
     tx_tone = forms.CharField(
         label=_("TX tone (CTCSS)"),
         required=False,
-        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "none"}),
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": _("none")}),
     )
     volume = forms.IntegerField(
         label=_("Volume (1-8)"),
