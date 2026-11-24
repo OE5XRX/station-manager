@@ -183,6 +183,9 @@ class StreamDecoder:
         return self._f0 + len(self._f)
 
     def _seg(self, a: int, b: int) -> np.ndarray:
+        if a < self._f0 or b > self._end:
+            # A negative slice start would wrap silently: this is a bug, not noise.
+            raise RuntimeError(f"audio [{a}, {b}) outside buffer [{self._f0}, {self._end})")
         return self._f[a - self._f0 : b - self._f0]
 
     def _trim(self, keep_from: int) -> None:
@@ -350,7 +353,7 @@ class StreamDecoder:
         # so a relock can render them again at the corrected timing.
         self._pending_lines: list[tuple[int, object]] = []
         self._held: tuple[np.ndarray, np.ndarray] | None = None  # Robot 36 even line
-        self._keep_from = self._t0
+        self._keep_from = self._t0 - self._ms(_WIDE_SYNC_WINDOW_MS) - 2 * self._guard
         self._layouts = []
         for parity in (0, 1):
             layout, off = [], 0.0
@@ -409,7 +412,16 @@ class StreamDecoder:
             return False
         if self._final_end is not None and line_end > self._final_end + 2:
             return False
-        if self._barrier is not None and line_end > self._barrier + 2:
+        if self._barrier is not None:
+            if line_end > self._barrier + 2:
+                return False
+        elif (
+            self._final_end is None
+            and need + self._ms(2 * LEADER_MS + BREAK_MS) > self._vis_cursor
+        ):
+            # Not until the VIS scan has passed this line: a new picture's leader
+            # or break inside its sync window must end the picture, not be
+            # mistaken for a sync (costs ~0.9 s of live latency).
             return False
 
         pos, quality = self._find_sync(pred, window)
@@ -451,7 +463,8 @@ class StreamDecoder:
         if self._pending_lines:
             first = self._pending_lines[0][0]
             keep = min(keep, self._placement(first, self._predict(first))[0])
-        self._keep_from = keep - self._ms(2)
+        # A relock may move a held-back line by up to the wide sync window.
+        self._keep_from = keep - self._ms(_WIDE_SYNC_WINDOW_MS) - 2 * self._guard
         return True
 
     def _placement(self, k: int, fallback: float) -> tuple[float, float]:

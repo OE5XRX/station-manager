@@ -9,7 +9,7 @@ import pytest
 
 from station_agent.sstv.decoder import End, Row, Start, StreamDecoder
 from station_agent.sstv.encoder import encode
-from station_agent.sstv.modes import MODES
+from station_agent.sstv.modes import MODES, sync_offset_ms
 
 SR = 8000
 CHUNK = SR // 50  # 20 ms
@@ -296,16 +296,18 @@ def test_new_picture_right_after_a_lost_one(gap_s):
     assert ends[1] == End(complete=True, rows=240)
 
 
-def test_relock_after_a_timing_jump_keeps_decoding():
-    # A sound-card glitch drops 4 ms mid-picture: syncs jump, the decoder must
+@pytest.mark.parametrize("key", ["martin1", "scottie1"])
+@pytest.mark.parametrize("drop", [32, 64])  # 4 ms, 8 ms
+def test_relock_after_a_timing_jump_keeps_decoding(key, drop):
+    # A sound-card glitch drops audio mid-picture: syncs jump, the decoder must
     # relock (not lose the picture) and keep the rest of the picture clean.
     rng = np.random.default_rng(11)
-    m = MODES["martin1"]
-    pic, pcm = _clean("martin1")
+    m = MODES[key]
+    pic, pcm = _clean(key)
     vis = int(0.91 * SR)
     line = m.line_ms * SR / 1000
     jump = vis + int(100.5 * line)
-    sig = np.concatenate([pcm[:jump], pcm[jump + 32 :]])
+    sig = np.concatenate([pcm[:jump], pcm[jump + drop :]])
     audio = np.concatenate([_noise(0.5, rng, 300), _resample(sig, 1.001), _noise(1.0, rng, 300)])
     events = _run(_awgn(audio, 20, rng))
     assert events[-1] == End(complete=True, rows=256)
@@ -337,3 +339,33 @@ def test_same_mode_picture_aligned_with_a_lost_one(shift):
     ends = [e for e in events if isinstance(e, End)]
     assert ends[0].complete is False and ends[0].rows <= 76 - 2
     assert ends[1] == End(complete=True, rows=256)
+
+
+@pytest.mark.parametrize("key", ["scottie1", "robot36"])
+@pytest.mark.parametrize("shift", [-6, 0, 6])
+def test_new_vis_break_on_the_old_sync_grid_is_not_a_sync(key, shift):
+    # The new picture's 10 ms break (1200 Hz) lands where the lost picture's
+    # line-60 sync (9 ms) is expected: it must not confirm leader-gray rows.
+    rng = np.random.default_rng(13)
+    m = MODES[key]
+    pic, pcm = _clean(key)
+    vis = 0.91 * SR
+    line = m.line_ms * SR / 1000
+    sync_at = vis + m.start_ms * SR / 1000 + 60 * line + sync_offset_ms(m) * SR / 1000
+    cut = round(sync_at - 0.300 * SR) + shift  # new leader 1 (300 ms), then the break
+    audio = np.concatenate([_noise(0.5, rng, 300), pcm[:cut], pcm, _noise(1.0, rng, 300)])
+    events = _run(_awgn(audio, 20, rng))
+    kinds = [(type(e).__name__) for e in events if not isinstance(e, Row)]
+    assert kinds == ["Start", "End", "Start", "End"]
+    first = []
+    for e in events:
+        if isinstance(e, Row):
+            first.append(e)
+        if isinstance(e, End):
+            break
+    assert first, "lost picture yielded no rows"
+    got = np.frombuffer(b"".join(r.rgb for r in first), np.uint8).reshape(len(first), m.width, 3)
+    idx = [r.index for r in first]
+    err = np.abs(got.astype(int) - pic[idx].astype(int)).mean(axis=(1, 2))
+    assert err.max() < 25, f"rows {np.array(idx)[err >= 25]} are not picture content"
+    assert [e for e in events if isinstance(e, End)][1] == End(complete=True, rows=m.height)
