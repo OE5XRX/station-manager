@@ -311,3 +311,10 @@ def test_drain_timeout_on_exit(monkeypatch):
     asyncio.run(unit._close_client())
     assert time.monotonic() - t0 < 5
     assert writer.closed and not unit.has_client
+
+
+@pytest.fixture(autouse=True)
+def _strict_decoder(monkeypatch):
+    from station_agent.sstv import decoder
+
+    monkeypatch.setattr(decoder, "STRICT", True)

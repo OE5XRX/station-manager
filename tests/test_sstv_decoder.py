@@ -7,6 +7,7 @@ white noise, resampling and truncation applied before decoding.
 import numpy as np
 import pytest
 
+from station_agent.sstv import decoder as decoder_module
 from station_agent.sstv.decoder import End, Row, Start, StreamDecoder
 from station_agent.sstv.encoder import encode
 from station_agent.sstv.modes import MODES, sync_offset_ms
@@ -369,3 +370,37 @@ def test_new_vis_break_on_the_old_sync_grid_is_not_a_sync(key, shift):
     err = np.abs(got.astype(int) - pic[idx].astype(int)).mean(axis=(1, 2))
     assert err.max() < 25, f"rows {np.array(idx)[err >= 25]} are not picture content"
     assert [e for e in events if isinstance(e, End)][1] == End(complete=True, rows=m.height)
+
+
+@pytest.fixture(autouse=True)
+def _strict_decoder(monkeypatch):
+    # In tests an internal invariant failure must fail loudly, not be survived.
+    monkeypatch.setattr(decoder_module, "STRICT", True)
+
+
+def test_internal_error_ends_picture_and_decoding_continues(monkeypatch, caplog):
+    monkeypatch.setattr(decoder_module, "STRICT", False)
+    _, a = _clean("robot36")
+    _, b = _clean("martin2")
+    dec = StreamDecoder(SR)
+    real = StreamDecoder._levels
+    calls = {"n": 0}
+
+    def flaky(self, *args):
+        calls["n"] += 1
+        if calls["n"] == 50:  # once, mid-picture
+            raise decoder_module._BufferError("boom")
+        return real(self, *args)
+
+    monkeypatch.setattr(StreamDecoder, "_levels", flaky)
+    audio = _to_i16(np.concatenate([a, b, np.zeros(SR)]))
+    events = []
+    for i in range(0, len(audio), CHUNK):
+        events += dec.feed(audio[i : i + CHUNK])
+    events += dec.flush()
+    kinds = [type(e).__name__ for e in events if not isinstance(e, Row)]
+    assert kinds == ["Start", "End", "Start", "End"]
+    ends = [e for e in events if isinstance(e, End)]
+    assert ends[0].complete is False
+    assert ends[1] == End(complete=True, rows=256)
+    assert "invariant failed" in caplog.text

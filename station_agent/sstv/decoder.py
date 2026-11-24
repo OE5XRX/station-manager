@@ -22,7 +22,9 @@ Pipeline, per block of audio:
    incomplete with only the confirmed rows.
 """
 
+import logging
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,6 +43,15 @@ from .modes import (
     line_segments,
     sync_offset_ms,
 )
+
+logger = logging.getLogger(__name__)
+
+# Tests set this: an internal invariant failure raises instead of being survived.
+STRICT = False
+
+
+class _BufferError(RuntimeError):
+    """Internal invariant: audio requested outside the kept buffer."""
 
 
 @dataclass(frozen=True)
@@ -154,8 +165,9 @@ class StreamDecoder:
             self._final_end = self._n_in - (_LP_TAPS - 1) // 2
             pad = math.ceil(2 * self._line_len + self._ms(50))
             self._f = np.concatenate([self._f, np.full(pad, BLACK_HZ + self._offset)])
-            while self._mode is not None and self._decode_line(events):
-                pass
+            with self._survive(events):
+                while self._mode is not None and self._decode_line(events):
+                    pass
         if self._mode is not None:
             events.append(End(complete=False, rows=self._emitted))
         self._reset()
@@ -185,7 +197,7 @@ class StreamDecoder:
     def _seg(self, a: int, b: int) -> np.ndarray:
         if a < self._f0 or b > self._end:
             # A negative slice start would wrap silently: this is a bug, not noise.
-            raise RuntimeError(f"audio [{a}, {b}) outside buffer [{self._f0}, {self._end})")
+            raise _BufferError(f"audio [{a}, {b}) outside buffer [{self._f0}, {self._end})")
         return self._f[a - self._f0 : b - self._f0]
 
     def _trim(self, keep_from: int) -> None:
@@ -202,6 +214,26 @@ class StreamDecoder:
             self._pending_n = 0
             self._demodulate(x)
         events: list[Event] = []
+        with self._survive(events):
+            self._decode_available(events)
+        self._trim_buffer()
+        return events
+
+    @contextmanager
+    def _survive(self, events: list[Event]):
+        """An internal bug (triggered by whatever audio came in) must not kill
+        the decoder unit: end the running picture incomplete and keep going."""
+        try:
+            yield
+        except _BufferError:
+            if STRICT:
+                raise
+            logger.exception("sstv decoder invariant failed; picture ended")
+            self._barrier = None
+            if self._mode is not None:
+                self._finish(events, complete_ok=False)
+
+    def _decode_available(self, events: list[Event]) -> None:
         while True:
             found = self._scan_vis()
             if found is not None:
@@ -221,8 +253,6 @@ class StreamDecoder:
                 pass
             if found is None:
                 break
-        self._trim_buffer()
-        return events
 
     def _demodulate(self, x: np.ndarray) -> None:
         step = 2 * math.pi * _MIX_HZ / self.sample_rate
