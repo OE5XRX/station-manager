@@ -245,9 +245,13 @@ def test_client_that_stops_reading_is_dropped():
     class _Transport:
         def __init__(self, size):
             self.size = size
+            self.aborted = False
 
         def get_write_buffer_size(self):
             return self.size
+
+        def abort(self):
+            self.aborted = True
 
     class _Writer:
         def __init__(self, size):
@@ -273,7 +277,8 @@ def test_client_that_stops_reading_is_dropped():
     stalled = _Writer(rx_unit.MAX_CLIENT_BUFFER + 1)
     unit._client = stalled
     unit._send([b"b\n"])
-    assert stalled.closed and stalled.written == [] and not unit.has_client
+    # Aborted, not close()d: close() would wait for the stalled buffer to drain.
+    assert stalled.transport.aborted and stalled.written == [] and not unit.has_client
 
 
 def test_exit_with_a_connected_client_that_never_reads():
@@ -295,8 +300,15 @@ def test_drain_timeout_on_exit(monkeypatch):
 
     monkeypatch.setattr(rx_unit, "DRAIN_TIMEOUT_S", 0.1)
 
+    class _Transport:
+        aborted = False
+
+        def abort(self):
+            self.aborted = True
+
     class _HangingWriter:
         closed = False
+        transport = _Transport()
 
         async def drain(self):
             await asyncio.sleep(60)
@@ -310,7 +322,7 @@ def test_drain_timeout_on_exit(monkeypatch):
     t0 = time.monotonic()
     asyncio.run(unit._close_client())
     assert time.monotonic() - t0 < 5
-    assert writer.closed and not unit.has_client
+    assert writer.transport.aborted and not writer.closed and not unit.has_client
 
 
 @pytest.fixture(autouse=True)
@@ -348,3 +360,24 @@ def test_decoder_crash_ends_picture_and_unit_keeps_running(monkeypatch):
     assert unit.join() == 0
     marks = [(ln["t"], ln.get("complete")) for ln in lines if ln["t"] != "row"]
     assert marks == [("start", None), ("end", False), ("start", None), ("end", True)]
+
+
+def test_unit_exits_with_a_stalled_real_client(monkeypatch):
+    # A connected client that never reads: the kernel buffers fill, the final
+    # drain times out and the unit must still exit (no hang in wait_closed()).
+    monkeypatch.setattr(rx_unit, "DRAIN_TIMEOUT_S", 1.0)
+    m = MODES["robot36"]
+    pcm = _pcm(m, _picture(m))
+    unit = _Unit(_free_port())
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+    assert unit.ready.wait(5)
+    sock.connect(("127.0.0.1", unit.port))
+    unit.wait_client()
+    for _ in range(8):
+        unit.write(pcm)
+    unit.close_stdin()
+    t0 = time.monotonic()
+    assert unit.join(timeout=30) == 0
+    assert time.monotonic() - t0 < 15
+    sock.close()

@@ -81,6 +81,13 @@ def _line(event) -> bytes:
     return json.dumps(obj, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
+def _drop(writer: asyncio.StreamWriter) -> None:
+    """Close without flushing. ``close()`` keeps a non-reading connection open
+    until its buffer drains, and ``server.wait_closed()`` waits for every
+    connection, so a stalled client would keep the unit from ever exiting."""
+    writer.transport.abort()
+
+
 class RxUnit:
     def __init__(self, port: int, rate: int, stdin):
         self.port = port
@@ -102,7 +109,7 @@ class RxUnit:
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         old, self._client = self._client, writer
         if old is not None:
-            old.close()
+            _drop(old)
         if self._replay:
             writer.write(b"".join(self._replay))
         try:
@@ -113,7 +120,10 @@ class RxUnit:
         finally:
             if self._client is writer:
                 self._client = None
-            writer.close()
+            if writer.transport.get_write_buffer_size():
+                _drop(writer)  # peer half-closed and not reading
+            else:
+                writer.close()
 
     def _send(self, lines: list[bytes]) -> None:
         writer = self._client
@@ -122,7 +132,7 @@ class RxUnit:
         if writer.is_closing() or writer.transport.get_write_buffer_size() > MAX_CLIENT_BUFFER:
             logger.warning("sstv client not reading, dropping it")
             self._client = None
-            writer.close()
+            _drop(writer)
             return
         writer.write(b"".join(lines))
 
@@ -176,6 +186,8 @@ class RxUnit:
             await asyncio.wait_for(writer.drain(), DRAIN_TIMEOUT_S)
         except (TimeoutError, ConnectionError, OSError):
             logger.warning("sstv client did not take the final lines in time")
+            _drop(writer)
+            return
         writer.close()
 
     async def run(self, started: Callable[["RxUnit"], None] | None = None) -> int:
