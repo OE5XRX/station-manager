@@ -6,10 +6,36 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.layers import get_channel_layer
 
 from apps.accounts.permissions import AreaConsumerMixin
+from apps.deployments.models import Deployment, DeploymentResult
 
 logger = logging.getLogger(__name__)
 
 GROUP_NAME = "deployment_status"
+
+
+def _status_label(enum_cls, code):
+    try:
+        return str(enum_cls(code).label)
+    except ValueError:
+        return str(code)
+
+
+def with_status_labels(data):
+    """Return a copy of a broadcast payload plus translated ``status_label`` fields.
+
+    The machine ``status`` codes stay untouched (backwards compatible); unknown
+    codes fall back to the raw code.
+    """
+    out = dict(data)
+    if "status" in out:
+        out["status_label"] = _status_label(Deployment.Status, out["status"])
+    result = out.get("result")
+    if isinstance(result, dict) and "status" in result:
+        out["result"] = {
+            **result,
+            "status_label": _status_label(DeploymentResult.Status, result["status"]),
+        }
+    return out
 
 
 class DeploymentStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
@@ -38,7 +64,9 @@ class DeploymentStatusConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         pass  # Server-push only
 
     async def deployment_update(self, event):
-        await self.send(text_data=json.dumps(event["data"]))
+        # Runs under the connected user's language (AreaConsumerMixin.dispatch),
+        # so the labels are translated per listener, not per broadcaster.
+        await self.send(text_data=json.dumps(with_status_labels(event["data"])))
 
 
 def broadcast_deployment_status(deployment, result=None):

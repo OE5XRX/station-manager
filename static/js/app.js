@@ -15,27 +15,19 @@
   };
   function fmt(text, values) { return interpolate(text, values, true); }
 
-  // Live pill labels for server status codes (same wording as the models'
+  // Live pill labels for station status codes (same wording as the model's
   // choices); an unknown code falls back to the raw code.
   var STATUS_LABELS = {
     online: gettext("Online"),
     offline: gettext("Offline"),
     updating: gettext("Updating"),
     error: gettext("Error"),
-    pending: gettext("Pending"),
-    in_progress: gettext("In Progress"),
-    completed: gettext("Completed"),
-    failed: gettext("Failed"),
-    cancelled: gettext("Cancelled"),
-    downloading: gettext("Downloading"),
-    installing: gettext("Installing"),
-    rebooting: gettext("Rebooting"),
-    verifying: gettext("Verifying"),
-    success: gettext("Success"),
-    rolled_back: gettext("Rolled Back"),
-    superseded: gettext("Superseded"),
   };
-  function statusLabel(code) {
+  // Deployment/result pills use the server-translated ``status_label`` of the
+  // WS payload (deployments.consumers.with_status_labels); the map above only
+  // covers station statuses.
+  function statusLabel(code, serverLabel) {
+    if (typeof serverLabel === "string" && serverLabel) return serverLabel.toUpperCase();
     var c = String(code);
     var label = Object.prototype.hasOwnProperty.call(STATUS_LABELS, c) ? STATUS_LABELS[c] : c.replace(/_/g, " ");
     return label.toUpperCase();
@@ -330,7 +322,7 @@
       if (s) {
         var st = String(data.status).replace("_", "-");
         s.className = "pill pill-" + st;
-        s.textContent = statusLabel(data.status);
+        s.textContent = statusLabel(data.status, data.status_label);
       }
     }
     if (data.result) {
@@ -339,7 +331,7 @@
         var sc = row.querySelector("[data-result-status]");
         if (sc) {
           sc.className = "pill pill-" + String(data.result.status);
-          sc.textContent = statusLabel(data.result.status);
+          sc.textContent = statusLabel(data.result.status, data.result.status_label);
         }
       }
     }

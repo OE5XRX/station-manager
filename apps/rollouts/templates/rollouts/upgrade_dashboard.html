@@ -216,7 +216,8 @@
           var dot = document.createElement('span');
           dot.className = 'dot';
           pill.appendChild(dot);
-          pill.appendChild(document.createTextNode(safe.toUpperCase().replace(/_/g, ' ')));
+          var label = (typeof r.status_label === 'string' && r.status_label) ? r.status_label : safe.replace(/_/g, ' ');
+          pill.appendChild(document.createTextNode(label.toUpperCase()));
           statusCell.appendChild(pill);
         }
       } catch (_) { /* ignore */ }
