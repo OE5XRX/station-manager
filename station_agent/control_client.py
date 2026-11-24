@@ -133,8 +133,12 @@ class ControlClient:
         on_firmware_check=None,
         on_rescan=None,
         decoder_host_factory=None,
+        sstv_tx=None,
     ):
         self._config = config
+        # Station-side SSTV TX (process lifetime, shared by every connection's Broker so a
+        # replayed sstv_tx_start after a reconnect is recognised and never re-keys).
+        self._sstv_tx = sstv_tx
         # Passive decoder host: built once on the control loop (process lifetime) and shared
         # by every connection's Broker, so decoders survive a WebSocket outage.
         self._decoder_host_factory = decoder_host_factory
@@ -225,6 +229,7 @@ class ControlClient:
                 virtual_modules=self._virtual_modules,
                 on_firmware_check=self._on_firmware_check,
                 decoder_host=self._decoder_host,
+                sstv_tx=self._sstv_tx,
             )
             self._refresh_event = asyncio.Event()
             self._broker = broker
@@ -508,6 +513,11 @@ class ControlClient:
         try:
             await self._run_loop()
         finally:
+            if self._sstv_tx is not None:
+                try:
+                    await self._sstv_tx.shutdown()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Control: SSTV TX shutdown failed")
             if self._decoder_host is not None:
                 try:
                     await self._decoder_host.shutdown()
