@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from html import unescape
 from urllib.parse import parse_qsl
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.core.files.base import ContentFile
@@ -204,6 +205,9 @@ def test_gallery_german(client, station):
         html = client.get(reverse("sstv:gallery", args=[station.pk])).content.decode()
     assert "Unvollständig" in html
     assert "Herunterladen" in html
+    # Visible numbers follow the locale, machine attributes stay ISO.
+    assert "145,800 MHz" in html
+    assert re.search(r'<time datetime="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d', html)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +246,8 @@ def test_download_filename_uses_utc_and_slug():
         station=st,
         direction="rx",
         mode="scottiedx",
-        created_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC) + timedelta(hours=0),
+        # 04:04:05 in Vienna (CET, UTC+1) = 03:04:05 UTC.
+        created_at=datetime(2026, 1, 2, 4, 4, 5, tzinfo=ZoneInfo("Europe/Vienna")),
     )
     assert download_filename(img) == "gaisberg-sud-20260102-030405Z-scottiedx-rx.png"
     # A name without slug characters still yields a usable, header-safe name.

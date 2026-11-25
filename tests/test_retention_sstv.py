@@ -79,6 +79,16 @@ def test_retention_days_below_one_count_as_one(station):
     assert _exists(today) and not _exists(old)
 
 
+def test_huge_retention_days_do_not_overflow(station):
+    SstvSettings.load()
+    SstvSettings.objects.update(retention_days=2_000_000_000)
+    young = _image(station, timedelta(days=100))
+    result = run_retention(_cfg())
+    assert result.errors == []
+    assert result.counts["sstv_pictures"] == 0
+    assert _exists(young)
+
+
 @pytest.mark.parametrize(
     "state,max_age",
     [

@@ -369,6 +369,7 @@ def _audit_messages_scrubbed(cfg, held):
 # gallery picture of a sent transmission is its own blob (SstvImage.image), never
 # the preview file.
 SSTV_TRANSMISSION_MAX_AGE = timedelta(hours=1)
+SSTV_RETENTION_MAX_DAYS = 36_500
 # A draft may be sent until it is 1 h old and a TX is hard-stopped after
 # duration + 5 s (≤ ~275 s), so a "sending" row is only a leftover past 2 h —
 # judged on created_at alone (updated_at misses QuerySet.update() transitions).
@@ -379,7 +380,9 @@ def _sstv_pictures(cfg, held):
     """Gallery pictures past ``SstvSettings.retention_days`` (stored files via signal)."""
     from apps.sstv.models import SstvImage, SstvSettings
 
-    days = max(1, int(SstvSettings.load().retention_days))
+    # < 1 counts as 1; capped at 100 years so a huge admin value cannot overflow
+    # the datetime arithmetic (the step would then fail every run, never purging).
+    days = min(max(1, int(SstvSettings.load().retention_days)), SSTV_RETENTION_MAX_DAYS)
     qs = SstvImage.objects.filter(created_at__lt=cfg.now - timedelta(days=days))
     return _apply(_exclude_held(qs, held, "user"), cfg)
 
