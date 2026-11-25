@@ -1,0 +1,208 @@
+{% load i18n %}
+{% comment %}
+SSTV section (SSTV spec §5.2–§5.4) — binds to the sstvPanel Alpine component
+(sstv-panel.js); the nested cpCollapsible scope (collapsible.js) owns open/closed.
+Sibling to #control-panel: frames go out via the "control:send" window event,
+the server's sstv_* frames come back as re-emitted control:* events.
+
+Shown only with sstv.view. Controls render only with sstv.use and are enabled
+only for the lock holder; everyone else watches read-only. When the agent does
+not advertise "sstv" the whole section collapses to one explanatory line.
+The live picture is drawn on a canvas sized to the detected mode; the gallery
+is the sstv:gallery partial, reloaded on the body event "sstv-gallery-refresh".
+{% endcomment %}
+{% if can.sstv.view %}
+{% if sstv_availability != "ok" %}
+<section class="cp-module-card sv-panel sv-unavailable mt-4" aria-labelledby="sv-title" data-sstv-unavailable>
+  <header class="cp-module-header">
+    <div class="cp-module-identity">
+      <h2 id="sv-title" class="rp-title">{% trans "SSTV" %}</h2>
+    </div>
+    <p class="sv-unavailable-text">
+      {% if sstv_availability == "old" %}
+        {% trans "The station software is too old for SSTV." %}
+      {% else %}
+        {% trans "SSTV is available once the station is online." %}
+      {% endif %}
+    </p>
+  </header>
+</section>
+{% else %}
+{{ sstv_modes|json_script:"sstv-modes" }}
+<section x-data="sstvPanel"
+         data-station-id="{{ station.id }}"
+         data-preview-url="{% url 'sstv:preview' station.pk %}"
+         data-can-use="{{ can.sstv.use|yesno:'1,0' }}"
+         data-station-callsign="{{ station_has_callsign|yesno:'1,0' }}"
+         class="cp-module-card sv-panel mt-4"
+         aria-labelledby="sv-title">
+  {% csrf_token %}
+  <div x-data="cpCollapsible('sstv')">
+    <header class="cp-module-header cp-collapse-header">
+      <button type="button" class="cp-collapse-toggle" @click="toggle()"
+              :aria-expanded="open ? 'true' : 'false'" aria-controls="sv-body">
+        <span class="cp-chevron" aria-hidden="true"></span>
+        <h2 id="sv-title" class="rp-title">{% trans "SSTV" %}</h2>
+      </button>
+      <span class="sv-chip" role="status" aria-live="polite"
+            x-show="summary() || (!open && notice)"
+            x-text="summary() || (notice ? notice.text : '')"
+            :class="txLive ? 'is-tx' : (summary() ? 'is-rx' : (notice && notice.ok ? 'is-ok' : 'is-error'))"></span>
+    </header>
+
+    <div id="sv-body" class="sv-body" x-show="open" x-cloak>
+      <div class="sv-layout">
+        {% comment %}The monitor: live RX picture, drawn row by row; the scan head marks the newest row.{% endcomment %}
+        <figure class="sv-monitor" :class="{ 'is-live': rxLive, 'has-picture': picture || lastImage }">
+          <div class="sv-screen">
+            <canvas data-sv="canvas" width="320" height="256" class="sv-canvas"
+                    aria-label="{% trans 'Received SSTV picture' %}" role="img"></canvas>
+            <div class="sv-scanhead" aria-hidden="true" x-show="picture && picture.row >= 0"
+                 :style="picture ? 'top:' + ((picture.row + 1) / picture.height * 100) + '%' : ''"></div>
+            <p class="sv-idle" x-show="!picture && !lastImage">
+              <span x-show="!rxLive">{% trans "No picture yet. Start receiving to watch one build up here." %}</span>
+              <span x-show="rxLive">{% trans "Listening. A picture appears as soon as its header is heard." %}</span>
+            </p>
+          </div>
+          {% trans "Last picture" as last_label %}
+          {% trans "Last picture (incomplete)" as last_partial_label %}
+          <figcaption class="sv-caption">
+            <span x-text="picture ? pictureLabel() : (lastImage ? (lastImage.complete ? '{{ last_label|escapejs }}' : '{{ last_partial_label|escapejs }}') : '')"></span>
+            <a x-show="lastImage && !picture" :href="lastImage ? lastImage.url : '#'" target="_blank" rel="noopener">{% trans "Open" %}</a>
+          </figcaption>
+        </figure>
+
+        <div class="sv-controls">
+          <section class="sv-group" aria-labelledby="sv-rx-title">
+            <h3 id="sv-rx-title" class="sv-group-title">{% trans "Receive" %}</h3>
+            <div class="sv-readout" :class="rxLive ? 'is-live' : ''">
+              <span class="sv-state" x-text="rxStateLabel()"></span>
+              <span class="sv-freq"><span x-text="rxMHz()"></span> MHz</span>
+              <span class="sv-left" x-show="rxLive && remaining()" x-text="remaining()"
+                    title="{% trans 'Time left in this receive session' %}"></span>
+            </div>
+            {% if can.sstv.use %}
+            <label class="sv-field" x-show="rxModules.length > 1">
+              <span>{% trans "Module" %}</span>
+              <select class="form-select form-select-sm" x-model="selected" :disabled="rxLive">
+                <template x-for="m in rxModules" :key="m.slot + ' ' + m.module">
+                  <option :value="m.slot + ' ' + m.module" x-text="moduleLabel(m)"></option>
+                </template>
+              </select>
+            </label>
+            <div class="sv-actions">
+              <button type="button" class="btn btn-sm btn-primary" x-show="!rxLive"
+                      :disabled="!canStartRx" @click="startRx()">{% trans "Start receiving" %}</button>
+              <button type="button" class="btn btn-sm btn-danger" x-show="rxLive"
+                      :disabled="!canStopRx" @click="stopRx()">{% trans "Stop receiving" %}</button>
+              <button type="button" class="btn btn-sm btn-ghost sv-iss" :disabled="!canIss" @click="tuneIss()"
+                      :aria-pressed="onIss ? 'true' : 'false'"
+                      title="{% trans 'Set the receive frequency to 145.800 MHz, the SSTV downlink of the ISS' %}">{% trans "ISS" %}</button>
+            </div>
+            <p class="rp-hint" x-show="!rxModules.length">{% trans "No online module of this station can receive." %}</p>
+            {% endif %}
+          </section>
+
+          <section class="sv-group" aria-labelledby="sv-tx-title">
+            <h3 id="sv-tx-title" class="sv-group-title">{% trans "Send" %}</h3>
+            {% if can.sstv.use %}
+            <div class="sv-source" role="radiogroup" aria-label="{% trans 'Picture to send' %}">
+              <label class="sv-seg"><input type="radio" value="test" x-model="source" @change="invalidate()" :disabled="txLive"><span>{% trans "Test picture" %}</span></label>
+              <label class="sv-seg"><input type="radio" value="upload" x-model="source" @change="invalidate()" :disabled="txLive"><span>{% trans "Upload a photo" %}</span></label>
+            </div>
+            <label class="sv-field" x-show="source === 'upload'">
+              <span>{% trans "Photo (JPEG, PNG, WebP or GIF)" %}</span>
+              <input type="file" class="form-control form-control-sm" data-sv="file"
+                     accept="image/jpeg,image/png,image/webp,image/gif"
+                     @change="onFile($event)" :disabled="txLive">
+            </label>
+            <label class="sv-field">
+              <span>{% trans "Mode" %}</span>
+              <select class="form-select form-select-sm" x-model="mode" @change="invalidate()" :disabled="txLive">
+                {% for m in sstv_modes %}
+                  <option value="{{ m.key }}">{% blocktrans with name=m.name duration=m.duration_label %}{{ name }} ({{ duration }} min){% endblocktrans %}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <fieldset class="sv-calls">
+              <legend class="visually-hidden">{% trans "Callsigns on the picture" %}</legend>
+              <label class="sp-check"><input type="checkbox" x-model="csUser" @change="invalidate()" :disabled="txLive"><span>{% trans "My callsign" %}</span></label>
+              <label class="sp-check{% if not station_has_callsign %} is-disabled{% endif %}">
+                <input type="checkbox" x-model="csStation" @change="invalidate()"{% if not station_has_callsign %} disabled{% else %} :disabled="txLive"{% endif %}>
+                <span>{% trans "Station callsign" %}</span>
+              </label>
+              {% if not station_has_callsign %}
+                <span class="rp-hint sv-inline-hint">{% trans "This station has no callsign." %}</span>
+              {% endif %}
+            </fieldset>
+            <div class="sv-actions">
+              <button type="button" class="btn btn-sm btn-ghost" :disabled="!canPreview" @click="makePreview()"
+                      :aria-busy="previewBusy ? 'true' : 'false'">{% trans "Preview" %}</button>
+            </div>
+            {% endif %}
+
+            {% comment %}What goes out: the preview, wiped by the progress while it is on the air.{% endcomment %}
+            <figure class="sv-preview" x-show="preview">
+              <div class="sv-screen">
+                <img x-show="preview" :src="preview ? preview.url : ''" alt="{% trans 'Preview of the picture to send' %}">
+                <div class="sv-sent" aria-hidden="true" :style="sentStyle()"></div>
+              </div>
+              <figcaption class="sv-caption" x-show="preview && !txLive">
+                <span x-text="preview ? modeName(preview.mode) + ', ' + durationText(preview.duration_s) : ''"></span>
+                <span class="sv-warn" x-show="preview && preview.noCallsign">{% trans "No callsign on the picture" %}</span>
+              </figcaption>
+            </figure>
+
+            <div class="sv-progress" x-show="txLive" role="group" aria-label="{% trans 'Transmission' %}">
+              <div class="sv-progress-line">
+                <span class="sv-state" x-text="txPhase()"></span>
+                <span class="sv-left" x-show="txLeft()" x-text="txLeft()"></span>
+              </div>
+              <div class="progress sv-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                   :aria-valuenow="txPercent()" aria-label="{% trans 'Transmission progress' %}">
+                <div class="progress-bar" :style="'width:' + txPercent() + '%'"></div>
+              </div>
+            </div>
+
+            {% if can.sstv.use %}
+            <div class="sv-actions">
+              <button type="button" class="btn btn-sm btn-primary" x-show="!txLive" :disabled="!canSend" @click="send(false)">{% trans "Send" %}</button>
+              <button type="button" class="btn btn-sm btn-danger" x-show="txLive" :disabled="!canAbort" @click="abort()">{% trans "Abort" %}</button>
+            </div>
+            <p class="rp-hint" :class="txOnIss ? 'is-error' : ''" x-show="sendHint()" x-text="sendHint()"></p>
+            <p class="rp-hint sv-txfreq" x-show="txModule">
+              {% trans "Sends on the module's TX frequency:" %} <span class="sv-freq"><span x-text="txMHz()"></span> MHz</span>
+            </p>
+            {% else %}
+            <p class="rp-hint" x-show="!txLive">{% trans "You can watch and download pictures here. Receiving and sending needs a higher membership level." %}</p>
+            {% endif %}
+          </section>
+
+          <div class="rp-notice" role="status" aria-live="polite"
+               x-show="notice" :class="notice && !notice.ok ? 'is-error' : 'is-ok'"
+               x-text="notice ? notice.text : ''"></div>
+        </div>
+      </div>
+
+      <div class="sv-gallery"
+           hx-get="{% url 'sstv:gallery' station.pk %}"
+           hx-trigger="load, sstv-gallery-refresh from:body"
+           hx-swap="innerHTML">
+        <p class="rp-hint">{% trans "Loading pictures…" %}</p>
+      </div>
+    </div>
+
+    {% if can.sstv.use %}
+    <dialog class="sv-dialog" data-sv="confirm" aria-labelledby="sv-confirm-title">
+      <h3 id="sv-confirm-title">{% trans "Send without a callsign?" %}</h3>
+      <p>{% trans "Neither your callsign nor the station callsign is on the picture. Every transmission has to identify the station." %}</p>
+      <div class="sv-actions">
+        <button type="button" class="btn btn-sm btn-ghost" @click="cancelSend()">{% trans "Back" %}</button>
+        <button type="button" class="btn btn-sm btn-primary" @click="confirmSend()">{% trans "Send without callsign" %}</button>
+      </div>
+    </dialog>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% endif %}

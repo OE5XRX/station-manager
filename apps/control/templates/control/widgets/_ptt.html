@@ -21,7 +21,7 @@ Mouse: @mousedown/@mouseup. Touch: @touchstart.prevent/@touchend.prevent. Keyboa
   {% trans "PTT" as ptt_armed_label %}
   <button type="button"
           class="cp-ptt-button"
-          :disabled="!canOperate('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
+          :disabled="!canKey('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}')"
           :class="{
             'is-armed': pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'armed',
             'is-keying': pttPhase('{{ m.slot|escapejs }}','{{ m.module_id|escapejs }}') === 'keying',

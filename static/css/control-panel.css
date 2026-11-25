@@ -1466,3 +1466,196 @@
   color: var(--cyan);
   font-size: 12px;
 }
+
+/* ---------- Collapsible sections (SSTV spec §5.6) --------------------------------
+   Repeater list, scanner and SSTV: the header row is the toggle, collapsed by
+   default (collapsible.js). A collapsed card keeps a status chip in its header so
+   a running scan, receive or transmission is never out of sight. */
+.cp-collapse-header { padding: 0 14px 0 0; }
+.cp-collapse-header:has(.cp-collapse-toggle[aria-expanded="false"]) { border-bottom-color: transparent; }
+.cp-collapse-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cp-collapse-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cp-collapse-toggle:hover .cp-chevron { border-color: var(--ink-0); }
+.cp-chevron {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid var(--ink-2);
+  border-bottom: 1.5px solid var(--ink-2);
+  transform: rotate(-45deg);
+  transition: transform 0.18s var(--ease);
+}
+.cp-collapse-toggle[aria-expanded="true"] .cp-chevron { transform: rotate(45deg) translate(-2px, -1px); }
+.rp-body[x-cloak],
+.sp-body[x-cloak],
+.sv-body[x-cloak] { display: none; }
+
+/* Header status chip (collapsed scanner/SSTV, live SSTV session). */
+.sv-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  padding: 2px 10px;
+  border: 1px solid transparent;
+  border-radius: 100px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sv-chip.is-rx, .sv-chip.is-ok { color: var(--signal); background: var(--signal-soft); border-color: color-mix(in srgb, var(--signal) 30%, transparent); }
+.sv-chip.is-tx { color: var(--accent); background: var(--accent-tint); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.sv-chip.is-error { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+
+/* ---------- SSTV section (SSTV spec §5.3/§5.4) -------------------------------------
+   The monitor is the one loud element: a black screen the picture is painted onto,
+   row by row, with a green scan head on the newest row. Sending mirrors it: the
+   preview is wiped from the top in the TX accent as the picture goes out. The
+   controls beside it keep the quiet scanner-card language. */
+.sv-body { position: relative; z-index: 1; padding: 12px 14px 14px; }
+.sv-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .sv-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.sv-monitor, .sv-preview { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0; }
+.sv-screen {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: #000;
+  box-shadow: 0 0 0 1px var(--line-bright);
+}
+.sv-monitor.is-live .sv-screen { box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal) 55%, transparent); }
+.sv-canvas, .sv-preview img { display: block; width: 100%; height: auto; }
+.sv-scanhead {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--signal);
+  box-shadow: 0 0 10px 1px var(--signal);
+  pointer-events: none;
+  transition: top 0.12s linear;
+}
+.sv-idle {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 16px 24px;
+  color: rgb(255 255 255 / 0.6);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  text-wrap: balance;
+}
+.sv-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 1.3em;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.sv-caption a { color: var(--ink-1); }
+.sv-sent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent), 0 0 12px var(--accent-glow);
+  pointer-events: none;
+  transition: height 1s linear;
+}
+.sv-warn { font-family: var(--font-body); color: var(--warn); }
+
+.sv-controls { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.sv-group { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.sv-group + .sv-group { padding-top: 14px; border-top: 1px solid var(--line); }
+.sv-group-title { margin: 0; font-family: var(--font-body); font-size: 13px; font-weight: 600; color: var(--ink-1); }
+.sv-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--line);
+  background: color-mix(in srgb, var(--ink-0) 4%, transparent);
+  font-size: 13px;
+}
+.sv-readout.is-live { border-left-color: var(--signal); }
+.sv-state { font-weight: 600; color: var(--ink-0); }
+.sv-freq, .sv-left { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.sv-left { margin-left: auto; color: var(--ink-2); }
+.sv-field { display: flex; flex-direction: column; gap: 3px; margin: 0; font-size: 12px; color: var(--ink-2); }
+.sv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sv-iss { font-family: var(--font-mono); letter-spacing: 0.04em; }
+.sv-iss[aria-pressed="true"] { color: var(--signal); border-color: color-mix(in srgb, var(--signal) 45%, transparent); }
+.sv-source {
+  display: inline-flex;
+  align-self: flex-start;
+  overflow: hidden;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-md);
+}
+.sv-seg { position: relative; margin: 0; }
+.sv-seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.sv-seg span { display: block; padding: 5px 12px; font-size: 12px; color: var(--ink-2); }
+.sv-seg + .sv-seg span { border-left: 1px solid var(--line-bright); }
+.sv-seg input:checked + span { background: var(--accent-tint); color: var(--accent); font-weight: 600; }
+.sv-seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sv-seg input:disabled { cursor: default; }
+.sv-seg input:disabled + span { opacity: 0.55; }
+.sv-calls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.sv-calls .sp-check.is-disabled { opacity: 0.55; cursor: not-allowed; }
+.sv-inline-hint { flex-basis: 100%; margin: 0; }
+.sv-progress { display: flex; flex-direction: column; gap: 6px; }
+.sv-progress-line { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.sv-txfreq { margin: 0; }
+.sv-controls .rp-notice { margin: 0; }
+.sv-controls .rp-hint { margin: 0; padding: 0; }
+.sv-controls .rp-hint.is-error { color: var(--danger); }
+.sv-gallery { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.sv-unavailable-text { margin: 0; font-size: 12.5px; color: var(--ink-2); text-align: right; }
+.sv-dialog {
+  max-width: 26rem;
+  padding: 18px 20px;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  color: var(--ink-0);
+  box-shadow: var(--shadow-md);
+}
+.sv-dialog::backdrop { background: rgb(0 0 0 / 0.55); }
+.sv-dialog h3 { margin: 0 0 8px; font-size: 16px; }
+.sv-dialog p { margin: 0 0 16px; font-size: 13px; line-height: 1.5; color: var(--ink-1); }
+.sv-dialog .sv-actions { justify-content: flex-end; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-chevron, .sv-scanhead, .sv-sent { transition: none; }
+}
