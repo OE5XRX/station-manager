@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 23:55+0100\n"
+"POT-Creation-Date: 2026-11-25 01:39+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -239,8 +239,8 @@ msgid "privacy policy acknowledged at"
 msgstr "Datenschutzerklärung zur Kenntnis genommen am"
 
 #: apps/accounts/models.py:221 apps/control/models.py:255 apps/sso/models.py:27
-#: apps/sso/models.py:278 apps/sstv/models.py:67 apps/sstv/models.py:119
-#: apps/sstv/models.py:164 apps/stations/models.py:457
+#: apps/sso/models.py:278 apps/sstv/models.py:67 apps/sstv/models.py:121
+#: apps/sstv/models.py:166 apps/stations/models.py:457
 #: apps/stations/models.py:662 apps/stations/models.py:715
 #: apps/tunnel/models.py:23
 msgid "user"
@@ -2046,7 +2046,7 @@ msgstr "Audio-Relay"
 #: apps/monitoring/models.py:243 apps/passive/models.py:107
 #: apps/passive/models.py:160 apps/passive/models.py:198
 #: apps/passive/models.py:250 apps/provisioning/models.py:22
-#: apps/sstv/models.py:55 apps/sstv/models.py:109 apps/sstv/models.py:155
+#: apps/sstv/models.py:55 apps/sstv/models.py:111 apps/sstv/models.py:157
 #: apps/stations/models.py:235 apps/stations/models.py:302
 #: apps/stations/models.py:338 apps/stations/models.py:425
 #: apps/stations/models.py:541 apps/stations/models.py:668
@@ -2266,7 +2266,7 @@ msgstr ""
 
 #: apps/control/models.py:20 apps/control/models.py:131
 #: apps/control/models.py:214 apps/module_firmware/models.py:136
-#: apps/passive/models.py:165 apps/sstv/models.py:111 apps/sstv/models.py:157
+#: apps/passive/models.py:165 apps/sstv/models.py:113 apps/sstv/models.py:159
 msgid "slot"
 msgstr "Slot"
 
@@ -2290,7 +2290,7 @@ msgstr "Version"
 #: apps/control/models.py:33 apps/control/models.py:215
 #: apps/module_firmware/models.py:109 apps/module_firmware/models.py:126
 #: apps/module_firmware/models.py:472 apps/passive/models.py:166
-#: apps/sstv/models.py:112 apps/stations/models.py:437
+#: apps/sstv/models.py:114 apps/stations/models.py:437
 msgid "module"
 msgstr "Modul"
 
@@ -2393,7 +2393,7 @@ msgstr "gespeicherte Capabilities"
 msgid "control"
 msgstr "Steuerung"
 
-#: apps/control/models.py:173 apps/sstv/models.py:124
+#: apps/control/models.py:173 apps/sstv/models.py:126
 msgid "audio"
 msgstr "Audio"
 
@@ -2454,7 +2454,7 @@ msgid "hang time (s)"
 msgstr "Haltezeit (s)"
 
 #: apps/control/models.py:267 apps/module_firmware/models.py:481
-#: apps/passive/models.py:167 apps/sstv/models.py:129 apps/sstv/models.py:167
+#: apps/passive/models.py:167 apps/sstv/models.py:131 apps/sstv/models.py:169
 msgid "state"
 msgstr "Zustand"
 
@@ -2749,7 +2749,7 @@ msgstr "hat die Bedienung"
 #: apps/deployments/templates/deployments/deployment_detail.html:92
 #: apps/deployments/templates/deployments/deployment_detail.html:106
 #: apps/module_firmware/update_status.py:109 apps/passive/models.py:154
-#: apps/sstv/models.py:102 apps/stations/models.py:135 apps/tunnel/models.py:13
+#: apps/sstv/models.py:104 apps/stations/models.py:135 apps/tunnel/models.py:13
 msgid "Error"
 msgstr "Fehler"
 
@@ -3869,7 +3869,7 @@ msgstr "S3-Objekt-Key"
 #: apps/module_firmware/models.py:187
 #: apps/module_firmware/templates/module_firmware/release_list.html:78
 #: apps/module_firmware/templates/module_firmware/release_list.html:101
-#: apps/sstv/models.py:125
+#: apps/sstv/models.py:127
 msgid "SHA-256"
 msgstr "SHA-256"
 
@@ -3924,7 +3924,7 @@ msgstr "Image-Releases"
 #: apps/module_firmware/templates/module_firmware/convergence.html:104
 #: apps/module_firmware/templates/module_firmware/module_detail.html:68
 #: apps/passive/models.py:150 apps/provisioning/models.py:11
-#: apps/sstv/models.py:148
+#: apps/sstv/models.py:150
 msgid "Running"
 msgstr "Läuft"
 
@@ -5424,6 +5424,7 @@ msgstr ""
 #: apps/module_firmware/templates/module_firmware/type_confirm_delete.html:27
 #: apps/module_firmware/templates/module_firmware/type_list.html:71
 #: apps/monitoring/templates/monitoring/_threshold_rule_fields.html:54
+#: apps/sstv/templates/sstv/_gallery.html:46
 #: apps/stations/templates/stations/group_confirm_delete.html:9
 #: apps/stations/templates/stations/group_list.html:64
 #: apps/stations/templates/stations/region_list.html:53
@@ -5631,6 +5632,7 @@ msgid "Update pending"
 msgstr "Update ausstehend"
 
 #: apps/module_firmware/update_status.py:124
+#: apps/sstv/templates/sstv/_gallery.html:40
 msgid "Download"
 msgstr "Herunterladen"
 
@@ -6616,7 +6618,7 @@ msgstr "passive Konfiguration der Station"
 msgid "station passive configs"
 msgstr "passive Konfigurationen der Stationen"
 
-#: apps/passive/models.py:149 apps/sstv/models.py:147
+#: apps/passive/models.py:149 apps/sstv/models.py:149
 msgid "Starting"
 msgstr "Startet"
 
@@ -8515,11 +8517,11 @@ msgstr "Gesendet"
 msgid "direction"
 msgstr "Richtung"
 
-#: apps/sstv/models.py:58 apps/sstv/models.py:121
+#: apps/sstv/models.py:58 apps/sstv/models.py:123
 msgid "mode"
 msgstr "Modus"
 
-#: apps/sstv/models.py:59 apps/sstv/models.py:122
+#: apps/sstv/models.py:59 apps/sstv/models.py:124
 msgid "frequency (Hz)"
 msgstr "Frequenz (Hz)"
 
@@ -8531,7 +8533,7 @@ msgstr "vollständig"
 msgid "picture"
 msgstr "Bild"
 
-#: apps/sstv/models.py:73 apps/sstv/models.py:131
+#: apps/sstv/models.py:73 apps/sstv/models.py:133
 msgid "created"
 msgstr "erstellt"
 
@@ -8543,75 +8545,106 @@ msgstr "Bild-ID"
 msgid "SSTV picture"
 msgstr "SSTV-Bild"
 
-#: apps/sstv/models.py:79
+#: apps/sstv/models.py:79 apps/sstv/templates/sstv/_gallery.html:10
 msgid "SSTV pictures"
 msgstr "SSTV-Bilder"
 
-#: apps/sstv/models.py:98
+#: apps/sstv/models.py:100
 msgid "Draft"
 msgstr "Entwurf"
 
-#: apps/sstv/models.py:99
+#: apps/sstv/models.py:101
 msgid "Sending"
 msgstr "Wird gesendet"
 
-#: apps/sstv/models.py:100
+#: apps/sstv/models.py:102
 msgid "Done"
 msgstr "Fertig"
 
-#: apps/sstv/models.py:101
+#: apps/sstv/models.py:103
 msgid "Aborted"
 msgstr "Abgebrochen"
 
-#: apps/sstv/models.py:123
+#: apps/sstv/models.py:125
 msgid "preview"
 msgstr "Vorschau"
 
-#: apps/sstv/models.py:126
+#: apps/sstv/models.py:128
 msgid "size (bytes)"
 msgstr "Größe (Bytes)"
 
-#: apps/sstv/models.py:127
+#: apps/sstv/models.py:129
 msgid "duration (s)"
 msgstr "Dauer (s)"
 
-#: apps/sstv/models.py:132
+#: apps/sstv/models.py:134
 msgid "updated"
 msgstr "aktualisiert"
 
-#: apps/sstv/models.py:135
+#: apps/sstv/models.py:137
 msgid "SSTV transmission"
 msgstr "SSTV-Aussendung"
 
-#: apps/sstv/models.py:136
+#: apps/sstv/models.py:138
 msgid "SSTV transmissions"
 msgstr "SSTV-Aussendungen"
 
-#: apps/sstv/models.py:169
+#: apps/sstv/models.py:171
 msgid "started"
 msgstr "gestartet"
 
-#: apps/sstv/models.py:172
+#: apps/sstv/models.py:174
 msgid "active SSTV receive session"
 msgstr "laufender SSTV-Empfang"
 
-#: apps/sstv/models.py:173
+#: apps/sstv/models.py:175
 msgid "active SSTV receive sessions"
 msgstr "laufende SSTV-Empfänge"
 
-#: apps/sstv/render.py:50
+#: apps/sstv/render.py:58
 msgid "The file is not a JPEG, PNG, WebP or GIF picture."
 msgstr "Die Datei ist kein JPEG-, PNG-, WebP- oder GIF-Bild."
 
-#: apps/sstv/render.py:63
+#: apps/sstv/render.py:71
 #, python-format
 msgid "The file is larger than %(mb)d MB."
 msgstr "Die Datei ist größer als %(mb)d MB."
 
-#: apps/sstv/render.py:67
+#: apps/sstv/render.py:95
 #, python-format
 msgid "The picture has too many pixels (at most %(mpx)d megapixels)."
 msgstr "Das Bild hat zu viele Pixel (höchstens %(mpx)d Megapixel)."
+
+#: apps/sstv/templates/sstv/_gallery.html:12
+msgid "No pictures yet. Received and sent pictures appear here."
+msgstr "Noch keine Bilder. Empfangene und gesendete Bilder erscheinen hier."
+
+#: apps/sstv/templates/sstv/_gallery.html:20
+#, python-format
+msgid "SSTV picture, %(mode)s"
+msgstr "SSTV-Bild, %(mode)s"
+
+#: apps/sstv/templates/sstv/_gallery.html:27
+msgid "Incomplete"
+msgstr "Unvollständig"
+
+#: apps/sstv/templates/sstv/_gallery.html:33
+#, python-format
+msgid "sent by %(who)s"
+msgstr "gesendet von %(who)s"
+
+#: apps/sstv/templates/sstv/_gallery.html:35
+#, python-format
+msgid "received by %(who)s"
+msgstr "empfangen von %(who)s"
+
+#: apps/sstv/templates/sstv/_gallery.html:44
+msgid "Delete this picture? This cannot be undone."
+msgstr "Dieses Bild löschen? Das kann nicht rückgängig gemacht werden."
+
+#: apps/sstv/templates/sstv/_gallery.html:57
+msgid "Load older pictures"
+msgstr "Ältere Bilder laden"
 
 #: apps/stations/admin.py:68
 msgid "Hardware"

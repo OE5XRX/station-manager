@@ -36,6 +36,8 @@ CATEGORIES = [
     "django_sessions_cleared",
     "oauth_tokens_cleared",
     "audit_messages_scrubbed",
+    "sstv_pictures",
+    "sstv_stale_drafts",
 ]
 
 
