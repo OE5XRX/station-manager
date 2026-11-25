@@ -28,6 +28,11 @@ _DEAD_STATES = {"failed", "inactive"}
 # own inventory debouncing) before its decoder is stopped with "module_gone".
 ABSENT_POLLS_BEFORE_STOP = 3
 
+# Upper bound for a plugin's ``finalize`` (e.g. SSTV encoding the partial picture) during a
+# stop: a slow or hung finalize must never keep the unit (and the RX node) busy. (The SSTV
+# plugin encodes in a shielded task, so its picture is still spooled after a timeout.)
+FINALIZE_TIMEOUT_S = 2.0
+
 
 @dataclass
 class _Instance:
@@ -38,6 +43,10 @@ class _Instance:
     health_task: asyncio.Task | None = None
     runtime_task: asyncio.Task | None = None
     stopping: bool = False
+    link: int = 0  # connection generation whose start request created this instance
+    # Stopped because its link dropped: its output goes to the spool only (never live on a
+    # newer connection, where on_connected re-sends it in order after the snapshot).
+    link_lost: bool = False
 
 
 class DecoderHost:
@@ -66,14 +75,60 @@ class DecoderHost:
         self._lock = asyncio.Lock()
         self._absent: dict[int, int] = {}
         self._reconcile_task: asyncio.Task | None = None
+        self._link_lost_tasks: set[asyncio.Task] = set()
+        self._link = 0  # bumped on every attach()
+        self._snapshot_link = 0  # the link whose snapshot (and spool resend) has gone out
+
+    @property
+    def decoders(self) -> frozenset[str]:
+        """Names of the registered decoder plugins (feature advertisement)."""
+        return frozenset(self._plugins)
 
     # -- connection binding -------------------------------------------------
 
     def attach(self, send: Callable[[dict], Awaitable[None]]) -> None:
+        self._link += 1
         self._send_fn = send
 
     def detach(self) -> None:
         self._send_fn = None
+
+    def on_link_lost(self) -> None:
+        """Control link dropped: stop the decoders that must not outlive it (non-blocking).
+
+        Only plugins with ``stop_on_link_loss`` (SSTV: the server frees the lock on agent
+        disconnect, and SSTV never runs on a station nobody holds). Their final output goes
+        to the spool and is re-sent by the next ``on_connected``. APRS keeps running.
+        """
+        task = asyncio.get_running_loop().create_task(self._stop_link_lost(self._link))
+        self._link_lost_tasks.add(task)
+        task.add_done_callback(self._link_lost_tasks.discard)
+
+    async def _stop_link_lost(self, link: int) -> None:
+        # Evaluated under the lock, so a start of the lost connection that was still in
+        # flight is caught too; instances started by a newer connection are left alone.
+        async with self._lock:
+            doomed = [
+                inst.slot
+                for inst in self._instances.values()
+                if inst.link <= link
+                and getattr(self._plugins.get(inst.decoder), "stop_on_link_loss", False)
+            ]
+            for slot in doomed:
+                inst = self._instances[slot]
+                inst.link_lost = True
+                try:
+                    err = await self._stop_locked(slot, "link_lost")
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - must not end silently
+                    logger.exception("stopping decoder on slot %s after link loss failed", slot)
+                    err = "failed"
+                if err:
+                    # Still tracked (state 'error'): it belongs to the current link now, so a
+                    # retried stop is reported normally.
+                    inst.link_lost = False
+                    inst.link = self._link
 
     async def _send(self, msg: dict) -> None:
         send = self._send_fn
@@ -88,6 +143,8 @@ class DecoderHost:
         return await asyncio.get_running_loop().run_in_executor(self._executor, fn, *args)
 
     async def _state(self, inst: _Instance, state: str, detail: str | None = None) -> None:
+        if inst.link_lost:
+            return  # the next connection's snapshot reports it
         await self._send(protocol.build_decoder_state(inst.decoder, inst.slot, state, detail))
 
     # -- lifecycle ------------------------------------------------------------
@@ -110,14 +167,17 @@ class DecoderHost:
         request_id: str,
         max_runtime_s: float | None = None,
     ) -> None:
+        link = self._link  # the connection that asked, before waiting for the lock
         async with self._lock:
-            await self._start_locked(decoder, slot, params, request_id, max_runtime_s)
+            await self._start_locked(decoder, slot, params, request_id, max_runtime_s, link)
 
     async def _reject(self, request_id, decoder, slot, code: str, msg: str) -> None:
         await self._send(protocol.build_result(request_id, False, error=(code, msg)))
         await self._send(protocol.build_decoder_state(decoder, slot, "error", code))
 
-    async def _start_locked(self, decoder, slot, params, request_id, max_runtime_s) -> None:
+    async def _start_locked(
+        self, decoder, slot, params, request_id, max_runtime_s, link: int = 0
+    ) -> None:
         plugin = self._plugins.get(decoder)
         if plugin is None:
             await self._reject(request_id, decoder, slot, "unknown_decoder", str(decoder))
@@ -139,7 +199,7 @@ class DecoderHost:
             if err:  # the old unit could not be stopped: it still holds the RX node
                 await self._reject(request_id, decoder, slot, "unit_failed", err)
                 return
-        inst = _Instance(decoder, slot)
+        inst = _Instance(decoder, slot, link=link)
         await self._state(inst, "starting")
         try:
             env = plugin.env(slot, params or {}, rx_node)
@@ -238,10 +298,13 @@ class DecoderHost:
             for t in (inst.reader_task, inst.health_task, inst.runtime_task)
             if t is not None and t is not current
         ]
-        for task in tasks:
-            task.cancel()
         err = None
         try:
+            # Before cancelling the reader: the plugin still has its state (e.g. the rows of
+            # a partial SSTV picture) and emits its final output.
+            await self._finalize(inst)
+            for task in tasks:
+                task.cancel()
             if tasks:
                 # wait() (unlike awaiting each task) never swallows a cancellation aimed at
                 # the task doing the stopping.
@@ -253,6 +316,8 @@ class DecoderHost:
         except asyncio.CancelledError:
             # Cancelled halfway: the unit may still run and our tasks are gone. Keep the
             # instance as 'error' (never a zombie 'running') so a retry stops it.
+            for task in tasks:
+                task.cancel()
             inst.state = "error"
             raise
         if err:
@@ -269,10 +334,27 @@ class DecoderHost:
                 await self._state(inst, "stopped", reason)
         return err
 
+    async def _finalize(self, inst: _Instance) -> None:
+        finalize = getattr(self._plugins.get(inst.decoder), "finalize", None)
+        if finalize is None:
+            return
+
+        async def emit(kind: str, reliable: bool, data: dict) -> None:
+            await self._emit(inst, kind, reliable, data)
+
+        try:
+            await asyncio.wait_for(finalize(inst.slot, emit), FINALIZE_TIMEOUT_S)
+        except TimeoutError:
+            logger.warning("decoder %s slot %s: finalize timed out", inst.decoder, inst.slot)
+        except Exception:  # noqa: BLE001 - a plugin bug must not prevent the stop
+            logger.exception("decoder %s slot %s: finalize failed", inst.decoder, inst.slot)
+
     async def shutdown(self) -> None:
         if self._reconcile_task is not None:
             self._reconcile_task.cancel()
             await asyncio.wait([self._reconcile_task])
+        if self._link_lost_tasks:
+            await asyncio.wait(list(self._link_lost_tasks))
         async with self._lock:
             for slot in list(self._instances):
                 await self._stop_locked(slot, "shutdown", announce=False)
@@ -283,19 +365,32 @@ class DecoderHost:
         self._spool.ack(epoch, seqs)
 
     async def on_connected(self) -> None:
+        # A link-loss stop of the previous connection must land (its final output in the
+        # spool, the decoder gone from the snapshot) before the server sees the snapshot.
+        if self._link_lost_tasks:
+            await asyncio.wait(list(self._link_lost_tasks))
         # Under the lock so an in-flight start/stop of the previous connection is complete
         # (and therefore reflected) before the server sees the snapshot.
         async with self._lock:
             snapshot = self.running()
         await self._send(protocol.build_decoder_snapshot(snapshot))
+        # From here on, late output of link-lost instances goes out live (after the snapshot);
+        # anything spooled before is in the resend below. (A frame in both is deduplicated
+        # by the server on (epoch, seq).)
+        self._snapshot_link = self._link
         for frame in self._spool.pending():
             await self._send(frame)
 
     async def _emit(self, inst: _Instance, kind: str, reliable: bool, data: dict) -> None:
         ts = self._now()
         if reliable:
-            await self._send(self._spool.add(inst.decoder, inst.slot, kind, data, ts))
-        elif self._send_fn is not None:
+            frame = self._spool.add(inst.decoder, inst.slot, kind, data, ts)
+            # A link-lost instance's output (e.g. a picture finished after a finalize
+            # timeout) must not overtake the next connection's snapshot, nor be stranded
+            # in the spool once that snapshot and the resend have gone out.
+            if not inst.link_lost or self._snapshot_link == self._link:
+                await self._send(frame)
+        elif self._send_fn is not None and not inst.link_lost:
             frame = protocol.build_decoder_output(
                 inst.decoder, inst.slot, self._spool.epoch, 0, kind, False, data, ts
             )

@@ -836,16 +836,27 @@ class StationAgent:
 
             from .decoders.aprs import AprsDecoder
             from .decoders.host import DecoderHost
+            from .decoders.spool import Spool
+            from .decoders.sstv import SstvDecoderPlugin
             from .decoders.units import DecoderUnits
 
             # Dedicated pool: a hung systemd must not tie up the default executor that
             # serves serial I/O (commands, PTT, telemetry polls).
             aprs = AprsDecoder()
             register_aprs_metric(self._metrics, aprs)
+            # Own single thread for the SSTV PNG encoding (~1 MB zlib for PD 120/180).
+            sstv = SstvDecoderPlugin(
+                executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix="sstv-png")
+            )
             return DecoderHost(
                 DecoderUnits(),
-                {AprsDecoder.name: aprs},
+                {AprsDecoder.name: aprs, SstvDecoderPlugin.name: sstv},
                 lambda slot: router_backend.resolve_node(slot, "rx"),
+                # One sstv_image can be ~0.9 MB (sstv.MAX_PNG_B64): the default 1 MB bound
+                # would leave no room for anything else. SSTV stops on link loss, so an
+                # outage leaves at most two pictures per slot unacked (one that just ended
+                # plus the partial one); evictions are logged by the spool.
+                spool=Spool(max_bytes=4_000_000),
                 loop_executor=ThreadPoolExecutor(
                     max_workers=2, thread_name_prefix="decoder-units"
                 ),

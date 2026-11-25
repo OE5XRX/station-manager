@@ -706,8 +706,17 @@ class Broker:
                     module_out["status"] = descriptor["status"]
                 modules_out.append(module_out)
             slots_out.append({"slot": slot, "modules": modules_out})
-        features = [decoders.FEATURE] if self._decoder_host is not None else None
-        await self._send(proto.build_inventory(slots_out, features=features))
+        await self._send(proto.build_inventory(slots_out, features=self._features()))
+
+    def _features(self) -> list[str] | None:
+        host = self._decoder_host
+        if host is None:
+            return None
+        features = [decoders.FEATURE]
+        # The server shows the SSTV section (RX and TX) only for agents advertising "sstv".
+        if self._sstv_tx is not None and decoders.SSTV_FEATURE in getattr(host, "decoders", ()):
+            features.append(decoders.SSTV_FEATURE)
+        return features
 
     async def _execute(self, slot, module, op, capability, token, *, failsafe=False) -> dict:
         """Run one command on the slot's control device.
