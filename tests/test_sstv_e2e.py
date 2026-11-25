@@ -344,7 +344,9 @@ async def _close(agent, browser):
 
 async def _rx_running(agent, browser):
     await browser.send({"type": "sstv_rx_start", "request_id": "rx1", "slot": 1})
-    await until(lambda: bool(browser.frames("sstv_state", state="running")), "rx running")
+    await until(
+        lambda: bool(browser.frames("sstv_state", state="running")), "rx running", agent.check_pump
+    )
     (start,) = agent.frames("decoder_start", decoder="sstv")
     assert (start["slot"], start["max_runtime_s"]) == (1, 1800)
     assert agent.units_calls[-1] == ("start", "sstv", 1)
@@ -417,7 +419,9 @@ def test_lock_release_mid_rx_saves_the_partial_picture(setup, pd120, tmp_path):
             )
             await until(lambda: not agent.host._spool.pending(), "image acked", agent.check_pump)
             await until(
-                lambda: not ActiveSstvRx.objects.filter(station=station).exists(), "rx ended"
+                lambda: not ActiveSstvRx.objects.filter(station=station).exists(),
+                "rx ended",
+                agent.check_pump,
             )
             return agent.frames("decoder_stop", decoder="sstv"), list(agent.units_calls)
         finally:
@@ -469,7 +473,9 @@ def test_tx_preview_send_download_play_done(setup, tmp_path):
                 "tx done",
                 agent.check_pump,
             )
-            await until(lambda: bool(browser.frames("sstv_image")), "tx in gallery")
+            await until(
+                lambda: bool(browser.frames("sstv_image")), "tx in gallery", agent.check_pump
+            )
             return agent, body, preview_png, list(browser.seen)
         finally:
             await _close(agent, browser)
