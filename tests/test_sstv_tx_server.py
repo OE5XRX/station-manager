@@ -27,6 +27,7 @@ from tests.test_sstv_rx_server import (
     _agent,
     _browser,
     _code,
+    _desc,
     advertise,
     connect,
     drain,
@@ -1034,3 +1035,50 @@ def test_rechecked_frequency_is_stored(ready):
     assert tx.start_sending(station, claimed, b"\0\0" * 100) is None
     claimed.refresh_from_db()
     assert claimed.frequency_hz == 145_600_000
+
+
+# -- review round 5 ------------------------------------------------------------------
+
+
+def test_forbidden_frequency_on_another_slot_keeps_the_tx(control_agent_auth):
+    station, user = setup_station("tx-otherslot")
+    StationModule.objects.create(
+        station=station, slot="2", module_id="fm1", type="fm_transceiver", online=True,
+        capability_descriptor=_desc(), last_state={"tx_frequency": 145.5},
+    )  # fmt: skip
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await sent_start(agent, browser, draft)
+        await agent.send_json_to(
+            {"type": "state", "slot": 2, "module": "fm1", "values": {"tx_frequency": 145.8}}
+        )
+        assert not any(m.get("type") == "sstv_tx_stop" for m in await drain(agent))
+        row = await database_sync_to_async(SstvTransmission.objects.get)(pk=draft.pk)
+        assert row.state == TxState.SENDING  # before the agent disconnect aborts it
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
+
+
+def test_allowed_late_retune_updates_the_recorded_frequency(ready):
+    station, user = ready
+    _, claimed = tx.claim(station, user, str(_draft(station, user).pk), confirm_no_callsign=False)
+    assert tx.start_sending(station, claimed, b"\0\0" * 100) is None
+    _set_tx(station, 145.525)
+    tx.on_module_state(station, 1)
+    claimed.refresh_from_db()
+    assert (claimed.state, claimed.frequency_hz) == (TxState.SENDING, 145_525_000)
+
+
+def test_voice_ptt_keyed_during_synthesis_ends_the_tx(ready):
+    from apps.audio import gate as audio_gate
+
+    station, user = ready
+    _, claimed = tx.claim(station, user, str(_draft(station, user).pk), confirm_no_callsign=False)
+    audio_gate.set_ptt(station, "2", "fm1")
+    assert tx.start_sending(station, claimed, b"\0\0" * 100) == "ptt_active"
+    claimed.refresh_from_db()
+    assert claimed.state == TxState.ERROR

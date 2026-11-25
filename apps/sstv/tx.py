@@ -277,6 +277,11 @@ def start_sending(station, tx, audio):
             station=station, slot=str(row.slot), module_id=row.module, online=True
         ).first()
         code, hz = frequency_guard(module)
+        if code is None:
+            from apps.audio import gate as audio_gate
+
+            # Voice PTT that was in flight at claim time (another tab, another slot).
+            code = "ptt_active" if audio_gate.ptt_keyed(station) else None
         if code is not None:
             fail(station, row.pk, code)
             return code
@@ -459,10 +464,15 @@ def on_module_state(station, slot):
         module = StationModule.objects.filter(
             station=station, slot=key, module_id=row.module, online=True
         ).first()
-        code, _hz = frequency_guard(module)
+        code, hz = frequency_guard(module)
         if code in ("iss_downlink", "out_of_range"):
             abort_tx(station, code)
             return
+        if code is None and hz != row.frequency_hz:
+            # An allowed late retune: the gallery records what actually went out.
+            SstvTransmission.objects.filter(
+                pk=row.pk, state=SstvTransmission.State.SENDING
+            ).update(frequency_hz=hz)
 
 
 def slot_on_air(station, slot):

@@ -274,7 +274,10 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 )
                 # A transmission on a slot that now reports a forbidden TX frequency
                 # (a write queued on the agent before it took the slot) is aborted.
-                await self._sstv_call(sstv_tx.on_module_state, msg.get("slot"))
+                # Only frames carrying the TX frequency (not the telemetry polls).
+                values = msg.get("values")
+                if isinstance(values, dict) and "tx_frequency" in values:
+                    await self._sstv_call(sstv_tx.on_module_state, msg.get("slot"))
             await self._broadcast("control.state", {"msg": msg})
         elif mtype == "result":
             rid = msg.get("request_id")

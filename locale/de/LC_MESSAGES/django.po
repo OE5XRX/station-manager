@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 03:56+0100\n"
+"POT-Creation-Date: 2026-11-25 04:18+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2299,19 +2299,19 @@ msgstr "Es läuft kein SSTV-Betrieb"
 msgid "SSTV could not be started"
 msgstr "SSTV konnte nicht gestartet werden"
 
-#: apps/control/consumers.py:1302
+#: apps/control/consumers.py:1305
 msgid "Repeater cannot be applied here"
 msgstr "Repeater kann hier nicht angewendet werden"
 
-#: apps/control/consumers.py:1328
+#: apps/control/consumers.py:1331
 msgid "Repeater could not be authorized"
 msgstr "Repeater konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1572
+#: apps/control/consumers.py:1575
 msgid "Command could not be authorized"
 msgstr "Befehl konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1763
+#: apps/control/consumers.py:1766
 #, python-format
 msgid ""
 "Permission denied — taking over control requires %(manage)s or a Station-"
