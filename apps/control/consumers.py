@@ -41,6 +41,10 @@ from .models import AgentConnection, StationModule
 _PASSIVE_REQUEST_PREFIX = "passive-"
 # Request ids reserved for system commands (results never reach a browser).
 _RESERVED_REQUEST_PREFIXES = (_PASSIVE_REQUEST_PREFIX, sstv_control.REQUEST_PREFIX)
+# SSTV handlers that read/write media files (up to ~5 MB, S3 in prod) run in the thread
+# pool, not on the one shared thread-sensitive sync thread every consumer's DB calls queue
+# on. Each call is awaited, so a consumer's own frames stay in order.
+_BLOB_IO = {"thread_sensitive": False}
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +302,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 sstv_control.on_snapshot, decoders if isinstance(decoders, list) else []
             )
         elif mtype == "sstv_tx_state":
-            await self._sstv_call(sstv_tx.on_tx_state, msg)
+            await self._sstv_call(sstv_tx.on_tx_state, msg, blob_io=True)
         elif mtype == "scan_state":
             station = await self._cached_station()
             if station is not None:
@@ -361,7 +365,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                     await self._broadcast("control.sstv", {"msg": frame})
             return
         try:
-            ack = await database_sync_to_async(sstv_ingest.ingest_output)(
+            # Stores the picture (S3 in prod): off the shared sync thread (_BLOB_IO).
+            ack = await database_sync_to_async(sstv_ingest.ingest_output, **_BLOB_IO)(
                 self.station_id, msg, recv_now=timezone.now()
             )
         except Exception:
@@ -376,13 +381,14 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
             }
             await self.send(text_data=json.dumps(ack_frame))
 
-    async def _sstv_call(self, fn, *args):
+    async def _sstv_call(self, fn, *args, blob_io=False):
         """Run a sync ``apps.sstv`` handler for this station; a failure never breaks the
-        control socket."""
+        control socket. ``blob_io``: the handler reads/writes media files (_BLOB_IO)."""
         try:
             station = await self._cached_station()
             if station is not None:
-                await database_sync_to_async(fn)(station, *args)
+                kwargs = _BLOB_IO if blob_io else {}
+                await database_sync_to_async(fn, **kwargs)(station, *args)
         except Exception:
             logger.exception("control: sstv %s failed", getattr(fn, "__name__", fn))
 
@@ -1474,7 +1480,7 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             return
         try:
             audio = await asyncio.to_thread(sstv_tx.synthesise, transmission)
-            code = await database_sync_to_async(sstv_tx.start_sending)(
+            code = await database_sync_to_async(sstv_tx.start_sending, **_BLOB_IO)(
                 station, transmission, audio
             )
         except Exception:

@@ -435,7 +435,7 @@ def test_lock_release_mid_rx_saves_the_partial_picture(setup, pd120, tmp_path):
     stops, calls = asyncio.run(scenario())
     assert len(stops) == 1 and ("stop", "sstv", 1) in calls
     image = SstvImage.objects.get(station=station)
-    assert (image.direction, image.complete) == ("rx", False)
+    assert (image.direction, image.complete, image.user_id) == ("rx", False, user.pk)
     got = _pixels(image.image)
     assert got.shape == pic.shape
     diff = np.abs(got[:received].astype(int) - pic[:received].astype(int))
