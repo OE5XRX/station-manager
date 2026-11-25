@@ -21,6 +21,7 @@ No pytest-asyncio: WS scenarios run via asyncio.run() in transactional tests.
 
 import asyncio
 import json
+import uuid
 
 import pytest
 from channels.layers import get_channel_layer
@@ -46,7 +47,8 @@ def _key_id(key):
     return f"{key[0]}.{key[1]}"
 
 
-# (area, verb) -> (method, url_name, objs-key for the single URL arg or None, POST data)
+# (area, verb) -> (method, url_name, objs-key for the URL arg(s) or None, POST data);
+# a tuple value in ``objs`` supplies several URL args.
 UI = {
     ("dashboard", "view"): ("GET", "dashboard:index", None, None),
     ("profile", "view"): ("GET", "accounts:profile", None, None),
@@ -82,16 +84,16 @@ UI = {
     ("passive_services", "view"): ("GET", "passive:aprs", None, None),
     # POST-only; manage is enforced before the body is read (an empty form just re-renders).
     ("passive_services", "manage"): ("POST", "passive:aprs_settings", None, {}),
+    ("sstv", "view"): ("GET", "sstv:gallery", "station", None),
+    # Unknown picture: allowed levels get 404, the use floor answers 403 before the lookup.
+    ("sstv", "use"): ("POST", "sstv:delete", "sstv_missing", {}),
+    # Someone else's received picture: only manage may delete it.
+    ("sstv", "manage"): ("POST", "sstv:delete", "sstv_rx", {}),
 }
 # control.use / control.manage live on the WS channel (WS table below).
 UI_NOT_APPLICABLE = {
     ("control", "use"),
     ("control", "manage"),
-    # SSTV endpoints (gallery, preview, RX/TX frames) arrive with SSTV Tasks 9–11,
-    # which replace these entries with representatives; levels: tests/test_sstv_models.py.
-    ("sstv", "view"),
-    ("sstv", "use"),
-    ("sstv", "manage"),
 }
 
 # (area, verb) -> (method, url with {objs-key} placeholders, JSON body or None)
@@ -203,6 +205,17 @@ def _user(level):
     )
 
 
+def _sstv_rx_picture(station, user):
+    from django.core.files.base import ContentFile
+
+    from apps.sstv.models import SstvImage
+
+    img = SstvImage(station=station, direction="rx", mode="martin1", user=user)
+    img.image.save("p.png", ContentFile(b"png"), save=False)
+    img.save()
+    return img
+
+
 @pytest.fixture
 def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch):
     from apps.provisioning.models import ProvisioningJob
@@ -219,6 +232,8 @@ def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch)
         "alert": alert.pk,
         "provisioning_job": job.pk,
         "other_user": other.pk,
+        "sstv_missing": (station.pk, uuid.uuid4()),
+        "sstv_rx": (station.pk, _sstv_rx_picture(station, other).pk),
     }
 
 
@@ -231,7 +246,8 @@ def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch)
 @pytest.mark.parametrize("key", sorted(UI), ids=_key_id)
 def test_ui_matrix(client, objs, level, key):
     method, name, kw, data = UI[key]
-    url = reverse(name, args=[objs[kw]] if kw else [])
+    arg = objs[kw] if kw else ()
+    url = reverse(name, args=arg if isinstance(arg, tuple) else [arg])
     user = _user(level)
     if user:
         client.force_login(user)

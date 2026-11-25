@@ -84,6 +84,7 @@ urlpatterns += i18n_patterns(
     path("sso-admin/", include("apps.sso.urls")),
     path("stations/", include("apps.stations.urls")),
     path("stations/", include("apps.control.urls")),
+    path("stations/", include("apps.sstv.urls")),
     path("deployments/", include("apps.deployments.urls")),
     path("tunnel/", include("apps.tunnel.urls")),
     path("audit/", include("apps.audit.urls")),

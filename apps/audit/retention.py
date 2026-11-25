@@ -11,6 +11,9 @@ Driven by ``manage.py enforce_retention`` (own compose service ``retention``).
   ``RetentionResult.errors`` and the remaining steps still run.
 - ``held_user_ids()`` is the legal-hold hook (Löschsperre): rows of held users are
   skipped by **both** deadlines (365 d delete and 90 d IP clearing).
+- SSTV: gallery pictures after ``SstvSettings.retention_days``, transmission
+  artefacts (preview, TX audio) after 1 h; the stored files go with their rows
+  (``apps.sstv.signals``).
 """
 
 import logging
@@ -360,6 +363,29 @@ def _audit_messages_scrubbed(cfg, held):
     )
 
 
+# A transmission row (preview = user photo, TX audio) outlives its use by at most
+# this long. A TX is hard-stopped after duration + 5 s (≤ ~275 s), so anything
+# older — even a row still marked "sending" — is a leftover.
+SSTV_TRANSMISSION_MAX_AGE = timedelta(hours=1)
+
+
+def _sstv_pictures(cfg, held):
+    """Gallery pictures past ``SstvSettings.retention_days`` (stored files via signal)."""
+    from apps.sstv.models import SstvImage, SstvSettings
+
+    days = max(1, int(SstvSettings.load().retention_days))
+    qs = SstvImage.objects.filter(created_at__lt=cfg.now - timedelta(days=days))
+    return _apply(_exclude_held(qs, held, "user"), cfg)
+
+
+def _sstv_stale_drafts(cfg, held):
+    """Previews/TX audio older than 1 h in any state (temporary artefacts, no hold)."""
+    from apps.sstv.models import SstvTransmission
+
+    qs = SstvTransmission.objects.filter(created_at__lt=cfg.now - SSTV_TRANSMISSION_MAX_AGE)
+    return _apply(qs, cfg)
+
+
 def run_retention(cfg: RetentionConfig) -> RetentionResult:
     # Resolved at call time (module globals), so tests can monkeypatch single steps.
     steps = (
@@ -379,6 +405,8 @@ def run_retention(cfg: RetentionConfig) -> RetentionResult:
         ("django_sessions_cleared", _django_sessions_cleared),
         ("oauth_tokens_cleared", _oauth_tokens_cleared),
         ("audit_messages_scrubbed", _audit_messages_scrubbed),
+        ("sstv_pictures", _sstv_pictures),
+        ("sstv_stale_drafts", _sstv_stale_drafts),
     )
     result = RetentionResult(enforce=cfg.enforce)
     held = held_user_ids()
