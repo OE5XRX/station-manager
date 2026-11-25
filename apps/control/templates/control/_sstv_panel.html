@@ -98,7 +98,7 @@ is the sstv:gallery partial, reloaded on the body event "sstv-gallery-refresh".
                       :disabled="!canStopRx" @click="stopRx()">{% trans "Stop receiving" %}</button>
               <button type="button" class="btn btn-sm btn-ghost sv-iss" :disabled="!canIss" @click="tuneIss()"
                       :aria-pressed="onIss ? 'true' : 'false'"
-                      title="{% trans 'Set the receive frequency to 145.800 MHz, the SSTV downlink of the ISS' %}">{% trans "ISS" %}</button>
+                      title="{% trans 'Tune the receiver to 145.800 MHz, the SSTV downlink of the ISS' %}">{% trans "ISS" %}</button>
             </div>
             <p class="rp-hint" x-show="!rxModules.length">{% trans "No online module of this station can receive." %}</p>
             {% endif %}
@@ -172,7 +172,7 @@ is the sstv:gallery partial, reloaded on the body event "sstv-gallery-refresh".
             </div>
             <p class="rp-hint" x-show="sendHint()" x-text="sendHint()"></p>
             <p class="rp-hint sv-txfreq" x-show="txModule">
-              {% trans "Sends on the module's TX frequency:" %} <span class="sv-freq"><span x-text="txMHz()"></span> MHz</span>
+              {% trans "Sends on:" %} <span class="sv-freq"><span x-text="txMHz()"></span> MHz</span>
             </p>
             {% else %}
             <p class="rp-hint" x-show="!txLive">{% trans "You can watch and download pictures here. Receiving and sending needs a higher membership level." %}</p>

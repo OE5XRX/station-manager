@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 05:26+0100\n"
+"POT-Creation-Date: 2026-11-25 06:13+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -3076,8 +3076,8 @@ msgid "Stop receiving"
 msgstr "Empfang stoppen"
 
 #: apps/control/templates/control/_sstv_panel.html:102
-msgid "Set the receive frequency to 145.800 MHz, the SSTV downlink of the ISS"
-msgstr "Empfangsfrequenz auf 145,800 MHz setzen, den SSTV-Downlink der ISS"
+msgid "Tune the receiver to 145.800 MHz, the SSTV downlink of the ISS"
+msgstr "Empfänger auf 145,800 MHz stellen, den SSTV-Downlink der ISS"
 
 #: apps/control/templates/control/_sstv_panel.html:102
 msgid "ISS"
@@ -3160,8 +3160,8 @@ msgid "Abort"
 msgstr "Abbrechen"
 
 #: apps/control/templates/control/_sstv_panel.html:177
-msgid "Sends on the module's TX frequency:"
-msgstr "Gesendet wird auf der TX-Frequenz des Moduls:"
+msgid "Sends on:"
+msgstr "Gesendet wird auf:"
 
 #: apps/control/templates/control/_sstv_panel.html:180
 msgid ""

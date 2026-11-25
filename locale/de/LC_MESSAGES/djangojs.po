@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 05:26+0100\n"
+"POT-Creation-Date: 2026-11-25 06:13+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -694,55 +694,55 @@ msgstr "Bild wird auf die Station geladen"
 msgid "On the air"
 msgstr "Auf Sendung"
 
-#: static/js/sstv-panel.js:267
+#: static/js/sstv-panel.js:294
 msgid "Slot %(slot)s (%(module)s)"
 msgstr "Slot %(slot)s (%(module)s)"
 
-#: static/js/sstv-panel.js:306
+#: static/js/sstv-panel.js:333
 msgid "Take control of the station to send a picture."
 msgstr "Übernimm die Steuerung der Station, um ein Bild zu senden."
 
-#: static/js/sstv-panel.js:308
+#: static/js/sstv-panel.js:335
 msgid "Create a preview first. It shows exactly what will be sent."
 msgstr "Erstelle zuerst eine Vorschau. Sie zeigt genau, was gesendet wird."
 
-#: static/js/sstv-panel.js:314
+#: static/js/sstv-panel.js:341
 msgid "Not receiving"
 msgstr "Kein Empfang aktiv"
 
-#: static/js/sstv-panel.js:315
+#: static/js/sstv-panel.js:342
 msgid "Starting receiver"
 msgstr "Empfänger startet"
 
-#: static/js/sstv-panel.js:316
+#: static/js/sstv-panel.js:343
 msgid "Paused while sending"
 msgstr "Pausiert während des Sendens"
 
-#: static/js/sstv-panel.js:317
+#: static/js/sstv-panel.js:344
 msgid "Receiving a picture"
 msgstr "Bild wird empfangen"
 
-#: static/js/sstv-panel.js:317
+#: static/js/sstv-panel.js:344
 msgid "Listening for a picture"
 msgstr "Warte auf ein Bild"
 
-#: static/js/sstv-panel.js:326
+#: static/js/sstv-panel.js:353
 msgid "%(mode)s, row %(row)s of %(rows)s"
 msgstr "%(mode)s, Zeile %(row)s von %(rows)s"
 
-#: static/js/sstv-panel.js:341
+#: static/js/sstv-panel.js:368
 msgid "On the air, %(pct)s"
 msgstr "Auf Sendung, %(pct)s"
 
-#: static/js/sstv-panel.js:569
+#: static/js/sstv-panel.js:483 static/js/sstv-panel.js:845
+msgid "The ISS frequency could not be set."
+msgstr "Die ISS-Frequenz konnte nicht gesetzt werden."
+
+#: static/js/sstv-panel.js:617
 msgid "The preview could not be created. Check the connection and try again."
 msgstr ""
 "Die Vorschau konnte nicht erstellt werden. Prüfe die Verbindung und versuch "
 "es noch einmal."
-
-#: static/js/sstv-panel.js:734
-msgid "The ISS frequency could not be set."
-msgstr "Die ISS-Frequenz konnte nicht gesetzt werden."
 
 #: static/webpush/push.js:37
 msgid "Could not remove device."
