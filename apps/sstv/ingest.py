@@ -153,6 +153,7 @@ def _store_image(station_id, msg, data, *, recv_now):
         if ts is not None and agent_heard is not None
         else recv_now
     )
+    stored = None  # the uploaded PNG, removed again if the row is not committed
     try:
         with transaction.atomic():
             station = Station.objects.get(pk=station_id)
@@ -172,15 +173,27 @@ def _store_image(station_id, msg, data, *, recv_now):
                 picture_id=pid,
             )
             image.image.save(f"{uuid.uuid4().hex}.png", ContentFile(png), save=False)
+            stored = image.image
             image.save()
             # The gallery shows when the picture was heard, not when it arrived.
             SstvImage.objects.filter(pk=image.pk).update(created_at=heard_at)
             image.created_at = heard_at
             control.broadcast(station.pk, image_frame(image))
-    except IntegrityError:
-        if SstvImage.objects.filter(station_id=station_id, picture_id=pid).exists():
+    except Exception as exc:
+        if stored is not None:
+            _delete_quietly(stored.storage, stored.name)
+        if isinstance(exc, IntegrityError) and (
+            SstvImage.objects.filter(station_id=station_id, picture_id=pid).exists()
+        ):
             return  # concurrent duplicate
         raise
+
+
+def _delete_quietly(storage, name):
+    try:
+        storage.delete(name)
+    except Exception:
+        logger.exception("sstv: deleting the orphaned picture %s failed", name)
 
 
 def ingest_output(station_id: int, msg: dict, *, recv_now: datetime) -> bool:

@@ -1157,3 +1157,34 @@ def test_running_decoder_of_a_given_up_session_is_stopped(control_agent_auth):
         await agent.disconnect()
 
     asyncio.run(go())
+
+
+def test_concurrent_duplicate_picture_leaves_no_orphaned_file(monkeypatch):
+    # Two connections of one station (old + new after a reconnect) both pass the duplicate
+    # pre-check; the loser's INSERT fails and its already uploaded PNG must go again.
+    from django.core.files.storage import default_storage
+    from django.db.models import QuerySet
+
+    station, _ = setup_station("rx-dupe")
+    pid = "d" * 32
+    SstvImage.objects.create(
+        station=station, direction="rx", mode="robot36", picture_id=pid, image="sstv/w.png"
+    )
+    real_exists, calls = QuerySet.exists, []
+
+    def racing_exists(qs):
+        calls.append(1)
+        return False if len(calls) == 1 else real_exists(qs)  # the pre-check misses
+
+    original_save, uploaded = SstvImage.save, []
+
+    def recording_save(self, *args, **kwargs):
+        uploaded.append(self.image.name)
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(QuerySet, "exists", racing_exists)
+    monkeypatch.setattr(SstvImage, "save", recording_save)
+    frame = image_frame(pid=pid)
+    assert ingest.ingest_output(station.pk, frame, recv_now=timezone.now()) is True
+    assert SstvImage.objects.filter(station=station).count() == 1
+    assert uploaded and not default_storage.exists(uploaded[0])
