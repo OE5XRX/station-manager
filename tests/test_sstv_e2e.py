@@ -240,8 +240,9 @@ class Agent:
         ]
 
     async def close(self):
-        # Every step runs even if an earlier one raises (the first error propagates):
-        # a leaked pty thread or unit socket would outlive the test.
+        # Every step runs even if an earlier one raises (the last error propagates, earlier
+        # ones are chained as __context__): a leaked pty thread or unit socket would outlive
+        # the test.
         async with contextlib.AsyncExitStack() as stack:
             if self._fw_started:
                 stack.callback(self.fw.stop)
