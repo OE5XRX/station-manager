@@ -1,0 +1,63 @@
+{% load i18n %}
+{% comment %}
+SSTV gallery partial (sstv:gallery). The first page renders the #sstv-gallery wrapper;
+later pages (?ts=&id= keyset cursor, fetched by the "load more" button) return only their tiles
+plus the next button, which replaces itself (hx-swap="outerHTML"). Pictures load
+through sstv:image (permission-checked), never via a storage URL. Delete forms are
+rendered only where the viewer may delete (views_gallery.can_delete).
+{% endcomment %}
+{% if first_page %}
+<section id="sstv-gallery" class="sg" aria-label="{% trans 'SSTV pictures' %}">
+  {% if not images %}
+    <p class="sg-empty">{% trans "No pictures yet. Received and sent pictures appear here." %}</p>
+  {% endif %}
+  <div class="sg-grid">
+{% endif %}
+{% for img in images %}
+    <article class="sg-tile{% if not img.complete %} is-partial{% endif %}" id="sstv-{{ img.pk }}" data-direction="{{ img.direction }}">
+      <a class="sg-frame" href="{% url 'sstv:image' station.pk img.pk %}" target="_blank" rel="noopener">
+        <img src="{% url 'sstv:image' station.pk img.pk %}" loading="lazy" decoding="async"
+             alt="{% blocktrans with mode=img.get_mode_display %}SSTV picture, {{ mode }}{% endblocktrans %}">
+      </a>
+      <div class="sg-caption">
+        <p class="sg-line">
+          <span class="sg-dir sg-dir-{{ img.direction }}" title="{{ img.get_direction_display }}">{% if img.direction == "tx" %}TX{% else %}RX{% endif %}</span>
+          <span class="sg-mode">{{ img.get_mode_display }}</span>
+          {% if img.frequency_mhz %}<span class="sg-freq">{{ img.frequency_mhz|floatformat:3 }} MHz</span>{% endif %}
+          {% if not img.complete %}<span class="pill pill-warn sg-partial">{% trans "Incomplete" %}</span>{% endif %}
+        </p>
+        <p class="sg-line sg-meta">
+          <time datetime="{{ img.created_at|date:'c' }}">{{ img.created_at|date:"SHORT_DATETIME_FORMAT" }}</time>
+          <span class="sg-who">
+            {% if img.direction == "tx" %}
+              {% if img.callsign %}{% blocktrans with who=img.callsign %}sent by {{ who }}{% endblocktrans %}{% endif %}
+            {% elif img.user %}
+              {% blocktrans with who=img.user.username %}received by {{ who }}{% endblocktrans %}
+            {% endif %}
+          </span>
+        </p>
+        <div class="sg-actions">
+          <a class="btn btn-ghost btn-sm" href="{% url 'sstv:download' station.pk img.pk %}" download>{% trans "Download" %}</a>
+          {% if img.deletable %}
+            <form hx-post="{% url 'sstv:delete' station.pk img.pk %}"
+                  hx-target="#sstv-{{ img.pk }}" hx-swap="outerHTML"
+                  hx-confirm="{% trans 'Delete this picture? This cannot be undone.' %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-danger btn-sm">{% trans "Delete" %}</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+{% endfor %}
+{% if next_query %}
+    <div class="sg-more">
+      <button type="button" class="btn btn-ghost btn-sm"
+              hx-get="{% url 'sstv:gallery' station.pk %}?{{ next_query }}"
+              hx-target="closest .sg-more" hx-swap="outerHTML">{% trans "Load older pictures" %}</button>
+    </div>
+{% endif %}
+{% if first_page %}
+  </div>
+</section>
+{% endif %}

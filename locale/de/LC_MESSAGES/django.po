@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 02:39+0100\n"
+"POT-Creation-Date: 2026-11-25 03:03+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -5484,6 +5484,7 @@ msgstr ""
 #: apps/module_firmware/templates/module_firmware/type_confirm_delete.html:27
 #: apps/module_firmware/templates/module_firmware/type_list.html:71
 #: apps/monitoring/templates/monitoring/_threshold_rule_fields.html:54
+#: apps/sstv/templates/sstv/_gallery.html:46
 #: apps/stations/templates/stations/group_confirm_delete.html:9
 #: apps/stations/templates/stations/group_list.html:64
 #: apps/stations/templates/stations/region_list.html:53
@@ -5691,6 +5692,7 @@ msgid "Update pending"
 msgstr "Update ausstehend"
 
 #: apps/module_firmware/update_status.py:124
+#: apps/sstv/templates/sstv/_gallery.html:40
 msgid "Download"
 msgstr "Herunterladen"
 
@@ -8603,7 +8605,7 @@ msgstr "Bild-ID"
 msgid "SSTV picture"
 msgstr "SSTV-Bild"
 
-#: apps/sstv/models.py:79
+#: apps/sstv/models.py:79 apps/sstv/templates/sstv/_gallery.html:10
 msgid "SSTV pictures"
 msgstr "SSTV-Bilder"
 
@@ -8680,6 +8682,37 @@ msgstr "Die Datei ist größer als %(mb)d MB."
 #, python-format
 msgid "The picture has too many pixels (at most %(mpx)d megapixels)."
 msgstr "Das Bild hat zu viele Pixel (höchstens %(mpx)d Megapixel)."
+
+#: apps/sstv/templates/sstv/_gallery.html:12
+msgid "No pictures yet. Received and sent pictures appear here."
+msgstr "Noch keine Bilder. Empfangene und gesendete Bilder erscheinen hier."
+
+#: apps/sstv/templates/sstv/_gallery.html:20
+#, python-format
+msgid "SSTV picture, %(mode)s"
+msgstr "SSTV-Bild, %(mode)s"
+
+#: apps/sstv/templates/sstv/_gallery.html:27
+msgid "Incomplete"
+msgstr "Unvollständig"
+
+#: apps/sstv/templates/sstv/_gallery.html:33
+#, python-format
+msgid "sent by %(who)s"
+msgstr "gesendet von %(who)s"
+
+#: apps/sstv/templates/sstv/_gallery.html:35
+#, python-format
+msgid "received by %(who)s"
+msgstr "empfangen von %(who)s"
+
+#: apps/sstv/templates/sstv/_gallery.html:44
+msgid "Delete this picture? This cannot be undone."
+msgstr "Dieses Bild löschen? Das kann nicht rückgängig gemacht werden."
+
+#: apps/sstv/templates/sstv/_gallery.html:57
+msgid "Load older pictures"
+msgstr "Ältere Bilder laden"
 
 #: apps/sstv/views.py:16
 msgid "Unknown SSTV mode."
