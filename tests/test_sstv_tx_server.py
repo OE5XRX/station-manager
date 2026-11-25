@@ -724,3 +724,88 @@ def test_synthesised_audio_decodes_back_to_the_preview(mode):
     rows = b"".join(e.rgb for e in events if isinstance(e, Row))
     got = np.frombuffer(rows, dtype=np.uint8).reshape(m.height, m.width, 3).astype(int)
     assert np.mean(np.abs(got - np.array([10, 200, 10]))) < 12
+
+
+# -- review round 1: failure paths ---------------------------------------------------
+
+
+def test_abort_during_synthesis_never_hands_out_audio(ready):
+    station, user = ready
+    code, claimed = tx.claim(
+        station, user, str(_draft(station, user).pk), confirm_no_callsign=False
+    )
+    assert code is None
+    tx.abort_tx(station, "lock released")  # lock lost while the audio was being made
+    assert tx.start_sending(station, claimed, b"\0\0" * 100) == "aborted"
+    claimed.refresh_from_db()
+    assert claimed.state == TxState.ABORTED and not claimed.audio
+
+
+def test_oversized_audio_ends_the_transmission(ready):
+    station, user = ready
+    _, claimed = tx.claim(station, user, str(_draft(station, user).pk), confirm_no_callsign=False)
+    assert tx.start_sending(station, claimed, b"\0" * (tx.MAX_AUDIO_BYTES + 2)) == "internal_error"
+    claimed.refresh_from_db()
+    assert claimed.state == TxState.ERROR
+
+
+def test_synthesis_failure_reports_and_ends(control_agent_auth, monkeypatch):
+    station, user = setup_station("tx-synfail")
+
+    def boom(_tx):
+        raise ValueError("broken preview")
+
+    monkeypatch.setattr(tx, "synthesise", boom)
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await browser.send_json_to(send(draft))
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "internal_error"
+        assert not any(m.get("type") == "sstv_tx_start" for m in await drain(agent))
+        await browser.disconnect()
+        await agent.disconnect()
+        return draft
+
+    draft = asyncio.run(go())
+    draft.refresh_from_db()
+    assert draft.state == TxState.ERROR
+
+
+def test_stale_sending_row_neither_busy_nor_activity(ready):
+    station, user = ready
+    stale = _draft(station, user)
+    then = timezone.now() - timedelta(seconds=sstv_control.TX_MAX_S + 1)
+    SstvTransmission.objects.filter(pk=stale.pk).update(state=TxState.SENDING, updated_at=then)
+    assert not sstv_control.counts_as_activity(station)
+    assert _claim(station, user, _draft(station, user)) is None
+
+
+def test_lock_loss_aborts_tx_even_if_ending_rx_fails(ready, monkeypatch):
+    station, user = ready
+    sending = _draft(station, user)
+    SstvTransmission.objects.filter(pk=sending.pk).update(state=TxState.SENDING)
+
+    def boom(*a, **kw):
+        raise RuntimeError("db hiccup")
+
+    monkeypatch.setattr(sstv_control, "stop_rx", boom)
+    asyncio.run(sstv_control.on_lock_released(station, "released"))
+    sending.refresh_from_db()
+    assert sending.state == TxState.ABORTED
+
+
+def test_gallery_picture_survives_the_transmission_row():
+    # Retention deletes transmission rows (and with them the preview blob): the gallery
+    # entry of a sent picture must be a copy.
+    station, user = setup_station("tx-copy")
+    draft = _draft(station, user)
+    SstvTransmission.objects.filter(pk=draft.pk).update(state=TxState.SENDING)
+    preview_name = draft.preview.name
+    tx.on_tx_state(station, {"tx_id": draft.pk.hex, "state": "done", "progress": 1})
+    image = SstvImage.objects.get(station=station)
+    assert image.image.name != preview_name
+    assert not default_storage.exists(preview_name)
+    with image.image.open("rb") as f:
+        assert Image.open(f).size == (320, 240)

@@ -190,14 +190,17 @@ def claim(station, user, transmission_id, *, confirm_no_callsign):
     if tx_id is None:
         return "not_found", None
     with transaction.atomic():
-        # Serialises concurrent sends of the station (no-op lock on SQLite).
+        # Serialises concurrent sends of the station (no-op lock on SQLite); the lock row
+        # also keeps a concurrent release from slipping between the check and the claim.
         type(station).objects.select_for_update().filter(pk=station.pk).first()
+        if not control.is_holder(station, user, lock_row=True):
+            return "not_locked", None
         tx = SstvTransmission.objects.filter(pk=tx_id, station=station, user=user).first()
         if tx is None:
             return "not_found", None
-        if SstvTransmission.objects.filter(
-            station=station, state=SstvTransmission.State.SENDING
-        ).exists():
+        if control.sending_transmissions(station).exists():
+            return "sstv_busy", None
+        if tx.state == SstvTransmission.State.SENDING:
             return "sstv_busy", None
         if tx.state != SstvTransmission.State.DRAFT:
             return "not_found", None
@@ -316,7 +319,9 @@ def fail(station, tx_pk, detail):
             .first()
         )
         if tx is not None:
-            control._audit(station, tx.user, f"SSTV transmission failed ({control._clip(detail)})")
+            control._audit(
+                station, tx.user, f"SSTV transmission failed ({control.audit_detail(detail)})"
+            )
             _finish(station, tx, SstvTransmission.State.ERROR, detail)
 
 
@@ -347,7 +352,7 @@ def _sending(station, tx_id):
     if pk is None:
         return None
     return (
-        SstvTransmission.objects.select_for_update()
+        SstvTransmission.objects.select_for_update(of=("self",))
         .select_related("user")
         .filter(pk=pk, station=station, state=SstvTransmission.State.SENDING)
         .first()
@@ -376,7 +381,7 @@ def on_tx_state(station, msg):
             _done(station, tx)
         elif state in _END_STATES:
             control._audit(
-                station, tx.user, f"SSTV transmission {state} ({control._clip(detail)})"
+                station, tx.user, f"SSTV transmission {state} ({control.audit_detail(detail)})"
             )
             _finish(station, tx, state, detail)
         else:

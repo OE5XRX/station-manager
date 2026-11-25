@@ -891,3 +891,66 @@ def test_passive_supervisor_never_stops_an_sstv_decoder_as_orphan(aprs_env):
     asyncio.run(go())
     assert agent.sent("decoder_stop") == []
     assert not PassiveServiceRun.objects.exists()
+
+
+# -- review round 1 ------------------------------------------------------------------
+
+
+def test_start_refused_only_by_result_ends_the_session(control_agent_auth):
+    station, user = setup_station("rx-refres")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await browser.send_json_to(rx_start())
+        start = await until(agent, is_decoder("decoder_start"))
+        await agent.send_json_to(
+            {"type": "result", "request_id": start["request_id"], "ok": False,
+             "error": {"code": "unsupported", "msg": ""}}
+        )  # fmt: skip
+        err = await until(browser, is_state("error"))
+        assert err["detail"] == "unsupported"
+        await close(browser, agent)
+
+    asyncio.run(go())
+    assert rows() == []
+
+
+def test_start_on_another_slot_stops_the_old_one(control_agent_auth):
+    station, user = setup_station("rx-other")
+    StationModule.objects.create(
+        station=station, slot="2", module_id="fm1", type="fm_transceiver", online=True,
+        capability_descriptor=_desc(), last_state={"rx_frequency": 433.5},
+    )  # fmt: skip
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await started(agent, browser)
+        await browser.send_json_to(rx_start(slot=2, rid="r2"))
+        seen = []
+        start = await until(agent, lambda m: seen.append(m) or is_decoder("decoder_start")(m))
+        stops = [m for m in seen if is_decoder("decoder_stop")(m)]
+        assert [m["slot"] for m in stops] == [1] and start["slot"] == 2
+        await close(browser, agent)
+
+    asyncio.run(go())
+
+
+def test_stale_running_session_stops_counting_as_activity():
+    station, user = setup_station("rx-stale")
+    row = _running(station, user)
+    then = timezone.now() - timedelta(seconds=sstv_control.RX_MAX_S + 1)
+    ActiveSstvRx.objects.filter(pk=row.pk).update(started_at=then)
+    assert not sstv_control.counts_as_activity(station)
+
+
+def test_agent_detail_is_scrubbed_in_the_audit():
+    from apps.stations.models import StationAuditLog
+
+    station, user = setup_station("rx-audit")
+    _running(station, user)
+    sstv_control.on_decoder_state(
+        station,
+        {"slot": 1, "state": "error", "detail": "reader: connect to 10.1.2.3 <x@y.at> failed"},
+    )
+    msg = StationAuditLog.objects.filter(station=station).latest("pk").message
+    assert "10.1.2.3" not in msg and "x@y.at" not in msg and "<" not in msg

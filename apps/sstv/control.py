@@ -10,6 +10,7 @@ to the agent and broadcasts to the browsers go out on commit.
 """
 
 import logging
+import re
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
@@ -32,6 +33,10 @@ MAX_RUNTIME_S = 1800
 # A start the agent has not confirmed (no decoder_state running) keeps the lock busy only
 # this long: an agent that ignores decoder_start must not hold the lock forever.
 START_GRACE_S = 30.0
+# Upper bounds for "busy": RX ends after MAX_RUNTIME_S (the agent stops it; resumes get the
+# rest), a transmission after download + the longest mode + the agent's hard stop.
+RX_MAX_S = MAX_RUNTIME_S + 120
+TX_MAX_S = 600
 # Request ids of server-issued SSTV agent requests: their results go to apps.sstv, never
 # to the browsers.
 REQUEST_PREFIX = "sstv-"
@@ -89,13 +94,34 @@ def _clip(value):
     return str(value)[:_DETAIL_MAX] if value is not None else None
 
 
-def is_holder(station, user):
-    holder = (
-        ControlLock.objects.filter(station=station, scope="station")
-        .values_list("holder_id", flat=True)
-        .first()
-    )
+def is_holder(station, user, *, lock_row=False):
+    """``user`` holds the station's lock. ``lock_row``: row-lock the ControlLock (call inside
+    the caller's transaction), so a concurrent release cannot slip between check and write."""
+    rows = ControlLock.objects.filter(station=station, scope="station")
+    if lock_row:
+        rows = rows.select_for_update()
+    holder = rows.values_list("holder_id", flat=True).first()
     return user is not None and holder is not None and holder == user.pk
+
+
+_AUDIT_DETAIL_RE = re.compile(r"[^A-Za-z0-9_ =:.,/+-]")
+
+
+def audit_detail(value):
+    """Agent-reported free text (e.g. ``reader: <exception>``) as safe audit text: clipped,
+    e-mails/IPs scrubbed, odd characters dropped."""
+    from apps.audit.scrub import scrub_message
+
+    return _AUDIT_DETAIL_RE.sub("", scrub_message(str(value)[:_DETAIL_MAX]))
+
+
+def sending_transmissions(station):
+    """Transmissions on the air. Bounded: a ``sending`` row whose end frame was lost does not
+    keep the station busy (or the lock alive) longer than any transmission can last."""
+    fresh = timezone.now() - timedelta(seconds=TX_MAX_S)
+    return SstvTransmission.objects.filter(
+        station=station, state=SstvTransmission.State.SENDING, updated_at__gte=fresh
+    )
 
 
 def supported(station):
@@ -175,9 +201,9 @@ def start_rx(station, user, slot):
         return "invalid_slot"
     slot = str(slot)
     with transaction.atomic():
-        if SstvTransmission.objects.filter(
-            station=station, state=SstvTransmission.State.SENDING
-        ).exists():
+        if not is_holder(station, user, lock_row=True):
+            return "not_locked"
+        if sending_transmissions(station).exists():
             return "sstv_busy"
         previous = ActiveSstvRx.objects.select_for_update().filter(station=station).first()
         if previous is not None:
@@ -200,7 +226,7 @@ def stop_rx(station, reason, *, notify_agent=True):
     so the final (partial) picture is still attributed. True if a session was running."""
     with transaction.atomic():
         row = (
-            ActiveSstvRx.objects.select_for_update()
+            ActiveSstvRx.objects.select_for_update(of=("self",))
             .select_related("user")
             .filter(station=station, state__in=_LIVE_STATES)
             .first()
@@ -280,7 +306,7 @@ def on_decoder_state(station, msg):
             live = row.state != ActiveSstvRx.State.STOPPING
             row.delete()
             if live:
-                _audit(station, None, f"SSTV receive ended ({_clip(detail or state)})")
+                _audit(station, None, f"SSTV receive ended ({audit_detail(detail or state)})")
                 frame = state_frame(station, detail=detail or state)
                 if state == "error":
                     frame["state"] = "error"
@@ -304,10 +330,28 @@ def _mark_running(station):
 
 
 def on_rx_result(station, msg):
-    """``result`` of our ``decoder_start``/``decoder_stop``. A refused start is reported by
-    the agent as ``decoder_state error`` as well (handled there)."""
-    if msg.get("request_id") == RX_START_REQUEST and msg.get("ok") is True:
+    """``result`` of our ``decoder_start``/``decoder_stop``. A refused start ends the
+    session (usually a ``decoder_state error`` follows too; some refusals send only this)."""
+    if msg.get("request_id") != RX_START_REQUEST:
+        return
+    if msg.get("ok") is True:
         _mark_running(station)
+        return
+    error = msg.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    with transaction.atomic():
+        row = (
+            ActiveSstvRx.objects.select_for_update()
+            .filter(station=station, state=ActiveSstvRx.State.STARTING)
+            .first()
+        )
+        if row is None:
+            return
+        row.delete()
+        _audit(station, None, f"SSTV receive refused ({audit_detail(code or 'refused')})")
+        frame = state_frame(station, detail=code or "refused")
+        frame["state"] = "error"
+        broadcast(station.pk, frame)
 
 
 def on_snapshot(station, decoders):
@@ -337,48 +381,59 @@ def on_snapshot(station, decoders):
             _decoder_stop(station, slot)
 
 
+def _isolated(fn, *args, **kwargs):
+    """Run one teardown step; a failure is logged and never skips the next one (aborting a
+    transmission must happen even if ending RX failed)."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:
+        logger.exception("sstv: %s failed", fn.__name__)
+
+
 def agent_gone(station):
     """The agent link died: it stopped SSTV itself; never resend anything on reconnect."""
-    stop_rx(station, "agent_disconnect", notify_agent=False)
     from . import tx
 
-    tx.abort_tx(station, "agent_disconnect", notify_agent=False)
+    _isolated(stop_rx, station, "agent_disconnect", notify_agent=False)
+    _isolated(tx.abort_tx, station, "agent_disconnect", notify_agent=False)
 
 
 def counts_as_activity(station):
     """A running RX session or a transmission on the air keeps the lock from idling out."""
-    fresh = timezone.now() - timedelta(seconds=START_GRACE_S)
+    now = timezone.now()
+    fresh = now - timedelta(seconds=START_GRACE_S)
     rx = (
         ActiveSstvRx.objects.filter(station=station)
-        .filter(state__in=(ActiveSstvRx.State.RUNNING, ActiveSstvRx.State.PAUSED))
+        .filter(
+            state__in=(ActiveSstvRx.State.RUNNING, ActiveSstvRx.State.PAUSED),
+            started_at__gte=now - timedelta(seconds=RX_MAX_S),
+        )
         .exists()
         or ActiveSstvRx.objects.filter(
             station=station, state=ActiveSstvRx.State.STARTING, started_at__gte=fresh
         ).exists()
     )
-    return (
-        rx
-        or SstvTransmission.objects.filter(
-            station=station, state=SstvTransmission.State.SENDING
-        ).exists()
-    )
+    return rx or sending_transmissions(station).exists()
 
 
 def _end_all(station, reason, notify_agent=True):
     from . import tx
 
-    stop_rx(station, reason, notify_agent=notify_agent)
-    tx.abort_tx(station, reason, notify_agent=notify_agent)
+    _isolated(stop_rx, station, reason, notify_agent=notify_agent)
+    _isolated(tx.abort_tx, station, reason, notify_agent=notify_agent)
 
 
 def _end_unless_user(station, reason, user):
     """Preempting oneself keeps one's own session (like the scanner)."""
     from . import tx
 
-    row = ActiveSstvRx.objects.filter(station=station, state__in=_LIVE_STATES).first()
-    if row is None or user is None or row.user_id != user.pk:
-        stop_rx(station, reason)
-    tx.abort_tx(station, reason, unless_user=user)
+    try:
+        row = ActiveSstvRx.objects.filter(station=station, state__in=_LIVE_STATES).first()
+        if row is None or user is None or row.user_id != user.pk:
+            stop_rx(station, reason)
+    except Exception:
+        logger.exception("sstv: stopping RX on preempt failed")
+    _isolated(tx.abort_tx, station, reason, unless_user=user)
 
 
 async def on_lock_released(station, reason):
