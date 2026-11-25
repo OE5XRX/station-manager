@@ -167,7 +167,8 @@ Modi: Martin M1/M2, Scottie S1/S2/DX, Robot 36/72, PD 90/120/180 — nichts ande
 - **Link-Verlust stoppt SSTV, nicht APRS:** `SstvDecoderPlugin.stop_on_link_loss = True` → der `DecoderHost`
   stoppt den SSTV-Decoder beim WS-Abbruch (Teilbild wird gespoolt), weil der Server dann den Lock freigibt —
   SSTV läuft nie auf einer Station, die niemand hält. Passive Decoder (APRS) laufen weiter. Jeder
-  Lock-Wechsel (Release, Transfer, Preempt, Sweep, Holder-Disconnect-Grace) beendet RX und bricht TX ab —
+  Lock-Wechsel (Release, Transfer, Preempt, Sweep, Holder-Disconnect-Grace) beendet RX und bricht TX ab
+  (Ausnahme: ein Preempt durch denselben User behält die eigene Session, wie beim Scanner) —
   nur über das Hook-Paar `lock_hooks` (wie APRS). Laufendes RX/TX zählt als Lock-Aktivität; RX und Scanner
   schließen sich aus („der zuletzt gestartete gewinnt“). Request-IDs mit Präfix `sstv-` sind
   Server-intern (Browser-Kommandos damit werden abgelehnt).

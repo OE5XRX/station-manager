@@ -9,6 +9,7 @@ DeviceKey-authenticated view; what the fake player is handed is decoded back to 
 picture. Async scenarios run via asyncio.run() (no pytest-asyncio)."""
 
 import asyncio
+import contextlib
 import io
 import os
 
@@ -239,20 +240,23 @@ class Agent:
         ]
 
     async def close(self):
-        self.host.detach()
-        if self._pump_task is not None:
-            self._pump_task.cancel()
-            await asyncio.gather(self._pump_task, return_exceptions=True)
-        if self.broker is not None:
-            await self.broker.on_disconnect()
-        if self.comm is not None:
-            await self.comm.disconnect()
-        await self.host.shutdown()
-        await self.tx.shutdown()
-        if self.unit.server is not None:
-            await self.unit.__aexit__()
-        if self._fw_started:
-            self.fw.stop()
+        # Every step runs even if an earlier one raises (the first error propagates):
+        # a leaked pty thread or unit socket would outlive the test.
+        async with contextlib.AsyncExitStack() as stack:
+            if self._fw_started:
+                stack.callback(self.fw.stop)
+            if self.unit.server is not None:
+                stack.push_async_callback(self.unit.__aexit__)
+            stack.push_async_callback(self.tx.shutdown)
+            stack.push_async_callback(self.host.shutdown)
+            if self.comm is not None:
+                stack.push_async_callback(self.comm.disconnect)
+            if self.broker is not None:
+                stack.push_async_callback(self.broker.on_disconnect)
+            self.host.detach()
+            if self._pump_task is not None:
+                self._pump_task.cancel()
+                await asyncio.gather(self._pump_task, return_exceptions=True)
 
 
 class Browser:
