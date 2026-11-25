@@ -145,6 +145,60 @@ Spec: `docs/superpowers/specs/2026-11-18-datenschutz-design.md` („Job für die
   eigener Compose-Service `retention` in `docker-compose.yml` und `deploy/docker-compose.prod.yml` —
   das servers-Repo braucht ihn ebenfalls.
 
+### SSTV (`apps/sstv`, `station_agent/sstv`)
+Spec: `docs/superpowers/specs/2026-11-24-sstv-design.md`. Der Lock-Halter (`sstv.use`) empfängt Bilder live
+zeilenweise in eine Stations-Galerie und sendet hochgeladene oder generierte Bilder mit Rufzeichen-Overlay.
+Modi: Martin M1/M2, Scottie S1/S2/DX, Robot 36/72, PD 90/120/180 — nichts anderes.
+
+- **Ein geteiltes Paket:** `station_agent/sstv/` (Modus-Tabelle `modes`, reines-Python-`encoder`, `png`,
+  numpy-`decoder`, Decoder-Unit `rx_unit`) ist der einzige Kontrakt zwischen Server und Station.
+  **Server-Code importiert nie `station_agent.sstv.decoder`/`rx_unit`** (numpy gibt es nur in `dev.in` und
+  im Image); der Server nutzt nur `modes` und `encoder`. Auch das Agent-Plugin (`decoders/sstv.py`)
+  bleibt stdlib-only — der Decoder läuft sandboxed in `oe5xrx-decoder@sstv-slotN` (NDJSON auf
+  `127.0.0.1:8200+slot`).
+- **`sstv_image` reliable, `sstv_line` unreliable:** Live-Zeilen gehen nur an die Browser (nie gespoolt,
+  nie in der DB). Das finale Bild (PNG, auch partiell `complete: false`) ist das einzig Autoritative:
+  gespoolt, nach Reconnect erneut gesendet, serverseitig per `(station, picture_id)` dedupliziert. Bilder mit
+  < 10 % der Zeilen werden verworfen, fehlende Zeilen sind schwarz.
+- **Frame-Größe:** daphne schließt den Control-WS bei einer Nachricht > 1 MiB, und ein reliable Frame, der nie
+  passt, käme nach jedem Reconnect wieder aus dem Spool. Das Plugin hält das PNG-Base64 daher ≤ 900 KB
+  (`MAX_PNG_B64`, reduziert notfalls die Bits pro Kanal 8→2, `depth` im Frame); der Server muss Frames von
+  ~0.9 MB annehmen (`ingest.MAX_PNG_B64`). Beide Grenzen gemeinsam ändern.
+- **Link-Verlust stoppt SSTV, nicht APRS:** `SstvDecoderPlugin.stop_on_link_loss = True` → der `DecoderHost`
+  stoppt den SSTV-Decoder beim WS-Abbruch (Teilbild wird gespoolt), weil der Server dann den Lock freigibt —
+  SSTV läuft nie auf einer Station, die niemand hält. Passive Decoder (APRS) laufen weiter. Jeder
+  Lock-Wechsel (Release, Transfer, Preempt, Sweep, Holder-Disconnect-Grace) beendet RX und bricht TX ab —
+  nur über das Hook-Paar `lock_hooks` (wie APRS). Laufendes RX/TX zählt als Lock-Aktivität; RX und Scanner
+  schließen sich aus („der zuletzt gestartete gewinnt“). Request-IDs mit Präfix `sstv-` sind
+  Server-intern (Browser-Kommandos damit werden abgelehnt).
+- **TX gehört der Station:** Der Server synthetisiert das Audio (8 kHz mono s16le), der Agent lädt es über
+  die DeviceKey-View `/api/v1/stations/sstv/tx/<uuid>/audio/` (nur eigene Station, nur `sending`), prüft
+  Größe + sha256 **vor** dem Keyen und spielt direkt in den TX-Node (TX-Ceiling, nie durch die Voice-DSP).
+  Die `SstvTxSession` unkeyt auf **jedem** Pfad: Ende der Wiedergabe, Hard-Stop bei `duration_s + 5` s
+  (unabhängig vom Server), `sstv_tx_stop` (Lock-Verlust, Operator-Stop), WS-Verlust, Player-Crash,
+  Agent-Shutdown; ein unbestätigtes Unkey endet als `error`/`unkey_unconfirmed`. Kein Browser-Dead-Man
+  während der Session — der Hard-Stop ersetzt ihn.
+- **Kein Re-Key nach Reconnect:** Der Server markiert eine `sending`-Transmission beim Agent-Disconnect als
+  `aborted` und sendet `sstv_tx_start` **nie** erneut; der Agent merkt sich gesehene `tx_id`s
+  prozessweit (`SstvTxManager`) und lehnt ein Replay ab.
+- **Send-Guards zur Sendezeit, nicht zur Vorschau:** Holder, eigener Draft < 1 h, `no_callsign` nur mit
+  Bestätigung, TX-Frequenz aus dem **aktuellen** `StationModule.last_state` nicht im ISS-Downlink
+  (145.800 MHz ± 10 kHz → `iss_downlink`) und innerhalb der TX-`ranges` (`out_of_range`), kein Scan, kein
+  Voice-PTT, keine zweite Transmission (`sstv_busy`). Nach der Synthese wird die Frequenz erneut geprüft;
+  ein `state`-Frame mit verbotener TX-Frequenz während des Sendens bricht ab. **Warum:** Wer nach der
+  Vorschau „ISS“ drückt, darf nicht auf dem ISS-Downlink senden.
+- **`done` kopiert die Vorschau** in `SstvImage(direction="tx").image` und löscht die Transmission (samt
+  Audio). Nie auf das Preview-File der Transmission verweisen: Retention löscht Transmissions.
+  `aborted`/`error` speichern nichts. Ein laufendes RX wird für die TX pausiert und danach fortgesetzt
+  (der Server pausiert, nicht der Agent).
+- **Retention** (`enforce_retention`, `RETENTION_ENFORCE` gilt): `sstv_pictures` löscht `SstvImage` älter als
+  `SstvSettings.retention_days` (Default 90, Legal Hold beachtet), `sstv_stale_drafts` löscht nicht
+  gesendete Drafts/Abbrüche 1 h nach dem Anlegen (ein hängendes `sending` nach 2 h). Dateien gehen per
+  `post_delete`-Signal (on_commit) mit den Zeilen.
+- E2E-Referenz: `tests/test_sstv_e2e.py` (echter Broker + DecoderHost + SstvDecoderPlugin mit Fake-Unit-Socket
+  aus echtem PD-120-Encode/Decode, echte Consumer/Ingest, echte Preview- und DeviceKey-Download-View, echte
+  `SstvTxSession` mit Fake-Player, dessen Audio zurück aufs Vorschaubild dekodiert wird).
+
 ### Lokalisierung / i18n (`locale/de`)
 Spec: `docs/superpowers/specs/2026-11-24-i18n-de-design.md` (dort auch Glossar + **Du-Form** — verbindlich).
 
