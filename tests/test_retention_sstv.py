@@ -94,6 +94,14 @@ def test_stale_transmissions_deleted_with_files(
     assert default_storage.exists(fresh.preview.name)
 
 
+def test_sending_row_kept_while_it_still_moves(station):
+    """Sent from a 59-min-old draft: still "sending" past the 1 h mark — not a leftover."""
+    tx = _tx(station, timedelta(minutes=61), S.SENDING)
+    SstvTransmission.objects.filter(pk=tx.pk).update(updated_at=NOW - timedelta(minutes=2))
+    assert run_retention(_cfg()).counts["sstv_stale_drafts"] == 0
+    assert _exists(tx)
+
+
 def test_dry_run_counts_only(station, django_capture_on_commit_callbacks):
     img = _image(station, timedelta(days=100))
     tx = _tx(station, timedelta(hours=2), S.DRAFT)

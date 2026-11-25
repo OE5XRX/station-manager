@@ -1,7 +1,10 @@
 """SSTV gallery: partial (read-only for viewers), picture/download views, delete rules."""
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from html import unescape
+from urllib.parse import parse_qsl
 
 import pytest
 from django.core.files.base import ContentFile
@@ -86,6 +89,12 @@ def test_gallery_empty_state(client, station):
     assert "sg-empty" in html and 'class="sg-tile' not in html
 
 
+def _next_query(html):
+    """The cursor query of the "load more" button, or None."""
+    m = re.search(r'hx-get="[^"?]*\?([^"]+)"', html)
+    return dict(parse_qsl(unescape(m.group(1)))) if m else None
+
+
 def test_gallery_pages_of_24_with_load_more(client, station):
     base = timezone.now()
     imgs = [_image(station) for _ in range(PAGE_SIZE + 3)]
@@ -95,22 +104,63 @@ def test_gallery_pages_of_24_with_load_more(client, station):
     first = _gallery(client, station).content.decode()
     assert PAGE_SIZE == 24
     assert first.count('class="sg-tile') == PAGE_SIZE
-    assert "page=2" in first and 'id="sstv-gallery"' in first
-    second = _gallery(client, station, page=2).content.decode()
+    assert 'id="sstv-gallery"' in first
+    cursor = _next_query(first)
+    assert cursor == {"ts": cursor["ts"], "id": str(imgs[PAGE_SIZE - 1].pk)}
+    second = _gallery(client, station, **cursor).content.decode()
     assert second.count('class="sg-tile') == 3
-    assert "page=3" not in second
+    assert _next_query(second) is None
     # Later pages are bare tiles for the "load more" swap, no second wrapper.
     assert 'id="sstv-gallery"' not in second
-    shown = {str(i.pk) for i in imgs[:PAGE_SIZE]}
-    assert all(pk in first for pk in shown)
+    assert all(str(i.pk) in first for i in imgs[:PAGE_SIZE])
     assert all(str(i.pk) in second for i in imgs[PAGE_SIZE:])
 
 
-@pytest.mark.parametrize("page", ["0", "-1", "abc", "999999999999999999999"])
-def test_gallery_bad_page_param_does_not_crash(client, station, page):
+def test_load_more_is_stable_across_delete_and_new_pictures(client, station):
+    """Keyset cursor: an in-place delete or a new picture never shifts the next page."""
+    base = timezone.now() - timedelta(hours=1)
+    imgs = [_image(station) for _ in range(PAGE_SIZE + 2)]
+    for i, img in enumerate(imgs):
+        SstvImage.objects.filter(pk=img.pk).update(created_at=base - timedelta(minutes=i))
+    client.force_login(_user("staff"))
+    cursor = _next_query(_gallery(client, station).content.decode())
+    imgs[0].delete()  # deleted from the first page
+    _image(station)  # newly received, newest
+    second = _gallery(client, station, **cursor).content.decode()
+    assert [str(i.pk) in second for i in imgs[PAGE_SIZE - 1 :]] == [False, True, True]
+    assert second.count('class="sg-tile') == 2
+
+
+def test_load_more_tie_on_created_at_uses_pk(client, station):
+    stamp = timezone.now()
+    imgs = [_image(station) for _ in range(PAGE_SIZE + 5)]
+    SstvImage.objects.filter(station=station).update(created_at=stamp)
+    client.force_login(_user("applicant"))
+    first = _gallery(client, station).content.decode()
+    second = _gallery(client, station, **_next_query(first)).content.decode()
+    shown = [str(i.pk) for i in imgs if str(i.pk) in first] + [
+        str(i.pk) for i in imgs if str(i.pk) in second
+    ]
+    assert sorted(shown) == sorted(str(i.pk) for i in imgs)
+    assert len(shown) == len(imgs)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"ts": "abc", "id": str(uuid.uuid4())},
+        {"ts": "²", "id": str(uuid.uuid4())},
+        {"ts": "-1", "id": str(uuid.uuid4())},
+        {"ts": "9" * 40, "id": str(uuid.uuid4())},
+        {"ts": "1", "id": "nope"},
+        {"ts": "1"},
+        {"id": str(uuid.uuid4())},
+    ],
+)
+def test_gallery_bad_cursor_is_400(client, station, params):
     _image(station)
     client.force_login(_user("applicant"))
-    assert _gallery(client, station, page=page).status_code == 200
+    assert _gallery(client, station, **params).status_code == 400
 
 
 def test_gallery_member_sees_delete_only_on_own_tx(client, station):

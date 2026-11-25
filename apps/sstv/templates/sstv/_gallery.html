@@ -1,7 +1,7 @@
 {% load i18n %}
 {% comment %}
-SSTV gallery partial (sstv:gallery). Page 1 renders the #sstv-gallery wrapper;
-later pages (?page=N, fetched by the "load more" button) return only their tiles
+SSTV gallery partial (sstv:gallery). The first page renders the #sstv-gallery wrapper;
+later pages (?ts=&id= keyset cursor, fetched by the "load more" button) return only their tiles
 plus the next button, which replaces itself (hx-swap="outerHTML"). Pictures load
 through sstv:image (permission-checked), never via a storage URL. Delete forms are
 rendered only where the viewer may delete (views_gallery.can_delete).
@@ -50,10 +50,10 @@ rendered only where the viewer may delete (views_gallery.can_delete).
       </div>
     </article>
 {% endfor %}
-{% if next_page %}
+{% if next_query %}
     <div class="sg-more">
       <button type="button" class="btn btn-ghost btn-sm"
-              hx-get="{% url 'sstv:gallery' station.pk %}?page={{ next_page }}"
+              hx-get="{% url 'sstv:gallery' station.pk %}?{{ next_query }}"
               hx-target="closest .sg-more" hx-swap="outerHTML">{% trans "Load older pictures" %}</button>
     </div>
 {% endif %}

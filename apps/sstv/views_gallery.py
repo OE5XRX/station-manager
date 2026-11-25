@@ -8,9 +8,12 @@ Delete rules (spec §6): ``sstv.use`` deletes the user's **own sent** pictures,
 deleting a gallery entry never touches the radio.
 """
 
-from datetime import UTC
+import uuid
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import BadRequest, PermissionDenied
+from django.db.models import Q
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
@@ -23,8 +26,7 @@ from apps.stations.models import Station
 from .models import SstvImage
 
 PAGE_SIZE = 24
-# Upper bound for ?page= — keeps the OFFSET (and int parsing) sane.
-MAX_PAGE = 10_000
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def can_delete(user, image) -> bool:
@@ -46,44 +48,62 @@ def download_filename(image) -> str:
     return f"{slug}-{stamp}Z-{slugify(image.mode)}-{image.direction}.png"
 
 
-def _page(request) -> int:
-    raw = request.GET.get("page", "1")
-    if not raw.isdigit() or len(raw) > 6:
-        return 1
-    return min(max(1, int(raw)), MAX_PAGE)
+def _cursor_ts(dt) -> int:
+    """Exact integer microseconds since the epoch (no float rounding)."""
+    return (dt - _EPOCH) // timedelta(microseconds=1)
+
+
+def _parse_cursor(request):
+    """``(created_at, pk)`` of the last tile already shown, or ``None`` (first page).
+
+    Keyset, not OFFSET: deleting a tile in place or a newly received picture
+    never shifts the next page (no skipped or duplicated tiles).
+    """
+    raw_ts, raw_id = request.GET.get("ts"), request.GET.get("id")
+    if raw_ts is None and raw_id is None:
+        return None
+    try:
+        if not (raw_ts.isascii() and raw_ts.isdigit() and len(raw_ts) <= 18):
+            raise ValueError(raw_ts)
+        return _EPOCH + timedelta(microseconds=int(raw_ts)), uuid.UUID(raw_id)
+    except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+        raise BadRequest("bad gallery cursor") from exc
 
 
 class SstvGalleryView(AreaPermissionMixin, View):
-    """Gallery partial, newest first. Page 1 renders the wrapper, later pages
-    only their tiles plus the next "load more" button (HTMX swap)."""
+    """Gallery partial, newest first. The first page renders the wrapper, later
+    pages (``?ts=&id=`` cursor) only their tiles plus the next "load more" button
+    (HTMX swap)."""
 
     area = "sstv"
     verb = "view"
 
     def get(self, request, pk):
         station = get_object_or_404(Station, pk=pk)
-        page = _page(request)
-        start = (page - 1) * PAGE_SIZE
-        rows = list(
-            SstvImage.objects.filter(station=station)
-            .select_related("user")
-            .order_by("-created_at", "-pk")[start : start + PAGE_SIZE + 1]
-        )
+        cursor = _parse_cursor(request)
+        qs = SstvImage.objects.filter(station=station)
+        if cursor is not None:
+            ts, last_pk = cursor
+            qs = qs.filter(Q(created_at__lt=ts) | Q(created_at=ts, pk__lt=last_pk))
+        rows = list(qs.select_related("user").order_by("-created_at", "-pk")[: PAGE_SIZE + 1])
         has_more = len(rows) > PAGE_SIZE
         images = rows[:PAGE_SIZE]
         for img in images:
             img.station = station  # no extra query in templates/filename
             img.deletable = can_delete(request.user, img)
             img.frequency_mhz = img.frequency_hz / 1_000_000 if img.frequency_hz else None
+        next_query = None
+        if has_more:
+            last = images[-1]
+            next_query = urlencode({"ts": _cursor_ts(last.created_at), "id": str(last.pk)})
         return TemplateResponse(
             request,
             "sstv/_gallery.html",
             {
                 "station": station,
                 "images": images,
-                "page": page,
-                "next_page": page + 1 if has_more else None,
-                "first_page": page == 1,
+                "next_query": next_query,
+                "first_page": cursor is None,
             },
         )
 

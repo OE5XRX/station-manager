@@ -364,8 +364,8 @@ def _audit_messages_scrubbed(cfg, held):
 
 
 # A transmission row (preview = user photo, TX audio) outlives its use by at most
-# this long. A TX is hard-stopped after duration + 5 s (≤ ~275 s), so anything
-# older — even a row still marked "sending" — is a leftover.
+# this long. A TX is hard-stopped after duration + 5 s (≤ ~275 s), so a row still
+# "sending" an hour after its last state change is a leftover too.
 SSTV_TRANSMISSION_MAX_AGE = timedelta(hours=1)
 
 
@@ -379,10 +379,18 @@ def _sstv_pictures(cfg, held):
 
 
 def _sstv_stale_drafts(cfg, held):
-    """Previews/TX audio older than 1 h in any state (temporary artefacts, no hold)."""
+    """Previews/TX audio older than 1 h in any state (temporary artefacts, no hold).
+
+    A draft may be sent until it is 1 h old, so a "sending" row only counts as a
+    leftover once it has also not moved for 1 h (``updated_at`` follows the
+    state change).
+    """
     from apps.sstv.models import SstvTransmission
 
-    qs = SstvTransmission.objects.filter(created_at__lt=cfg.now - SSTV_TRANSMISSION_MAX_AGE)
+    cutoff = cfg.now - SSTV_TRANSMISSION_MAX_AGE
+    qs = SstvTransmission.objects.filter(created_at__lt=cutoff).filter(
+        ~Q(state=SstvTransmission.State.SENDING) | Q(updated_at__lt=cutoff)
+    )
     return _apply(qs, cfg)
 
 
