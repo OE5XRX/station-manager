@@ -24,7 +24,13 @@ from PIL import Image
 
 from apps.control.models import StationModule
 from station_agent.sstv.encoder import encode
-from station_agent.sstv.modes import ISS_FREQUENCY_HZ, ISS_GUARD_HZ, MODES, duration_s
+from station_agent.sstv.modes import (
+    ISS_FREQUENCY_HZ,
+    ISS_GUARD_HZ,
+    MODES,
+    VIS_HEADER_S,
+    duration_s,
+)
 
 from . import control, render
 from .ingest import image_frame
@@ -38,6 +44,11 @@ TX_REQUEST_PREFIX = f"{control.REQUEST_PREFIX}tx-"
 MAX_AUDIO_BYTES = 5 * 1024 * 1024
 _AGENT_STATES = frozenset({"downloading", "keyed", "done", "aborted", "error"})
 _END_STATES = frozenset({"done", "aborted", "error"})
+
+
+def air_time_s(mode):
+    """Length of the transmitted audio: leader + VIS header + picture."""
+    return VIS_HEADER_S + duration_s(mode)
 
 
 class PreviewError(ValueError):
@@ -112,7 +123,7 @@ def create_preview(station, user, *, source, upload, mode_key, cs_user, cs_stati
             module=target.module_id,
             user=user,
             mode=mode.key,
-            duration_s=duration_s(mode),
+            duration_s=air_time_s(mode),
             callsigns=calls,
         )
         tx.preview.save(f"{uuid.uuid4().hex}.png", ContentFile(buf.getvalue()), save=False)
@@ -252,8 +263,9 @@ def start_sending(station, tx, audio):
             return "aborted"  # lock lost / agent gone while synthesising
         row.sha256 = hashlib.sha256(audio).hexdigest()
         row.size = len(audio)
+        row.duration_s = len(audio) / 2 / 8000  # exact: the agent hard-stops 5 s after it
         row.audio.save(f"{uuid.uuid4().hex}.raw", ContentFile(audio), save=False)
-        row.save(update_fields=["sha256", "size", "audio", "updated_at"])
+        row.save(update_fields=["sha256", "size", "duration_s", "audio", "updated_at"])
         # TX pauses RX (spec §5.2): the server pauses and resumes, the agent does not.
         control.pause_rx(station)
         control.send_to_agent(

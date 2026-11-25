@@ -118,6 +118,13 @@ def state_frame(station, detail=None):
     )
 
 
+def live_state_frame(station):
+    """``state_frame`` of a running RX session, ``None`` when idle."""
+    if not ActiveSstvRx.objects.filter(station=station, state__in=_LIVE_STATES).exists():
+        return None
+    return state_frame(station)
+
+
 def _rx_module(station, slot):
     return (
         StationModule.objects.filter(station=station, slot=str(slot), online=True)

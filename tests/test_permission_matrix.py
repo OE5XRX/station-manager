@@ -82,15 +82,16 @@ UI = {
     ("passive_services", "view"): ("GET", "passive:aprs", None, None),
     # POST-only; manage is enforced before the body is read (an empty form just re-renders).
     ("passive_services", "manage"): ("POST", "passive:aprs_settings", None, {}),
+    # Own preview only: an unknown id answers 404 once sstv.use passed.
+    ("sstv", "use"): ("GET", "sstv:preview_image", "sstv_preview", None),
 }
 # control.use / control.manage live on the WS channel (WS table below).
 UI_NOT_APPLICABLE = {
     ("control", "use"),
     ("control", "manage"),
-    # SSTV endpoints (gallery, preview, RX/TX frames) arrive with SSTV Tasks 9–11,
-    # which replace these entries with representatives; levels: tests/test_sstv_models.py.
+    # SSTV gallery endpoints (view/manage) arrive with SSTV Task 11, which replaces these
+    # entries with representatives; levels: tests/test_sstv_models.py.
     ("sstv", "view"),
-    ("sstv", "use"),
     ("sstv", "manage"),
 }
 
@@ -128,6 +129,7 @@ WS = [
     ("control", "control", "view", "connect"),
     ("control", "control", "use", "lock_acquire"),
     ("control", "control", "manage", "command:filter_hpf"),
+    ("control", "sstv", "use", "sstv_rx_start"),
     ("audio", "control", "view", "connect"),
     ("audio", "control", "use", "mic_open"),
     ("terminal", "terminal", "use", "connect"),
@@ -219,6 +221,7 @@ def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch)
         "alert": alert.pk,
         "provisioning_job": job.pk,
         "other_user": other.pk,
+        "sstv_preview": [station.pk, "00000000-0000-0000-0000-000000000000"],
     }
 
 
@@ -231,7 +234,8 @@ def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch)
 @pytest.mark.parametrize("key", sorted(UI), ids=_key_id)
 def test_ui_matrix(client, objs, level, key):
     method, name, kw, data = UI[key]
-    url = reverse(name, args=[objs[kw]] if kw else [])
+    arg = objs[kw] if kw else None
+    url = reverse(name, args=(arg if isinstance(arg, list) else [arg]) if kw else [])
     user = _user(level)
     if user:
         client.force_login(user)
@@ -353,6 +357,8 @@ async def _ws_case(station, user, consumer, action):
     elif action == "mic_open":
         # The audio protocol's mic_open carries no request_id (its frames neither).
         await comm.send_json_to({"type": "mic_open"})
+    elif action == "sstv_rx_start":
+        await comm.send_json_to({"type": "sstv_rx_start", "request_id": rid, "slot": 1})
     elif action.startswith("command:"):
         # The capability gate sits behind the lock: take it first (a no-op
         # forbidden for levels without control.use, which the command repeats).
@@ -421,6 +427,9 @@ def test_ws_matrix(control_agent_auth, level, entry):
         elif action == "mic_open":
             # Past the permission gate: the lock-less open is refused as not_locked.
             assert any(f.get("code") == "not_locked" for f in frames), frames
+        elif action == "sstv_rx_start":
+            # Past both permission gates (control.use, sstv.use): refused for the lock.
+            assert any((f.get("error") or {}).get("code") == "not_locked" for f in frames), frames
         elif action.startswith("command:"):
             assert [o for o in agent_out if o["type"] == "websocket.send"], agent_out
     else:

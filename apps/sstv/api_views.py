@@ -3,6 +3,8 @@
 from django.contrib.auth.decorators import login_not_required
 from django.http import FileResponse
 from django.utils.decorators import method_decorator
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -23,6 +25,7 @@ class TxAudioView(APIView):
     permission_classes = [IsDevice]
     permission_exempt = "device-key"
 
+    @extend_schema(responses={200: OpenApiTypes.BINARY})
     def get(self, request, tx_id):
         station = getattr(request.auth, "station", None)
         tx = SstvTransmission.objects.filter(pk=tx_id).first()

@@ -1063,10 +1063,11 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._send_sstv_snapshot(station)
 
     async def _send_sstv_snapshot(self, station):
-        """The SSTV state (RX session, transmission on the air) for a (re)loaded page."""
+        """A running SSTV session (RX, transmission on the air) for a (re)loaded page.
+        Nothing when idle: the page starts idle."""
         try:
             frames = await database_sync_to_async(
-                lambda: [sstv_control.state_frame(station), sstv_tx.sending_frame(station)]
+                lambda: [sstv_control.live_state_frame(station), sstv_tx.sending_frame(station)]
             )()
         except Exception:
             logger.exception("control: SSTV snapshot failed")
