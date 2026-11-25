@@ -21,6 +21,7 @@ No pytest-asyncio: WS scenarios run via asyncio.run() in transactional tests.
 
 import asyncio
 import json
+import uuid
 
 import pytest
 from channels.layers import get_channel_layer
@@ -46,7 +47,8 @@ def _key_id(key):
     return f"{key[0]}.{key[1]}"
 
 
-# (area, verb) -> (method, url_name, objs-key for the single URL arg or None, POST data)
+# (area, verb) -> (method, url_name, objs-key for the URL arg(s) or None, POST data);
+# a tuple value in ``objs`` supplies several URL args.
 UI = {
     ("dashboard", "view"): ("GET", "dashboard:index", None, None),
     ("profile", "view"): ("GET", "accounts:profile", None, None),
@@ -82,6 +84,11 @@ UI = {
     ("passive_services", "view"): ("GET", "passive:aprs", None, None),
     # POST-only; manage is enforced before the body is read (an empty form just re-renders).
     ("passive_services", "manage"): ("POST", "passive:aprs_settings", None, {}),
+    ("sstv", "view"): ("GET", "sstv:gallery", "station", None),
+    # Unknown picture: allowed levels get 404, the use floor answers 403 before the lookup.
+    ("sstv", "use"): ("POST", "sstv:delete", "sstv_missing", {}),
+    # Someone else's received picture: only manage may delete it.
+    ("sstv", "manage"): ("POST", "sstv:delete", "sstv_rx", {}),
 }
 # control.use / control.manage live on the WS channel (WS table below).
 UI_NOT_APPLICABLE = {
@@ -123,6 +130,7 @@ WS = [
     ("control", "control", "view", "connect"),
     ("control", "control", "use", "lock_acquire"),
     ("control", "control", "manage", "command:filter_hpf"),
+    ("control", "sstv", "use", "sstv_rx_start"),
     ("audio", "control", "view", "connect"),
     ("audio", "control", "use", "mic_open"),
     ("terminal", "terminal", "use", "connect"),
@@ -198,6 +206,17 @@ def _user(level):
     )
 
 
+def _sstv_rx_picture(station, user):
+    from django.core.files.base import ContentFile
+
+    from apps.sstv.models import SstvImage
+
+    img = SstvImage(station=station, direction="rx", mode="martin1", user=user)
+    img.image.save("p.png", ContentFile(b"png"), save=False)
+    img.save()
+    return img
+
+
 @pytest.fixture
 def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch):
     from apps.provisioning.models import ProvisioningJob
@@ -214,6 +233,8 @@ def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch)
         "alert": alert.pk,
         "provisioning_job": job.pk,
         "other_user": other.pk,
+        "sstv_missing": (station.pk, uuid.uuid4()),
+        "sstv_rx": (station.pk, _sstv_rx_picture(station, other).pk),
     }
 
 
@@ -226,7 +247,8 @@ def objs(db, station, image_release, alert, deployment, admin_user, monkeypatch)
 @pytest.mark.parametrize("key", sorted(UI), ids=_key_id)
 def test_ui_matrix(client, objs, level, key):
     method, name, kw, data = UI[key]
-    url = reverse(name, args=[objs[kw]] if kw else [])
+    arg = objs[kw] if kw else ()
+    url = reverse(name, args=arg if isinstance(arg, tuple) else [arg])
     user = _user(level)
     if user:
         client.force_login(user)
@@ -348,6 +370,8 @@ async def _ws_case(station, user, consumer, action):
     elif action == "mic_open":
         # The audio protocol's mic_open carries no request_id (its frames neither).
         await comm.send_json_to({"type": "mic_open"})
+    elif action == "sstv_rx_start":
+        await comm.send_json_to({"type": "sstv_rx_start", "request_id": rid, "slot": 1})
     elif action.startswith("command:"):
         # The capability gate sits behind the lock: take it first (a no-op
         # forbidden for levels without control.use, which the command repeats).
@@ -416,6 +440,9 @@ def test_ws_matrix(control_agent_auth, level, entry):
         elif action == "mic_open":
             # Past the permission gate: the lock-less open is refused as not_locked.
             assert any(f.get("code") == "not_locked" for f in frames), frames
+        elif action == "sstv_rx_start":
+            # Past both permission gates (control.use, sstv.use): refused for the lock.
+            assert any((f.get("error") or {}).get("code") == "not_locked" for f in frames), frames
         elif action.startswith("command:"):
             assert [o for o in agent_out if o["type"] == "websocket.send"], agent_out
     else:

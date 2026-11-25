@@ -265,12 +265,14 @@ Bootstrap 5 utilities for grid/spacing only. No new visual language introduced.
       <div class="d-flex align-items-center gap-2 flex-wrap">
 
         {% comment %}Mic enable/disable{% endcomment %}
+        {% trans "Blocked while an SSTV picture is being sent" as mic_sstv_hint %}
         <button type="button"
                 class="cp-btn"
                 :class="micEnabled ? 'cp-btn--action' : ''"
                 :aria-pressed="micEnabled"
                 @click="micEnabled ? disableMic() : enableMic()"
-                :disabled="conn !== 'open'"
+                :disabled="conn !== 'open' || sstvTx"
+                :title="sstvTx ? '{{ mic_sstv_hint|escapejs }}' : null"
                 style="font-size:10px;padding:4px 14px;min-height:28px;min-width:100px;">
           <span x-text="micEnabled ? '{% trans "Mic On" %}' : '{% trans "Enable Mic" %}'"></span>
         </button>

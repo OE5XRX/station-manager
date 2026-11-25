@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "apps.history",
     "apps.repeaters",
     "apps.passive",
+    "apps.sstv",
     "apps.images",
     "apps.module_firmware",
     "apps.provisioning",

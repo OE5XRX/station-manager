@@ -26,6 +26,7 @@ Ein nicht definiertes niedrigeres Verb erbt die Stufe des nächsthöheren.
 | `modules` | Module & Firmware | A | S | S |
 | `repeaters` | Repeater | A | S | S |
 | `passive_services` | Passive Dienste | A | Ad | Ad |
+| `sstv` | SSTV | A | M | S |
 | `users` | Benutzer | M | Ad | Ad |
 | `api_tokens` | API-Tokens | M | M | – |
 | `audit` | Audit-Log | Ad | – | – |

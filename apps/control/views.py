@@ -5,6 +5,7 @@ from django.views.generic import DetailView
 
 from apps.accounts.permissions import (
     AreaPermissionMixin,
+    can,
     can_override_station,
     level_label,
     required_level,
@@ -13,9 +14,45 @@ from apps.module_firmware import drain
 from apps.module_firmware.update_status import bulk_update_status
 from apps.repeaters.selection import repeaters_for_station, station_bands
 from apps.repeaters.views import ATTRIBUTION
+from apps.sstv import control as sstv_control
+from apps.sstv.render import MAX_UPLOAD_BYTES as SSTV_MAX_UPLOAD_BYTES
+from apps.sstv.tx import air_time_s
 from apps.stations.models import Station
+from station_agent.sstv.modes import MODES as SSTV_MODES
 
 from . import serializers
+from .models import AgentConnection
+
+
+def sstv_availability(station):
+    """``ok`` (agent advertises SSTV), ``old`` (connected agent without it) or
+    ``offline`` (no control connection: unknown until the agent is back)."""
+    rows = AgentConnection.objects.filter(
+        station=station, kind=AgentConnection.Kind.CONTROL
+    ).values_list("features", flat=True)[:1]
+    if not rows:
+        return "offline"
+    features = rows[0]
+    return "ok" if isinstance(features, list) and sstv_control.FEATURE in features else "old"
+
+
+def sstv_modes():
+    """The TX/RX mode list of the SSTV section (key, name, size, air time)."""
+    modes = []
+    for m in SSTV_MODES.values():
+        seconds = air_time_s(m)
+        whole = round(seconds)
+        modes.append(
+            {
+                "key": m.key,
+                "name": m.name,
+                "width": m.width,
+                "height": m.height,
+                "duration_s": round(seconds, 1),
+                "duration_label": f"{whole // 60}:{whole % 60:02d}",
+            }
+        )
+    return modes
 
 
 class StationControlView(AreaPermissionMixin, DetailView):
@@ -57,6 +94,13 @@ class StationControlView(AreaPermissionMixin, DetailView):
         ctx["ptt_default_key"] = " "
         # Station drain banner first paint; live updates come via lock frames.
         ctx["drain"] = drain.drain_status(station)
+        # SSTV section: hidden unless the agent advertises it (cosmetic; the consumer
+        # and the preview view check lock + sstv.use + support again).
+        if can(self.request.user, "sstv", "view"):
+            ctx["sstv_availability"] = sstv_availability(station)
+            ctx["sstv_modes"] = sstv_modes()
+            ctx["sstv_max_upload_bytes"] = SSTV_MAX_UPLOAD_BYTES
+            ctx["station_has_callsign"] = bool((station.callsign or "").strip())
         return ctx
 
 

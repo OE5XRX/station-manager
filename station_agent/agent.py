@@ -836,20 +836,46 @@ class StationAgent:
 
             from .decoders.aprs import AprsDecoder
             from .decoders.host import DecoderHost
+            from .decoders.spool import Spool
+            from .decoders.sstv import SstvDecoderPlugin
             from .decoders.units import DecoderUnits
 
             # Dedicated pool: a hung systemd must not tie up the default executor that
             # serves serial I/O (commands, PTT, telemetry polls).
             aprs = AprsDecoder()
             register_aprs_metric(self._metrics, aprs)
+            # Own single thread for the SSTV PNG encoding (~1 MB zlib for PD 120/180).
+            sstv = SstvDecoderPlugin(
+                executor=ThreadPoolExecutor(max_workers=1, thread_name_prefix="sstv-png")
+            )
             return DecoderHost(
                 DecoderUnits(),
-                {AprsDecoder.name: aprs},
+                {AprsDecoder.name: aprs, SstvDecoderPlugin.name: sstv},
                 lambda slot: router_backend.resolve_node(slot, "rx"),
+                # One sstv_image can be ~0.9 MB (sstv.MAX_PNG_B64): the default 1 MB bound
+                # would leave no room for anything else. SSTV stops on link loss, so an
+                # outage leaves at most two pictures per slot unacked (one that just ended
+                # plus the partial one); evictions are logged by the spool.
+                spool=Spool(max_bytes=4_000_000),
                 loop_executor=ThreadPoolExecutor(
                     max_workers=2, thread_name_prefix="decoder-units"
                 ),
             )
+
+        from .sstv_tx import SstvTxManager
+
+        # SSTV TX (spec §5.4): artefact over the signed client, played at the calibrated TX
+        # ceiling into the slot's TX node.
+        sstv_tx = SstvTxManager(
+            # No redirects: the artefact must come from our server, and a redirect would carry
+            # the device signature headers elsewhere.
+            http_get=lambda path, headers, timeout: http_client.request(
+                "GET", path, stream=True, headers=headers, timeout=timeout, allow_redirects=False
+            ),
+            server_url=config.server_url,
+            ceiling_dbfs=lambda: tx_settings.ceiling_dbfs,
+            tx_node=router_backend.tx_sink_node,
+        )
 
         control_client = ControlClient(
             config,
@@ -857,6 +883,7 @@ class StationAgent:
             on_firmware_check=self._wake.set,
             on_rescan=audio.kick,
             decoder_host_factory=_make_decoder_host,
+            sstv_tx=sstv_tx,
         )
         control_thread = threading.Thread(
             target=control_client.run, name="control-client", daemon=True
@@ -904,7 +931,9 @@ class StationAgent:
         if control_client is not None:
             control_client.stop()
         if control_thread is not None:
-            control_thread.join(timeout=5)
+            # Long enough for an SSTV TX teardown (kill wait + two fail-safe unkey attempts at
+            # the slot command timeout) to finish before the daemon thread is abandoned.
+            control_thread.join(timeout=20)
 
         # Stop the audio supervisor + client on shutdown
         audio.stop()

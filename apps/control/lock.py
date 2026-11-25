@@ -23,6 +23,23 @@ FIRMWARE_DRAIN_MESSAGE = gettext_lazy(
 )
 
 
+# Extra "the radio is busy for the holder" checks for the idle sweep, ``fn(station) -> bool``
+# (sync, inside the sweep transaction). Registered by other apps (SSTV) in ``ready()``.
+_activity_checks = []
+
+
+def register_activity_check(fn):
+    if fn not in _activity_checks:
+        _activity_checks.append(fn)
+
+
+def _counts_as_activity(station):
+    # Lazy import: scan imports this module's siblings at load.
+    from .scan import scan_counts_as_activity
+
+    return scan_counts_as_activity(station) or any(check(station) for check in _activity_checks)
+
+
 class _DrainRefused:
     """Falsy refusal marker: the grant was refused BECAUSE the station drains.
 
@@ -232,13 +249,10 @@ def sweep_lock(station, now, idle_seconds, scope="station"):
         and (now - lock.last_activity).total_seconds() > idle_seconds
     )
     if idle_lapsed and lock.pending_release_at is None:
-        # A running scan counts as activity while the holder is connected (scanner
-        # spec §7.5): an unattended-but-watched scan must not idle out. Lazy import:
-        # scan imports this module's siblings at load.
-        from .scan import scan_counts_as_activity
-
-        if scan_counts_as_activity(station):
-            # Refresh, not just skip: once the scan ends (also agent-side, e.g.
+        # A running scan (scanner spec §7.5) or SSTV session counts as activity while
+        # the holder is connected: an unattended-but-watched one must not idle out.
+        if _counts_as_activity(station):
+            # Refresh, not just skip: once it ends (also agent-side, e.g.
             # no_reachable_entries) the holder gets a full idle window again.
             lock.last_activity = now
             lock.save(update_fields=["last_activity"])

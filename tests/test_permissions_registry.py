@@ -32,6 +32,7 @@ SPEC_MATRIX = {
     "modules": ("A", None, "S"),
     "repeaters": ("A", None, "S"),
     "passive_services": ("A", None, "Ad"),
+    "sstv": ("A", "M", "S"),
     "users": ("M", None, "Ad"),
     "api_tokens": (None, "M", None),
     "audit": ("Ad", None, None),

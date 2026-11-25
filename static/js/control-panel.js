@@ -41,8 +41,31 @@
   var SEND_EVENT = "control:send";
   // Frame types a sibling panel may send through the bridge (everything else
   // has its own path: commands via the widgets / store.sendCommand, lock UX here).
-  var BRIDGE_TYPES = { apply_repeater: true, scan_start: true, scan_control: true };
-  var EMIT_TYPES = { inventory: true, state: true, result: true, error: true, scan_state: true, passive_state: true };
+  var BRIDGE_TYPES = {
+    apply_repeater: true,
+    scan_start: true,
+    scan_control: true,
+    sstv_rx_start: true,
+    sstv_rx_stop: true,
+    sstv_tx_start: true,
+    sstv_tx_stop: true,
+  };
+  var EMIT_TYPES = {
+    inventory: true,
+    state: true,
+    result: true,
+    error: true,
+    scan_state: true,
+    passive_state: true,
+    sstv_state: true,
+    sstv_start: true,
+    sstv_line: true,
+    sstv_image: true,
+    sstv_tx_state: true,
+  };
+  // The SSTV section announces a transmission on the air ({active}); voice PTT is
+  // blocked meanwhile (the server refuses it too, this keeps the button honest).
+  var SSTV_TX_EVENT = "sstv:tx";
 
   function emitFrame(msg) {
     if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
@@ -71,6 +94,7 @@
       errors: {}, // "slot module cap" (or "slot module") -> human string
       ptt: {}, // "slot module" -> 'armed' | 'keying' | 'tx'
       updating: {}, // "slot module" -> true while the agent flashes its firmware
+      sstvTx: false, // an SSTV picture is on the air: no voice PTT
       drainSince: null, // ISO time a pending firmware update blocks new control since
       // lock
       lockState: "free", // 'free' | 'held' | 'other'
@@ -251,6 +275,9 @@
           self._lastDenial = null; // a stale action denial must not explain a later 4403
           self._subscribeAll();
           self._publishControlStore();
+          // Sibling panels drop session state they may have missed the end of; the
+          // server's connect-time snapshot (sent after this) restores what is live.
+          emitFrame({ type: "open" });
         });
         ws.addEventListener("message", function (ev) {
           var msg;
@@ -604,6 +631,10 @@
         );
       },
 
+      canKey: function (slot, module) {
+        return this.canOperate(slot, module) && !this.sstvTx;
+      },
+
       isUpdating: function (slot, module) {
         return !!this.updating[L.moduleKey(slot, module)];
       },
@@ -809,7 +840,7 @@
       },
 
       pttDown: function (slot, module) {
-        if (!this.canOperate(slot, module)) return;
+        if (!this.canKey(slot, module)) return;
         var mkey = L.moduleKey(slot, module);
         if (L.isKeyed(this.ptt[mkey])) return; // already keying/tx this module
         // One active PTT (MVP): unkey any other keyed module first.
@@ -959,6 +990,10 @@
         this._addListener(window, "beforeunload", onBeforeUnload);
         this._addListener(window, SEND_EVENT, function (e) {
           self._onSendEvent(e);
+        });
+        this._addListener(window, SSTV_TX_EVENT, function (e) {
+          self.sstvTx = !!(e && e.detail && e.detail.active);
+          if (self.sstvTx) self._unkeyAll(true);
         });
       },
 
