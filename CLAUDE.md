@@ -182,11 +182,12 @@ Modi: Martin M1/M2, Scottie S1/S2/DX, Robot 36/72, PD 90/120/180 — nichts ande
   `aborted` und sendet `sstv_tx_start` **nie** erneut; der Agent merkt sich gesehene `tx_id`s
   prozessweit (`SstvTxManager`) und lehnt ein Replay ab.
 - **Send-Guards zur Sendezeit, nicht zur Vorschau:** Holder, eigener Draft < 1 h, `no_callsign` nur mit
-  Bestätigung, TX-Frequenz aus dem **aktuellen** `StationModule.last_state` nicht im ISS-Downlink
-  (145.800 MHz ± 10 kHz → `iss_downlink`) und innerhalb der TX-`ranges` (`out_of_range`), kein Scan, kein
-  Voice-PTT, keine zweite Transmission (`sstv_busy`). Nach der Synthese wird die Frequenz erneut geprüft;
-  ein `state`-Frame mit verbotener TX-Frequenz während des Sendens bricht ab. **Warum:** Wer nach der
-  Vorschau „ISS“ drückt, darf nicht auf dem ISS-Downlink senden.
+  Bestätigung, TX-Frequenz aus dem **aktuellen** `StationModule.last_state` innerhalb der TX-`ranges`
+  (`out_of_range`), kein Scan, kein Voice-PTT, keine zweite Transmission (`sstv_busy`). Nach der Synthese
+  wird die Frequenz erneut geprüft; ein `state`-Frame mit unzulässiger TX-Frequenz während des Sendens
+  bricht ab. **Warum:** Zwischen Vorschau und Senden kann der Halter umstimmen — es zählt, worauf das
+  Modul beim Keyen wirklich steht. Eine ISS-Downlink-Sendesperre gibt es bewusst **nicht**
+  (User-Entscheid 2026-11-25).
 - **`done` kopiert die Vorschau** in `SstvImage(direction="tx").image` und löscht die Transmission (samt
   Audio). Nie auf das Preview-File der Transmission verweisen: Retention löscht Transmissions.
   `aborted`/`error` speichern nichts. Ein laufendes RX wird für die TX pausiert und danach fortgesetzt
