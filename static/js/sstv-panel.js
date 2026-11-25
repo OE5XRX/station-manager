@@ -101,6 +101,7 @@
       _previewGen: 0, // bumped by every change of the choices: a late reply is dropped
       _reopened: false,
       _reopenTimer: null,
+      _cmdTimers: {}, // request_id -> give-up timer of an ISS command
       _imageGen: 0, // bumped by every new picture: a late PNG load never paints over it
 
       init: function () {
@@ -146,7 +147,7 @@
           clearTimeout(self._reopenTimer);
           self._reopenTimer = setTimeout(function () {
             self._reopened = false;
-            if (!self.rx) self.picture = null;
+            if (!self.rx && self.picture) self._abandonPicture();
           }, REOPEN_WINDOW_MS);
         });
         this._on("control:sstv_tx_state", function (e) {
@@ -168,6 +169,7 @@
         clearTimeout(this._noticeTimer);
         clearTimeout(this._pendingTimer);
         clearTimeout(this._reopenTimer);
+        this._dropCommands();
         clearInterval(this._tick);
         this._tick = null;
         this._announceTx(false);
@@ -464,7 +466,8 @@
         this._requests[rid] = "command";
         // Its own give-up: a lost reply must not leave the entry (or the user) waiting.
         var self = this;
-        setTimeout(function () {
+        this._cmdTimers[rid] = setTimeout(function () {
+          delete self._cmdTimers[rid];
           if (self._requests[rid] !== "command") return;
           delete self._requests[rid];
           self._notify({ ok: false, text: gettext("The ISS frequency could not be set.") });
@@ -479,6 +482,8 @@
           if (this._requests[rid] !== "command") kept[rid] = this._requests[rid];
         }
         this._requests = kept;
+        for (var t in this._cmdTimers) clearTimeout(this._cmdTimers[t]);
+        this._cmdTimers = {};
       },
 
       send: function (confirmed) {
@@ -714,24 +719,44 @@
         if (msg.direction !== "tx") {
           this.lastImage = { url: msg.url, complete: msg.complete !== false };
           this.picture = null;
-          var gen = ++this._imageGen;
-          var self = this;
-          var c = this._canvas();
-          if (c && typeof Image === "function") {
-            var img = new Image();
-            img.onload = function () {
-              if (gen !== self._imageGen || self.picture) return; // a newer picture owns the canvas
-              c.width = img.naturalWidth;
-              c.height = img.naturalHeight;
-              var ctx = c.getContext && c.getContext("2d");
-              if (ctx) ctx.drawImage(img, 0, 0);
-            };
-            img.src = msg.url;
-          }
+          this._drawImage(msg.url);
         }
+        this._refreshGallery();
+      },
+
+      // Paint a stored picture into the monitor (unless a newer picture took it meanwhile).
+      _drawImage: function (url) {
+        var gen = ++this._imageGen;
+        var self = this;
+        var c = this._canvas();
+        if (!c || typeof Image !== "function") return;
+        var img = new Image();
+        img.onload = function () {
+          if (gen !== self._imageGen || self.picture) return; // a newer picture owns the canvas
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          var ctx = c.getContext && c.getContext("2d");
+          if (ctx) ctx.drawImage(img, 0, 0);
+        };
+        img.src = url;
+      },
+
+      _refreshGallery: function () {
         if (typeof document !== "undefined" && document.body) {
           document.body.dispatchEvent(new CustomEvent(GALLERY_EVENT));
         }
+      },
+
+      // A live picture whose session ended while the page was disconnected: wipe its rows,
+      // show the last stored picture again, and let the gallery pick up the missed final one.
+      _abandonPicture: function () {
+        this.picture = null;
+        this._imageGen += 1;
+        var c = this._canvas();
+        var ctx = c && c.getContext && c.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, c.width, c.height);
+        if (this.lastImage) this._drawImage(this.lastImage.url);
+        this._refreshGallery();
       },
 
       _setTx: function (tx) {
@@ -777,6 +802,10 @@
         if (!msg || msg.request_id === undefined || !this._requests[msg.request_id]) return;
         var kind = this._requests[msg.request_id];
         delete this._requests[msg.request_id];
+        if (this._cmdTimers[msg.request_id] !== undefined) {
+          clearTimeout(this._cmdTimers[msg.request_id]);
+          delete this._cmdTimers[msg.request_id];
+        }
         if (kind !== "command") this._syncPending();
         var failed = msg.type === "error" || msg.ok === false;
         if (!failed) return;

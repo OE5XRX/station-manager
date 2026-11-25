@@ -607,6 +607,59 @@ await ok("a lost ISS reply gives up with a notice; a reconnect drops it silently
   });
 });
 
+await ok("an abandoned picture is wiped, the last stored one comes back, the gallery refreshes", () => {
+  const images = [];
+  globalThis.Image = class {
+    constructor() {
+      images.push(this);
+      this.naturalWidth = 320;
+      this.naturalHeight = 256;
+    }
+  };
+  withTimers((timers) => {
+    const c = panel();
+    c._onImage({ id: "a", url: "/a.png", direction: "rx", complete: true });
+    c._onRxState({ state: "running", slot: 1, ends_at: null });
+    c._onPictureStart({ picture_id: "p7", mode: "robot36", width: 320, height: 240 });
+    c.root.canvasCalls.length = 0;
+    bodyEvents.length = 0;
+    window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+    timers.find((t) => t.ms === 5000).cb();
+    assert.equal(c.picture, null);
+    assert.equal(c.root.canvasCalls[0], "clear");
+    assert.equal(images[images.length - 1].src, "/a.png");
+    images[images.length - 1].onload();
+    assert.ok(c.root.canvasCalls.includes("draw"));
+    assert.deepEqual(bodyEvents, ["sstv-gallery-refresh"]);
+    c.destroy();
+  });
+  delete globalThis.Image;
+});
+
+await ok("destroy and replies clear the ISS give-up timers", () => {
+  const cleared = [];
+  const realClear = globalThis.clearTimeout;
+  globalThis.clearTimeout = (id) => (cleared.push(id), realClear(id));
+  try {
+    withTimers(() => {
+      const c = panel();
+      c.tuneIss();
+      const rid = Object.keys(c._requests)[0];
+      const timer = c._cmdTimers[rid];
+      c._onReply({ type: "result", request_id: rid, ok: true });
+      assert.ok(cleared.includes(timer));
+      assert.deepEqual(c._cmdTimers, {});
+      c.tuneIss();
+      const t2 = Object.values(c._cmdTimers)[0];
+      c.destroy();
+      assert.ok(cleared.includes(t2));
+      assert.deepEqual(c._cmdTimers, {});
+    });
+  } finally {
+    globalThis.clearTimeout = realClear;
+  }
+});
+
 // -- control panel: bridge, emit, PTT block ----------------------------------------
 await ok("control panel bridges the SSTV frames and re-emits the server's", () => {
   const cp = registered.controlPanel();
