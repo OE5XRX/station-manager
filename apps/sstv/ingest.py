@@ -85,9 +85,9 @@ def _start_frame(data):
 
 
 def image_url(image):
-    """URL of a gallery picture (the gallery's download view), ``None`` if not routed."""
+    """URL of a gallery picture (the gallery's image view), ``None`` if not routed."""
     try:
-        return reverse("sstv:download", args=[image.station_id, image.pk])
+        return reverse("sstv:image", args=[image.station_id, image.pk])
     except NoReverseMatch:
         return None
 
