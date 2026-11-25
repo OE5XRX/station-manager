@@ -5,7 +5,8 @@ Sibling to #control-panel (own x-data root); it never owns a socket: frames go o
 via the "control:send" window event, the agent's scan_state comes back as the
 "control:scan_state" event. Hidden until an online module advertises carrier
 detection. Values are rendered through helper methods so this template stays free
-of capability names.
+of capability names. Collapsible (cpCollapsible, collapsed by default); the header
+shows the scan state so a running scan stays visible when collapsed.
 {% endcomment %}
 <section x-data="scannerPanel"
          x-cloak x-show="visible"
@@ -13,14 +14,20 @@ of capability names.
          data-lists-url="{% url 'repeaters:scanlists_mine' %}"
          class="cp-module-card sp-panel mt-4"
          aria-labelledby="sp-title">
-  <header class="cp-module-header">
-    <div class="cp-module-identity">
+  <div x-data="cpCollapsible('scanner')">
+  <header class="cp-module-header cp-collapse-header">
+    <button type="button" class="cp-collapse-toggle" @click="toggle()"
+            :aria-expanded="open ? 'true' : 'false'" aria-controls="sp-body">
+      <span class="cp-chevron" aria-hidden="true"></span>
       <h2 id="sp-title" class="rp-title">{% trans "Scanner" %}</h2>
-    </div>
-    <a class="sp-manage" href="{% url 'repeaters:scanlists' %}">{% trans "Manage scan lists" %}</a>
+    </button>
+    <span class="sv-chip" x-show="!open && (running || notice)"
+          :class="running ? 'is-rx' : 'is-error'"
+          x-text="running ? stateLabel() : (notice ? notice.text : '')"></span>
+    <a class="sp-manage" href="{% url 'repeaters:scanlists' %}" x-show="open">{% trans "Manage scan lists" %}</a>
   </header>
 
-  <div class="sp-body">
+  <div id="sp-body" class="sp-body" x-show="open" x-cloak>
     <div class="sp-readout" role="status" aria-live="polite" x-show="running"
          :class="scan ? 'is-' + scan.state : ''">
       <span class="sp-state" x-text="stateLabel()"></span>
@@ -85,5 +92,6 @@ of capability names.
     <div class="rp-notice" role="status" aria-live="polite"
          x-show="notice" :class="notice && !notice.ok ? 'is-error' : 'is-ok'"
          x-text="notice ? notice.text : ''"></div>
+  </div>
   </div>
 </section>

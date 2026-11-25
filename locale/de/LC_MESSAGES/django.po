@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 04:18+0100\n"
+"POT-Creation-Date: 2026-11-25 06:13+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -580,7 +580,7 @@ msgstr ""
 "Versionen, Release-Quarantäne"
 
 #: apps/accounts/permissions.py:128
-#: apps/control/templates/control/_repeater_panel.html:18
+#: apps/control/templates/control/_repeater_panel.html:21
 #: apps/repeaters/apps.py:9
 #: apps/repeaters/templates/repeaters/repeater_confirm_deactivate.html:9
 #: apps/repeaters/templates/repeaters/repeater_form.html:9
@@ -608,7 +608,9 @@ msgstr "Passive Dienste"
 msgid "Manage passive services"
 msgstr "Passive Dienste verwalten"
 
-#: apps/accounts/permissions.py:140 apps/sstv/apps.py:9
+#: apps/accounts/permissions.py:140
+#: apps/control/templates/control/_sstv_panel.html:19
+#: apps/control/templates/control/_sstv_panel.html:46 apps/sstv/apps.py:9
 msgid "SSTV"
 msgstr "SSTV"
 
@@ -2272,46 +2274,42 @@ msgid "The TX frequency of the module is unknown"
 msgstr "Die Sendefrequenz des Moduls ist unbekannt"
 
 #: apps/control/consumers.py:101
-msgid "Sending on the ISS downlink (145.800 MHz) is not allowed"
-msgstr "Senden auf dem ISS-Downlink (145,800 MHz) ist nicht erlaubt"
-
-#: apps/control/consumers.py:102
 msgid "The TX frequency is outside the module's TX range"
 msgstr "Die Sendefrequenz liegt außerhalb des Sendebereichs des Moduls"
 
-#: apps/control/consumers.py:103
+#: apps/control/consumers.py:102
 msgid "The transmission was aborted"
 msgstr "Die Aussendung wurde abgebrochen"
 
-#: apps/control/consumers.py:104
+#: apps/control/consumers.py:103
 msgid "Stop the scanner before sending a picture"
 msgstr "Stoppe den Scanner, bevor du ein Bild sendest"
 
-#: apps/control/consumers.py:105
+#: apps/control/consumers.py:104
 msgid "Release PTT before sending a picture"
 msgstr "Lass PTT los, bevor du ein Bild sendest"
 
-#: apps/control/consumers.py:106
+#: apps/control/consumers.py:105
 msgid "No SSTV session is running"
 msgstr "Es läuft kein SSTV-Betrieb"
 
-#: apps/control/consumers.py:107
+#: apps/control/consumers.py:106
 msgid "SSTV could not be started"
 msgstr "SSTV konnte nicht gestartet werden"
 
-#: apps/control/consumers.py:1305
+#: apps/control/consumers.py:1304
 msgid "Repeater cannot be applied here"
 msgstr "Repeater kann hier nicht angewendet werden"
 
-#: apps/control/consumers.py:1331
+#: apps/control/consumers.py:1330
 msgid "Repeater could not be authorized"
 msgstr "Repeater konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1575
+#: apps/control/consumers.py:1574
 msgid "Command could not be authorized"
 msgstr "Befehl konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1766
+#: apps/control/consumers.py:1765
 #, python-format
 msgid ""
 "Permission denied — taking over control requires %(manage)s or a Station-"
@@ -2602,7 +2600,7 @@ msgid "No audio streams available."
 msgstr "Keine Audio-Streams verfügbar."
 
 #: apps/control/templates/control/_audio_panel.html:117
-#: apps/control/templates/control/_audio_panel.html:554
+#: apps/control/templates/control/_audio_panel.html:556
 msgid "Subscribe to"
 msgstr "Abonnieren:"
 
@@ -2623,25 +2621,25 @@ msgid "Gain"
 msgstr "Verstärkung"
 
 #: apps/control/templates/control/_audio_panel.html:159
-#: apps/control/templates/control/_audio_panel.html:574
+#: apps/control/templates/control/_audio_panel.html:576
 msgid "Gain for"
 msgstr "Verstärkung für"
 
 #: apps/control/templates/control/_audio_panel.html:174
 #: apps/control/templates/control/_audio_panel.html:178
-#: apps/control/templates/control/_audio_panel.html:519
-#: apps/control/templates/control/_audio_panel.html:590
-#: apps/control/templates/control/_audio_panel.html:594
+#: apps/control/templates/control/_audio_panel.html:521
+#: apps/control/templates/control/_audio_panel.html:592
+#: apps/control/templates/control/_audio_panel.html:596
 msgid "Mute"
 msgstr "Stumm"
 
 #: apps/control/templates/control/_audio_panel.html:178
-#: apps/control/templates/control/_audio_panel.html:594
+#: apps/control/templates/control/_audio_panel.html:596
 msgid "Muted"
 msgstr "Stumm"
 
 #: apps/control/templates/control/_audio_panel.html:185
-#: apps/control/templates/control/_audio_panel.html:603
+#: apps/control/templates/control/_audio_panel.html:605
 msgid "Level for"
 msgstr "Pegel für"
 
@@ -2677,85 +2675,89 @@ msgstr "keine"
 msgid "Microphone"
 msgstr "Mikrofon"
 
-#: apps/control/templates/control/_audio_panel.html:295
+#: apps/control/templates/control/_audio_panel.html:288
+msgid "Blocked while an SSTV picture is being sent"
+msgstr "Gesperrt, solange ein SSTV-Bild gesendet wird"
+
+#: apps/control/templates/control/_audio_panel.html:297
 msgid "Mic On"
 msgstr "Mikro an"
 
-#: apps/control/templates/control/_audio_panel.html:295
+#: apps/control/templates/control/_audio_panel.html:297
 msgid "Enable Mic"
 msgstr "Mikro aktivieren"
 
-#: apps/control/templates/control/_audio_panel.html:304
+#: apps/control/templates/control/_audio_panel.html:306
 msgid "Sidetone"
 msgstr "Mithörton"
 
-#: apps/control/templates/control/_audio_panel.html:310
+#: apps/control/templates/control/_audio_panel.html:312
 msgid "Side On"
 msgstr "Mithören an"
 
-#: apps/control/templates/control/_audio_panel.html:310
+#: apps/control/templates/control/_audio_panel.html:312
 msgid "Side Off"
 msgstr "Mithören aus"
 
-#: apps/control/templates/control/_audio_panel.html:319
+#: apps/control/templates/control/_audio_panel.html:321
 msgid "ST gain"
 msgstr "MT-Verst."
 
-#: apps/control/templates/control/_audio_panel.html:329
+#: apps/control/templates/control/_audio_panel.html:331
 msgid "Sidetone gain (dB)"
 msgstr "Mithörton-Verstärkung (dB)"
 
-#: apps/control/templates/control/_audio_panel.html:343
+#: apps/control/templates/control/_audio_panel.html:345
 msgid "Mic input"
 msgstr "Mikro-Eingang"
 
-#: apps/control/templates/control/_audio_panel.html:347
+#: apps/control/templates/control/_audio_panel.html:349
 msgid "Microphone input level"
 msgstr "Mikrofon-Eingangspegel"
 
-#: apps/control/templates/control/_audio_panel.html:368
-#: apps/control/templates/control/_audio_panel.html:372
+#: apps/control/templates/control/_audio_panel.html:370
+#: apps/control/templates/control/_audio_panel.html:374
 msgid "TX modulation"
 msgstr "TX-Modulation"
 
-#: apps/control/templates/control/_audio_panel.html:385
+#: apps/control/templates/control/_audio_panel.html:387
 msgid "Limiting"
 msgstr "Begrenzung"
 
-#: apps/control/templates/control/_audio_panel.html:389
+#: apps/control/templates/control/_audio_panel.html:391
 msgid "Agent DSP unavailable on this image: pass-through, no limiter"
 msgstr "Agent-DSP auf diesem Image nicht verfügbar: Durchleitung, kein Limiter"
 
-#: apps/control/templates/control/_audio_panel.html:390
+#: apps/control/templates/control/_audio_panel.html:392
 msgid "DSP off"
 msgstr "DSP aus"
 
-#: apps/control/templates/control/_audio_panel.html:395
+#: apps/control/templates/control/_audio_panel.html:397
 msgid "TX audio pipeline failed"
 msgstr "TX-Audio-Pipeline fehlgeschlagen"
 
-#: apps/control/templates/control/_audio_panel.html:407
+#: apps/control/templates/control/_audio_panel.html:409
 msgid "TX"
 msgstr "TX"
 
-#: apps/control/templates/control/_audio_panel.html:420
+#: apps/control/templates/control/_audio_panel.html:422
 #, python-format
 msgid "Receive only. Transmitting requires %(level)s."
 msgstr "Nur Empfang. Senden erfordert %(level)s."
 
-#: apps/control/templates/control/_audio_panel.html:431
+#: apps/control/templates/control/_audio_panel.html:433
 msgid "Link quality"
 msgstr "Verbindungsqualität"
 
-#: apps/control/templates/control/_audio_panel.html:437
+#: apps/control/templates/control/_audio_panel.html:439
 msgid "Server relay"
 msgstr "Server-Relay"
 
-#: apps/control/templates/control/_audio_panel.html:445
+#: apps/control/templates/control/_audio_panel.html:447
 msgid "No active RX streams."
 msgstr "Keine aktiven RX-Streams."
 
-#: apps/control/templates/control/_audio_panel.html:474
+#: apps/control/templates/control/_audio_panel.html:476
 msgid ""
 "last-5s / total · under = underruns (stutter) · plc = concealed · jit = "
 "arrival jitter · lead = playback delay · drop = silent frames skipped to "
@@ -2765,15 +2767,15 @@ msgstr ""
 "Ankunfts-Jitter · lead = Wiedergabeverzögerung · drop = übersprungene Stille-"
 "Frames, um live zu bleiben · catch-up = Warteschlange geleert (lead zu groß)"
 
-#: apps/control/templates/control/_audio_panel.html:490
+#: apps/control/templates/control/_audio_panel.html:492
 msgid "Mixer"
 msgstr "Mixer"
 
-#: apps/control/templates/control/_audio_panel.html:502
+#: apps/control/templates/control/_audio_panel.html:504
 msgid "Mixer matrix"
 msgstr "Mixer-Matrix"
 
-#: apps/control/templates/control/_audio_panel.html:507
+#: apps/control/templates/control/_audio_panel.html:509
 #: apps/passive/templates/passive/_station_aprs_tab.html:46
 #: apps/passive/templates/passive/aprs.html:95
 #: apps/repeaters/templates/repeaters/repeater_list.html:56
@@ -2781,27 +2783,27 @@ msgstr "Mixer-Matrix"
 msgid "Source"
 msgstr "Quelle"
 
-#: apps/control/templates/control/_audio_panel.html:511
+#: apps/control/templates/control/_audio_panel.html:513
 msgid "Sub"
 msgstr "Abo"
 
-#: apps/control/templates/control/_audio_panel.html:515
+#: apps/control/templates/control/_audio_panel.html:517
 msgid "Gain dB"
 msgstr "Verst. dB"
 
-#: apps/control/templates/control/_audio_panel.html:523
+#: apps/control/templates/control/_audio_panel.html:525
 msgid "Level"
 msgstr "Pegel"
 
-#: apps/control/templates/control/_audio_panel.html:532
+#: apps/control/templates/control/_audio_panel.html:534
 msgid "No streams"
 msgstr "Keine Streams"
 
-#: apps/control/templates/control/_audio_panel.html:558
+#: apps/control/templates/control/_audio_panel.html:560
 msgid "On"
 msgstr "An"
 
-#: apps/control/templates/control/_audio_panel.html:558
+#: apps/control/templates/control/_audio_panel.html:560
 msgid "Off"
 msgstr "Aus"
 
@@ -2899,118 +2901,302 @@ msgstr "Bedienung gesperrt, bis das Modul wieder da ist"
 msgid "Slot"
 msgstr "Slot"
 
-#: apps/control/templates/control/_repeater_panel.html:22
+#: apps/control/templates/control/_repeater_panel.html:25
 msgid "Search callsign or site"
 msgstr "Rufzeichen oder Standort suchen"
 
-#: apps/control/templates/control/_repeater_panel.html:24
+#: apps/control/templates/control/_repeater_panel.html:27
 msgid "Callsign or site"
 msgstr "Rufzeichen oder Standort"
 
-#: apps/control/templates/control/_repeater_panel.html:32
+#: apps/control/templates/control/_repeater_panel.html:35
 msgid "Module per band"
 msgstr "Modul pro Band"
 
-#: apps/control/templates/control/_repeater_panel.html:50
+#: apps/control/templates/control/_repeater_panel.html:53
 msgid ""
 "Sorted by callsign. Add coordinates to this station to sort by distance."
 msgstr ""
 "Nach Rufzeichen sortiert. Trag Koordinaten für diese Station ein, um nach "
 "Entfernung zu sortieren."
 
-#: apps/control/templates/control/_repeater_panel.html:53
+#: apps/control/templates/control/_repeater_panel.html:56
 msgid "Take control of the station to tune a repeater."
 msgstr "Übernimm die Bedienung der Station, um einen Repeater einzustellen."
 
-#: apps/control/templates/control/_repeater_panel.html:80
+#: apps/control/templates/control/_repeater_panel.html:83
 msgid "cross-band – not yet supported"
 msgstr "Cross-Band – noch nicht unterstützt"
 
-#: apps/control/templates/control/_repeater_panel.html:97
+#: apps/control/templates/control/_repeater_panel.html:100
 msgid "No repeater matches this search."
 msgstr "Kein Repeater passt zu dieser Suche."
 
-#: apps/control/templates/control/_repeater_panel.html:98
+#: apps/control/templates/control/_repeater_panel.html:101
 msgid "No repeater fits the bands of this station's online modules."
 msgstr "Kein Repeater passt zu den Bändern der online Module dieser Station."
 
-#: apps/control/templates/control/_repeater_panel.html:101
+#: apps/control/templates/control/_repeater_panel.html:104
 msgid "The repeater list could not be loaded."
 msgstr "Die Repeater-Liste konnte nicht geladen werden."
 
-#: apps/control/templates/control/_repeater_panel.html:102
+#: apps/control/templates/control/_repeater_panel.html:105
 #: apps/images/templates/images/_github_error.html:10
 #: apps/module_firmware/templates/module_firmware/_github_releases.html:15
 msgid "Try again"
 msgstr "Erneut versuchen"
 
-#: apps/control/templates/control/_scanner_panel.html:18
+#: apps/control/templates/control/_scanner_panel.html:22
 msgid "Scanner"
 msgstr "Scanner"
 
-#: apps/control/templates/control/_scanner_panel.html:20
+#: apps/control/templates/control/_scanner_panel.html:27
 msgid "Manage scan lists"
 msgstr "Scan-Listen verwalten"
 
-#: apps/control/templates/control/_scanner_panel.html:31
+#: apps/control/templates/control/_scanner_panel.html:38
 msgid "Scan controls"
 msgstr "Scan-Steuerung"
 
-#: apps/control/templates/control/_scanner_panel.html:32
+#: apps/control/templates/control/_scanner_panel.html:39
 msgid "Skip"
 msgstr "Überspringen"
 
-#: apps/control/templates/control/_scanner_panel.html:33
+#: apps/control/templates/control/_scanner_panel.html:40
 msgid "Hold"
 msgstr "Halten"
 
-#: apps/control/templates/control/_scanner_panel.html:34
+#: apps/control/templates/control/_scanner_panel.html:41
 msgid "Resume"
 msgstr "Fortsetzen"
 
-#: apps/control/templates/control/_scanner_panel.html:35
+#: apps/control/templates/control/_scanner_panel.html:42
 msgid "Stop scan"
 msgstr "Scan stoppen"
 
-#: apps/control/templates/control/_scanner_panel.html:40
+#: apps/control/templates/control/_scanner_panel.html:47
 msgid "What to scan"
 msgstr "Was gescannt wird"
 
-#: apps/control/templates/control/_scanner_panel.html:44
+#: apps/control/templates/control/_scanner_panel.html:51
 msgid "Repeaters within"
 msgstr "Repeater im Umkreis von"
 
-#: apps/control/templates/control/_scanner_panel.html:48
+#: apps/control/templates/control/_scanner_panel.html:55
 msgid "Radius in kilometres"
 msgstr "Radius in Kilometern"
 
-#: apps/control/templates/control/_scanner_panel.html:65
+#: apps/control/templates/control/_scanner_panel.html:72
 msgid "You have no scan lists yet."
 msgstr "Du hast noch keine Scan-Listen."
 
-#: apps/control/templates/control/_scanner_panel.html:66
+#: apps/control/templates/control/_scanner_panel.html:73
 msgid "Create one"
 msgstr "Eine anlegen"
 
-#: apps/control/templates/control/_scanner_panel.html:68
+#: apps/control/templates/control/_scanner_panel.html:75
 msgid "Your scan lists could not be loaded."
 msgstr "Deine Scan-Listen konnten nicht geladen werden."
 
-#: apps/control/templates/control/_scanner_panel.html:73
+#: apps/control/templates/control/_scanner_panel.html:80
 msgid "Listen per channel (s)"
 msgstr "Hören pro Kanal (s)"
 
-#: apps/control/templates/control/_scanner_panel.html:77
+#: apps/control/templates/control/_scanner_panel.html:84
 msgid "Wait for a reply (s)"
 msgstr "Auf Antwort warten (s)"
 
-#: apps/control/templates/control/_scanner_panel.html:80
+#: apps/control/templates/control/_scanner_panel.html:87
 msgid "Start scan"
 msgstr "Scan starten"
 
-#: apps/control/templates/control/_scanner_panel.html:82
+#: apps/control/templates/control/_scanner_panel.html:89
 msgid "Take control of the station to start a scan."
 msgstr "Übernimm die Bedienung der Station, um einen Scan zu starten."
+
+#: apps/control/templates/control/_sstv_panel.html:23
+msgid "The station software is too old for SSTV."
+msgstr "Station-Software zu alt für SSTV."
+
+#: apps/control/templates/control/_sstv_panel.html:25
+msgid "SSTV appears here once the station is online. Reload the page then."
+msgstr ""
+"SSTV erscheint hier, sobald die Station online ist. Lade die Seite dann neu."
+
+#: apps/control/templates/control/_sstv_panel.html:61
+msgid "Received SSTV picture"
+msgstr "Empfangenes SSTV-Bild"
+
+#: apps/control/templates/control/_sstv_panel.html:65
+msgid "No picture yet. Start receiving to watch one build up here."
+msgstr "Noch kein Bild. Starte den Empfang, dann baut es sich hier auf."
+
+#: apps/control/templates/control/_sstv_panel.html:66
+msgid "Listening. A picture appears as soon as its header is heard."
+msgstr "Empfang läuft. Ein Bild erscheint, sobald sein Kopf (VIS) gehört wird."
+
+#: apps/control/templates/control/_sstv_panel.html:69
+msgid "Last picture"
+msgstr "Letztes Bild"
+
+#: apps/control/templates/control/_sstv_panel.html:70
+msgid "Last picture (incomplete)"
+msgstr "Letztes Bild (unvollständig)"
+
+#: apps/control/templates/control/_sstv_panel.html:73
+#: apps/dashboard/templates/dashboard/index.html:175
+#: apps/dashboard/templates/dashboard/index.html:177
+#: apps/deployments/templates/deployments/deployment_list.html:93
+#: apps/module_firmware/templates/module_firmware/module_list.html:112
+#: apps/module_firmware/templates/module_firmware/module_list.html:114
+#: apps/stations/templates/stations/_station_table.html:58
+#: apps/stations/templates/stations/_station_table.html:60
+msgid "Open"
+msgstr "Öffnen"
+
+#: apps/control/templates/control/_sstv_panel.html:79
+msgid "Receive"
+msgstr "Empfang"
+
+#: apps/control/templates/control/_sstv_panel.html:84
+msgid "Time left in this receive session"
+msgstr "Restzeit dieses Empfangs"
+
+#: apps/control/templates/control/_sstv_panel.html:88
+#: apps/module_firmware/templates/module_firmware/module_detail.html:20
+msgid "Module"
+msgstr "Modul"
+
+#: apps/control/templates/control/_sstv_panel.html:97
+msgid "Start receiving"
+msgstr "Empfang starten"
+
+#: apps/control/templates/control/_sstv_panel.html:99
+msgid "Stop receiving"
+msgstr "Empfang stoppen"
+
+#: apps/control/templates/control/_sstv_panel.html:102
+msgid "Tune the receiver to 145.800 MHz, the SSTV downlink of the ISS"
+msgstr "Empfänger auf 145,800 MHz stellen, den SSTV-Downlink der ISS"
+
+#: apps/control/templates/control/_sstv_panel.html:102
+msgid "ISS"
+msgstr "ISS"
+
+#: apps/control/templates/control/_sstv_panel.html:104
+msgid "No online module of this station can receive."
+msgstr "Kein Online-Modul dieser Station kann empfangen."
+
+#: apps/control/templates/control/_sstv_panel.html:109
+#: apps/control/templates/control/_sstv_panel.html:172
+msgid "Send"
+msgstr "Senden"
+
+#: apps/control/templates/control/_sstv_panel.html:111
+msgid "Picture to send"
+msgstr "Zu sendendes Bild"
+
+#: apps/control/templates/control/_sstv_panel.html:112
+msgid "Test picture"
+msgstr "Testbild"
+
+#: apps/control/templates/control/_sstv_panel.html:113
+msgid "Upload a photo"
+msgstr "Foto hochladen"
+
+#: apps/control/templates/control/_sstv_panel.html:116
+msgid "Photo (JPEG, PNG, WebP or GIF)"
+msgstr "Foto (JPEG, PNG, WebP oder GIF)"
+
+#: apps/control/templates/control/_sstv_panel.html:122
+#: templates/oauth2_provider/authorize.html:79
+msgid "Mode"
+msgstr "Modus"
+
+#: apps/control/templates/control/_sstv_panel.html:125
+#, python-format
+msgid "%(name)s (%(duration)s min)"
+msgstr "%(name)s (%(duration)s min)"
+
+#: apps/control/templates/control/_sstv_panel.html:130
+msgid "Callsigns on the picture"
+msgstr "Rufzeichen auf dem Bild"
+
+#: apps/control/templates/control/_sstv_panel.html:131
+msgid "My callsign"
+msgstr "Mein Rufzeichen"
+
+#: apps/control/templates/control/_sstv_panel.html:134
+msgid "Station callsign"
+msgstr "Stationsrufzeichen"
+
+#: apps/control/templates/control/_sstv_panel.html:137
+msgid "This station has no callsign."
+msgstr "Diese Station hat kein Rufzeichen."
+
+#: apps/control/templates/control/_sstv_panel.html:142
+#: apps/deployments/templates/deployments/_preview.html:9
+msgid "Preview"
+msgstr "Vorschau"
+
+#: apps/control/templates/control/_sstv_panel.html:150
+msgid "Preview of the picture to send"
+msgstr "Vorschau des zu sendenden Bildes"
+
+#: apps/control/templates/control/_sstv_panel.html:155
+msgid "No callsign on the picture"
+msgstr "Kein Rufzeichen auf dem Bild"
+
+#: apps/control/templates/control/_sstv_panel.html:159
+msgid "Transmission"
+msgstr "Aussendung"
+
+#: apps/control/templates/control/_sstv_panel.html:165
+msgid "Transmission progress"
+msgstr "Fortschritt der Aussendung"
+
+#: apps/control/templates/control/_sstv_panel.html:173
+msgid "Abort"
+msgstr "Abbrechen"
+
+#: apps/control/templates/control/_sstv_panel.html:177
+msgid "Sends on:"
+msgstr "Gesendet wird auf:"
+
+#: apps/control/templates/control/_sstv_panel.html:180
+msgid ""
+"You can watch and download pictures here. Receiving and sending needs a "
+"higher membership level."
+msgstr ""
+"Du kannst hier Bilder ansehen und herunterladen. Zum Empfangen und Senden "
+"brauchst du eine höhere Mitgliedsstufe."
+
+#: apps/control/templates/control/_sstv_panel.html:194
+msgid "Loading pictures…"
+msgstr "Bilder werden geladen …"
+
+#: apps/control/templates/control/_sstv_panel.html:200
+msgid "Send without a callsign?"
+msgstr "Ohne Rufzeichen senden?"
+
+#: apps/control/templates/control/_sstv_panel.html:201
+msgid ""
+"Neither your callsign nor the station callsign is on the picture. Every "
+"transmission has to identify the station."
+msgstr ""
+"Weder dein Rufzeichen noch das Stationsrufzeichen ist auf dem Bild. Jede "
+"Aussendung muss die Station kennzeichnen."
+
+#: apps/control/templates/control/_sstv_panel.html:203
+#: apps/module_firmware/templates/module_firmware/type_confirm_delete.html:29
+#: apps/stations/templates/stations/group_confirm_delete.html:45
+#: templates/403.html:26
+msgid "Back"
+msgstr "Zurück"
+
+#: apps/control/templates/control/_sstv_panel.html:204
+msgid "Send without callsign"
+msgstr "Ohne Rufzeichen senden"
 
 #: apps/control/templates/control/panel.html:31
 msgid "No modules discovered on this station yet."
@@ -3216,16 +3402,6 @@ msgstr "Zuletzt gehört"
 #, python-format
 msgid "%(since)s ago"
 msgstr "%(since)s her"
-
-#: apps/dashboard/templates/dashboard/index.html:175
-#: apps/dashboard/templates/dashboard/index.html:177
-#: apps/deployments/templates/deployments/deployment_list.html:93
-#: apps/module_firmware/templates/module_firmware/module_list.html:112
-#: apps/module_firmware/templates/module_firmware/module_list.html:114
-#: apps/stations/templates/stations/_station_table.html:58
-#: apps/stations/templates/stations/_station_table.html:60
-msgid "Open"
-msgstr "Öffnen"
 
 #: apps/dashboard/templates/dashboard/index.html:189
 msgid "No stations yet"
@@ -3514,10 +3690,6 @@ msgstr ""
 #, python-format
 msgid "Release %(tag)s is not OTA-ready (rootfs artifact missing)."
 msgstr "Release %(tag)s ist nicht OTA-fähig (Rootfs-Artefakt fehlt)."
-
-#: apps/deployments/templates/deployments/_preview.html:9
-msgid "Preview"
-msgstr "Vorschau"
 
 #: apps/deployments/templates/deployments/_preview.html:12
 #, python-format
@@ -5091,10 +5263,6 @@ msgstr ""
 "Module erscheinen hier, sobald eine Station eines meldet. Versuch, die "
 "Filter zurückzusetzen."
 
-#: apps/module_firmware/templates/module_firmware/module_detail.html:20
-msgid "Module"
-msgstr "Modul"
-
 #: apps/module_firmware/templates/module_firmware/module_detail.html:28
 msgid "at"
 msgstr "auf"
@@ -5571,12 +5739,6 @@ msgstr "Modultyp „%(name)s“ löschen? Nichts verweist darauf."
 #: apps/module_firmware/templates/module_firmware/type_confirm_delete.html:27
 msgid "Delete this module type?"
 msgstr "Diesen Modultyp löschen?"
-
-#: apps/module_firmware/templates/module_firmware/type_confirm_delete.html:29
-#: apps/stations/templates/stations/group_confirm_delete.html:45
-#: templates/403.html:26
-msgid "Back"
-msgstr "Zurück"
 
 #: apps/module_firmware/templates/module_firmware/type_form.html:21
 msgid ""
@@ -8685,12 +8847,12 @@ msgstr "laufende SSTV-Empfänge"
 msgid "The file is not a JPEG, PNG, WebP or GIF picture."
 msgstr "Die Datei ist kein JPEG-, PNG-, WebP- oder GIF-Bild."
 
-#: apps/sstv/render.py:71
+#: apps/sstv/render.py:74
 #, python-format
 msgid "The file is larger than %(mb)d MB."
 msgstr "Die Datei ist größer als %(mb)d MB."
 
-#: apps/sstv/render.py:95
+#: apps/sstv/render.py:98
 #, python-format
 msgid "The picture has too many pixels (at most %(mpx)d megapixels)."
 msgstr "Das Bild hat zu viele Pixel (höchstens %(mpx)d Megapixel)."
@@ -10346,10 +10508,6 @@ msgstr "OAuth 2 / OIDC"
 #: templates/oauth2_provider/authorize.html:76
 msgid "TLS · PKCE"
 msgstr "TLS · PKCE"
-
-#: templates/oauth2_provider/authorize.html:79
-msgid "Mode"
-msgstr "Modus"
 
 #: templates/oauth2_provider/authorize.html:80
 msgid "Explicit consent"

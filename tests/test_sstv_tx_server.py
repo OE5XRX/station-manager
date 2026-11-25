@@ -274,9 +274,8 @@ def test_guard_no_callsign_needs_confirmation(ready):
 @pytest.mark.parametrize(
     "mhz, code",
     [
-        (145.800, "iss_downlink"),
-        (145.8099, "iss_downlink"),
-        (145.7901, "iss_downlink"),
+        # The ISS downlink is no send guard (user, 2026-11-25: removed).
+        (145.800, None),
         (145.811, None),
         (146.5, "out_of_range"),
         (None, "no_frequency"),
@@ -356,7 +355,7 @@ def test_send_hands_the_audio_to_the_agent(control_agent_auth):
 
 
 def test_frequency_changed_after_preview_is_refused_at_send(control_agent_auth):
-    # Review Focus 2: preview on 145.500, then the user presses "ISS" -> 145.800.
+    # Review Focus 2: preview on 145.500, then the TX frequency leaves the module's range.
     station, user = setup_station("tx-iss")
 
     async def go():
@@ -364,12 +363,12 @@ def test_frequency_changed_after_preview_is_refused_at_send(control_agent_auth):
         draft = await database_sync_to_async(_draft)(station, user)
         await agent.send_json_to(
             {"type": "state", "slot": "1", "module": "fm0",
-             "values": {"tx_frequency": 145.8, "rx_frequency": 145.8}}
+             "values": {"tx_frequency": 146.5, "rx_frequency": 146.5}}
         )  # fmt: skip
         await until(browser, lambda m: m.get("type") == "state")
         await browser.send_json_to(send(draft))
         err = await until(browser, lambda m: m.get("type") == "error")
-        assert _code(err) == "iss_downlink" and err["request_id"] == "t1"
+        assert _code(err) == "out_of_range" and err["request_id"] == "t1"
         assert not any(m.get("type") == "sstv_tx_start" for m in await drain(agent))
         await browser.disconnect()
         await agent.disconnect()
@@ -916,8 +915,8 @@ def test_frequency_rechecked_after_synthesis(ready):
     # A write still in flight at claim time lands while the audio is made.
     station, user = ready
     _, claimed = tx.claim(station, user, str(_draft(station, user).pk), confirm_no_callsign=False)
-    _set_tx(station, 145.8)
-    assert tx.start_sending(station, claimed, b"\0\0" * 100) == "iss_downlink"
+    _set_tx(station, 146.5)
+    assert tx.start_sending(station, claimed, b"\0\0" * 100) == "out_of_range"
     claimed.refresh_from_db()
     assert claimed.state == TxState.ERROR and not claimed.audio
 
@@ -965,12 +964,12 @@ def test_queued_retune_reported_after_the_start_aborts_the_tx(control_agent_auth
         frame = await sent_start(agent, browser, draft)
         await agent.send_json_to(
             {"type": "state", "slot": 1, "module": "fm0",
-             "values": {"tx_frequency": 145.8, "rx_frequency": 145.8}}
+             "values": {"tx_frequency": 146.5, "rx_frequency": 146.5}}
         )  # fmt: skip
         stop = await until(agent, lambda m: m.get("type") == "sstv_tx_stop")
         assert stop["tx_id"] == frame["tx_id"]
         got = await until(browser, is_tx_state("aborted"))
-        assert got["detail"] == "iss_downlink"
+        assert got["detail"] == "out_of_range"
         await browser.disconnect()
         await agent.disconnect()
         return draft

@@ -66,6 +66,7 @@
       preset: "fm",             // 'fm' | 'satellite' | 'custom'
 
       micEnabled: false,
+      sstvTx: false,            // an SSTV picture is on the air: mic blocked (sstv:tx event)
       micError: null,           // string if mic could not be enabled
       micLevel: 0,              // 0..1 — local mic input RMS, measured right at
                                 // the browser capture boundary (before worklet/
@@ -994,6 +995,11 @@
         this._addListener(window, "scan:audio", function (e) {
           self._followScan((e.detail && e.detail.slots) || []);
         });
+        // SSTV section: no microphone while a picture is on the air (it would mix in).
+        this._addListener(window, "sstv:tx", function (e) {
+          self.sstvTx = !!(e.detail && e.detail.active);
+          if (self.sstvTx && self.micEnabled) self.disableMic();
+        });
       },
 
       // Subscribe the scan's RX streams and remember which ones are ours, so the
@@ -1154,7 +1160,7 @@
       // enableMic — getUserMedia + worklet + AudioEncoder
       // ---------------------------------------------------------------------
       enableMic: function () {
-        if (this.micEnabled) return;
+        if (this.micEnabled || this.sstvTx) return;
         var self = this;
         this.micError = null;
 

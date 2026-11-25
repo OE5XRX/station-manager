@@ -37,7 +37,7 @@ Secondary (user): the repeater list and the scanner panel on the control page ta
 
 - A stuck carrier: the station keeps transmitting after the picture ended, after an abort, or after the control link died.
 - SSTV running on a station nobody holds, or surviving a lock hand-over.
-- Transmitting on the ISS downlink (145.800 MHz).
+- ~~Transmitting on the ISS downlink (145.800 MHz).~~ (user, 2026-11-25: removed — a licensed operator decides, and it is allowed.)
 - A transmission without any station identification because both checkboxes were off unnoticed.
 - Pictures kept forever, or photos stored that were never transmitted.
 - Station uplink (LTE with data caps, HAMNET) burdened with audio streams for decoding.
@@ -92,7 +92,7 @@ Size check: the largest RX picture (PD180, 640×496) as PNG must fit the agent s
 2. Server renders the **preview**: crop-to-fill and scale to the mode's resolution, draw the selected callsigns (legible, high-contrast bar), or render the test picture (callsigns, date, time in UTC and local time, mode name, station name) (call for layout). The preview PNG is exactly what will be sent. Uploads are validated (type, size limit, decoded with Pillow's decompression-bomb guard) and held only for the preview session, never stored (user).
 3. **Send guard:**
    - If both checkboxes are off, sending asks for confirmation ("Ohne Rufzeichen senden?") (call; anti-goal "no identification").
-   - TX is refused if the current TX frequency is 145.800 MHz ±10 kHz (ISS downlink) (call).
+   - ~~TX is refused if the current TX frequency is 145.800 MHz ±10 kHz (ISS downlink) (call).~~ (user, 2026-11-25: removed — no ISS-downlink guard; the "ISS" button only tunes the receiver.)
    - TX is refused if the TX frequency is outside the module descriptor's TX `ranges`.
 4. Holder presses "Senden". Server synthesises the SSTV audio (VIS + mode, 8 kHz mono s16) and stores it as a short-lived artefact. It then sends a new control frame `sstv_tx_start{slot, tx_id, url, sha256, duration_s}` (frame name for the builder).
 5. Agent: downloads the audio (agent-authenticated HTTPS, size and sha256 checked), then takes **station-side TX ownership**: suspends the browser keepalive dead-man for this session, keys PTT via the existing `ptt` capability, plays the audio into the slot's TX node, unkeys. **TX level** (call): the SSTV audio is scaled to the station's calibrated TX ceiling (`station_agent/audio/tx_settings.py`, the RF-safety bound) but does **not** pass the voice band-pass/compressor/limiter (`tx_dsp.py`), which would distort the tones. Because only the agent knows the TX settings, playback runs in the agent (call); the audio is a server-generated, checksum-verified PCM/WAV artefact, so parsing is trivial (no untrusted RF input on the TX side). If the builder prefers a unit, the instance name must match the wrapper regex (e.g. `sstvtx`, not `sstv-tx`) and the gain must be passed in.
@@ -158,7 +158,7 @@ Frame names and shapes; app layout; decoder and encoder libraries (within §5.5/
 ## 9. Testing expectations
 
 - **Agent:** SSTV plugin lifecycle, output parsing (start/line/image), spool behaviour for `sstv_image`, TX session: download + checksum, keying, every unkey path, dead-man suspension and restoration.
-- **Server:** decoder-output dispatch by decoder name, lock-hook stop of RX/TX on every lock path, exclusivity with the scanner, permission matrix, send guards (ISS frequency, TX range, no-callsign confirmation), preview == sent picture, synthesis round-trip per mode, gallery storage, download, deletion rules, retention.
+- **Server:** decoder-output dispatch by decoder name, lock-hook stop of RX/TX on every lock path, exclusivity with the scanner, permission matrix, send guards (TX range, no-callsign confirmation), preview == sent picture, synthesis round-trip per mode, gallery storage, download, deletion rules, retention.
 - **E2E (probe):** simulated agent streams lines and a final picture → browser receives lines, gallery entry appears; TX: browser → server synthesis → fake agent downloads and reports progress → gallery entry on done.
 - **linux-image:** static test for the new wrapper case(s) and decoder package.
 - **Real/HIL:** .211 spike (§7.1–7.3), then one full RX of an SSTV signal and one TX into a dummy load decoded by a second receiver.

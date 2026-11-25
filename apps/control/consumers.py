@@ -98,7 +98,6 @@ _SSTV_ERRORS = {
     "no_callsign": gettext_lazy("No callsign on the picture — confirm to send without one"),
     "module_offline": gettext_lazy("The module is offline"),
     "no_frequency": gettext_lazy("The TX frequency of the module is unknown"),
-    "iss_downlink": gettext_lazy("Sending on the ISS downlink (145.800 MHz) is not allowed"),
     "out_of_range": gettext_lazy("The TX frequency is outside the module's TX range"),
     "aborted": gettext_lazy("The transmission was aborted"),
     "scan_active": gettext_lazy("Stop the scanner before sending a picture"),

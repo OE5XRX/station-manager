@@ -156,6 +156,7 @@ CONTRACT_METHODS = [
     "moduleOnline",
     "canControl",
     "canOperate",
+    "canKey",
     "pttState",
     "pttPhase",
     "pttDown",
@@ -183,7 +184,17 @@ OBJECT_PROTOTYPE_NAMES = (
 )
 
 
-@pytest.mark.parametrize("js", ["control-panel", "audio-panel", "scanner-panel", "repeater-panel"])
+@pytest.mark.parametrize(
+    "js",
+    [
+        "control-panel",
+        "audio-panel",
+        "scanner-panel",
+        "repeater-panel",
+        "sstv-panel",
+        "collapsible",
+    ],
+)
 def test_alpine_component_members_do_not_shadow_object_prototype(js):
     text = (REPO_ROOT / "static/js" / f"{js}.js").read_text()
     for name in OBJECT_PROTOTYPE_NAMES:

@@ -33,6 +33,7 @@
   </div>
   {% include "control/_repeater_panel.html" %}
   {% include "control/_scanner_panel.html" %}
+  {% include "control/_sstv_panel.html" %}
   {# Audio panel: sibling to #control-panel, owns its own x-data="audioPanel" root. #}
   {% include "control/_audio_panel.html" %}
 {% endblock %}
@@ -40,5 +41,8 @@
 <script src="{% static 'js/control-panel.js' %}" nonce="{{ csp_nonce }}"></script>
 <script src="{% static 'js/repeater-panel.js' %}" nonce="{{ csp_nonce }}"></script>
 <script src="{% static 'js/scanner-panel.js' %}" nonce="{{ csp_nonce }}"></script>
+<script src="{% static 'js/collapsible.js' %}" nonce="{{ csp_nonce }}"></script>
+<script src="{% static 'js/sstv-logic.js' %}" nonce="{{ csp_nonce }}"></script>
+<script src="{% static 'js/sstv-panel.js' %}" nonce="{{ csp_nonce }}"></script>
 <script src="{% static 'js/audio-logic.js' %}" nonce="{{ csp_nonce }}"></script>
 <script src="{% static 'js/audio-panel.js' %}" nonce="{{ csp_nonce }}"></script>{% endblock %}

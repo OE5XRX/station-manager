@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 19:40+0100\n"
+"POT-Creation-Date: 2026-11-25 06:13+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -229,7 +229,7 @@ msgstr "Kein iGate-Rufzeichen: wird nicht ins APRS-IS gegated."
 msgid "No coordinates: not gated to APRS-IS."
 msgstr "Keine Koordinaten: wird nicht ins APRS-IS gegated."
 
-#: static/js/audio-panel.js:190
+#: static/js/audio-panel.js:191
 msgid ""
 "WebCodecs is not supported in this browser. Please use a recent version of "
 "Chrome or Edge."
@@ -237,47 +237,47 @@ msgstr ""
 "WebCodecs wird von diesem Browser nicht unterstützt. Bitte verwende eine "
 "aktuelle Version von Chrome oder Edge."
 
-#: static/js/audio-panel.js:301 static/js/control-panel.js:302
+#: static/js/audio-panel.js:302 static/js/control-panel.js:329
 msgid "You are not signed in."
 msgstr "Du bist nicht angemeldet."
 
-#: static/js/audio-panel.js:303
+#: static/js/audio-panel.js:304
 msgid "You are not permitted to access this station's audio."
 msgstr "Du hast keine Berechtigung für das Audio dieser Station."
 
-#: static/js/audio-panel.js:304 static/js/control-panel.js:305
+#: static/js/audio-panel.js:305 static/js/control-panel.js:332
 msgid "Station not found."
 msgstr "Station nicht gefunden."
 
-#: static/js/audio-panel.js:445 static/js/control-logic.js:256
+#: static/js/audio-panel.js:446 static/js/control-logic.js:256
 msgid "Not permitted"
 msgstr "Nicht erlaubt"
 
-#: static/js/audio-panel.js:1165
+#: static/js/audio-panel.js:1171
 msgid "Microphone unavailable: audio worklet failed to load"
 msgstr "Mikrofon nicht verfügbar: Audio-Worklet konnte nicht geladen werden"
 
-#: static/js/audio-panel.js:1183
+#: static/js/audio-panel.js:1189
 msgid "Microphone unavailable: no audio context"
 msgstr "Mikrofon nicht verfügbar: kein Audio-Kontext"
 
-#: static/js/audio-panel.js:1271
+#: static/js/audio-panel.js:1277
 msgid "Microphone worklet crashed (processor error)"
 msgstr "Mikrofon-Worklet abgestürzt (Prozessorfehler)"
 
-#: static/js/audio-panel.js:1343
+#: static/js/audio-panel.js:1349
 msgid "Microphone permission denied"
 msgstr "Mikrofon-Berechtigung verweigert"
 
-#: static/js/audio-panel.js:1345
+#: static/js/audio-panel.js:1351
 msgid "No microphone found"
 msgstr "Kein Mikrofon gefunden"
 
-#: static/js/audio-panel.js:1348
+#: static/js/audio-panel.js:1354
 msgid "Microphone unavailable: %(error)s"
 msgstr "Mikrofon nicht verfügbar: %(error)s"
 
-#: static/js/audio-panel.js:1349
+#: static/js/audio-panel.js:1355
 msgid "unknown error"
 msgstr "unbekannter Fehler"
 
@@ -357,11 +357,11 @@ msgstr "unbekannt"
 msgid "Passive: off"
 msgstr "Passiv: aus"
 
-#: static/js/control-panel.js:304
+#: static/js/control-panel.js:331
 msgid "You are not permitted to control this station."
 msgstr "Du hast keine Berechtigung, diese Station zu bedienen."
 
-#: static/js/control-panel.js:619
+#: static/js/control-panel.js:650
 msgid "Station waiting for firmware update since %(since)s"
 msgstr "Station wartet auf Firmware-Update seit %(since)s"
 
@@ -370,6 +370,7 @@ msgid "simplex"
 msgstr "Simplex"
 
 #: static/js/repeater-panel.js:154 static/js/scanner-panel.js:120
+#: static/js/sstv-logic.js:132
 msgid "Take control of the station first."
 msgstr "Übernimm zuerst die Bedienung der Station."
 
@@ -394,6 +395,7 @@ msgid "Release PTT before switching repeaters."
 msgstr "Lass PTT los, bevor du den Repeater wechselst."
 
 #: static/js/repeater-panel.js:164 static/js/scanner-panel.js:128
+#: static/js/sstv-logic.js:147
 msgid "The station connection is down. Wait for it to reconnect."
 msgstr ""
 "Die Verbindung zur Station ist unterbrochen. Warte, bis sie sich wieder "
@@ -519,7 +521,7 @@ msgstr ""
 "Nichts zu scannen: Kein Repeater in Reichweite oder in den gewählten Listen "
 "passt zu den Modulen dieser Station."
 
-#: static/js/scanner-panel.js:130
+#: static/js/scanner-panel.js:130 static/js/sstv-logic.js:148
 msgid "The station did not answer in time."
 msgstr "Die Station hat nicht rechtzeitig geantwortet."
 
@@ -544,6 +546,203 @@ msgstr "Gib einen Radius größer als 0 km ein."
 #: static/js/scanner-panel.js:347
 msgid "Choose a radius or at least one scan list."
 msgstr "Wähle einen Radius oder mindestens eine Scan-Liste."
+
+#: static/js/sstv-logic.js:133
+msgid "Your membership level may not use SSTV."
+msgstr "Deine Mitgliedsstufe darf SSTV nicht verwenden."
+
+#: static/js/sstv-logic.js:134
+msgid "The station software is too old for SSTV."
+msgstr "Station-Software zu alt für SSTV."
+
+#: static/js/sstv-logic.js:135
+msgid "This module cannot receive."
+msgstr "Dieses Modul kann nicht empfangen."
+
+#: static/js/sstv-logic.js:136
+msgid "A picture is being sent. Wait until it has finished."
+msgstr "Gerade wird ein Bild gesendet. Warte, bis es fertig ist."
+
+#: static/js/sstv-logic.js:137
+msgid "The preview is gone. Create a new preview."
+msgstr "Die Vorschau ist nicht mehr da. Erstelle eine neue Vorschau."
+
+#: static/js/sstv-logic.js:138
+msgid "The preview is older than one hour. Create a new preview."
+msgstr "Die Vorschau ist älter als eine Stunde. Erstelle eine neue Vorschau."
+
+#: static/js/sstv-logic.js:139
+msgid "The picture carries no callsign. Confirm to send it anyway."
+msgstr "Auf dem Bild ist kein Rufzeichen. Bestätige, um es trotzdem zu senden."
+
+#: static/js/sstv-logic.js:140
+msgid "The module is offline."
+msgstr "Das Modul ist offline."
+
+#: static/js/sstv-logic.js:141
+msgid "The module has not reported its TX frequency yet."
+msgstr "Das Modul hat seine TX-Frequenz noch nicht gemeldet."
+
+#: static/js/sstv-logic.js:142
+msgid "The TX frequency is outside the module's TX range."
+msgstr "Die TX-Frequenz liegt außerhalb des TX-Bereichs des Moduls."
+
+#: static/js/sstv-logic.js:143 static/js/sstv-logic.js:187
+msgid "The transmission was aborted."
+msgstr "Die Aussendung wurde abgebrochen."
+
+#: static/js/sstv-logic.js:144
+msgid "Stop the scanner before sending a picture."
+msgstr "Stoppe den Scanner, bevor du ein Bild sendest."
+
+#: static/js/sstv-logic.js:145
+msgid "Release PTT before sending a picture."
+msgstr "Lass die PTT los, bevor du ein Bild sendest."
+
+#: static/js/sstv-logic.js:146
+msgid "Nothing is running."
+msgstr "Es läuft nichts."
+
+#: static/js/sstv-logic.js:149
+msgid "Choose an SSTV mode."
+msgstr "Wähle eine SSTV-Betriebsart."
+
+#: static/js/sstv-logic.js:150
+msgid "Choose a photo or the test picture."
+msgstr "Wähle ein Foto oder das Testbild."
+
+#: static/js/sstv-logic.js:151
+msgid "Choose a photo to send."
+msgstr "Wähle ein Foto zum Senden."
+
+#: static/js/sstv-logic.js:152
+msgid "No module of this station can transmit."
+msgstr "Kein Modul dieser Station kann senden."
+
+#: static/js/sstv-logic.js:153
+msgid "SSTV failed on the server. Try again."
+msgstr "SSTV ist am Server fehlgeschlagen. Versuch es noch einmal."
+
+#: static/js/sstv-logic.js:157
+msgid "The request was refused."
+msgstr "Die Anfrage wurde abgelehnt."
+
+#: static/js/sstv-logic.js:164 static/js/sstv-logic.js:173
+msgid "Receiving stopped because of an error."
+msgstr "Der Empfang wurde wegen eines Fehlers beendet."
+
+#: static/js/sstv-logic.js:166
+msgid "Receiving ended after 30 minutes. Start again to continue."
+msgstr "Der Empfang endete nach 30 Minuten. Starte ihn neu, um weiterzumachen."
+
+#: static/js/sstv-logic.js:167
+msgid "Receiving stopped because a scan was started."
+msgstr "Der Empfang wurde beendet, weil ein Scan gestartet wurde."
+
+#: static/js/sstv-logic.js:168
+msgid "Receiving stopped because the lock changed hands."
+msgstr ""
+"Der Empfang wurde beendet, weil die Steuerung den Besitzer gewechselt hat."
+
+#: static/js/sstv-logic.js:170
+msgid "Receiving stopped because the station connection was lost."
+msgstr ""
+"Der Empfang wurde beendet, weil die Verbindung zur Station verloren ging."
+
+#: static/js/sstv-logic.js:180
+msgid "Picture sent. It is in the gallery."
+msgstr "Bild gesendet. Es ist in der Galerie."
+
+#: static/js/sstv-logic.js:181
+msgid "You aborted the transmission."
+msgstr "Du hast die Aussendung abgebrochen."
+
+#: static/js/sstv-logic.js:182
+msgid "The transmission was aborted because the lock changed hands."
+msgstr ""
+"Die Aussendung wurde abgebrochen, weil die Steuerung den Besitzer gewechselt "
+"hat."
+
+#: static/js/sstv-logic.js:184
+msgid "The transmission was aborted because the station connection was lost."
+msgstr ""
+"Die Aussendung wurde abgebrochen, weil die Verbindung zur Station verloren "
+"ging."
+
+#: static/js/sstv-logic.js:188
+msgid "The transmission failed. The station unkeyed."
+msgstr ""
+"Die Aussendung ist fehlgeschlagen. Die Station hat den Sender abgeschaltet."
+
+#: static/js/sstv-logic.js:198
+msgid "The file is not a JPEG, PNG, WebP or GIF picture."
+msgstr "Die Datei ist kein JPEG-, PNG-, WebP- oder GIF-Bild."
+
+#: static/js/sstv-logic.js:201
+msgid "The file is larger than %(mb)s MB."
+msgstr "Die Datei ist größer als %(mb)s MB."
+
+#: static/js/sstv-logic.js:207
+msgid "Preparing"
+msgstr "Wird vorbereitet"
+
+#: static/js/sstv-logic.js:208
+msgid "Loading the picture onto the station"
+msgstr "Bild wird auf die Station geladen"
+
+#: static/js/sstv-logic.js:209
+msgid "On the air"
+msgstr "Auf Sendung"
+
+#: static/js/sstv-panel.js:294
+msgid "Slot %(slot)s (%(module)s)"
+msgstr "Slot %(slot)s (%(module)s)"
+
+#: static/js/sstv-panel.js:333
+msgid "Take control of the station to send a picture."
+msgstr "Übernimm die Steuerung der Station, um ein Bild zu senden."
+
+#: static/js/sstv-panel.js:335
+msgid "Create a preview first. It shows exactly what will be sent."
+msgstr "Erstelle zuerst eine Vorschau. Sie zeigt genau, was gesendet wird."
+
+#: static/js/sstv-panel.js:341
+msgid "Not receiving"
+msgstr "Kein Empfang aktiv"
+
+#: static/js/sstv-panel.js:342
+msgid "Starting receiver"
+msgstr "Empfänger startet"
+
+#: static/js/sstv-panel.js:343
+msgid "Paused while sending"
+msgstr "Pausiert während des Sendens"
+
+#: static/js/sstv-panel.js:344
+msgid "Receiving a picture"
+msgstr "Bild wird empfangen"
+
+#: static/js/sstv-panel.js:344
+msgid "Listening for a picture"
+msgstr "Warte auf ein Bild"
+
+#: static/js/sstv-panel.js:353
+msgid "%(mode)s, row %(row)s of %(rows)s"
+msgstr "%(mode)s, Zeile %(row)s von %(rows)s"
+
+#: static/js/sstv-panel.js:368
+msgid "On the air, %(pct)s"
+msgstr "Auf Sendung, %(pct)s"
+
+#: static/js/sstv-panel.js:483 static/js/sstv-panel.js:845
+msgid "The ISS frequency could not be set."
+msgstr "Die ISS-Frequenz konnte nicht gesetzt werden."
+
+#: static/js/sstv-panel.js:617
+msgid "The preview could not be created. Check the connection and try again."
+msgstr ""
+"Die Vorschau konnte nicht erstellt werden. Prüfe die Verbindung und versuch "
+"es noch einmal."
 
 #: static/webpush/push.js:37
 msgid "Could not remove device."
