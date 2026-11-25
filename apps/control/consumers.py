@@ -8,7 +8,7 @@ import django.conf
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
-from django.utils.translation import gettext
+from django.utils.translation import gettext, gettext_lazy
 
 from apps.accounts.permissions import (
     AreaConsumerMixin,
@@ -19,6 +19,9 @@ from apps.accounts.permissions import (
 )
 from apps.passive import status as passive_status
 from apps.passive.supervisor import WILDCARD_TOUCH
+from apps.sstv import control as sstv_control
+from apps.sstv import ingest as sstv_ingest
+from apps.sstv import tx as sstv_tx
 
 from . import (
     agent_presence,
@@ -36,6 +39,8 @@ from .models import AgentConnection, StationModule
 # Prefix of request ids the passive-services supervisor puts on its system commands: their
 # results go to the supervisor, never to the browsers (apps.passive.supervisor).
 _PASSIVE_REQUEST_PREFIX = "passive-"
+# Request ids reserved for system commands (results never reach a browser).
+_RESERVED_REQUEST_PREFIXES = (_PASSIVE_REQUEST_PREFIX, sstv_control.REQUEST_PREFIX)
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +77,35 @@ _USE_ACTIONS = frozenset(
         "apply_repeater",
         "scan_start",
         "scan_control",
+        "sstv_rx_start",
+        "sstv_rx_stop",
+        "sstv_tx_start",
+        "sstv_tx_stop",
     }
 )
+
+# SSTV frames additionally need sstv.use.
+_SSTV_ACTIONS = frozenset({"sstv_rx_start", "sstv_rx_stop", "sstv_tx_start", "sstv_tx_stop"})
+
+# User-facing texts for SSTV refusals (codes are the contract, texts are cosmetic).
+_SSTV_ERRORS = {
+    "not_locked": gettext_lazy("You do not hold the lock"),
+    "unsupported": gettext_lazy("This station cannot do SSTV yet"),
+    "invalid_slot": gettext_lazy("No receiver in this slot"),
+    "sstv_busy": gettext_lazy("An SSTV transmission is already running"),
+    "not_found": gettext_lazy("Preview not found — create a new preview"),
+    "expired": gettext_lazy("The preview is older than one hour — create a new preview"),
+    "no_callsign": gettext_lazy("No callsign on the picture — confirm to send without one"),
+    "module_offline": gettext_lazy("The module is offline"),
+    "no_frequency": gettext_lazy("The TX frequency of the module is unknown"),
+    "iss_downlink": gettext_lazy("Sending on the ISS downlink (145.800 MHz) is not allowed"),
+    "out_of_range": gettext_lazy("The TX frequency is outside the module's TX range"),
+    "aborted": gettext_lazy("The transmission was aborted"),
+    "scan_active": gettext_lazy("Stop the scanner before sending a picture"),
+    "ptt_active": gettext_lazy("Release PTT before sending a picture"),
+    "no_active_sstv": gettext_lazy("No SSTV session is running"),
+    "internal_error": gettext_lazy("SSTV could not be started"),
+}
 
 # User-facing texts for scan_start refusals (codes are the contract, texts are cosmetic).
 _SCAN_ERRORS = {
@@ -161,6 +193,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         # (server restart, superseded half-open socket) is stale and would keep the lock
         # from idling out.
         await self._end_scan(station, "agent reconnect")
+        # Same for SSTV: the agent stopped RX and aborted TX when its link died, and a
+        # transmission is never handed out again (it must not key twice).
+        await self._sstv_agent_gone(station)
         await self.accept()
         self.sweep_task = asyncio.create_task(self._sweep_loop())
 
@@ -187,6 +222,7 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 await self.passive.on_agent_disconnect()
                 # The agent stops its scan on disconnect (dead-man): only drop the row.
                 await self._end_scan(station, "disconnect")
+                await self._sstv_agent_gone(station)
                 freed = await self._force_free(station)
                 if freed:
                     # Agent disconnect clears any held lock -> PTT must die too.
@@ -221,6 +257,8 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 await self._reapply_persisted(station, msg.get("slots", []))
                 await self._replay_telemetry(station)
             self.passive.set_agent_features(msg.get("features"))
+            if station is not None:
+                await self._set_features(station, msg.get("features"))
             await self.passive.on_inventory()
             await self._broadcast("control.inventory", {"msg": msg})
             if drain_changed:
@@ -234,24 +272,44 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 await self._apply_state(
                     station, msg.get("slot"), msg.get("module"), msg.get("values", {})
                 )
+                # A transmission on a slot that now reports a forbidden TX frequency
+                # (a write queued on the agent before it took the slot) is aborted.
+                # Only frames carrying the TX frequency (not the telemetry polls).
+                values = msg.get("values")
+                if isinstance(values, dict) and "tx_frequency" in values:
+                    await self._sstv_call(sstv_tx.on_module_state, msg.get("slot"))
             await self._broadcast("control.state", {"msg": msg})
         elif mtype == "result":
             rid = msg.get("request_id")
             if isinstance(rid, str) and rid.startswith(_PASSIVE_REQUEST_PREFIX):
                 await self.passive.on_result(msg)
+            elif isinstance(rid, str) and rid.startswith(sstv_control.REQUEST_PREFIX):
+                await self._sstv_call(self._sstv_result, msg)
             else:
                 await self._broadcast("control.result", {"msg": msg})
         elif mtype == "decoder_state":
-            await self.passive.on_decoder_state(msg)
+            if msg.get("decoder") == sstv_control.DECODER:
+                await self._sstv_call(sstv_control.on_decoder_state, msg)
+            else:
+                await self.passive.on_decoder_state(msg)
         elif mtype == "decoder_snapshot":
             await self.passive.on_snapshot(msg)
+            decoders = msg.get("decoders")
+            await self._sstv_call(
+                sstv_control.on_snapshot, decoders if isinstance(decoders, list) else []
+            )
+        elif mtype == "sstv_tx_state":
+            await self._sstv_call(sstv_tx.on_tx_state, msg)
         elif mtype == "scan_state":
             station = await self._cached_station()
             if station is not None:
                 await self._apply_scan_state(station, msg)
             await self._broadcast("control.scan_state", {"msg": self._enrich_scan_state(msg)})
         elif mtype == "decoder_output":
-            await self._ingest_decoder_output(msg)
+            if msg.get("decoder") == sstv_control.DECODER:
+                await self._ingest_sstv_output(msg)
+            else:
+                await self._ingest_decoder_output(msg)
         elif mtype == "event":
             updating = registry.FIRMWARE_UPDATING_EVENTS.get(msg.get("event"))
             if updating is not None:
@@ -293,6 +351,60 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 "seqs": [msg["seq"]],
             }
             await self.send(text_data=json.dumps(ack_frame))
+
+    async def _ingest_sstv_output(self, msg):
+        """SSTV decoder output: live rows go straight to the control pages (unreliable, no
+        DB, no ack); ``sstv_start``/``sstv_image`` are reliable and acked once handled."""
+        if msg.get("reliable") is not True:
+            if msg.get("kind") == "sstv_line":
+                frame = sstv_ingest.line_frame(msg)
+                if frame is not None:
+                    await self._broadcast("control.sstv", {"msg": frame})
+            return
+        try:
+            ack = await database_sync_to_async(sstv_ingest.ingest_output)(
+                self.station_id, msg, recv_now=timezone.now()
+            )
+        except Exception:
+            logger.exception("sstv output ingest failed (station %s)", self.station_id)
+            return  # unacked: the agent resends
+        if ack:
+            ack_frame = {
+                "v": 1,
+                "type": "decoder_ack",
+                "epoch": msg["epoch"],
+                "seqs": [msg["seq"]],
+            }
+            await self.send(text_data=json.dumps(ack_frame))
+
+    async def _sstv_call(self, fn, *args):
+        """Run a sync ``apps.sstv`` handler for this station; a failure never breaks the
+        control socket."""
+        try:
+            station = await self._cached_station()
+            if station is not None:
+                await database_sync_to_async(fn)(station, *args)
+        except Exception:
+            logger.exception("control: sstv %s failed", getattr(fn, "__name__", fn))
+
+    @staticmethod
+    def _sstv_result(station, msg):
+        sstv_control.on_rx_result(station, msg)
+        sstv_tx.on_result(station, msg)
+
+    async def _sstv_agent_gone(self, station):
+        try:
+            await database_sync_to_async(sstv_control.agent_gone)(station)
+        except Exception:
+            logger.exception("control: ending SSTV after agent link loss failed")
+
+    async def _set_features(self, station, features):
+        try:
+            await database_sync_to_async(agent_presence.set_features)(
+                station, AgentConnection.Kind.CONTROL, self.channel_name, features
+            )
+        except Exception:
+            logger.exception("control: storing agent features failed")
 
     async def _replay_telemetry(self, station):
         """Re-arm the agent with the browsers' aggregated telemetry demand: a
@@ -413,6 +525,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
         pass
 
     async def control_passive(self, event):
+        pass
+
+    async def control_sstv(self, event):
         pass
 
     async def control_passive_preempt(self, event):
@@ -953,6 +1068,21 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self._send_lock_status(station)
         await self._send_scan_snapshot(station)
         await self._send_passive_snapshot(station)
+        await self._send_sstv_snapshot(station)
+
+    async def _send_sstv_snapshot(self, station):
+        """A running SSTV session (RX, transmission on the air) for a (re)loaded page.
+        Nothing when idle: the page starts idle."""
+        try:
+            frames = await database_sync_to_async(
+                lambda: [sstv_control.live_state_frame(station), sstv_tx.sending_frame(station)]
+            )()
+        except Exception:
+            logger.exception("control: SSTV snapshot failed")
+            return
+        for frame in frames:
+            if frame is not None:
+                await self.send(text_data=json.dumps(frame))
 
     async def _send_passive_snapshot(self, station):
         """Passive-service state from the DB (works while the agent is offline): the open
@@ -1045,12 +1175,15 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
                 # A holder who lost control.use must not keep the lock (and TX path).
                 await self._revoke_if_holder(station)
                 return
+        if mtype in _SSTV_ACTIONS:
+            if not await self.area_allows("use", area="sstv", request_id=msg.get("request_id")):
+                return
 
         rid = msg.get("request_id")
         if (
             mtype in ("command", "apply_repeater")
             and isinstance(rid, str)
-            and rid.startswith(_PASSIVE_REQUEST_PREFIX)
+            and rid.startswith(_RESERVED_REQUEST_PREFIXES)
         ):
             # Reserved for system commands: their results never reach a browser.
             await self._error(rid, "invalid_request_id", "request_id prefix is reserved")
@@ -1064,6 +1197,14 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             await self._handle_scan_start(station, msg)
         elif mtype == "scan_control":
             await self._handle_scan_control(station, msg)
+        elif mtype == "sstv_rx_start":
+            await self._handle_sstv_rx_start(station, msg)
+        elif mtype == "sstv_rx_stop":
+            await self._handle_sstv_stop(station, msg, sstv_control.stop_rx)
+        elif mtype == "sstv_tx_start":
+            await self._handle_sstv_tx_start(station, msg)
+        elif mtype == "sstv_tx_stop":
+            await self._handle_sstv_stop(station, msg, sstv_tx.abort_tx)
         elif mtype == "ptt_keepalive":
             if await self._touch_if_holder(station):
                 await self._relay(msg)
@@ -1093,6 +1234,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
     async def _handle_command(self, station, msg):
         if not await self._touch_if_holder(station):
             await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
+            return
+        if msg.get("op") != "get" and await self._sstv_blocks(station, msg):
+            await self._sstv_error(msg.get("request_id"), "sstv_busy")
             return
         allowed, module_type = await self._authorize_command(station, msg)
         if not allowed:
@@ -1160,6 +1304,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if code is not None:
             await self._error(request_id, code, gettext("Repeater cannot be applied here"))
             return
+        if await self._sstv_on_air(station, plan["slot"]):
+            await self._sstv_error(request_id, "sstv_busy")
+            return
         try:
             denied = [
                 cap
@@ -1223,6 +1370,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if not await self._touch_if_holder(station):
             await self._error(request_id, "not_locked", "You do not hold the lock")
             return
+        if await self._sstv_sending(station):
+            await self._sstv_error(request_id, "sstv_busy")
+            return
         try:
             code, frame = await self._start_scan(station, msg)
         except Exception:
@@ -1231,7 +1381,122 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if code is not None:
             await self._error(request_id, code, _SCAN_ERRORS.get(code, code))
             return
+        # Last one started wins (spec §5.2): the scan ends SSTV receive.
+        try:
+            await database_sync_to_async(sstv_control.stop_rx)(station, "scan started")
+        except Exception:
+            logger.exception("control: stopping SSTV receive for a scan failed")
         await self._relay(frame)
+
+    async def _sstv_error(self, request_id, code):
+        await self._error(request_id, code, str(_SSTV_ERRORS.get(code, code)))
+
+    async def _handle_sstv_rx_start(self, station, msg):
+        """Start SSTV receive (spec §5.3) on ``slot``; stops a running scan first."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._sstv_error(request_id, "not_locked")
+            return
+        try:
+            code = await database_sync_to_async(self._sstv_start_rx)(station, msg.get("slot"))
+        except Exception:
+            logger.exception("control: starting SSTV receive failed")
+            code = "internal_error"
+        if code is not None:
+            await self._sstv_error(request_id, code)
+
+    async def _sstv_blocks(self, station, msg):
+        """A write that must wait for the transmission on the air to end: any setting of
+        its slot, voice PTT on (the mic would mix into the SSTV audio — PTT off stays a
+        no-op on the agent) and a TX route onto that slot. Settings are only checked once
+        by the send guards."""
+        capability, value = msg.get("capability"), msg.get("value")
+        if capability == "ptt":
+            # Voice PTT on any slot while a picture is on the air: the mic bridge follows
+            # the gate's TX route, which may point at the transmitting slot.
+            return bool(value) and await self._sstv_sending(station)
+        if capability == "tx_route" and isinstance(value, dict):
+            if await self._sstv_on_air(station, value.get("slot")):
+                return True
+        return await self._sstv_on_air(station, msg.get("slot"))
+
+    async def _sstv_sending(self, station):
+        try:
+            return await database_sync_to_async(
+                lambda: sstv_control.sending_transmissions(station).exists()
+            )()
+        except Exception:
+            logger.exception("control: SSTV sending check failed")
+            return True
+
+    async def _sstv_on_air(self, station, slot):
+        try:
+            return await database_sync_to_async(sstv_tx.slot_on_air)(station, slot)
+        except Exception:
+            logger.exception("control: SSTV on-air check failed")
+            return True  # fail closed: never retune a transmitting slot
+
+    def _sstv_start_rx(self, station, slot):
+        user = _fresh_user(self.user)
+        if user is None:
+            return "not_locked"
+        return sstv_control.start_rx(station, user, slot)
+
+    async def _handle_sstv_stop(self, station, msg, stop):
+        """Operator stop of SSTV receive (``stop_rx``) or transmit (``abort_tx``)."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._sstv_error(request_id, "not_locked")
+            return
+        try:
+            stopped = await database_sync_to_async(stop)(station, "operator")
+        except Exception:
+            logger.exception("control: stopping SSTV failed")
+            stopped = True  # logged; nothing sensible to tell the browser
+        if not stopped:
+            await self._sstv_error(request_id, "no_active_sstv")
+
+    async def _handle_sstv_tx_start(self, station, msg):
+        """Send the caller's previewed picture (spec §5.4): guards at send time, then the
+        audio is synthesised off the event loop and handed to the agent."""
+        request_id = msg.get("request_id")
+        if not await self._touch_if_holder(station):
+            await self._sstv_error(request_id, "not_locked")
+            return
+        try:
+            code, transmission = await database_sync_to_async(self._sstv_claim)(
+                station, msg.get("transmission_id"), msg.get("confirm_no_callsign") is True
+            )
+        except Exception:
+            logger.exception("control: SSTV send guards failed")
+            code, transmission = "internal_error", None
+        if code is not None:
+            await self._sstv_error(request_id, code)
+            return
+        try:
+            audio = await asyncio.to_thread(sstv_tx.synthesise, transmission)
+            code = await database_sync_to_async(sstv_tx.start_sending)(
+                station, transmission, audio
+            )
+        except Exception:
+            logger.exception("control: SSTV synthesis failed")
+            try:
+                await database_sync_to_async(sstv_tx.fail)(
+                    station, transmission.pk, "synthesis_failed"
+                )
+            except Exception:
+                logger.exception("control: ending the failed SSTV transmission failed")
+            code = "internal_error"
+        if code is not None:
+            await self._sstv_error(request_id, code)
+
+    def _sstv_claim(self, station, transmission_id, confirm_no_callsign):
+        user = _fresh_user(self.user)
+        if user is None:
+            return "not_locked", None
+        return sstv_tx.claim(
+            station, user, transmission_id, confirm_no_callsign=confirm_no_callsign
+        )
 
     async def _handle_scan_control(self, station, msg):
         """stop/skip/hold/resume for the station's running scan (lock holder only)."""
@@ -1560,6 +1825,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_passive(self, event):
+        await self.send(text_data=json.dumps(event["msg"]))
+
+    async def control_sstv(self, event):
         await self.send(text_data=json.dumps(event["msg"]))
 
     async def control_result(self, event):

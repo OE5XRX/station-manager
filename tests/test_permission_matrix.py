@@ -130,6 +130,7 @@ WS = [
     ("control", "control", "view", "connect"),
     ("control", "control", "use", "lock_acquire"),
     ("control", "control", "manage", "command:filter_hpf"),
+    ("control", "sstv", "use", "sstv_rx_start"),
     ("audio", "control", "view", "connect"),
     ("audio", "control", "use", "mic_open"),
     ("terminal", "terminal", "use", "connect"),
@@ -369,6 +370,8 @@ async def _ws_case(station, user, consumer, action):
     elif action == "mic_open":
         # The audio protocol's mic_open carries no request_id (its frames neither).
         await comm.send_json_to({"type": "mic_open"})
+    elif action == "sstv_rx_start":
+        await comm.send_json_to({"type": "sstv_rx_start", "request_id": rid, "slot": 1})
     elif action.startswith("command:"):
         # The capability gate sits behind the lock: take it first (a no-op
         # forbidden for levels without control.use, which the command repeats).
@@ -437,6 +440,9 @@ def test_ws_matrix(control_agent_auth, level, entry):
         elif action == "mic_open":
             # Past the permission gate: the lock-less open is refused as not_locked.
             assert any(f.get("code") == "not_locked" for f in frames), frames
+        elif action == "sstv_rx_start":
+            # Past both permission gates (control.use, sstv.use): refused for the lock.
+            assert any((f.get("error") or {}).get("code") == "not_locked" for f in frames), frames
         elif action.startswith("command:"):
             assert [o for o in agent_out if o["type"] == "websocket.send"], agent_out
     else:

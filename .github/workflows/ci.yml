@@ -219,3 +219,7 @@ jobs:
       # `changes` JSON to text and uses __regex — backend-specific SQL.
       - name: Run retention tests on Postgres
         run: pytest -q tests/test_retention.py tests/test_enforce_retention_command.py
+
+      # SSTV row locking (select_for_update with nullable joins) is backend-specific.
+      - name: Run SSTV server tests on Postgres
+        run: pytest -q tests/test_sstv_rx_server.py tests/test_sstv_tx_server.py

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views_gallery
+from . import views, views_gallery
 
 app_name = "sstv"
 urlpatterns = [
@@ -19,5 +19,11 @@ urlpatterns = [
         "<int:pk>/sstv/<uuid:image_id>/delete/",
         views_gallery.SstvDeleteView.as_view(),
         name="delete",
+    ),
+    path("<int:pk>/sstv/preview/", views.PreviewView.as_view(), name="preview"),
+    path(
+        "<int:pk>/sstv/preview/<uuid:tx_id>/",
+        views.PreviewImageView.as_view(),
+        name="preview_image",
     ),
 ]

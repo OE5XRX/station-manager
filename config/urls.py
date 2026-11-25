@@ -49,6 +49,8 @@ javascript_catalog = login_not_required(
 
 urlpatterns = [
     path("", include("apps.webpush.urls")),
+    # Agent download of SSTV TX audio (DeviceKey), before the generic API include.
+    path("api/v1/stations/sstv/", include("apps.sstv.api_urls")),
     path("api/", include("apps.api.urls")),
     path(
         "api/v1/module-firmware/",

@@ -9,4 +9,14 @@ class SstvConfig(AppConfig):
     verbose_name = _("SSTV")
 
     def ready(self):
-        from . import signals  # noqa: F401 — deletes stored files with their rows
+        from apps.control import lock, lock_hooks
+
+        from . import (
+            control,
+            signals,  # noqa: F401 — deletes stored files with their rows
+        )
+
+        # Every lock change ends SSTV (spec §5.2); a running session keeps the lock busy.
+        lock_hooks.register_release_hook(control.on_lock_released)
+        lock_hooks.register_acquire_hook(control.on_lock_acquired)
+        lock.register_activity_check(control.counts_as_activity)
