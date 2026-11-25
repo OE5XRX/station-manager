@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 06:13+0100\n"
+"POT-Creation-Date: 2026-11-25 16:32+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -6294,6 +6294,113 @@ msgstr "Schwellwert-Zustand"
 msgid "threshold states"
 msgstr "Schwellwert-Zustände"
 
+#: apps/monitoring/notifications.py:78
+#, python-format
+msgid "[OE5XRX] %(severity)s: %(title)s"
+msgstr "[OE5XRX] %(severity)s: %(title)s"
+
+#: apps/monitoring/notifications.py:98 apps/monitoring/notifications.py:172
+#, python-format
+msgid "Station: %(station)s"
+msgstr "Station: %(station)s"
+
+#: apps/monitoring/notifications.py:100
+#, python-format
+msgid "Severity: %(severity)s"
+msgstr "Schweregrad: %(severity)s"
+
+#: apps/monitoring/notifications.py:102
+#, python-format
+msgid "Alert: %(title)s"
+msgstr "Alarm: %(title)s"
+
+#: apps/monitoring/notifications.py:104
+#, python-format
+msgid "Time: %(time)s"
+msgstr "Zeit: %(time)s"
+
+#: apps/monitoring/notifications.py:207
+#, python-format
+msgid "Unknown channel: %(channel)s"
+msgstr "Unbekannter Kanal: %(channel)s"
+
+#: apps/monitoring/notifications.py:219
+msgid "Web-Push is not enabled (no VAPID keys configured)."
+msgstr "Web-Push ist nicht aktiviert (keine VAPID-Keys konfiguriert)."
+
+#: apps/monitoring/notifications.py:222
+msgid "No requesting user to send the test push to."
+msgstr "Kein anfragender Benutzer, an den der Test-Push gehen kann."
+
+#: apps/monitoring/notifications.py:227
+msgid ""
+"No push device registered — open this app from the home screen and enable "
+"push on this device first."
+msgstr ""
+"Kein Push-Gerät registriert — öffne die App zuerst über den Homescreen und "
+"aktiviere Push auf diesem Gerät."
+
+#: apps/monitoring/notifications.py:235 apps/monitoring/notifications.py:280
+msgid "[OE5XRX] Test notification"
+msgstr "[OE5XRX] Testbenachrichtigung"
+
+#: apps/monitoring/notifications.py:236
+msgid "Web-Push is working correctly."
+msgstr "Web-Push funktioniert."
+
+#: apps/monitoring/notifications.py:242
+msgid ""
+"Push delivery failed for all your registered devices — a device subscription "
+"may have expired (re-enable push here), or the push service rejected the "
+"request (check the VAPID config and server logs)."
+msgstr ""
+"Push-Zustellung an alle deine registrierten Geräte fehlgeschlagen — ein "
+"Geräte-Abo ist eventuell abgelaufen (aktiviere Push hier neu), oder der Push-"
+"Dienst hat die Anfrage abgelehnt (prüf die VAPID-Konfiguration und die "
+"Server-Logs)."
+
+#: apps/monitoring/notifications.py:257
+msgid "Email notifications are not enabled (ALERT_EMAIL_ENABLED)."
+msgstr "E-Mail-Benachrichtigungen sind nicht aktiviert (ALERT_EMAIL_ENABLED)."
+
+#: apps/monitoring/notifications.py:274
+msgid ""
+"No recipient — set your user's email or configure a Club admin with email."
+msgstr ""
+"Kein Empfänger — hinterlege deine E-Mail-Adresse oder richte einen Vereins-"
+"Admin mit E-Mail-Adresse ein."
+
+#: apps/monitoring/notifications.py:282
+#, python-format
+msgid ""
+"This is a test notification from OE5XRX Station Manager.\n"
+"Sent at: %(time)s\n"
+"\n"
+"If you received this, email notifications are working correctly."
+msgstr ""
+"Das ist eine Testbenachrichtigung vom OE5XRX Station Manager.\n"
+"Gesendet: %(time)s\n"
+"\n"
+"Wenn du sie bekommen hast, funktionieren die E-Mail-Benachrichtigungen."
+
+#: apps/monitoring/notifications.py:305
+msgid "Telegram notifications are not enabled (ALERT_TELEGRAM_ENABLED)."
+msgstr ""
+"Telegram-Benachrichtigungen sind nicht aktiviert (ALERT_TELEGRAM_ENABLED)."
+
+#: apps/monitoring/notifications.py:311
+msgid "Telegram bot token or chat ID not configured."
+msgstr "Telegram-Bot-Token oder Chat-ID nicht konfiguriert."
+
+#: apps/monitoring/notifications.py:315
+#, python-format
+msgid ""
+"Test notification successful.\n"
+"Sent at: %(time)s"
+msgstr ""
+"Testbenachrichtigung erfolgreich.\n"
+"Gesendet: %(time)s"
+
 #: apps/monitoring/rules.py:78
 msgid ""
 "Enter a metric key (e.g. cpu.temp_c) or a pattern with one '*' segment (e.g. "
@@ -10368,6 +10475,105 @@ msgstr ""
 #: templates/403_csrf.html:12
 msgid "Continue"
 msgstr "Weiter"
+
+#: templates/accounts/emails/reset.body.txt:1
+#: templates/accounts/emails/verify.body.txt:1
+#: templates/accounts/emails/welcome.body.txt:1
+#, python-format
+msgid "Hi %(name)s,"
+msgstr "Hallo %(name)s,"
+
+#: templates/accounts/emails/reset.body.txt:3
+msgid "Someone requested a password reset for your account on OE5XRX."
+msgstr ""
+"Jemand hat für dein OE5XRX-Konto das Zurücksetzen des Passworts angefordert."
+
+#: templates/accounts/emails/reset.body.txt:5
+msgid "Set a new password here:"
+msgstr "Hier kannst du ein neues Passwort festlegen:"
+
+#: templates/accounts/emails/reset.body.txt:8
+msgid ""
+"This link is valid for 24 hours. If you didn't request this, you can\n"
+"ignore this email — your current password stays unchanged."
+msgstr ""
+"Dieser Link ist 24 Stunden gültig. Wenn du das nicht angefordert hast,\n"
+"kannst du diese E-Mail ignorieren — dein aktuelles Passwort bleibt "
+"unverändert."
+
+#: templates/accounts/emails/reset.body.txt:11
+#: templates/accounts/emails/verify.body.txt:14
+#: templates/accounts/emails/welcome.body.txt:11
+msgid "73,"
+msgstr "73,"
+
+#: templates/accounts/emails/reset.body.txt:12
+#: templates/accounts/emails/verify.body.txt:15
+#: templates/accounts/emails/welcome.body.txt:12
+msgid "The OE5XRX team"
+msgstr "Das OE5XRX-Team"
+
+#: templates/accounts/emails/reset.subject.txt:1
+msgid "Password reset for your OE5XRX account"
+msgstr "Passwort für dein OE5XRX-Konto zurücksetzen"
+
+#: templates/accounts/emails/verify.body.txt:3
+#, python-format
+msgid ""
+"You requested to change your OE5XRX account email\n"
+"from %(old_email)s to %(new_email)s."
+msgstr ""
+"Du hast angefordert, die E-Mail-Adresse deines OE5XRX-Kontos\n"
+"von %(old_email)s auf %(new_email)s zu ändern."
+
+#: templates/accounts/emails/verify.body.txt:6
+msgid "Confirm the change:"
+msgstr "Bestätige die Änderung:"
+
+#: templates/accounts/emails/verify.body.txt:9
+#, python-format
+msgid ""
+"This link is valid for 24 hours. Until you click it, your old address\n"
+"(%(old_email)s) remains active for login and notifications."
+msgstr ""
+"Dieser Link ist 24 Stunden gültig. Bis du ihn anklickst, bleibt deine alte "
+"Adresse\n"
+"(%(old_email)s) für Anmeldung und Benachrichtigungen aktiv."
+
+#: templates/accounts/emails/verify.body.txt:12
+msgid "If you didn't request this, ignore this email — no change will happen."
+msgstr ""
+"Wenn du das nicht angefordert hast, ignoriere diese E-Mail — es wird nichts "
+"geändert."
+
+#: templates/accounts/emails/verify.subject.txt:1
+msgid "Confirm your new email for OE5XRX"
+msgstr "Bestätige deine neue E-Mail-Adresse für OE5XRX"
+
+#: templates/accounts/emails/welcome.body.txt:3
+msgid "An admin"
+msgstr "Ein Admin"
+
+#: templates/accounts/emails/welcome.body.txt:3
+#, python-format
+msgid "%(actor)s just created your OE5XRX account."
+msgstr "%(actor)s hat gerade dein OE5XRX-Konto angelegt."
+
+#: templates/accounts/emails/welcome.body.txt:5
+msgid "Set your password and start using the station-manager:"
+msgstr "Leg dein Passwort fest und leg mit dem Station-Manager los:"
+
+#: templates/accounts/emails/welcome.body.txt:8
+msgid ""
+"This link is valid for 7 days. If you didn't expect this email, you can\n"
+"safely ignore it."
+msgstr ""
+"Dieser Link ist 7 Tage gültig. Wenn du diese E-Mail nicht erwartet hast,\n"
+"kannst du sie einfach ignorieren."
+
+#: templates/accounts/emails/welcome.subject.txt:1
+msgid "Welcome to OE5XRX — set your password"
+msgstr "Willkommen bei OE5XRX — leg dein Passwort fest"
 
 #: templates/accounts/notification_settings.html:4
 #: templates/accounts/notification_settings.html:9

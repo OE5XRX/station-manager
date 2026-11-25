@@ -221,6 +221,12 @@ Spec: `docs/superpowers/specs/2026-11-24-i18n-de-design.md` (dort auch Glossar +
 - **Zahlen in Attributen/JS** müssen maschinenlesbar bleiben (`de` macht `0,5`): `{% localize off %}` bzw.
   `|unlocalize`, `NumberInput` mit `lang="en"`. `tests/test_i18n_locale_formats.py` scannt gerenderte Seiten.
 - `{{ x|timesince }} ago` nie zusammenstückeln → **ein** `{% blocktrans %}` (Wortstellung im Deutschen).
+- **Nachrichten (E-Mail, Push, Telegram) in der Sprache des Empfängers**, nie der aktiven: Rendern unter
+  `translation.override(language_for(user))` (`apps/accounts/language.py`; kein User/ungültig →
+  `LANGUAGE_CODE`, Telegram-Gruppen-Chat immer `LANGUAGE_CODE`). Fan-out per `group_by_language` — eine
+  Mail **je Sprache**, nie einmal für alle rendern. UI-Rückmeldungen (z.B. „Test senden“) außerhalb des
+  override erzeugen. Plain-Text-Mail-Templates mit `{% autoescape off %}`. Gespeicherte Texte
+  (`Alert.title/message`, Audit) bleiben unübersetzt.
 
 ## station-agent
 

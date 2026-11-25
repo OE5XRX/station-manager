@@ -1,1 +1,1 @@
-Confirm your new email for OE5XRX
+{% load i18n %}{% autoescape off %}{% trans "Confirm your new email for OE5XRX" %}{% endautoescape %}

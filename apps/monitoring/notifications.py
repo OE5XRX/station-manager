@@ -4,9 +4,11 @@ import logging
 
 from django.conf import settings
 from django.core.mail import send_mail
-from django.utils import timezone
+from django.utils import formats, timezone
+from django.utils.translation import gettext as _
+from django.utils.translation import override
 
-from apps.accounts.language import reverse_for_user
+from apps.accounts.language import group_by_language, language_for, reverse_for_user
 from apps.webpush.dispatch import send_web_push
 
 logger = logging.getLogger(__name__)
@@ -37,8 +39,8 @@ def _send_email_notification(alert, recipients_qs=None):
 
         recipients_qs = email_recipients_for_station_alert(alert.station)
 
-    recipient_list = list(recipients_qs.values_list("email", flat=True))
-    if not recipient_list:
+    rows = list(recipients_qs.values_list("email", "language"))
+    if not rows:
         region = alert.station.region.name if alert.station.region else None
         logger.warning(
             "Alert %s on station %s (region=%s) has no recipients. "
@@ -50,27 +52,59 @@ def _send_email_notification(alert, recipients_qs=None):
         )
         return
 
-    subject = f"[OE5XRX] {alert.get_severity_display()}: {alert.title}"
+    sent = 0
+    for language, group in group_by_language(rows, key=lambda row: row[1]).items():
+        recipient_list = [email for email, _language in group]
+        try:
+            with override(language):
+                subject, body = _alert_email(alert)
+            send_mail(
+                subject=subject,
+                message=body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=recipient_list,
+                fail_silently=False,
+            )
+            sent += len(recipient_list)
+        except Exception:
+            # One failing language group must not cost the others their mail.
+            logger.exception("Failed to send alert email (language=%s).", language)
+    if sent:
+        logger.info("Alert email sent to %d recipient(s).", sent)
+
+
+def _alert_title(alert) -> str:
+    """``[OE5XRX] <severity>: <title>`` in the active language (title stays as stored)."""
+    return _("[OE5XRX] %(severity)s: %(title)s") % {
+        "severity": alert.get_severity_display(),
+        "title": alert.title,
+    }
+
+
+def _local_time(value=None) -> str:
+    """Localized date + time with the zone name (e.g. ``CET``) — the reader
+    may not be in the server's time zone, and DST makes bare times ambiguous."""
+    local = timezone.localtime(value)
+    return f"{formats.date_format(local, 'DATETIME_FORMAT')} {local.tzname()}"
+
+
+def _alert_email(alert):
+    """Subject + body of the alert mail in the active language."""
     # A CR/LF in the subject raises a header error and the mail is lost.
-    subject = " ".join(subject.splitlines())
+    subject = " ".join(_alert_title(alert).splitlines())
+    severity = alert.get_severity_display()
+    created = _local_time(alert.created_at)
     body = (
-        f"Station: {alert.station.name}\n"
-        f"Severity: {alert.get_severity_display()}\n"
-        f"Alert: {alert.title}\n\n"
-        f"{alert.message}\n\n"
-        f"Time: {alert.created_at}\n"
+        _("Station: %(station)s") % {"station": alert.station.name}
+        + "\n"
+        + _("Severity: %(severity)s") % {"severity": severity}
+        + "\n"
+        + _("Alert: %(title)s") % {"title": alert.title}
+        + f"\n\n{alert.message}\n\n"
+        + _("Time: %(time)s") % {"time": created}
+        + "\n"
     )
-    try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=recipient_list,
-            fail_silently=False,
-        )
-        logger.info("Alert email sent to %d recipient(s).", len(recipient_list))
-    except Exception:
-        logger.exception("Failed to send alert email.")
+    return subject, body
 
 
 def _send_webpush_notification(alert):
@@ -81,15 +115,20 @@ def _send_webpush_notification(alert):
     """
     from apps.monitoring.recipients import push_recipients_for_station_alert
 
-    payload = {
-        "title": f"[OE5XRX] {alert.get_severity_display()}: {alert.title}",
-        "body": f"{alert.station.name}: {alert.message}",
-        "severity": alert.severity,
-    }
-
     count = 0
     for user in push_recipients_for_station_alert(alert.station):
-        user_payload = {**payload, "url": reverse_for_user(user, "monitoring:alert_list")}
+        try:
+            with override(language_for(user)):
+                user_payload = {
+                    "title": _alert_title(alert),
+                    "body": f"{alert.station.name}: {alert.message}",
+                    "severity": alert.severity,
+                    "url": reverse_for_user(user, "monitoring:alert_list"),
+                }
+        except Exception:
+            # One user's render failure must not cost the others their push.
+            logger.exception("Failed to render alert web-push for user %s.", user.pk)
+            continue
         for subscription in user.push_subscriptions.all():
             if send_web_push(subscription, user_payload):
                 count += 1
@@ -124,13 +163,16 @@ def _send_telegram_notification(alert):
         return
 
     severity_emoji = "\u26a0\ufe0f" if alert.severity == "warning" else "\U0001f6a8"
-    message = (
-        f"{severity_emoji} *{alert.get_severity_display()}*: {_telegram_md_escape(alert.title)}\n"
-        f"Station: {_telegram_md_escape(alert.station.name)}\n\n"
-        f"{_telegram_md_escape(alert.message)}"
-    )
-
     try:
+        # Telegram goes to one shared chat: write it in the site language.
+        with override(settings.LANGUAGE_CODE):
+            message = (
+                f"{severity_emoji} *{alert.get_severity_display()}*: "
+                f"{_telegram_md_escape(alert.title)}\n"
+                + _("Station: %(station)s") % {"station": _telegram_md_escape(alert.station.name)}
+                + f"\n\n{_telegram_md_escape(alert.message)}"
+            )
+
         import telegram
 
         bot = telegram.Bot(token=token)
@@ -162,7 +204,7 @@ def send_test_notification(channel, requesting_user=None):
         return _test_telegram()
     elif channel == "webpush":
         return _test_webpush(requesting_user=requesting_user)
-    return False, f"Unknown channel: {channel}"
+    return False, _("Unknown channel: %(channel)s") % {"channel": channel}
 
 
 def _test_webpush(requesting_user=None):
@@ -174,26 +216,29 @@ def _test_webpush(requesting_user=None):
     unconfigured or the user has no working device.
     """
     if not getattr(settings, "ALERT_WEBPUSH_ENABLED", False):
-        return False, "Web-Push is not enabled (no VAPID keys configured)."
+        return False, _("Web-Push is not enabled (no VAPID keys configured).")
 
     if requesting_user is None:
-        return False, "No requesting user to send the test push to."
+        return False, _("No requesting user to send the test push to.")
 
     subscriptions = list(requesting_user.push_subscriptions.all())
     if not subscriptions:
-        return False, (
+        return False, _(
             "No push device registered — open this app from the home screen "
             "and enable push on this device first."
         )
 
-    payload = {
-        "title": "[OE5XRX] Test notification",
-        "body": "Web-Push is working correctly.",
-        "url": reverse_for_user(requesting_user, "monitoring:alert_list"),
-    }
+    # Recipient-facing text in the recipient's language; the error strings
+    # returned to the UI stay in the request language (outside the override).
+    with override(language_for(requesting_user)):
+        payload = {
+            "title": _("[OE5XRX] Test notification"),
+            "body": _("Web-Push is working correctly."),
+            "url": reverse_for_user(requesting_user, "monitoring:alert_list"),
+        }
     sent = sum(1 for sub in subscriptions if send_web_push(sub, payload))
     if sent == 0:
-        return False, (
+        return False, _(
             "Push delivery failed for all your registered devices — a device "
             "subscription may have expired (re-enable push here), or the push "
             "service rejected the request (check the VAPID config and server logs)."
@@ -209,63 +254,72 @@ def _test_email(requesting_user=None):
     notification noise when several admins are configured.
     """
     if not getattr(settings, "ALERT_EMAIL_ENABLED", False):
-        return False, "Email notifications are not enabled (ALERT_EMAIL_ENABLED)."
+        return False, _("Email notifications are not enabled (ALERT_EMAIL_ENABLED).")
 
     if requesting_user is not None and requesting_user.email:
-        recipient_list = [requesting_user.email]
+        groups = {language_for(requesting_user): [requesting_user.email]}
     else:
         from apps.accounts.permissions import users_with
 
-        recipient_list = list(
-            users_with("alert_rules", "manage").exclude(email="").values_list("email", flat=True)
+        rows = (
+            users_with("alert_rules", "manage").exclude(email="").values_list("email", "language")
         )
+        groups = {
+            language: [email for email, _language in group]
+            for language, group in group_by_language(rows, key=lambda row: row[1]).items()
+        }
 
-    if not recipient_list:
-        return False, (
+    if not groups:
+        return False, _(
             "No recipient — set your user's email or configure a Club admin with email."
         )
 
-    try:
-        send_mail(
-            subject="[OE5XRX] Test notification",
-            message=(
-                f"This is a test notification from OE5XRX Station Manager.\n"
-                f"Sent at: {timezone.now()}\n\n"
-                f"If you received this, email notifications are working correctly."
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=recipient_list,
-            fail_silently=False,
-        )
-        return True, ""
-    except Exception as e:
-        return False, str(e)
+    errors = []
+    for language, recipient_list in groups.items():
+        with override(language):
+            subject = _("[OE5XRX] Test notification")
+            message = _(
+                "This is a test notification from OE5XRX Station Manager.\n"
+                "Sent at: %(time)s\n\n"
+                "If you received this, email notifications are working correctly."
+            ) % {"time": _local_time()}
+        try:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=recipient_list,
+                fail_silently=False,
+            )
+        except Exception as e:
+            # Name the group: with several languages one may succeed.
+            errors.append(f"{language}: {e}")
+    if errors:
+        return False, "; ".join(errors)
+    return True, ""
 
 
 def _test_telegram():
     """Send a test message via Telegram."""
     if not getattr(settings, "ALERT_TELEGRAM_ENABLED", False):
-        return False, "Telegram notifications are not enabled (ALERT_TELEGRAM_ENABLED)."
+        return False, _("Telegram notifications are not enabled (ALERT_TELEGRAM_ENABLED).")
 
     token = getattr(settings, "TELEGRAM_BOT_TOKEN", "")
     chat_id = getattr(settings, "TELEGRAM_CHAT_ID", "")
 
     if not token or not chat_id:
-        return False, "Telegram bot token or chat ID not configured."
+        return False, _("Telegram bot token or chat ID not configured.")
+
+    with override(settings.LANGUAGE_CODE):
+        text = "\u2705 *OE5XRX Station Manager*\n" + _(
+            "Test notification successful.\nSent at: %(time)s"
+        ) % {"time": _local_time()}
 
     try:
         import telegram
 
         bot = telegram.Bot(token=token)
-        bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "\u2705 *OE5XRX Station Manager*\n"
-                "Test notification successful.\n"
-                f"Sent at: {timezone.now()}"
-            ),
-            parse_mode="Markdown",
-        )
+        bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
         return True, ""
     except Exception as e:
         return False, str(e)

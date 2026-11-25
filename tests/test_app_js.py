@@ -16,6 +16,8 @@ TEST_FILES = [
     REPO_ROOT / "tests" / "js" / "app-poll-visibility.test.mjs",
     # [data-tab-link] activates the target tab and moves focus to it.
     REPO_ROOT / "tests" / "js" / "app-tab-link.test.mjs",
+    # Live deployment pills use the server ``status_label`` (raw-code fallback).
+    REPO_ROOT / "tests" / "js" / "app-deployment-status-label.test.mjs",
 ]
 
 
