@@ -104,7 +104,7 @@ def test_section_hidden_when_agent_lacks_sstv(client, member, station):
 def test_section_hidden_while_agent_offline(client, member, station):
     html = render(client, member, station)
     assert 'x-data="sstvPanel"' not in html
-    assert "SSTV is available once the station is online." in html
+    assert "SSTV appears here once the station is online. Reload the page then." in html
 
 
 def test_german_labels(client, member, station):

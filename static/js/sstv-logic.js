@@ -9,6 +9,10 @@
   // i18n: globals from Django's JavaScriptCatalog; identity fallback under Node.
   // Function-scoped so classic <script> files never collide.
   var gettext = globalThis.gettext || function (s) { return s; };
+  var interpolate = globalThis.interpolate || function (fmt, obj, named) {
+    if (named) return fmt.replace(/%\(\s*([^)]+)\s*\)s/g, function (m, k) { return String(obj[k]); });
+    return fmt.replace(/%s/g, function () { return String(obj.shift()); });
+  };
 
   // Same constants as station_agent/sstv/modes.py (ISS_FREQUENCY_HZ, ISS_GUARD_HZ).
   var ISS_HZ = 145800000;
@@ -171,10 +175,11 @@
   }
 
   // End of a transmission (sstv_tx_state aborted/error ``detail``).
-  function txEndText(state, detail) {
+  // ``mine``: the reader's own transmission (only then "you" wording).
+  function txEndText(state, detail, mine) {
     var d = typeof detail === "string" ? detail : "";
     if (state === "done") return gettext("Picture sent. It is in the gallery.");
-    if (d === "operator") return gettext("You aborted the transmission.");
+    if (d === "operator") return mine ? gettext("You aborted the transmission.") : GUARD.aborted;
     if (d.indexOf("lock ") === 0) return gettext("The transmission was aborted because the lock changed hands.");
     if (d === "ws_disconnect" || d === "agent_disconnect") {
       return gettext("The transmission was aborted because the station connection was lost.");
@@ -182,6 +187,21 @@
     if (d === "iss_downlink" || d === "out_of_range" || d === "ptt_active") return GUARD[d];
     if (state === "aborted") return gettext("The transmission was aborted.");
     return gettext("The transmission failed. The station unkeyed.");
+  }
+
+  var UPLOAD_TYPES = { "image/jpeg": true, "image/png": true, "image/webp": true, "image/gif": true };
+
+  // Client-side copy of the server's upload checks (render.load_upload): the type the
+  // browser reports and the size. "" = fine; the server checks again (and the content).
+  function uploadRefusal(file, maxBytes) {
+    if (!file) return GUARD.no_file;
+    if (file.type && !UPLOAD_TYPES[file.type]) {
+      return gettext("The file is not a JPEG, PNG, WebP or GIF picture.");
+    }
+    if (maxBytes > 0 && file.size > maxBytes) {
+      return interpolate(gettext("The file is larger than %(mb)s MB."), { mb: Math.floor(maxBytes / 1048576) }, true);
+    }
+    return "";
   }
 
   var TX_PHASES = {
@@ -207,6 +227,7 @@
     rxEndText: rxEndText,
     txEndText: txEndText,
     txPhaseText: txPhaseText,
+    uploadRefusal: uploadRefusal,
   };
   if (typeof window !== "undefined") window.OE5XRXSstvLogic = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

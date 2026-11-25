@@ -58,7 +58,10 @@ def _unsupported() -> UploadError:
     return UploadError(_("The file is not a JPEG, PNG, WebP or GIF picture."), "unsupported")
 
 
-def load_upload(f, *, max_bytes: int = 15 * 1024 * 1024) -> Image.Image:
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
+def load_upload(f, *, max_bytes: int = MAX_UPLOAD_BYTES) -> Image.Image:
     """Decode an uploaded picture into an upright, opaque RGB image.
 
     JPEG/PNG/WebP/GIF (first frame) only; EXIF orientation applied; transparency

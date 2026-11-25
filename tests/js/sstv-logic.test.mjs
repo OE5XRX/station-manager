@@ -116,4 +116,19 @@ ok("end texts: operator stop is silent, the rest explains", () => {
   assert.equal(S.txPhaseText("done"), "");
 });
 
+ok("txEndText says 'you' only to the sender", () => {
+  assert.match(S.txEndText("aborted", "operator", true), /^You /);
+  assert.equal(S.txEndText("aborted", "operator", false), S.sendGuardMessage("aborted"));
+});
+
+ok("uploadRefusal mirrors the server's type and size limits", () => {
+  const max = 15 * 1024 * 1024;
+  assert.equal(S.uploadRefusal({ type: "image/png", size: 1000 }, max), "");
+  assert.equal(S.uploadRefusal({ type: "", size: 1000 }, max), "", "unknown type: the server decides");
+  assert.match(S.uploadRefusal({ type: "application/pdf", size: 10 }, max), /JPEG, PNG, WebP or GIF/);
+  assert.match(S.uploadRefusal({ type: "image/jpeg", size: max + 1 }, max), /larger than 15 MB/);
+  assert.equal(S.uploadRefusal({ type: "image/jpeg", size: max }, max), "");
+  assert.equal(S.uploadRefusal(null, max), S.sendGuardMessage("no_file"));
+});
+
 console.log(`# ${passed} passed`);

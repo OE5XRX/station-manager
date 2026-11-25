@@ -1,4 +1,4 @@
-{% load i18n %}
+{% load i18n l10n %}
 {% comment %}
 SSTV section (SSTV spec §5.2–§5.4) — binds to the sstvPanel Alpine component
 (sstv-panel.js); the nested cpCollapsible scope (collapsible.js) owns open/closed.
@@ -22,7 +22,7 @@ is the sstv:gallery partial, reloaded on the body event "sstv-gallery-refresh".
       {% if sstv_availability == "old" %}
         {% trans "The station software is too old for SSTV." %}
       {% else %}
-        {% trans "SSTV is available once the station is online." %}
+        {% trans "SSTV appears here once the station is online. Reload the page then." %}
       {% endif %}
     </p>
   </header>
@@ -32,6 +32,7 @@ is the sstv:gallery partial, reloaded on the body event "sstv-gallery-refresh".
 <section x-data="sstvPanel"
          data-station-id="{{ station.id }}"
          data-preview-url="{% url 'sstv:preview' station.pk %}"
+         data-max-upload-bytes="{{ sstv_max_upload_bytes|unlocalize }}"
          data-can-use="{{ can.sstv.use|yesno:'1,0' }}"
          data-station-callsign="{{ station_has_callsign|yesno:'1,0' }}"
          class="cp-module-card sv-panel mt-4"

@@ -333,7 +333,7 @@ await ok("transmission: progress, abort, sstv:tx on/off, gallery on done", () =>
   assert.equal(c.canStartRx, false);
   c._onTxState({ id: "t1", state: "keyed", progress: 0.5, duration_s: 127 });
   assert.equal(c.txPercent(), 50);
-  assert.match(c.summary(), /50/);
+  assert.equal(c.summary(), "On the air, 50 %");
   assert.equal(tx.seen.length, 1, "no repeat while it stays on the air");
   const send = capture("control:send");
   c.abort();
@@ -366,6 +366,125 @@ await ok("a page that missed the end frame lets go of a stale transmission", () 
   c.now = Date.now();
   c._expireStale();
   assert.equal(c.tx, null);
+  c.destroy();
+});
+
+await ok("reconnect drops sessions the page may have missed the end of", () => {
+  const c = panel();
+  const tx = capture("sstv:tx");
+  c._onRxState({ state: "running", slot: 1, ends_at: new Date(Date.now() + 600000).toISOString() });
+  c._onTxState({ id: "t3", state: "keyed", progress: 0.2, duration_s: 60 });
+  window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+  assert.equal(c.rx, null);
+  assert.equal(c.tx, null);
+  assert.deepEqual(tx.seen, [{ active: true }, { active: false }]);
+  assert.equal(c.notice, null, "silent: the snapshot restores what is still live");
+  // the snapshot brings a live transmission back
+  c._onTxState({ id: "t3", state: "sending", progress: 0, duration_s: 60 });
+  assert.equal(c.txLive, true);
+  tx.stop();
+  c.destroy();
+});
+
+await ok("an aborted or failed transmission uses up the preview", () => {
+  for (const state of ["aborted", "error"]) {
+    const c = panel();
+    c.preview = { id: "t4", url: "/p", duration_s: 1, mode: "pd120", slot: 1, module: "fm0", noCallsign: false };
+    c._onTxState({ id: "t4", state: "keyed", progress: 0.1, duration_s: 60 });
+    c._onTxState({ id: "t4", state, detail: state === "aborted" ? "operator" : "player_failed" });
+    assert.equal(c.preview, null, state);
+    assert.equal(c.canSend, false, state);
+    assert.match(c.notice.text, state === "aborted" ? /^You aborted/ : /failed/);
+    c.destroy();
+  }
+});
+
+await ok("viewers get a neutral text for an operator abort, none for done", () => {
+  const c = panel({ "data-can-use": "0" });
+  c._onTxState({ id: "t5", state: "keyed", progress: 0.1, duration_s: 60 });
+  c._onTxState({ id: "t5", state: "aborted", detail: "operator" });
+  assert.equal(c.notice.text, "The transmission was aborted.");
+  c.notice = null;
+  c._onTxState({ id: "t6", state: "keyed", progress: 0.1, duration_s: 60 });
+  c._onTxState({ id: "t6", state: "done" });
+  assert.equal(c.notice, null);
+  c.destroy();
+});
+
+await ok("a preview reply that arrives after the choices changed is dropped", async () => {
+  const c = panel();
+  let resolve;
+  globalThis.fetch = () => new Promise((r) => (resolve = r));
+  const pending = c.makePreview();
+  c.mode = "martin1";
+  c.invalidate();
+  resolve({ ok: true, status: 200, json: () => Promise.resolve({ id: "old", preview_url: "/p", duration_s: 1, mode: "pd120", slot: 1, module: "fm0", warnings: [] }) });
+  assert.equal(await pending, false);
+  assert.equal(c.preview, null);
+  assert.equal(c.previewBusy, false);
+  c.destroy();
+});
+
+await ok("uploads over the size limit never leave the browser", async () => {
+  const c = panel({ "data-max-upload-bytes": "100" });
+  c.source = "upload";
+  c.fileName = "big.jpg";
+  const big = { name: "big.jpg", type: "image/jpeg", size: 101 };
+  c.root.querySelector = ((orig) => (sel) => (sel === "[data-sv=file]" ? { files: [big] } : orig(sel)))(c.root.querySelector);
+  const calls = fakeFetch(200, {});
+  assert.equal(await c.makePreview(), false);
+  assert.equal(calls.length, 0);
+  assert.match(c.notice.text, /larger than/);
+  c.destroy();
+});
+
+await ok("a sent picture does not replace the monitor's last received picture", () => {
+  const c = panel();
+  c._onImage({ id: "a", url: "/rx.png", direction: "rx", complete: true });
+  c._onImage({ id: "b", url: "/tx.png", direction: "tx", complete: true });
+  assert.equal(c.lastImage.url, "/rx.png");
+  c.destroy();
+});
+
+await ok("a late PNG load never paints over a newer live picture", () => {
+  const images = [];
+  globalThis.Image = class {
+    constructor() {
+      images.push(this);
+      this.naturalWidth = 320;
+      this.naturalHeight = 256;
+    }
+  };
+  const c = panel();
+  c._onImage({ id: "a", url: "/rx.png", direction: "rx", complete: true });
+  c._onPictureStart({ picture_id: "p9", mode: "pd90", width: 320, height: 256 });
+  images[0].onload();
+  assert.equal(c.root.canvasCalls.includes("draw"), false);
+  // without a newer picture the final PNG is drawn
+  c.picture = null;
+  c._onImage({ id: "b", url: "/rx2.png", direction: "rx", complete: true });
+  images[1].onload();
+  assert.equal(c.root.canvasCalls.includes("draw"), true);
+  delete globalThis.Image;
+  c.destroy();
+});
+
+await ok("an inventory without a frequency keeps the last known one", () => {
+  const c = panel();
+  c._onModuleState({ slot: 1, module: "fm0", values: { tx_frequency: 145.8 } });
+  c._seed([{ slot: "1", modules: [{ module: "fm0", online: true, capabilities: FM, state: {} }] }]);
+  assert.equal(c.txOnIss, true);
+  c.destroy();
+});
+
+await ok("with a preview the TX module is exactly the preview's", () => {
+  const c = panel();
+  c.preview = { id: "x", url: "/p", duration_s: 1, mode: "pd120", slot: 9, module: "gone", noCallsign: false };
+  assert.equal(c.txModule, null);
+  assert.equal(c.txMHz(), "–");
+  c.preview.slot = 1;
+  c.preview.module = "fm0";
+  assert.equal(c.txModule.module, "fm0");
   c.destroy();
 });
 

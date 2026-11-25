@@ -275,6 +275,9 @@
           self._lastDenial = null; // a stale action denial must not explain a later 4403
           self._subscribeAll();
           self._publishControlStore();
+          // Sibling panels drop session state they may have missed the end of; the
+          // server's connect-time snapshot (sent after this) restores what is live.
+          emitFrame({ type: "open" });
         });
         ws.addEventListener("message", function (ev) {
           var msg;

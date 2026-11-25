@@ -83,6 +83,7 @@
       fileName: "",
       preview: null, // {id, url, duration_s, mode, slot, module, noCallsign}
       previewBusy: false,
+      maxUploadBytes: 0,
       tx: null, // {id, state, progress, duration_s, mode, keyedAt, startedAt}
 
       pending: false,
@@ -96,12 +97,15 @@
       _pendingTimer: null,
       _tick: null,
       _txActive: false,
+      _previewGen: 0, // bumped by every change of the choices: a late reply is dropped
+      _imageGen: 0, // bumped by every new picture: a late PNG load never paints over it
 
       init: function () {
         var root = this.$el;
         rootEl = root;
         this.stationId = root.getAttribute("data-station-id");
         this.previewUrl = root.getAttribute("data-preview-url");
+        this.maxUploadBytes = Number(root.getAttribute("data-max-upload-bytes")) || 0;
         this.canUse = root.getAttribute("data-can-use") === "1";
         this.hasStationCall = root.getAttribute("data-station-callsign") === "1";
         this.csStation = this.hasStationCall;
@@ -125,6 +129,13 @@
         });
         this._on("control:sstv_image", function (e) {
           self._onImage(e.detail);
+        });
+        // (Re)connected: drop sessions whose end this page may have missed; the server's
+        // snapshot right after restores a live RX and a transmission on the air.
+        this._on("control:open", function () {
+          self._settle();
+          self._setRx(null);
+          self._setTx(null);
         });
         this._on("control:sstv_tx_state", function (e) {
           self._onTxState(e.detail);
@@ -162,9 +173,12 @@
           var mods = (this.slots[i] && this.slots[i].modules) || [];
           for (var j = 0; j < mods.length; j++) {
             var st = (mods[j] && mods[j].state) || {};
-            values[String(this.slots[i].slot) + " " + mods[j].module] = {
-              rx_frequency: st.rx_frequency,
-              tx_frequency: st.tx_frequency,
+            var key = String(this.slots[i].slot) + " " + mods[j].module;
+            var old = this.values[key] || {};
+            // An inventory without a value (failed get, paused slot) keeps the last one.
+            values[key] = {
+              rx_frequency: st.rx_frequency !== undefined ? st.rx_frequency : old.rx_frequency,
+              tx_frequency: st.tx_frequency !== undefined ? st.tx_frequency : old.tx_frequency,
             };
           }
         }
@@ -203,8 +217,9 @@
         }
         return null;
       },
-      // The transmitting module: the preview's, else the selected one if it can send,
-      // else the first that can (the server picks the same for a preview without one).
+      // The transmitting module: the preview's (exactly that one: the server sends with
+      // it), else the selected one if it can send, else the first that can (the server
+      // picks the same for a preview without one).
       get txModule() {
         var all = this.radios;
         var want = this.preview
@@ -216,7 +231,7 @@
           if (first === null) first = all[i];
           if (all[i].slot + " " + all[i].module === want) return all[i];
         }
-        return first;
+        return this.preview ? null : first;
       },
 
       _hz: function (mod, cap) {
@@ -326,7 +341,7 @@
       summary: function () {
         if (this.txLive) {
           return this.tx.state === "keyed"
-            ? interpolate(gettext("On the air, %(pct)s %%"), { pct: this.txPercent() }, true)
+            ? interpolate(gettext("On the air, %(pct)s"), { pct: this.txPercent() + " %" }, true)
             : S.txPhaseText(this.tx.state);
         }
         if (this.rx) {
@@ -472,12 +487,13 @@
       onFile: function (event) {
         var f = event && event.target && event.target.files && event.target.files[0];
         this.fileName = f ? f.name : "";
-        this.preview = null;
+        this.invalidate();
       },
 
       // Any change of what would be sent invalidates the preview: "Send" sends exactly it.
       invalidate: function () {
         this.preview = null;
+        this._previewGen += 1;
       },
 
       _csrf: function () {
@@ -504,11 +520,18 @@
             this._notify({ ok: false, text: S.sendGuardMessage("no_file") });
             return Promise.resolve(false);
           }
+          // Same limits as the server (render.load_upload), checked before the upload.
+          var refusal = S.uploadRefusal(f, this.maxUploadBytes);
+          if (refusal) {
+            this._notify({ ok: false, text: refusal });
+            return Promise.resolve(false);
+          }
           form.append("file", f);
         }
         var self = this;
+        this.invalidate();
+        var gen = this._previewGen;
         this.previewBusy = true;
-        this.preview = null;
         return fetch(this.previewUrl, {
           method: "POST",
           body: form,
@@ -522,6 +545,7 @@
             );
           })
           .then(function (res) {
+            if (gen !== self._previewGen) return false; // the choices changed meanwhile
             if (!res.ok) {
               // The server explains its refusals (translated); upload checks only it knows.
               var text = typeof res.body.message === "string" && res.body.message
@@ -544,6 +568,7 @@
             return true;
           })
           .catch(function () {
+            if (gen !== self._previewGen) return false;
             self._notify({ ok: false, text: gettext("The preview could not be created. Check the connection and try again.") });
             return false;
           })
@@ -592,6 +617,7 @@
         var w = Number(msg.width);
         var h = Number(msg.height);
         if (!(w > 0 && w <= 2048 && h > 0 && h <= 2048)) return;
+        this._imageGen += 1;
         this.picture = { id: msg.picture_id, mode: msg.mode, width: w, height: h, row: -1 };
         var c = this._canvas();
         if (c) {
@@ -621,13 +647,17 @@
       // The authoritative picture: show it in the monitor and refresh the gallery.
       _onImage: function (msg) {
         if (!msg || typeof msg.url !== "string") return;
-        this.lastImage = { url: msg.url, complete: msg.complete !== false, direction: msg.direction };
+        // The monitor shows received pictures only; a sent one just refreshes the gallery.
         if (msg.direction !== "tx") {
+          this.lastImage = { url: msg.url, complete: msg.complete !== false };
           this.picture = null;
+          var gen = ++this._imageGen;
+          var self = this;
           var c = this._canvas();
           if (c && typeof Image === "function") {
             var img = new Image();
             img.onload = function () {
+              if (gen !== self._imageGen || self.picture) return; // a newer picture owns the canvas
               c.width = img.naturalWidth;
               c.height = img.naturalHeight;
               var ctx = c.getContext && c.getContext("2d");
@@ -669,11 +699,14 @@
           });
           return;
         }
-        var mine = prev !== null || (this.preview && this.preview.id === msg.id);
+        // Only the sender's page holds the preview of this transmission.
+        var mine = !!(this.preview && this.preview.id === msg.id);
+        var seen = prev !== null || mine;
         this._setTx(null);
-        if (msg.state === "done") this.preview = null;
-        if (mine || msg.state !== "done") {
-          this._notify({ ok: msg.state === "done", text: S.txEndText(msg.state, msg.detail) });
+        // Sent, aborted or failed: the draft is used up, a resend needs a new preview.
+        if (mine) this.invalidate();
+        if (mine || (seen && msg.state !== "done")) {
+          this._notify({ ok: msg.state === "done", text: S.txEndText(msg.state, msg.detail, mine) });
         }
       },
 

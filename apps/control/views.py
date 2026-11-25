@@ -5,6 +5,7 @@ from django.views.generic import DetailView
 
 from apps.accounts.permissions import (
     AreaPermissionMixin,
+    can,
     can_override_station,
     level_label,
     required_level,
@@ -14,6 +15,7 @@ from apps.module_firmware.update_status import bulk_update_status
 from apps.repeaters.selection import repeaters_for_station, station_bands
 from apps.repeaters.views import ATTRIBUTION
 from apps.sstv import control as sstv_control
+from apps.sstv.render import MAX_UPLOAD_BYTES as SSTV_MAX_UPLOAD_BYTES
 from apps.sstv.tx import air_time_s
 from apps.stations.models import Station
 from station_agent.sstv.modes import MODES as SSTV_MODES
@@ -25,12 +27,13 @@ from .models import AgentConnection
 def sstv_availability(station):
     """``ok`` (agent advertises SSTV), ``old`` (connected agent without it) or
     ``offline`` (no control connection: unknown until the agent is back)."""
-    if sstv_control.supported(station):
-        return "ok"
-    connected = AgentConnection.objects.filter(
+    rows = AgentConnection.objects.filter(
         station=station, kind=AgentConnection.Kind.CONTROL
-    ).exists()
-    return "old" if connected else "offline"
+    ).values_list("features", flat=True)[:1]
+    if not rows:
+        return "offline"
+    features = rows[0]
+    return "ok" if isinstance(features, list) and sstv_control.FEATURE in features else "old"
 
 
 def sstv_modes():
@@ -93,9 +96,11 @@ class StationControlView(AreaPermissionMixin, DetailView):
         ctx["drain"] = drain.drain_status(station)
         # SSTV section: hidden unless the agent advertises it (cosmetic; the consumer
         # and the preview view check lock + sstv.use + support again).
-        ctx["sstv_availability"] = sstv_availability(station)
-        ctx["sstv_modes"] = sstv_modes()
-        ctx["station_has_callsign"] = bool((station.callsign or "").strip())
+        if can(self.request.user, "sstv", "view"):
+            ctx["sstv_availability"] = sstv_availability(station)
+            ctx["sstv_modes"] = sstv_modes()
+            ctx["sstv_max_upload_bytes"] = SSTV_MAX_UPLOAD_BYTES
+            ctx["station_has_callsign"] = bool((station.callsign or "").strip())
         return ctx
 
 

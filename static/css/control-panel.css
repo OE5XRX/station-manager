@@ -1542,7 +1542,7 @@
   position: relative;
   overflow: hidden;
   border-radius: var(--radius-md);
-  background: #000;
+  background: var(--term-bg);
   box-shadow: 0 0 0 1px var(--line-bright);
 }
 .sv-monitor.is-live .sv-screen { box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal) 55%, transparent); }
@@ -1565,7 +1565,7 @@
   place-items: center;
   margin: 0;
   padding: 16px 24px;
-  color: rgb(255 255 255 / 0.6);
+  color: color-mix(in srgb, var(--sheen-color) 60%, transparent);
   font-size: 13px;
   line-height: 1.45;
   text-align: center;
@@ -1651,7 +1651,7 @@
   color: var(--ink-0);
   box-shadow: var(--shadow-md);
 }
-.sv-dialog::backdrop { background: rgb(0 0 0 / 0.55); }
+.sv-dialog::backdrop { background: color-mix(in srgb, var(--shadow-color) 55%, transparent); }
 .sv-dialog h3 { margin: 0 0 8px; font-size: 16px; }
 .sv-dialog p { margin: 0 0 16px; font-size: 13px; line-height: 1.5; color: var(--ink-1); }
 .sv-dialog .sv-actions { justify-content: flex-end; }
