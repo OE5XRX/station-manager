@@ -16,6 +16,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.db import connection
 from django.test import Client
 from django.urls import reverse
 from PIL import Image
@@ -150,6 +151,7 @@ class Agent:
         self.broker = None
         self.seen: list[dict] = []
         self._pump_task = None
+        self._fw_started = False
 
     # -- fake systemd units (DecoderHost unit manager) --
     def start(self, decoder, slot, env):
@@ -168,9 +170,12 @@ class Agent:
     def _http_get(self, path, headers, timeout):
         """Runs in the TX executor thread, like the real requests call."""
         extra = {f"HTTP_{k.upper().replace('-', '_')}": v for k, v in headers.items()}
-        resp = Client().get(path, **extra, **device_auth_headers(self._key, self.station.pk))
-        self.downloads.append(resp.status_code)
-        return _Download(resp)
+        try:
+            resp = Client().get(path, **extra, **device_auth_headers(self._key, self.station.pk))
+            self.downloads.append(resp.status_code)
+            return _Download(resp)
+        finally:
+            connection.close()  # this executor thread's own DB connection
 
     async def _spawn(self, argv):
         location = next(a for a in argv if a.startswith("location="))
@@ -183,6 +188,7 @@ class Agent:
 
     async def connect(self):
         self.fw.start()
+        self._fw_started = True
         await self.unit.__aenter__()
         self.comm = WebsocketCommunicator(
             application, f"/ws/agent/control/{self.station.id}/?signature=x&timestamp=0"
@@ -243,8 +249,10 @@ class Agent:
             await self.comm.disconnect()
         await self.host.shutdown()
         await self.tx.shutdown()
-        await self.unit.__aexit__()
-        self.fw.stop()
+        if self.unit.server is not None:
+            await self.unit.__aexit__()
+        if self._fw_started:
+            self.fw.stop()
 
 
 class Browser:
@@ -275,9 +283,10 @@ class Browser:
         ]
 
     async def close(self):
-        if self._task is not None:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        if self._task is None:
+            return  # never connected
+        self._task.cancel()
+        await asyncio.gather(self._task, return_exceptions=True)
         await self.comm.disconnect()
 
 
@@ -305,17 +314,32 @@ def setup(control_agent_auth):
 
 async def _session(station, user, key, tmp_path):
     agent = Agent(station, key, tmp_path)
-    await agent.connect()
-    await until(
-        lambda: "sstv" in AgentConnection.objects.get(station=station, kind="control").features,
-        "sstv advertised",
-        agent.check_pump,
-    )
     browser = Browser(user, station.id)
-    await browser.connect()
-    await browser.send({"type": "lock_acquire"})
-    await until(lambda: bool(browser.frames("lock", state="held")), "lock held", agent.check_pump)
+    try:
+        await agent.connect()
+        await until(
+            lambda: (
+                "sstv" in AgentConnection.objects.get(station=station, kind="control").features
+            ),
+            "sstv advertised",
+            agent.check_pump,
+        )
+        await browser.connect()
+        await browser.send({"type": "lock_acquire"})
+        await until(
+            lambda: bool(browser.frames("lock", state="held")), "lock held", agent.check_pump
+        )
+    except BaseException:
+        await _close(agent, browser)
+        raise
     return agent, browser
+
+
+async def _close(agent, browser):
+    try:
+        await browser.close()
+    finally:
+        await agent.close()
 
 
 async def _rx_running(agent, browser):
@@ -350,14 +374,14 @@ def test_rx_picture_reaches_browser_and_gallery(setup, pd120, tmp_path):
             await until(lambda: not agent.host._spool.pending(), "image acked", agent.check_pump)
             return list(browser.seen)
         finally:
-            await browser.close()
-            await agent.close()
+            await _close(agent, browser)
 
     seen = asyncio.run(scenario())
     (start,) = [f for f in seen if f["type"] == "sstv_start"]
     assert (start["mode"], start["width"], start["height"]) == ("pd120", 640, 496)
     shown_lines = [f for f in seen if f["type"] == "sstv_line"]
-    assert shown_lines and all(f["picture_id"] == start["picture_id"] for f in shown_lines)
+    assert [f["row"] for f in shown_lines] == list(range(RX_MODE.height))  # lossless in-process
+    assert all(f["picture_id"] == start["picture_id"] for f in shown_lines)
     (shown,) = [f for f in seen if f["type"] == "sstv_image"]
     assert (shown["direction"], shown["mode"], shown["complete"]) == ("rx", "pd120", True)
 
@@ -397,8 +421,7 @@ def test_lock_release_mid_rx_saves_the_partial_picture(setup, pd120, tmp_path):
             )
             return agent.frames("decoder_stop", decoder="sstv"), list(agent.units_calls)
         finally:
-            await browser.close()
-            await agent.close()
+            await _close(agent, browser)
 
     stops, calls = asyncio.run(scenario())
     assert len(stops) == 1 and ("stop", "sstv", 1) in calls
@@ -449,8 +472,7 @@ def test_tx_preview_send_download_play_done(setup, tmp_path):
             await until(lambda: bool(browser.frames("sstv_image")), "tx in gallery")
             return agent, body, preview_png, list(browser.seen)
         finally:
-            await browser.close()
-            await agent.close()
+            await _close(agent, browser)
 
     agent, body, preview_png, seen = asyncio.run(scenario())
     tx_states = [f["state"] for f in seen if f["type"] == "sstv_tx_state"]
