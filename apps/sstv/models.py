@@ -127,6 +127,8 @@ class SstvTransmission(models.Model):
     sha256 = models.CharField(_("SHA-256"), max_length=64, blank=True)
     size = models.PositiveBigIntegerField(_("size (bytes)"), default=0)
     duration_s = models.FloatField(_("duration (s)"), default=0.0)
+    # Callsigns drawn onto the picture (empty = needs the "send without callsign" confirm).
+    callsigns = models.JSONField(_("callsigns"), default=list, blank=True)
     state = models.CharField(
         _("state"), max_length=8, choices=State.choices, default=State.DRAFT, db_index=True
     )
@@ -148,6 +150,11 @@ class ActiveSstvRx(models.Model):
     class State(models.TextChoices):
         STARTING = "starting", _("Starting")
         RUNNING = "running", _("Running")
+        # Decoder stopped while an SSTV transmission is on the air; restarted after it.
+        PAUSED = "paused", _("Paused")
+        # Stop requested / agent gone: kept until the agent reports the decoder stopped,
+        # so the final picture (sent just before that) is still attributed to the user.
+        STOPPING = "stopping", _("Stopping")
 
     station = models.OneToOneField(
         "stations.Station",

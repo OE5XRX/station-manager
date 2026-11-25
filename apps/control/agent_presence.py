@@ -19,7 +19,7 @@ def claim(station, kind, channel_name):
         .first()
     )
     AgentConnection.objects.update_or_create(
-        station=station, kind=kind, defaults={"channel_name": channel_name}
+        station=station, kind=kind, defaults={"channel_name": channel_name, "features": []}
     )
     return previous is not None and previous != channel_name
 
@@ -34,3 +34,28 @@ def release(station, kind, channel_name):
         station=station, kind=kind, channel_name=channel_name
     ).delete()
     return deleted > 0
+
+
+MAX_FEATURES = 32
+
+
+def set_features(station, kind, channel_name, features):
+    """Store the features ``channel_name`` advertised (only while it is the current one)."""
+    clean = (
+        sorted({f[:32] for f in features if isinstance(f, str)})[:MAX_FEATURES]
+        if isinstance(features, list)
+        else []
+    )
+    AgentConnection.objects.filter(station=station, kind=kind, channel_name=channel_name).update(
+        features=clean
+    )
+
+
+def has_feature(station, feature):
+    """True iff the station's current control connection advertised ``feature``."""
+    row = (
+        AgentConnection.objects.filter(station=station, kind=AgentConnection.Kind.CONTROL)
+        .values_list("features", flat=True)
+        .first()
+    )
+    return isinstance(row, list) and feature in row

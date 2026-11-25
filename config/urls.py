@@ -49,6 +49,8 @@ javascript_catalog = login_not_required(
 
 urlpatterns = [
     path("", include("apps.webpush.urls")),
+    # Agent download of SSTV TX audio (DeviceKey), before the generic API include.
+    path("api/v1/stations/sstv/", include("apps.sstv.api_urls")),
     path("api/", include("apps.api.urls")),
     path(
         "api/v1/module-firmware/",
@@ -84,6 +86,7 @@ urlpatterns += i18n_patterns(
     path("sso-admin/", include("apps.sso.urls")),
     path("stations/", include("apps.stations.urls")),
     path("stations/", include("apps.control.urls")),
+    path("stations/", include("apps.sstv.urls")),
     path("deployments/", include("apps.deployments.urls")),
     path("tunnel/", include("apps.tunnel.urls")),
     path("audit/", include("apps.audit.urls")),

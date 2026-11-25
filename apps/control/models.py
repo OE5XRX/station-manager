@@ -181,6 +181,8 @@ class AgentConnection(models.Model):
     )
     kind = models.CharField(_("kind"), max_length=16, choices=Kind.choices)
     channel_name = models.CharField(_("channel name"), max_length=255)
+    # Features the agent advertised in its last inventory (control kind only).
+    features = models.JSONField(_("features"), default=list, blank=True)
     connected_at = models.DateTimeField(_("connected at"), auto_now=True)
 
     class Meta:
