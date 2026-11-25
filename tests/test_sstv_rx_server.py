@@ -1100,3 +1100,60 @@ def test_same_slot_restart_survives_the_old_instance_frames(control_agent_auth):
 )
 def test_audit_detail_keeps_only_the_leading_code(detail, expected):
     assert sstv_control.audit_detail(detail) == expected
+
+
+# -- final PR review round 1 ---------------------------------------------------------
+
+
+def test_snapshot_after_a_fresh_start_keeps_that_start(control_agent_auth):
+    # The snapshot follows the inventory as a separate task: a start sent in between is
+    # not in it, but its own result confirms it.
+    station, user = setup_station("rx-snaprace")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await browser.send_json_to(rx_start())
+        start = await until(agent, is_decoder("decoder_start"))
+        await agent.send_json_to({"type": "decoder_snapshot", "decoders": []})
+        await agent.send_json_to(ok_result(start))
+        await agent.send_json_to(
+            {"type": "decoder_state", "decoder": "sstv", "slot": 1, "state": "running"}
+        )
+        await until(browser, is_state("running"))
+        assert not [m for m in await drain(agent) if is_decoder("decoder_stop")(m)]
+        row = await database_sync_to_async(ActiveSstvRx.objects.get)(station=station)
+        assert row.state == State.RUNNING
+        await close(browser, agent)
+
+    asyncio.run(go())
+
+
+def test_snapshot_drops_a_stale_start():
+    station, user = setup_station("rx-stalestart")
+    row = ActiveSstvRx.objects.create(
+        station=station, slot=1, user=user, state=State.STARTING, start_request="sstv-rx-x"
+    )
+    ActiveSstvRx.objects.filter(pk=row.pk).update(
+        started_at=timezone.now() - timedelta(seconds=sstv_control.START_GRACE_S + 1)
+    )
+    sstv_control.on_snapshot(station, [])
+    assert ActiveSstvRx.objects.get(station=station).state == State.STOPPING
+
+
+def test_running_decoder_of_a_given_up_session_is_stopped(control_agent_auth):
+    station, user = setup_station("rx-givenup")
+
+    async def go():
+        agent = _agent(station.id)
+        await agent.connect()
+        await database_sync_to_async(ActiveSstvRx.objects.create)(
+            station=station, slot=1, user=user, state=State.STOPPING
+        )
+        await agent.send_json_to(
+            {"type": "decoder_state", "decoder": "sstv", "slot": 1, "state": "running"}
+        )
+        stop = await until(agent, is_decoder("decoder_stop"))
+        assert stop["slot"] == 1
+        await agent.disconnect()
+
+    asyncio.run(go())

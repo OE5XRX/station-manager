@@ -321,9 +321,10 @@ def on_decoder_state(station, msg):
     with transaction.atomic():
         row = ActiveSstvRx.objects.select_for_update().filter(station=station).first()
         if row is None or str(row.slot) != slot or row.state == ActiveSstvRx.State.STOPPING:
-            if state == "running" and (row is None or str(row.slot) != slot):
+            if state == "running":
                 # A decoder nobody here owns (e.g. a start that was replaced or refused
-                # meanwhile): SSTV never runs on its own.
+                # meanwhile, or one confirmed after its session was given up): SSTV never
+                # runs on its own. A repeated stop is harmless.
                 _decoder_stop(station, slot)
             if row is None or str(row.slot) != slot:
                 return
@@ -398,13 +399,17 @@ def on_snapshot(station, decoders):
     with transaction.atomic():
         row = ActiveSstvRx.objects.select_for_update().filter(station=station).first()
         mine = str(row.slot) if row is not None and row.state in _LIVE_STATES else None
+        # A fresh start may have been sent on this connection before the snapshot was
+        # taken (the snapshot follows the inventory as a separate task): its own result
+        # confirms or ends it. Only a start older than the grace is stale.
+        stale_start = (
+            row is not None
+            and row.state == ActiveSstvRx.State.STARTING
+            and (row.started_at < timezone.now() - timedelta(seconds=START_GRACE_S))
+        )
         if (
             row is not None
-            and row.state
-            in (
-                ActiveSstvRx.State.STARTING,
-                ActiveSstvRx.State.RUNNING,
-            )
+            and (row.state == ActiveSstvRx.State.RUNNING or stale_start)
             and mine not in running
         ):
             row.state = ActiveSstvRx.State.STOPPING
