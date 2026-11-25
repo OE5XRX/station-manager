@@ -87,6 +87,11 @@ UI = {
 UI_NOT_APPLICABLE = {
     ("control", "use"),
     ("control", "manage"),
+    # SSTV endpoints (gallery, preview, RX/TX frames) arrive with SSTV Tasks 9–11,
+    # which replace these entries with representatives; levels: tests/test_sstv_models.py.
+    ("sstv", "view"),
+    ("sstv", "use"),
+    ("sstv", "manage"),
 }
 
 # (area, verb) -> (method, url with {objs-key} placeholders, JSON body or None)

@@ -136,6 +136,16 @@ AREAS: dict[str, Area] = {
         manage=AD,
         verb_labels={"manage": _("Manage passive services")},
     ),
+    "sstv": Area(
+        _("SSTV"),
+        view=A,
+        use=M,
+        manage=S,
+        verb_labels={
+            "use": _("Receive and send SSTV pictures"),
+            "manage": _("Delete any SSTV picture"),
+        },
+    ),
     "users": Area(_("Users"), view=M, manage=AD, verb_labels={"manage": _("Manage users")}),
     "api_tokens": Area(_("API tokens"), use=M, verb_labels={"use": _("Create API tokens")}),
     "audit": Area(_("Audit log"), view=AD),

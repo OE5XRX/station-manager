@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-24 19:40+0100\n"
+"POT-Creation-Date: 2026-11-24 23:55+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -120,11 +120,11 @@ msgstr ""
 msgid "A user with that username already exists."
 msgstr "Es gibt bereits einen Benutzer mit diesem Benutzernamen."
 
-#: apps/accounts/models.py:86 config/settings/base.py:162
+#: apps/accounts/models.py:86 config/settings/base.py:163
 msgid "English"
 msgstr "Englisch"
 
-#: apps/accounts/models.py:87 config/settings/base.py:163
+#: apps/accounts/models.py:87 config/settings/base.py:164
 msgid "German"
 msgstr "Deutsch"
 
@@ -239,7 +239,8 @@ msgid "privacy policy acknowledged at"
 msgstr "Datenschutzerklärung zur Kenntnis genommen am"
 
 #: apps/accounts/models.py:221 apps/control/models.py:255 apps/sso/models.py:27
-#: apps/sso/models.py:278 apps/stations/models.py:457
+#: apps/sso/models.py:278 apps/sstv/models.py:67 apps/sstv/models.py:119
+#: apps/sstv/models.py:164 apps/stations/models.py:457
 #: apps/stations/models.py:662 apps/stations/models.py:715
 #: apps/tunnel/models.py:23
 msgid "user"
@@ -607,7 +608,19 @@ msgstr "Passive Dienste"
 msgid "Manage passive services"
 msgstr "Passive Dienste verwalten"
 
-#: apps/accounts/permissions.py:139
+#: apps/accounts/permissions.py:140 apps/sstv/apps.py:9
+msgid "SSTV"
+msgstr "SSTV"
+
+#: apps/accounts/permissions.py:145
+msgid "Receive and send SSTV pictures"
+msgstr "SSTV-Bilder empfangen und senden"
+
+#: apps/accounts/permissions.py:146
+msgid "Delete any SSTV picture"
+msgstr "Beliebige SSTV-Bilder löschen"
+
+#: apps/accounts/permissions.py:149
 #: apps/accounts/templates/accounts/user_confirm_soft_delete.html:7
 #: apps/accounts/templates/accounts/user_detail.html:13
 #: apps/accounts/templates/accounts/user_form.html:7
@@ -618,21 +631,21 @@ msgstr "Passive Dienste verwalten"
 msgid "Users"
 msgstr "Benutzer"
 
-#: apps/accounts/permissions.py:139
+#: apps/accounts/permissions.py:149
 msgid "Manage users"
 msgstr "Benutzer verwalten"
 
-#: apps/accounts/permissions.py:140
+#: apps/accounts/permissions.py:150
 #: apps/accounts/templates/accounts/api_token_created.html:11
 #: apps/accounts/templates/accounts/user_detail.html:184
 msgid "API tokens"
 msgstr "API-Tokens"
 
-#: apps/accounts/permissions.py:140
+#: apps/accounts/permissions.py:150
 msgid "Create API tokens"
 msgstr "API-Tokens erstellen"
 
-#: apps/accounts/permissions.py:141
+#: apps/accounts/permissions.py:151
 #: apps/accounts/templates/accounts/user_detail.html:375
 #: apps/audit/templates/audit/audit_list.html:4
 #: apps/audit/templates/audit/audit_list.html:9
@@ -641,32 +654,32 @@ msgstr "API-Tokens erstellen"
 msgid "Audit log"
 msgstr "Audit-Log"
 
-#: apps/accounts/permissions.py:142
+#: apps/accounts/permissions.py:152
 msgid "SSO administration"
 msgstr "SSO-Verwaltung"
 
-#: apps/accounts/permissions.py:145
+#: apps/accounts/permissions.py:155
 msgid "view"
 msgstr "ansehen"
 
-#: apps/accounts/permissions.py:145
+#: apps/accounts/permissions.py:155
 msgid "operate"
 msgstr "bedienen"
 
-#: apps/accounts/permissions.py:145
+#: apps/accounts/permissions.py:155
 msgid "manage"
 msgstr "verwalten"
 
-#: apps/accounts/permissions.py:187
+#: apps/accounts/permissions.py:197
 msgid "nobody"
 msgstr "niemand"
 
-#: apps/accounts/permissions.py:273
+#: apps/accounts/permissions.py:283
 #, python-format
 msgid "Permission denied — %(what)s is not available to anyone."
 msgstr "Keine Berechtigung — %(what)s ist für niemanden freigegeben."
 
-#: apps/accounts/permissions.py:277
+#: apps/accounts/permissions.py:287
 #, python-format
 msgid ""
 "Permission denied — %(what)s requires %(need)s, you are %(have)s. If you "
@@ -675,7 +688,7 @@ msgstr ""
 "Keine Berechtigung — %(what)s erfordert %(need)s, du bist %(have)s. Wenn du "
 "glaubst, dass das falsch ist, wende dich an einen Admin."
 
-#: apps/accounts/permissions.py:567
+#: apps/accounts/permissions.py:577
 msgid "Permission could not be checked."
 msgstr "Berechtigung konnte nicht geprüft werden."
 
@@ -2033,6 +2046,7 @@ msgstr "Audio-Relay"
 #: apps/monitoring/models.py:243 apps/passive/models.py:107
 #: apps/passive/models.py:160 apps/passive/models.py:198
 #: apps/passive/models.py:250 apps/provisioning/models.py:22
+#: apps/sstv/models.py:55 apps/sstv/models.py:109 apps/sstv/models.py:155
 #: apps/stations/models.py:235 apps/stations/models.py:302
 #: apps/stations/models.py:338 apps/stations/models.py:425
 #: apps/stations/models.py:541 apps/stations/models.py:668
@@ -2252,7 +2266,7 @@ msgstr ""
 
 #: apps/control/models.py:20 apps/control/models.py:131
 #: apps/control/models.py:214 apps/module_firmware/models.py:136
-#: apps/passive/models.py:165
+#: apps/passive/models.py:165 apps/sstv/models.py:111 apps/sstv/models.py:157
 msgid "slot"
 msgstr "Slot"
 
@@ -2276,7 +2290,7 @@ msgstr "Version"
 #: apps/control/models.py:33 apps/control/models.py:215
 #: apps/module_firmware/models.py:109 apps/module_firmware/models.py:126
 #: apps/module_firmware/models.py:472 apps/passive/models.py:166
-#: apps/stations/models.py:437
+#: apps/sstv/models.py:112 apps/stations/models.py:437
 msgid "module"
 msgstr "Modul"
 
@@ -2379,7 +2393,7 @@ msgstr "gespeicherte Capabilities"
 msgid "control"
 msgstr "Steuerung"
 
-#: apps/control/models.py:173
+#: apps/control/models.py:173 apps/sstv/models.py:124
 msgid "audio"
 msgstr "Audio"
 
@@ -2440,7 +2454,7 @@ msgid "hang time (s)"
 msgstr "Haltezeit (s)"
 
 #: apps/control/models.py:267 apps/module_firmware/models.py:481
-#: apps/passive/models.py:167
+#: apps/passive/models.py:167 apps/sstv/models.py:129 apps/sstv/models.py:167
 msgid "state"
 msgstr "Zustand"
 
@@ -2735,7 +2749,7 @@ msgstr "hat die Bedienung"
 #: apps/deployments/templates/deployments/deployment_detail.html:92
 #: apps/deployments/templates/deployments/deployment_detail.html:106
 #: apps/module_firmware/update_status.py:109 apps/passive/models.py:154
-#: apps/stations/models.py:135 apps/tunnel/models.py:13
+#: apps/sstv/models.py:102 apps/stations/models.py:135 apps/tunnel/models.py:13
 msgid "Error"
 msgstr "Fehler"
 
@@ -3855,6 +3869,7 @@ msgstr "S3-Objekt-Key"
 #: apps/module_firmware/models.py:187
 #: apps/module_firmware/templates/module_firmware/release_list.html:78
 #: apps/module_firmware/templates/module_firmware/release_list.html:101
+#: apps/sstv/models.py:125
 msgid "SHA-256"
 msgstr "SHA-256"
 
@@ -3909,6 +3924,7 @@ msgstr "Image-Releases"
 #: apps/module_firmware/templates/module_firmware/convergence.html:104
 #: apps/module_firmware/templates/module_firmware/module_detail.html:68
 #: apps/passive/models.py:150 apps/provisioning/models.py:11
+#: apps/sstv/models.py:148
 msgid "Running"
 msgstr "Läuft"
 
@@ -6600,7 +6616,7 @@ msgstr "passive Konfiguration der Station"
 msgid "station passive configs"
 msgstr "passive Konfigurationen der Stationen"
 
-#: apps/passive/models.py:149
+#: apps/passive/models.py:149 apps/sstv/models.py:147
 msgid "Starting"
 msgstr "Startet"
 
@@ -7136,7 +7152,8 @@ msgstr "ÖVSV"
 msgid "Manual"
 msgstr "Manuell"
 
-#: apps/repeaters/models.py:22 apps/stations/models.py:138
+#: apps/repeaters/models.py:22 apps/sstv/models.py:70
+#: apps/stations/models.py:138
 msgid "callsign"
 msgstr "Rufzeichen"
 
@@ -8473,6 +8490,128 @@ msgstr "Tag öffnen"
 #: apps/sso/templates/sso/tag_list.html:111
 msgid "Create the first tag above to start propagating group claims."
 msgstr "Leg oben den ersten Tag an, um Gruppen-Claims weiterzugeben."
+
+#: apps/sstv/models.py:25
+msgid "retention (days)"
+msgstr "Aufbewahrung (Tage)"
+
+#: apps/sstv/models.py:28
+msgid "Pictures in the gallery are deleted after this many days."
+msgstr "Bilder in der Galerie werden nach so vielen Tagen gelöscht."
+
+#: apps/sstv/models.py:32 apps/sstv/models.py:33
+msgid "SSTV settings"
+msgstr "SSTV-Einstellungen"
+
+#: apps/sstv/models.py:47
+msgid "Received"
+msgstr "Empfangen"
+
+#: apps/sstv/models.py:48
+msgid "Sent"
+msgstr "Gesendet"
+
+#: apps/sstv/models.py:57
+msgid "direction"
+msgstr "Richtung"
+
+#: apps/sstv/models.py:58 apps/sstv/models.py:121
+msgid "mode"
+msgstr "Modus"
+
+#: apps/sstv/models.py:59 apps/sstv/models.py:122
+msgid "frequency (Hz)"
+msgstr "Frequenz (Hz)"
+
+#: apps/sstv/models.py:71
+msgid "complete"
+msgstr "vollständig"
+
+#: apps/sstv/models.py:72
+msgid "picture"
+msgstr "Bild"
+
+#: apps/sstv/models.py:73 apps/sstv/models.py:131
+msgid "created"
+msgstr "erstellt"
+
+#: apps/sstv/models.py:75
+msgid "picture ID"
+msgstr "Bild-ID"
+
+#: apps/sstv/models.py:78
+msgid "SSTV picture"
+msgstr "SSTV-Bild"
+
+#: apps/sstv/models.py:79
+msgid "SSTV pictures"
+msgstr "SSTV-Bilder"
+
+#: apps/sstv/models.py:98
+msgid "Draft"
+msgstr "Entwurf"
+
+#: apps/sstv/models.py:99
+msgid "Sending"
+msgstr "Wird gesendet"
+
+#: apps/sstv/models.py:100
+msgid "Done"
+msgstr "Fertig"
+
+#: apps/sstv/models.py:101
+msgid "Aborted"
+msgstr "Abgebrochen"
+
+#: apps/sstv/models.py:123
+msgid "preview"
+msgstr "Vorschau"
+
+#: apps/sstv/models.py:126
+msgid "size (bytes)"
+msgstr "Größe (Bytes)"
+
+#: apps/sstv/models.py:127
+msgid "duration (s)"
+msgstr "Dauer (s)"
+
+#: apps/sstv/models.py:132
+msgid "updated"
+msgstr "aktualisiert"
+
+#: apps/sstv/models.py:135
+msgid "SSTV transmission"
+msgstr "SSTV-Aussendung"
+
+#: apps/sstv/models.py:136
+msgid "SSTV transmissions"
+msgstr "SSTV-Aussendungen"
+
+#: apps/sstv/models.py:169
+msgid "started"
+msgstr "gestartet"
+
+#: apps/sstv/models.py:172
+msgid "active SSTV receive session"
+msgstr "laufender SSTV-Empfang"
+
+#: apps/sstv/models.py:173
+msgid "active SSTV receive sessions"
+msgstr "laufende SSTV-Empfänge"
+
+#: apps/sstv/render.py:50
+msgid "The file is not a JPEG, PNG, WebP or GIF picture."
+msgstr "Die Datei ist kein JPEG-, PNG-, WebP- oder GIF-Bild."
+
+#: apps/sstv/render.py:63
+#, python-format
+msgid "The file is larger than %(mb)d MB."
+msgstr "Die Datei ist größer als %(mb)d MB."
+
+#: apps/sstv/render.py:67
+#, python-format
+msgid "The picture has too many pixels (at most %(mpx)d megapixels)."
+msgstr "Das Bild hat zu viele Pixel (höchstens %(mpx)d Megapixel)."
 
 #: apps/stations/admin.py:68
 msgid "Hardware"
