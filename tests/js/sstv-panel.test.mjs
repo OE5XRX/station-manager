@@ -660,6 +660,45 @@ await ok("destroy and replies clear the ISS give-up timers", () => {
   }
 });
 
+await ok("a kept picture that finished during the gap is dropped when no row follows", () => {
+  withTimers((timers) => {
+    const c = panel();
+    c._onRxState({ state: "running", slot: 1, ends_at: null });
+    c._onPictureStart({ picture_id: "p8", mode: "robot36", width: 320, height: 240 });
+    window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+    c._onRxState({ state: "running", slot: 1, ends_at: null }); // live snapshot
+    assert.equal(c.picture.id, "p8");
+    bodyEvents.length = 0;
+    timers[timers.length - 1].cb(); // no sstv_line within the window
+    assert.equal(c.picture, null);
+    assert.deepEqual(bodyEvents, ["sstv-gallery-refresh"]);
+    // ... but a picture that keeps receiving rows stays
+    c._onPictureStart({ picture_id: "p9", mode: "robot36", width: 320, height: 240 });
+    window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+    c._onRxState({ state: "running", slot: 1, ends_at: null });
+    c._onLine({ picture_id: "p9", row: 1, rgb: Buffer.alloc(320 * 3).toString("base64") });
+    timers[timers.length - 1].cb();
+    assert.equal(c.picture.id, "p9");
+    c.destroy();
+  });
+});
+
+await ok("RX readout uses the selected module when it sits on the receiving slot", () => {
+  const c = panel();
+  c._seed([
+    { slot: "1", modules: [
+      { module: "a", online: true, capabilities: [{ name: "rx_frequency" }], state: { rx_frequency: 145.5 } },
+      { module: "b", online: true, capabilities: [{ name: "rx_frequency" }], state: { rx_frequency: 145.8 } },
+    ] },
+  ]);
+  c.selected = "1 a";
+  c._onRxState({ state: "running", slot: 1, ends_at: null });
+  assert.equal(c.selected, "1 a");
+  assert.equal(c.rxMHz(), "145.5000");
+  assert.equal(c.onIss, false);
+  c.destroy();
+});
+
 // -- control panel: bridge, emit, PTT block ----------------------------------------
 await ok("control panel bridges the SSTV frames and re-emits the server's", () => {
   const cp = registered.controlPanel();

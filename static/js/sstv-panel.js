@@ -100,6 +100,7 @@
       _txActive: false,
       _previewGen: 0, // bumped by every change of the choices: a late reply is dropped
       _reopened: false,
+      _sawLine: false, // a live row arrived since the last reconnect
       _reopenTimer: null,
       _cmdTimers: {}, // request_id -> give-up timer of an ISS command
       _imageGen: 0, // bumped by every new picture: a late PNG load never paints over it
@@ -144,6 +145,7 @@
           // The snapshot (sent right after the open) continues a live picture. No RX state
           // within the window = the session ended meanwhile: the partial picture goes.
           self._reopened = true;
+          self._sawLine = false;
           clearTimeout(self._reopenTimer);
           self._reopenTimer = setTimeout(function () {
             self._reopened = false;
@@ -261,7 +263,15 @@
         var mod = this.selectedModule;
         if (slot !== null) {
           var all = this.rxModules;
-          for (var i = 0; i < all.length; i++) if (all[i].slot === slot) mod = all[i];
+          if (!mod || mod.slot !== slot) {
+            mod = null;
+            for (var i = 0; i < all.length; i++) {
+              if (all[i].slot === slot) {
+                mod = all[i];
+                break;
+              }
+            }
+          }
         }
         return this._hz(mod, "rx_frequency");
       },
@@ -668,6 +678,14 @@
           if (!this.rx && !reopened) this.picture = null;
           this._setRx({ state: msg.state, slot: msg.slot, endsAt: msg.ends_at || null });
           this._followRxSlot(msg.slot);
+          if (reopened && this.picture) {
+            // The session is live, but the kept picture may have finished during the gap
+            // (its sstv_image is not in the snapshot): no new row soon = it is over.
+            var self = this;
+            this._reopenTimer = setTimeout(function () {
+              if (self.picture && !self._sawLine) self._abandonPicture();
+            }, REOPEN_WINDOW_MS);
+          }
           return;
         }
         var wasLive = this.rx !== null;
@@ -710,6 +728,7 @@
           ctx.putImageData(new ImageData(rgba.slice(0, px * 4), px, 1), 0, row);
         }
         if (row > p.row) p.row = row;
+        this._sawLine = true;
       },
 
       // The authoritative picture: show it in the monitor and refresh the gallery.
