@@ -12,8 +12,8 @@ Driven by ``manage.py enforce_retention`` (own compose service ``retention``).
 - ``held_user_ids()`` is the legal-hold hook (Löschsperre): rows of held users are
   skipped by **both** deadlines (365 d delete and 90 d IP clearing).
 - SSTV: gallery pictures after ``SstvSettings.retention_days``, transmission
-  artefacts (preview, TX audio) after 1 h; the stored files go with their rows
-  (``apps.sstv.signals``).
+  artefacts (preview, TX audio) after 1 h (2 h while still "sending"); the stored
+  files go with their rows (``apps.sstv.signals``).
 """
 
 import logging
