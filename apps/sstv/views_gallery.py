@@ -3,9 +3,10 @@
 Pictures are always streamed through these permission-checked views, never via a
 storage URL (S3 presigned URLs would work for anyone holding the link).
 
-Delete rules (spec §6): ``sstv.use`` deletes the user's **own sent** pictures,
-``sstv.manage`` deletes any picture of the station. The lock is not required —
-deleting a gallery entry never touches the radio.
+Delete rules (plan Task 11, spec §5.7): ``sstv.use`` deletes the user's **own
+sent** pictures, ``sstv.manage`` deletes any picture of the station. Unlike the
+spec's §5.7 grouping, the lock is deliberately not required — deleting a gallery
+entry never touches the radio.
 """
 
 import uuid
@@ -127,8 +128,9 @@ class _PictureView(AreaPermissionMixin, View):
             as_attachment=self.as_attachment,
             filename=download_filename(image),
         )
-        # Pictures never change; only the logged-in browser may keep them.
-        resp["Cache-Control"] = "private, max-age=3600"
+        # Only the logged-in browser may keep a copy, and only briefly: a deleted
+        # picture or a revoked permission must not linger in the cache.
+        resp["Cache-Control"] = "private, max-age=300"
         return resp
 
 

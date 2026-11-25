@@ -232,7 +232,7 @@ def test_inline_picture(client, station):
     assert resp.status_code == 200
     assert resp["Content-Type"] == "image/png"
     assert resp["Content-Disposition"].startswith("inline")
-    assert "private" in resp["Cache-Control"]
+    assert resp["Cache-Control"] == "private, max-age=300"
     assert b"".join(resp.streaming_content) == PNG
 
 

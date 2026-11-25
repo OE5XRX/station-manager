@@ -363,9 +363,12 @@ def _audit_messages_scrubbed(cfg, held):
     )
 
 
-# A transmission row (preview = user photo, TX audio) outlives its use by at most
-# this long. A TX is hard-stopped after duration + 5 s (≤ ~275 s), so a row still
-# "sending" an hour after its last state change is a leftover too.
+# A transmission row (preview = user photo, TX audio) becomes eligible for deletion
+# this long after creation and is removed by the next retention run (daily, and
+# only with RETENTION_ENFORCE). A TX is hard-stopped after duration + 5 s
+# (≤ ~275 s), so a row still "sending" an hour after its last state change is a
+# leftover too. Every state is covered, "done" included: the gallery picture of a
+# sent transmission is its own blob (SstvImage.image), never the preview file.
 SSTV_TRANSMISSION_MAX_AGE = timedelta(hours=1)
 
 
