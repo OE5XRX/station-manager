@@ -949,3 +949,88 @@ def test_scan_start_refused_while_sending(control_agent_auth):
         await agent.disconnect()
 
     asyncio.run(go())
+
+
+# -- review round 4 ------------------------------------------------------------------
+
+
+def test_queued_retune_reported_after_the_start_aborts_the_tx(control_agent_auth):
+    # A write the agent applied before it took the slot shows up as a state frame.
+    station, user = setup_station("tx-lateretune")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        frame = await sent_start(agent, browser, draft)
+        await agent.send_json_to(
+            {"type": "state", "slot": 1, "module": "fm0",
+             "values": {"tx_frequency": 145.8, "rx_frequency": 145.8}}
+        )  # fmt: skip
+        stop = await until(agent, lambda m: m.get("type") == "sstv_tx_stop")
+        assert stop["tx_id"] == frame["tx_id"]
+        got = await until(browser, is_tx_state("aborted"))
+        assert got["detail"] == "iss_downlink"
+        await browser.disconnect()
+        await agent.disconnect()
+        return draft
+
+    draft = asyncio.run(go())
+    draft.refresh_from_db()
+    assert draft.state == TxState.ABORTED
+
+
+def test_harmless_state_frame_keeps_the_tx(control_agent_auth):
+    station, user = setup_station("tx-okstate")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await sent_start(agent, browser, draft)
+        await agent.send_json_to(
+            {"type": "state", "slot": 1, "module": "fm0", "values": {"tx_frequency": 145.5}}
+        )
+        assert not any(m.get("type") == "sstv_tx_stop" for m in await drain(agent))
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
+
+
+def test_voice_ptt_on_any_slot_refused_while_sending(control_agent_auth):
+    station, user = setup_station("tx-ptt2")
+    StationModule.objects.create(
+        station=station, slot="2", module_id="fm1", type="fm_transceiver", online=True,
+        capability_descriptor=[], last_state={},
+    )  # fmt: skip
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await sent_start(agent, browser, draft)
+        await browser.send_json_to(
+            {"type": "command", "request_id": "p2", "slot": "2", "module": "fm1",
+             "capability": "ptt", "op": "set", "value": True}
+        )  # fmt: skip
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "sstv_busy" and err["request_id"] == "p2"
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
+
+
+def test_send_refused_while_voice_ptt_keyed(ready):
+    from apps.audio import gate as audio_gate
+
+    station, user = ready
+    audio_gate.set_ptt(station, "1", "fm0")
+    assert _claim(station, user, _draft(station, user)) == "ptt_active"
+
+
+def test_rechecked_frequency_is_stored(ready):
+    station, user = ready
+    _, claimed = tx.claim(station, user, str(_draft(station, user).pk), confirm_no_callsign=False)
+    _set_tx(station, 145.6)
+    assert tx.start_sending(station, claimed, b"\0\0" * 100) is None
+    claimed.refresh_from_db()
+    assert claimed.frequency_hz == 145_600_000

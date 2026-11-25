@@ -1050,13 +1050,6 @@ def test_snapshot_with_odd_slots_does_not_break_or_stop_own_decoder():
     assert ActiveSstvRx.objects.get(station=station).state == State.RUNNING
 
 
-def test_audit_detail_scrubs_before_clipping():
-    long = "x" * 50 + " user@example.org"  # the address straddles the 64-char clip
-    out = sstv_control.audit_detail(long)
-    assert "@" not in out and "user" not in out
-    assert "[email]" in sstv_control.audit_detail("mail a@b.at")
-
-
 # -- review round 3 ------------------------------------------------------------------
 
 
@@ -1091,6 +1084,19 @@ def test_same_slot_restart_survives_the_old_instance_frames(control_agent_auth):
     asyncio.run(go())
 
 
-def test_audit_detail_catches_an_address_joined_by_stripping():
-    out = sstv_control.audit_detail("connect 10.1.2<.3 failed")
-    assert "10.1.2.3" not in out and "[ip]" in out
+@pytest.mark.parametrize(
+    "detail, expected",
+    [
+        ("player_failed rc=1", "player_failed rc=1"),
+        ("reader: connect to 10.1.2.3 failed", "reader"),
+        ("unit failed: Job for x failed", "unit failed"),
+        ("max_runtime", "max_runtime"),
+        ("x" * 50 + " user@example.org", "error"),
+        ("connect 10.1.2<.3 failed", "error"),
+        ("connect 10.1.2.3", "error"),
+        ("mail peter.b<@example.com x", "error"),
+        ("", "error"),
+    ],
+)
+def test_audit_detail_keeps_only_the_leading_code(detail, expected):
+    assert sstv_control.audit_detail(detail) == expected

@@ -102,6 +102,7 @@ _SSTV_ERRORS = {
     "out_of_range": gettext_lazy("The TX frequency is outside the module's TX range"),
     "aborted": gettext_lazy("The transmission was aborted"),
     "scan_active": gettext_lazy("Stop the scanner before sending a picture"),
+    "ptt_active": gettext_lazy("Release PTT before sending a picture"),
     "no_active_sstv": gettext_lazy("No SSTV session is running"),
     "internal_error": gettext_lazy("SSTV could not be started"),
 }
@@ -271,6 +272,9 @@ class AgentControlConsumer(AsyncWebsocketConsumer):
                 await self._apply_state(
                     station, msg.get("slot"), msg.get("module"), msg.get("values", {})
                 )
+                # A transmission on a slot that now reports a forbidden TX frequency
+                # (a write queued on the agent before it took the slot) is aborted.
+                await self._sstv_call(sstv_tx.on_module_state, msg.get("slot"))
             await self._broadcast("control.state", {"msg": msg})
         elif mtype == "result":
             rid = msg.get("request_id")
@@ -1404,8 +1408,10 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         no-op on the agent) and a TX route onto that slot. Settings are only checked once
         by the send guards."""
         capability, value = msg.get("capability"), msg.get("value")
-        if capability == "ptt" and not value:
-            return False
+        if capability == "ptt":
+            # Voice PTT on any slot while a picture is on the air: the mic bridge follows
+            # the gate's TX route, which may point at the transmitting slot.
+            return bool(value) and await self._sstv_sending(station)
         if capability == "tx_route" and isinstance(value, dict):
             if await self._sstv_on_air(station, value.get("slot")):
                 return True

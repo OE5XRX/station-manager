@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 03:38+0100\n"
+"POT-Creation-Date: 2026-11-25 03:56+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2288,26 +2288,30 @@ msgid "Stop the scanner before sending a picture"
 msgstr "Stoppe den Scanner, bevor du ein Bild sendest"
 
 #: apps/control/consumers.py:105
+msgid "Release PTT before sending a picture"
+msgstr "Lass PTT los, bevor du ein Bild sendest"
+
+#: apps/control/consumers.py:106
 msgid "No SSTV session is running"
 msgstr "Es läuft kein SSTV-Betrieb"
 
-#: apps/control/consumers.py:106
+#: apps/control/consumers.py:107
 msgid "SSTV could not be started"
 msgstr "SSTV konnte nicht gestartet werden"
 
-#: apps/control/consumers.py:1298
+#: apps/control/consumers.py:1302
 msgid "Repeater cannot be applied here"
 msgstr "Repeater kann hier nicht angewendet werden"
 
-#: apps/control/consumers.py:1324
+#: apps/control/consumers.py:1328
 msgid "Repeater could not be authorized"
 msgstr "Repeater konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1566
+#: apps/control/consumers.py:1572
 msgid "Command could not be authorized"
 msgstr "Befehl konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1757
+#: apps/control/consumers.py:1763
 #, python-format
 msgid ""
 "Permission denied — taking over control requires %(manage)s or a Station-"

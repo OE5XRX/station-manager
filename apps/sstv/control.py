@@ -117,18 +117,19 @@ def is_holder(station, user, *, lock_row=False):
     return user is not None and holder is not None and holder == user.pk
 
 
-_AUDIT_DETAIL_RE = re.compile(r"[^A-Za-z0-9_ =:.,/+\[\]-]")
+_AUDIT_CODE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_ =.-]{0,63}")
 
 
 def audit_detail(value):
-    """Agent-reported free text (e.g. ``reader: <exception>``) as safe audit text: e-mails/IPs
-    scrubbed (before clipping, so a cut address cannot escape), odd characters dropped."""
+    """Agent-reported detail as safe audit text: only its leading code (``player_failed
+    rc=1``, ``reader`` of ``reader: <exception>``), never free text that may carry
+    addresses. Anything else becomes ``error``."""
     from apps.audit.scrub import scrub_message
 
-    # Scrub, strip, scrub again: stripping may join an address that was split by an odd
-    # character ("10.1.2<.3"); the second pass catches it. Clip last.
-    stripped = _AUDIT_DETAIL_RE.sub("", scrub_message(str(value)[:1024]))
-    return scrub_message(stripped)[:_DETAIL_MAX]
+    head = str(value).split(":", 1)[0].strip()[:64]
+    if not _AUDIT_CODE_RE.fullmatch(head) or scrub_message(head) != head:
+        return "error"
+    return head
 
 
 def sending_transmissions(station):

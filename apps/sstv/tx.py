@@ -209,6 +209,10 @@ def claim(station, user, transmission_id, *, confirm_no_callsign):
             return "expired", None
         if scan.current_scan_id(station) is not None:
             return "scan_active", None  # the scanner retunes the radio
+        from apps.audio import gate as audio_gate
+
+        if audio_gate.ptt_keyed(station):
+            return "ptt_active", None  # the voice mic would mix into the picture
         if not tx.callsigns and not confirm_no_callsign:
             return "no_callsign", None
         module = StationModule.objects.filter(
@@ -272,15 +276,18 @@ def start_sending(station, tx, audio):
         module = StationModule.objects.filter(
             station=station, slot=str(row.slot), module_id=row.module, online=True
         ).first()
-        code, _hz = frequency_guard(module)
+        code, hz = frequency_guard(module)
         if code is not None:
             fail(station, row.pk, code)
             return code
+        row.frequency_hz = hz
         row.sha256 = hashlib.sha256(audio).hexdigest()
         row.size = len(audio)
         row.duration_s = len(audio) / 2 / 8000  # exact: the agent hard-stops 5 s after it
         row.audio.save(f"{uuid.uuid4().hex}.raw", ContentFile(audio), save=False)
-        row.save(update_fields=["sha256", "size", "duration_s", "audio", "updated_at"])
+        row.save(
+            update_fields=["sha256", "size", "duration_s", "frequency_hz", "audio", "updated_at"]
+        )
         # TX pauses RX (spec §5.2): the server pauses and resumes, the agent does not.
         control.pause_rx(station)
         control.send_to_agent(
@@ -439,6 +446,23 @@ def sending_frame(station):
     """``sstv_tx_state`` of the transmission on the air (for a freshly loaded page)."""
     tx = control.sending_transmissions(station).first()
     return _tx_frame(tx, "sending") if tx is not None else None
+
+
+def on_module_state(station, slot):
+    """Agent ``state`` of a module: abort a transmission on that slot whose TX frequency is
+    now forbidden (ISS downlink / out of range). The send guards read ``last_state`` before
+    the agent owned the slot; a write already queued on the agent lands only now."""
+    key = control.slot_key(slot)
+    if key is None:
+        return
+    for row in control.sending_transmissions(station).filter(slot=int(key)):
+        module = StationModule.objects.filter(
+            station=station, slot=key, module_id=row.module, online=True
+        ).first()
+        code, _hz = frequency_guard(module)
+        if code in ("iss_downlink", "out_of_range"):
+            abort_tx(station, code)
+            return
 
 
 def slot_on_air(station, slot):
