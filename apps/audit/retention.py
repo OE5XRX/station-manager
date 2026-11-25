@@ -365,11 +365,14 @@ def _audit_messages_scrubbed(cfg, held):
 
 # A transmission row (preview = user photo, TX audio) becomes eligible for deletion
 # this long after creation and is removed by the next retention run (daily, and
-# only with RETENTION_ENFORCE). A TX is hard-stopped after duration + 5 s
-# (≤ ~275 s), so a row still "sending" an hour after its last state change is a
-# leftover too. Every state is covered, "done" included: the gallery picture of a
-# sent transmission is its own blob (SstvImage.image), never the preview file.
+# only with RETENTION_ENFORCE). Every state is covered, "done" included: the
+# gallery picture of a sent transmission is its own blob (SstvImage.image), never
+# the preview file.
 SSTV_TRANSMISSION_MAX_AGE = timedelta(hours=1)
+# A draft may be sent until it is 1 h old and a TX is hard-stopped after
+# duration + 5 s (≤ ~275 s), so a "sending" row is only a leftover past 2 h —
+# judged on created_at alone (updated_at misses QuerySet.update() transitions).
+SSTV_SENDING_MAX_AGE = timedelta(hours=2)
 
 
 def _sstv_pictures(cfg, held):
@@ -382,17 +385,14 @@ def _sstv_pictures(cfg, held):
 
 
 def _sstv_stale_drafts(cfg, held):
-    """Previews/TX audio older than 1 h in any state (temporary artefacts, no hold).
-
-    A draft may be sent until it is 1 h old, so a "sending" row only counts as a
-    leftover once it has also not moved for 1 h (``updated_at`` follows the
-    state change).
-    """
+    """Previews/TX audio past their use (temporary artefacts, no hold): 1 h after
+    creation, 2 h for a row still "sending"."""
     from apps.sstv.models import SstvTransmission
 
-    cutoff = cfg.now - SSTV_TRANSMISSION_MAX_AGE
-    qs = SstvTransmission.objects.filter(created_at__lt=cutoff).filter(
-        ~Q(state=SstvTransmission.State.SENDING) | Q(updated_at__lt=cutoff)
+    sending = Q(state=SstvTransmission.State.SENDING)
+    qs = SstvTransmission.objects.filter(
+        (~sending & Q(created_at__lt=cfg.now - SSTV_TRANSMISSION_MAX_AGE))
+        | (sending & Q(created_at__lt=cfg.now - SSTV_SENDING_MAX_AGE))
     )
     return _apply(qs, cfg)
 

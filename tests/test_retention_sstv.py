@@ -79,12 +79,21 @@ def test_retention_days_below_one_count_as_one(station):
     assert _exists(today) and not _exists(old)
 
 
-@pytest.mark.parametrize("state", [S.DRAFT, S.ABORTED, S.ERROR, S.DONE, S.SENDING])
+@pytest.mark.parametrize(
+    "state,max_age",
+    [
+        (S.DRAFT, timedelta(hours=1)),
+        (S.ABORTED, timedelta(hours=1)),
+        (S.ERROR, timedelta(hours=1)),
+        (S.DONE, timedelta(hours=1)),
+        (S.SENDING, timedelta(hours=2)),
+    ],
+)
 def test_stale_transmissions_deleted_with_files(
-    station, django_capture_on_commit_callbacks, state
+    station, django_capture_on_commit_callbacks, state, max_age
 ):
-    stale = _tx(station, timedelta(minutes=61), state)
-    fresh = _tx(station, timedelta(minutes=59), state)
+    stale = _tx(station, max_age + timedelta(minutes=1), state)
+    fresh = _tx(station, max_age - timedelta(minutes=1), state)
     names = stale.preview.name, stale.audio.name
     with django_capture_on_commit_callbacks(execute=True):
         result = run_retention(_cfg())
@@ -94,10 +103,10 @@ def test_stale_transmissions_deleted_with_files(
     assert default_storage.exists(fresh.preview.name)
 
 
-def test_sending_row_kept_while_it_still_moves(station):
-    """Sent from a 59-min-old draft: still "sending" past the 1 h mark — not a leftover."""
-    tx = _tx(station, timedelta(minutes=61), S.SENDING)
-    SstvTransmission.objects.filter(pk=tx.pk).update(updated_at=NOW - timedelta(minutes=2))
+def test_sending_row_kept_even_if_updated_at_never_moved(station):
+    """Sent from a 59-min-old draft via QuerySet.update() (no auto_now): still on air
+    at 61 min — created_at alone decides, with the 2 h margin."""
+    tx = _tx(station, timedelta(minutes=61), S.SENDING)  # updated_at == created_at
     assert run_retention(_cfg()).counts["sstv_stale_drafts"] == 0
     assert _exists(tx)
 
