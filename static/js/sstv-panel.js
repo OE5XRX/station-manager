@@ -34,6 +34,7 @@
   // A page that missed the end frame (socket gap) stops showing a session this long
   // after it must have ended: RX after ends_at, TX after its air time.
   var RX_STALE_MS = 30000;
+  var REOPEN_WINDOW_MS = 5000;
   var TX_STALE_MS = 60000;
   var LIVE_TX = { sending: true, downloading: true, keyed: true };
   var LIVE_RX = { starting: true, running: true, paused: true };
@@ -99,6 +100,7 @@
       _txActive: false,
       _previewGen: 0, // bumped by every change of the choices: a late reply is dropped
       _reopened: false,
+      _reopenTimer: null,
       _imageGen: 0, // bumped by every new picture: a late PNG load never paints over it
 
       init: function () {
@@ -135,9 +137,17 @@
         // snapshot right after restores a live RX and a transmission on the air.
         this._on("control:open", function () {
           self._settle();
-          self._reopened = true; // the snapshot's RX state continues the live picture
+          self._dropCommands();
           self._setRx(null);
           self._setTx(null);
+          // The snapshot (sent right after the open) continues a live picture. No RX state
+          // within the window = the session ended meanwhile: the partial picture goes.
+          self._reopened = true;
+          clearTimeout(self._reopenTimer);
+          self._reopenTimer = setTimeout(function () {
+            self._reopened = false;
+            if (!self.rx) self.picture = null;
+          }, REOPEN_WINDOW_MS);
         });
         this._on("control:sstv_tx_state", function (e) {
           self._onTxState(e.detail);
@@ -157,6 +167,7 @@
         this._listeners = [];
         clearTimeout(this._noticeTimer);
         clearTimeout(this._pendingTimer);
+        clearTimeout(this._reopenTimer);
         clearInterval(this._tick);
         this._tick = null;
         this._announceTx(false);
@@ -191,6 +202,8 @@
           if (mods2[k].slot + " " + mods2[k].module === this.selected) keep = true;
         }
         if (!keep) this.selected = mods2.length ? mods2[0].slot + " " + mods2[0].module : "";
+        // A live session keeps the receiving module, even if its slot was briefly missing.
+        if (this.rx) this._followRxSlot(this.rx.slot);
       },
 
       _onModuleState: function (msg) {
@@ -449,7 +462,23 @@
           return false;
         }
         this._requests[rid] = "command";
+        // Its own give-up: a lost reply must not leave the entry (or the user) waiting.
+        var self = this;
+        setTimeout(function () {
+          if (self._requests[rid] !== "command") return;
+          delete self._requests[rid];
+          self._notify({ ok: false, text: gettext("The ISS frequency could not be set.") });
+        }, PENDING_GIVEUP_MS);
         return true;
+      },
+
+      // The socket was replaced: replies to ISS commands sent on the old one never come.
+      _dropCommands: function () {
+        var kept = {};
+        for (var rid in this._requests) {
+          if (this._requests[rid] !== "command") kept[rid] = this._requests[rid];
+        }
+        this._requests = kept;
       },
 
       send: function (confirmed) {
@@ -629,6 +658,7 @@
         this._settle("sstv_rx");
         var reopened = this._reopened;
         this._reopened = false;
+        clearTimeout(this._reopenTimer);
         if (LIVE_RX[msg.state]) {
           if (!this.rx && !reopened) this.picture = null;
           this._setRx({ state: msg.state, slot: msg.slot, endsAt: msg.ends_at || null });

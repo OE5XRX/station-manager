@@ -551,6 +551,62 @@ await ok("no answer at all: every open request gives up with one notice", () => 
   c.destroy();
 });
 
+function withTimers(fn) {
+  const timers = [];
+  const realSet = globalThis.setTimeout;
+  globalThis.setTimeout = (cb, ms) => (timers.push({ cb, ms }), timers.length);
+  try {
+    return fn(timers);
+  } finally {
+    globalThis.setTimeout = realSet;
+  }
+}
+
+await ok("idle reconnect: no snapshot within the window drops the partial picture", () => {
+  withTimers((timers) => {
+    const c = panel();
+    c._onRxState({ state: "running", slot: 1, ends_at: null });
+    c._onPictureStart({ picture_id: "p6", mode: "robot36", width: 320, height: 240 });
+    window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+    assert.equal(c.picture.id, "p6", "kept until the window closes");
+    timers.find((t) => t.ms === 5000).cb(); // no live sstv_state came
+    assert.equal(c.picture, null);
+    assert.equal(c._reopened, false);
+    c._onRxState({ state: "starting", slot: 1, ends_at: null });
+    assert.equal(c.picture, null);
+    c.destroy();
+  });
+});
+
+await ok("an inventory gap during RX does not move the module choice off the receiver", () => {
+  const c = panel();
+  c._onRxState({ state: "running", slot: 2, ends_at: null });
+  c._seed([INV[0]]); // slot 2 briefly missing
+  c._seed(INV);
+  assert.equal(c.selected, "2 rx1");
+  c.destroy();
+});
+
+await ok("a lost ISS reply gives up with a notice; a reconnect drops it silently", () => {
+  withTimers((timers) => {
+    const c = panel();
+    c.tuneIss();
+    const giveUp = timers[timers.length - 1];
+    assert.equal(Object.values(c._requests).filter((k) => k === "command").length, 1);
+    giveUp.cb();
+    assert.deepEqual(c._requests, {});
+    assert.match(c.notice.text, /ISS frequency could not be set/);
+    c.notice = null;
+    c.tuneIss();
+    const second = timers[timers.length - 1];
+    window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+    assert.deepEqual(c._requests, {});
+    second.cb();
+    assert.equal(c.notice, null);
+    c.destroy();
+  });
+});
+
 // -- control panel: bridge, emit, PTT block ----------------------------------------
 await ok("control panel bridges the SSTV frames and re-emits the server's", () => {
   const cp = registered.controlPanel();
