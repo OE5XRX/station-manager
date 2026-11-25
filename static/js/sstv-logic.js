@@ -14,9 +14,8 @@
     return fmt.replace(/%s/g, function () { return String(obj.shift()); });
   };
 
-  // Same constants as station_agent/sstv/modes.py (ISS_FREQUENCY_HZ, ISS_GUARD_HZ).
+  // Same as station_agent/sstv/modes.py ISS_FREQUENCY_HZ (the "ISS" receive button).
   var ISS_HZ = 145800000;
-  var ISS_GUARD_HZ = 10000;
   var RX_CAP = "rx_frequency";
   var TX_CAP = "tx_frequency";
 
@@ -78,10 +77,11 @@
     return formatSeconds((end - Number(nowMs)) / 1000);
   }
 
-  function isIssFrequency(hz) {
+  // The receiver is tuned to the ISS SSTV downlink (exact, to the Hz).
+  function tunedToIss(hz) {
     var n = Number(hz);
     if (hz === null || hz === undefined || hz === "" || !isFinite(n)) return false;
-    return Math.abs(n - ISS_HZ) <= ISS_GUARD_HZ;
+    return Math.round(n) === ISS_HZ;
   }
 
   // Module setting in MHz (agent reports MHz) -> Hz, or null.
@@ -139,7 +139,6 @@
     no_callsign: gettext("The picture carries no callsign. Confirm to send it anyway."),
     module_offline: gettext("The module is offline."),
     no_frequency: gettext("The module has not reported its TX frequency yet."),
-    iss_downlink: gettext("Sending on the ISS downlink (145.800 MHz) is not allowed. Change the TX frequency."),
     out_of_range: gettext("The TX frequency is outside the module's TX range."),
     aborted: gettext("The transmission was aborted."),
     scan_active: gettext("Stop the scanner before sending a picture."),
@@ -184,7 +183,7 @@
     if (d === "ws_disconnect" || d === "agent_disconnect") {
       return gettext("The transmission was aborted because the station connection was lost.");
     }
-    if (d === "iss_downlink" || d === "out_of_range" || d === "ptt_active") return GUARD[d];
+    if (d === "out_of_range" || d === "ptt_active") return GUARD[d];
     if (state === "aborted") return gettext("The transmission was aborted.");
     return gettext("The transmission failed. The station unkeyed.");
   }
@@ -219,7 +218,7 @@
     decodeRow: decodeRow,
     formatSeconds: formatSeconds,
     formatRemaining: formatRemaining,
-    isIssFrequency: isIssFrequency,
+    tunedToIss: tunedToIss,
     mhzToHz: mhzToHz,
     formatMHz: formatMHz,
     radioModules: radioModules,

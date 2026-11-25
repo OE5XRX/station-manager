@@ -47,16 +47,16 @@ ok("formatRemaining is mm:ss, never negative, empty without an end", () => {
   assert.equal(S.formatRemaining("soon", now), "");
 });
 
-ok("isIssFrequency: 145.800 MHz ±10 kHz", () => {
-  assert.equal(S.isIssFrequency(145800000), true);
-  assert.equal(S.isIssFrequency(145810000), true);
-  assert.equal(S.isIssFrequency(145789999), false);
-  assert.equal(S.isIssFrequency(145500000), false);
-  assert.equal(S.isIssFrequency("145800000"), true);
-  assert.equal(S.isIssFrequency(null), false);
-  assert.equal(S.isIssFrequency(undefined), false);
-  assert.equal(S.isIssFrequency(""), false);
-  assert.equal(S.isIssFrequency(NaN), false);
+ok("tunedToIss: exactly 145.800 MHz", () => {
+  assert.equal(S.tunedToIss(145800000), true);
+  assert.equal(S.tunedToIss(145800000.4), true);
+  assert.equal(S.tunedToIss(145810000), false);
+  assert.equal(S.tunedToIss(145500000), false);
+  assert.equal(S.tunedToIss("145800000"), true);
+  assert.equal(S.tunedToIss(null), false);
+  assert.equal(S.tunedToIss(undefined), false);
+  assert.equal(S.tunedToIss(""), false);
+  assert.equal(S.tunedToIss(NaN), false);
 });
 
 ok("mhzToHz / formatMHz", () => {
@@ -71,7 +71,7 @@ ok("sendGuardMessage covers every server refusal code", () => {
   const fallback = S.sendGuardMessage("something_new");
   const codes = [
     "not_locked", "forbidden", "unsupported", "invalid_slot", "sstv_busy", "not_found", "expired",
-    "no_callsign", "module_offline", "no_frequency", "iss_downlink", "out_of_range", "aborted",
+    "no_callsign", "module_offline", "no_frequency", "out_of_range", "aborted",
     "scan_active", "ptt_active", "no_active_sstv", "not_connected", "timeout", "bad_mode",
     "bad_source", "no_file", "no_module", "internal_error",
   ];
@@ -82,7 +82,8 @@ ok("sendGuardMessage covers every server refusal code", () => {
     seen.add(text);
   }
   assert.equal(seen.size, codes.length, "every code has its own text");
-  assert.match(S.sendGuardMessage("iss_downlink"), /145\.800/);
+  // No ISS-downlink send guard any more (user, 2026-11-25): generic text only.
+  assert.equal(S.sendGuardMessage("iss_downlink"), fallback);
   assert.ok(fallback);
 });
 
@@ -110,7 +111,7 @@ ok("end texts: operator stop is silent, the rest explains", () => {
   assert.ok(S.rxEndText("idle", "scan started"));
   assert.ok(S.txEndText("done"));
   assert.ok(S.txEndText("aborted", "operator"));
-  assert.equal(S.txEndText("aborted", "iss_downlink"), S.sendGuardMessage("iss_downlink"));
+  assert.equal(S.txEndText("aborted", "out_of_range"), S.sendGuardMessage("out_of_range"));
   assert.ok(S.txEndText("error", "player_failed rc=1"));
   assert.ok(S.txPhaseText("keyed"));
   assert.equal(S.txPhaseText("done"), "");

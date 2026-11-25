@@ -298,14 +298,17 @@ await ok("server no_callsign refusal opens the confirmation", () => {
   c.destroy();
 });
 
-await ok("sending is blocked on the ISS downlink with an inline hint", () => {
+await ok("sending on the ISS downlink is allowed (no guard, user 2026-11-25)", () => {
   const c = panel();
   c.preview = { id: "abc", url: "/p", duration_s: 1, mode: "pd120", slot: 1, module: "fm0", noCallsign: false };
-  c._onModuleState({ slot: 1, module: "fm0", values: { tx_frequency: 145.805 } });
-  assert.equal(c.txOnIss, true);
-  assert.equal(c.canSend, false);
-  assert.match(c.sendHint(), /145\.800/);
-  assert.equal(c.send(false), false);
+  c._onModuleState({ slot: 1, module: "fm0", values: { tx_frequency: 145.8 } });
+  assert.equal(c.txMHz(), "145.8000");
+  assert.equal(c.canSend, true);
+  assert.equal(c.sendHint(), "");
+  const cap = capture("control:send");
+  assert.equal(c.send(false), true);
+  assert.equal(cap.seen[0].type, "sstv_tx_start");
+  cap.stop();
   c.destroy();
 });
 
@@ -473,7 +476,7 @@ await ok("an inventory without a frequency keeps the last known one", () => {
   const c = panel();
   c._onModuleState({ slot: 1, module: "fm0", values: { tx_frequency: 145.8 } });
   c._seed([{ slot: "1", modules: [{ module: "fm0", online: true, capabilities: FM, state: {} }] }]);
-  assert.equal(c.txOnIss, true);
+  assert.equal(c.txMHz(), "145.8000");
   c.destroy();
 });
 
@@ -485,6 +488,66 @@ await ok("with a preview the TX module is exactly the preview's", () => {
   c.preview.slot = 1;
   c.preview.module = "fm0";
   assert.equal(c.txModule.module, "fm0");
+  c.destroy();
+});
+
+await ok("a live RX on another slot moves the module choice (ISS tunes the receiver)", () => {
+  const c = panel();
+  assert.equal(c.selected, "1 fm0");
+  c._onRxState({ state: "running", slot: 2, ends_at: null });
+  assert.equal(c.selected, "2 rx1");
+  commands.length = 0;
+  c.tuneIss();
+  assert.equal(commands[0].slot, 2);
+  assert.equal(commands[0].module, "rx1");
+  assert.equal(c.rxMHz(), "433.5000");
+  c.destroy();
+});
+
+await ok("a reconnect mid-picture keeps painting the live picture", () => {
+  const c = panel();
+  c._onRxState({ state: "running", slot: 1, ends_at: null });
+  c._onPictureStart({ picture_id: "p5", mode: "robot36", width: 320, height: 240 });
+  window.dispatchEvent(new CustomEvent("control:open", { detail: { type: "open" } }));
+  c._onRxState({ state: "running", slot: 1, ends_at: null }); // the snapshot
+  assert.equal(c.picture && c.picture.id, "p5");
+  const rgb = Buffer.alloc(320 * 3, 9).toString("base64");
+  c._onLine({ picture_id: "p5", row: 3, rgb });
+  assert.equal(c.picture.row, 3);
+  // a fresh start (not a reconnect) still clears an old picture
+  c._onRxState({ state: "idle", detail: "operator" });
+  c._onRxState({ state: "starting", slot: 1, ends_at: null });
+  assert.equal(c.picture, null);
+  c.destroy();
+});
+
+await ok("an RX state frame does not swallow the refusal of a pending send", () => {
+  const c = panel();
+  c.preview = { id: "abc", url: "/p", duration_s: 1, mode: "pd120", slot: 1, module: "fm0", noCallsign: false };
+  const cap = capture("control:send");
+  c.send(false);
+  c._onRxState({ state: "running", slot: 1, ends_at: null }); // unrelated broadcast
+  assert.equal(c.pending, true, "the send is still open");
+  window.dispatchEvent(new CustomEvent("control:error", { detail: { type: "error", request_id: cap.seen[0].request_id, error: { code: "scan_active" } } }));
+  assert.equal(c.pending, false);
+  assert.match(c.notice.text, /scanner/);
+  cap.stop();
+  c.destroy();
+});
+
+await ok("no answer at all: every open request gives up with one notice", () => {
+  const timers = [];
+  const realSet = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => (timers.push(fn), 0);
+  const c = panel();
+  c.startRx();
+  c.preview = { id: "abc", url: "/p", duration_s: 1, mode: "pd120", slot: 1, module: "fm0", noCallsign: false };
+  globalThis.setTimeout = realSet;
+  assert.equal(c.pending, true);
+  timers[timers.length - 1]();
+  assert.equal(c.pending, false);
+  assert.deepEqual(c._requests, {});
+  assert.match(c.notice.text, /did not answer/);
   c.destroy();
 });
 

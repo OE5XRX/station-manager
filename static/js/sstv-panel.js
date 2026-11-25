@@ -98,6 +98,7 @@
       _tick: null,
       _txActive: false,
       _previewGen: 0, // bumped by every change of the choices: a late reply is dropped
+      _reopened: false,
       _imageGen: 0, // bumped by every new picture: a late PNG load never paints over it
 
       init: function () {
@@ -134,6 +135,7 @@
         // snapshot right after restores a live RX and a transmission on the air.
         this._on("control:open", function () {
           self._settle();
+          self._reopened = true; // the snapshot's RX state continues the live picture
           self._setRx(null);
           self._setTx(null);
         });
@@ -259,11 +261,9 @@
         var hz = this.txHz;
         return hz === null ? "–" : S.formatMHz(hz);
       },
+      // The receiver already sits on the ISS downlink (the ISS button shows pressed).
       get onIss() {
-        return S.isIssFrequency(this.rxHz);
-      },
-      get txOnIss() {
-        return S.isIssFrequency(this.txHz);
+        return S.tunedToIss(this.rxHz);
       },
       moduleLabel: function (m) {
         return interpolate(gettext("Slot %(slot)s (%(module)s)"), { slot: m.slot, module: m.module }, true);
@@ -297,7 +297,7 @@
         return this.source === "test" || !!this.fileName;
       },
       get canSend() {
-        return this.canOperate && !this.pending && !this.previewBusy && !!this.preview && !this.txLive && !this.txOnIss;
+        return this.canOperate && !this.pending && !this.previewBusy && !!this.preview && !this.txLive;
       },
       get canAbort() {
         return this.canOperate && this.txLive;
@@ -307,7 +307,6 @@
         if (!this.canUse) return "";
         if (!this.holder) return gettext("Take control of the station to send a picture.");
         if (this.txLive) return "";
-        if (this.txOnIss) return gettext("The TX frequency is the ISS downlink (145.800 MHz). Sending is blocked there.");
         if (!this.preview) return gettext("Create a preview first. It shows exactly what will be sent.");
         return "";
       },
@@ -411,7 +410,9 @@
         this._requests[frame.request_id] = frame.type;
         clearTimeout(this._pendingTimer);
         this._pendingTimer = setTimeout(function () {
-          self._onReply({ type: "error", request_id: frame.request_id, error: { code: "timeout" } });
+          // Nothing heard for a while: give up on every open request, report once.
+          self._settle();
+          self._notify({ ok: false, text: S.sendGuardMessage("timeout") });
         }, PENDING_GIVEUP_MS);
         window.dispatchEvent(new CustomEvent("control:send", { detail: frame }));
         return true;
@@ -579,14 +580,43 @@
       },
 
       // -- frames in --------------------------------------------------------------------------
-      _settle: function () {
+      // The server only answers a successful sstv_* request with the state broadcast, so
+      // a state frame ends the requests of ITS kind ("sstv_rx" / "sstv_tx"; none = all).
+      // A request of the other kind stays open: its refusal still has to reach us.
+      _settle: function (prefix) {
         var kept = {};
         for (var rid in this._requests) {
-          if (this._requests[rid] === "command") kept[rid] = "command";
+          var kind = this._requests[rid];
+          if (kind === "command" || (prefix && kind.indexOf(prefix) !== 0)) kept[rid] = kind;
         }
         this._requests = kept;
+        this._syncPending();
+      },
+
+      _syncPending: function () {
+        for (var rid in this._requests) {
+          if (this._requests[rid] !== "command") {
+            this.pending = true;
+            return;
+          }
+        }
         this.pending = false;
         clearTimeout(this._pendingTimer);
+      },
+
+      // A live session (also one started in another tab, or restored after a reload)
+      // owns the module choice: ISS and the RX readout act on the receiving module.
+      _followRxSlot: function (slot) {
+        if (slot === null || slot === undefined) return;
+        var all = this.rxModules;
+        var cur = this.selectedModule;
+        if (cur && cur.slot === String(slot)) return;
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].slot === String(slot)) {
+            this.selected = all[i].slot + " " + all[i].module;
+            return;
+          }
+        }
       },
 
       _setRx: function (rx) {
@@ -596,10 +626,13 @@
 
       _onRxState: function (msg) {
         if (!msg) return;
-        this._settle();
+        this._settle("sstv_rx");
+        var reopened = this._reopened;
+        this._reopened = false;
         if (LIVE_RX[msg.state]) {
-          if (!this.rx) this.picture = null;
+          if (!this.rx && !reopened) this.picture = null;
           this._setRx({ state: msg.state, slot: msg.slot, endsAt: msg.ends_at || null });
+          this._followRxSlot(msg.slot);
           return;
         }
         var wasLive = this.rx !== null;
@@ -685,7 +718,7 @@
 
       _onTxState: function (msg) {
         if (!msg || typeof msg.state !== "string") return;
-        this._settle();
+        this._settle("sstv_tx");
         var prev = this.tx && this.tx.id === msg.id ? this.tx : null;
         if (LIVE_TX[msg.state]) {
           this._setTx({
@@ -714,10 +747,7 @@
         if (!msg || msg.request_id === undefined || !this._requests[msg.request_id]) return;
         var kind = this._requests[msg.request_id];
         delete this._requests[msg.request_id];
-        if (kind !== "command") {
-          this.pending = false;
-          clearTimeout(this._pendingTimer);
-        }
+        if (kind !== "command") this._syncPending();
         var failed = msg.type === "error" || msg.ok === false;
         if (!failed) return;
         var code = (msg.error && msg.error.code) || msg.code;

@@ -29,8 +29,7 @@ VIS_BIT_MS = 30.0
 VIS_BITS = 10  # start + 7 data (LSB first) + even parity + stop
 VIS_HEADER_S = (2 * LEADER_MS + BREAK_MS + VIS_BITS * VIS_BIT_MS) / 1000.0  # 0.91
 
-ISS_FREQUENCY_HZ = 145_800_000
-ISS_GUARD_HZ = 10_000
+ISS_FREQUENCY_HZ = 145_800_000  # SSTV downlink of the ISS (the control page's "ISS" button)
 
 Color = Literal["gbr", "rgb_scottie", "yuv_robot36", "yuv_robot72", "yuv_pd"]
 

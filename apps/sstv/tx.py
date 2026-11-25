@@ -26,8 +26,6 @@ from apps.control import scan
 from apps.control.models import StationModule
 from station_agent.sstv.encoder import encode
 from station_agent.sstv.modes import (
-    ISS_FREQUENCY_HZ,
-    ISS_GUARD_HZ,
     MODES,
     VIS_HEADER_S,
     duration_s,
@@ -154,16 +152,15 @@ def _in_ranges(module, mhz):
 
 
 def frequency_guard(module):
-    """``(code, hz)``: the module's current TX frequency checked against the ISS downlink
-    and the module's TX ranges. Evaluated at send time, never at preview time."""
+    """``(code, hz)``: the module's current TX frequency checked against the module's TX
+    ranges. Evaluated at send time, never at preview time. (No ISS-downlink guard: user,
+    2026-11-25 — the operator decides.)"""
     if module is None:
         return "module_offline", None
     mhz = _tx_frequency_mhz(module)
     if mhz is None or not 0 < mhz < 1e6:
         return "no_frequency", None
     hz = round(mhz * 1_000_000)
-    if abs(hz - ISS_FREQUENCY_HZ) <= ISS_GUARD_HZ:
-        return "iss_downlink", hz
     if not _in_ranges(module, mhz):
         return "out_of_range", hz
     return None, hz
@@ -455,7 +452,7 @@ def sending_frame(station):
 
 def on_module_state(station, slot):
     """Agent ``state`` of a module: abort a transmission on that slot whose TX frequency is
-    now forbidden (ISS downlink / out of range). The send guards read ``last_state`` before
+    now outside the module's TX range. The send guards read ``last_state`` before
     the agent owned the slot; a write already queued on the agent lands only now."""
     key = control.slot_key(slot)
     if key is None:
@@ -465,7 +462,7 @@ def on_module_state(station, slot):
             station=station, slot=key, module_id=row.module, online=True
         ).first()
         code, hz = frequency_guard(module)
-        if code in ("iss_downlink", "out_of_range"):
+        if code == "out_of_range":
             abort_tx(station, code)
             return
         if code is None and hz != row.frequency_hz:

@@ -170,7 +170,7 @@ is the sstv:gallery partial, reloaded on the body event "sstv-gallery-refresh".
               <button type="button" class="btn btn-sm btn-primary" x-show="!txLive" :disabled="!canSend" @click="send(false)">{% trans "Send" %}</button>
               <button type="button" class="btn btn-sm btn-danger" x-show="txLive" :disabled="!canAbort" @click="abort()">{% trans "Abort" %}</button>
             </div>
-            <p class="rp-hint" :class="txOnIss ? 'is-error' : ''" x-show="sendHint()" x-text="sendHint()"></p>
+            <p class="rp-hint" x-show="sendHint()" x-text="sendHint()"></p>
             <p class="rp-hint sv-txfreq" x-show="txModule">
               {% trans "Sends on the module's TX frequency:" %} <span class="sv-freq"><span x-text="txMHz()"></span> MHz</span>
             </p>
