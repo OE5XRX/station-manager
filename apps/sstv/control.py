@@ -11,6 +11,7 @@ to the agent and broadcasts to the browsers go out on commit.
 
 import logging
 import re
+import uuid
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
@@ -40,7 +41,7 @@ TX_MAX_S = 600
 # Request ids of server-issued SSTV agent requests: their results go to apps.sstv, never
 # to the browsers.
 REQUEST_PREFIX = "sstv-"
-RX_START_REQUEST = f"{REQUEST_PREFIX}rx-start"
+RX_START_PREFIX = f"{REQUEST_PREFIX}rx-start-"
 RX_STOP_REQUEST = f"{REQUEST_PREFIX}rx-stop"
 _DETAIL_MAX = 64
 _LIVE_STATES = (ActiveSstvRx.State.STARTING, ActiveSstvRx.State.RUNNING, ActiveSstvRx.State.PAUSED)
@@ -86,8 +87,20 @@ def _audit(station, user, message):
     StationAuditLog.log(station=station, event_type="control_command", message=message, user=user)
 
 
+_SLOT_RE = re.compile(r"0|[1-9][0-9]{0,3}")
+
+
+def slot_key(slot):
+    """Canonical slot string (``"1"``) of an agent/browser slot, ``None`` if it is not a
+    plain ASCII slot number (no ``"01"``, ``"²"``, bools)."""
+    if type(slot) is int:
+        slot = str(slot)
+    return slot if isinstance(slot, str) and _SLOT_RE.fullmatch(slot) else None
+
+
 def _wire_slot(slot):
-    return int(slot) if isinstance(slot, str) and slot.isdigit() else slot
+    key = slot_key(slot)
+    return int(key) if key is not None else slot
 
 
 def _clip(value):
@@ -104,15 +117,15 @@ def is_holder(station, user, *, lock_row=False):
     return user is not None and holder is not None and holder == user.pk
 
 
-_AUDIT_DETAIL_RE = re.compile(r"[^A-Za-z0-9_ =:.,/+-]")
+_AUDIT_DETAIL_RE = re.compile(r"[^A-Za-z0-9_ =:.,/+\[\]-]")
 
 
 def audit_detail(value):
-    """Agent-reported free text (e.g. ``reader: <exception>``) as safe audit text: clipped,
-    e-mails/IPs scrubbed, odd characters dropped."""
+    """Agent-reported free text (e.g. ``reader: <exception>``) as safe audit text: e-mails/IPs
+    scrubbed (before clipping, so a cut address cannot escape), odd characters dropped."""
     from apps.audit.scrub import scrub_message
 
-    return _AUDIT_DETAIL_RE.sub("", scrub_message(str(value)[:_DETAIL_MAX]))
+    return _AUDIT_DETAIL_RE.sub("", scrub_message(str(value)[:1024]))[:_DETAIL_MAX]
 
 
 def sending_transmissions(station):
@@ -159,12 +172,16 @@ def _rx_module(station, slot):
     )
 
 
-def _decoder_start(station, slot, max_runtime_s):
+def _new_start_request():
+    return f"{RX_START_PREFIX}{uuid.uuid4().hex[:16]}"
+
+
+def _decoder_start(station, slot, max_runtime_s, request_id):
     send_to_agent(
         station.pk,
         _frame(
             "decoder_start",
-            request_id=RX_START_REQUEST,
+            request_id=request_id,
             decoder=DECODER,
             slot=_wire_slot(str(slot)),
             params={},
@@ -195,11 +212,9 @@ def start_rx(station, user, slot):
         return "not_locked"
     if not supported(station):
         return "unsupported"
-    if not (isinstance(slot, str) or type(slot) is int) or not str(slot).isdigit():
+    slot = slot_key(slot)
+    if slot is None or _rx_module(station, slot) is None:
         return "invalid_slot"
-    if _rx_module(station, slot) is None:
-        return "invalid_slot"
-    slot = str(slot)
     with transaction.atomic():
         if not is_holder(station, user, lock_row=True):
             return "not_locked"
@@ -207,15 +222,22 @@ def start_rx(station, user, slot):
             return "sstv_busy"
         previous = ActiveSstvRx.objects.select_for_update().filter(station=station).first()
         if previous is not None:
-            if previous.state in _LIVE_STATES and str(previous.slot) != slot:
+            if previous.state in (ActiveSstvRx.State.STARTING, ActiveSstvRx.State.RUNNING):
+                # Also on the same slot: the agent keeps a running instance (and its
+                # max-runtime timer) on a repeated start, so restart it for a fresh window.
                 _decoder_stop(station, str(previous.slot))
             previous.delete()
         scan.stop_active_scan(station, "sstv started")
+        request_id = _new_start_request()
         ActiveSstvRx.objects.create(
-            station=station, slot=int(slot), user=user, state=ActiveSstvRx.State.STARTING
+            station=station,
+            slot=int(slot),
+            user=user,
+            state=ActiveSstvRx.State.STARTING,
+            start_request=request_id,
         )
         _audit(station, user, f"{user.username} started SSTV receive (slot {_clip(slot)})")
-        _decoder_start(station, slot, MAX_RUNTIME_S)
+        _decoder_start(station, slot, MAX_RUNTIME_S, request_id)
         broadcast(station.pk, state_frame(station))
     return None
 
@@ -279,22 +301,28 @@ def resume_rx(station):
             broadcast(station.pk, state_frame(station, detail="max_runtime"))
             return False
         row.state = ActiveSstvRx.State.STARTING
-        row.save(update_fields=["state"])
-        _decoder_start(station, str(row.slot), int(left))
+        row.start_request = _new_start_request()
+        row.save(update_fields=["state", "start_request"])
+        _decoder_start(station, str(row.slot), int(left), row.start_request)
         broadcast(station.pk, state_frame(station))
     return True
 
 
 def on_decoder_state(station, msg):
     """Agent ``decoder_state`` of the ``sstv`` decoder."""
-    state, slot = msg.get("state"), msg.get("slot")
-    if not (isinstance(slot, str) or type(slot) is int):
+    state, slot = msg.get("state"), slot_key(msg.get("slot"))
+    if slot is None:
         return
     detail = msg.get("detail")
     with transaction.atomic():
         row = ActiveSstvRx.objects.select_for_update().filter(station=station).first()
-        if row is None or str(row.slot) != str(slot):
-            return
+        if row is None or str(row.slot) != slot or row.state == ActiveSstvRx.State.STOPPING:
+            if state == "running" and (row is None or str(row.slot) != slot):
+                # A decoder nobody here owns (e.g. a start that was replaced or refused
+                # meanwhile): SSTV never runs on its own.
+                _decoder_stop(station, slot)
+            if row is None or str(row.slot) != slot:
+                return
         if state == "running":
             if row.state == ActiveSstvRx.State.STARTING:
                 _mark_running(station)
@@ -332,21 +360,22 @@ def _mark_running(station):
 def on_rx_result(station, msg):
     """``result`` of our ``decoder_start``/``decoder_stop``. A refused start ends the
     session (usually a ``decoder_state error`` follows too; some refusals send only this)."""
-    if msg.get("request_id") != RX_START_REQUEST:
+    rid = msg.get("request_id")
+    if not isinstance(rid, str) or not rid.startswith(RX_START_PREFIX):
         return
-    if msg.get("ok") is True:
-        _mark_running(station)
-        return
-    error = msg.get("error")
-    code = error.get("code") if isinstance(error, dict) else None
     with transaction.atomic():
         row = (
             ActiveSstvRx.objects.select_for_update()
-            .filter(station=station, state=ActiveSstvRx.State.STARTING)
+            .filter(station=station, state=ActiveSstvRx.State.STARTING, start_request=rid)
             .first()
         )
         if row is None:
+            return  # a result of an earlier (replaced/resumed) start
+        if msg.get("ok") is True:
+            _mark_running(station)
             return
+        error = msg.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
         row.delete()
         _audit(station, None, f"SSTV receive refused ({audit_detail(code or 'refused')})")
         frame = state_frame(station, detail=code or "refused")
@@ -358,10 +387,10 @@ def on_snapshot(station, decoders):
     """Agent ``decoder_snapshot``: forget sessions the agent no longer runs, stop SSTV
     decoders nobody started here (SSTV never runs on a station nobody holds)."""
     running = {
-        str(d.get("slot"))
+        slot_key(d.get("slot"))
         for d in decoders
-        if isinstance(d, dict) and d.get("decoder") == DECODER and str(d.get("slot")).isdigit()
-    }
+        if isinstance(d, dict) and d.get("decoder") == DECODER
+    } - {None}
     with transaction.atomic():
         row = ActiveSstvRx.objects.select_for_update().filter(station=station).first()
         mine = str(row.slot) if row is not None and row.state in _LIVE_STATES else None

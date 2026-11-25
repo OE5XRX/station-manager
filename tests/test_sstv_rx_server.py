@@ -954,3 +954,94 @@ def test_agent_detail_is_scrubbed_in_the_audit():
     )
     msg = StationAuditLog.objects.filter(station=station).latest("pk").message
     assert "10.1.2.3" not in msg and "x@y.at" not in msg and "<" not in msg
+
+
+# -- review round 2 ------------------------------------------------------------------
+
+
+def test_late_result_of_a_replaced_start_is_ignored(control_agent_auth):
+    station, user = setup_station("rx-late")
+    StationModule.objects.create(
+        station=station, slot="2", module_id="fm1", type="fm_transceiver", online=True,
+        capability_descriptor=_desc(), last_state={},
+    )  # fmt: skip
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await browser.send_json_to(rx_start(slot=1))
+        first = await until(agent, is_decoder("decoder_start"))
+        await browser.send_json_to(rx_start(slot=2, rid="r2"))
+        second = await until(agent, is_decoder("decoder_start"))
+        assert first["request_id"] != second["request_id"]
+        # The refusal of the first (slot 1) start arrives late: slot 2 stays.
+        await agent.send_json_to(
+            {"type": "result", "request_id": first["request_id"], "ok": False,
+             "error": {"code": "no_rx_node", "msg": ""}}
+        )  # fmt: skip
+        await drain(browser)
+        row = await database_sync_to_async(ActiveSstvRx.objects.get)(station=station)
+        assert (row.slot, row.state) == (2, State.STARTING)
+        await agent.send_json_to(
+            {"type": "result", "request_id": second["request_id"], "ok": True, "value": None}
+        )
+        await until(browser, is_state("running"))
+        await close(browser, agent)
+
+    asyncio.run(go())
+
+
+def test_unowned_running_decoder_is_stopped(control_agent_auth):
+    station, user = setup_station("rx-unowned")
+
+    async def go():
+        agent = _agent(station.id)
+        await agent.connect()
+        await agent.send_json_to(
+            {"type": "decoder_state", "decoder": "sstv", "slot": 1, "state": "running"}
+        )
+        stop = await until(agent, is_decoder("decoder_stop"))
+        assert stop["slot"] == 1
+        await agent.disconnect()
+
+    asyncio.run(go())
+
+
+def test_same_slot_restart_restarts_the_decoder(control_agent_auth):
+    station, user = setup_station("rx-same")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await started(agent, browser)
+        await browser.send_json_to(rx_start(rid="r2"))
+        seen = []
+        await until(agent, lambda m: seen.append(m) or is_decoder("decoder_start")(m))
+        assert any(is_decoder("decoder_stop")(m) and m["slot"] == 1 for m in seen)
+        await close(browser, agent)
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("slot", ["01", "²", "1 ", True, -1, 1.0])
+def test_odd_slots_are_rejected(slot):
+    assert sstv_control.slot_key(slot) is None
+
+
+def test_snapshot_with_odd_slots_does_not_break_or_stop_own_decoder():
+    station, user = setup_station("rx-oddsnap")
+    _running(station, user)
+    sstv_control.on_snapshot(
+        station,
+        [
+            {"decoder": "sstv", "slot": 1, "state": "running"},
+            {"decoder": "sstv", "slot": "01", "state": "running"},
+            {"decoder": "sstv", "slot": "²", "state": "running"},
+        ],
+    )
+    assert ActiveSstvRx.objects.get(station=station).state == State.RUNNING
+
+
+def test_audit_detail_scrubs_before_clipping():
+    long = "x" * 50 + " user@example.org"  # the address straddles the 64-char clip
+    out = sstv_control.audit_detail(long)
+    assert "@" not in out and "user" not in out
+    assert "[email]" in sstv_control.audit_detail("mail a@b.at")

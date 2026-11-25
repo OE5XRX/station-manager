@@ -425,7 +425,14 @@ def abort_tx(station, reason, *, notify_agent=True, unless_user=None):
 
 def sending_frame(station):
     """``sstv_tx_state`` of the transmission on the air (for a freshly loaded page)."""
-    tx = SstvTransmission.objects.filter(
-        station=station, state=SstvTransmission.State.SENDING
-    ).first()
+    tx = control.sending_transmissions(station).first()
     return _tx_frame(tx, "sending") if tx is not None else None
+
+
+def slot_on_air(station, slot):
+    """A transmission owns ``slot``: its settings must not change until it ended (the
+    send guards checked the frequency once; the agent refuses writes only from its ack)."""
+    key = control.slot_key(slot)
+    return (
+        key is not None and control.sending_transmissions(station).filter(slot=int(key)).exists()
+    )

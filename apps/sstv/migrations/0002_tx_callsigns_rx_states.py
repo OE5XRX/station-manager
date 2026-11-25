@@ -11,6 +11,11 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
+            model_name='activesstvrx',
+            name='start_request',
+            field=models.CharField(blank=True, max_length=64, verbose_name='start request'),
+        ),
+        migrations.AddField(
             model_name='sstvtransmission',
             name='callsigns',
             field=models.JSONField(blank=True, default=list, verbose_name='callsigns'),

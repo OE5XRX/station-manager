@@ -1227,6 +1227,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if not await self._touch_if_holder(station):
             await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
             return
+        if msg.get("op") != "get" and msg.get("capability") != "ptt":
+            # Voice PTT false stays a no-op on the agent; every other write waits for the
+            # transmission on that slot to end (the send guards checked it once).
+            if await self._sstv_on_air(station, msg.get("slot")):
+                await self._sstv_error(msg.get("request_id"), "sstv_busy")
+                return
         allowed, module_type = await self._authorize_command(station, msg)
         if not allowed:
             return
@@ -1292,6 +1298,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         code, plan = resolved
         if code is not None:
             await self._error(request_id, code, gettext("Repeater cannot be applied here"))
+            return
+        if await self._sstv_on_air(station, plan["slot"]):
+            await self._sstv_error(request_id, "sstv_busy")
             return
         try:
             denied = [
@@ -1388,6 +1397,13 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if code is not None:
             await self._sstv_error(request_id, code)
 
+    async def _sstv_on_air(self, station, slot):
+        try:
+            return await database_sync_to_async(sstv_tx.slot_on_air)(station, slot)
+        except Exception:
+            logger.exception("control: SSTV on-air check failed")
+            return True  # fail closed: never retune a transmitting slot
+
     def _sstv_start_rx(self, station, slot):
         user = _fresh_user(self.user)
         if user is None:
@@ -1432,9 +1448,12 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             )
         except Exception:
             logger.exception("control: SSTV synthesis failed")
-            await database_sync_to_async(sstv_tx.fail)(
-                station, transmission.pk, "synthesis_failed"
-            )
+            try:
+                await database_sync_to_async(sstv_tx.fail)(
+                    station, transmission.pk, "synthesis_failed"
+                )
+            except Exception:
+                logger.exception("control: ending the failed SSTV transmission failed")
             code = "internal_error"
         if code is not None:
             await self._sstv_error(request_id, code)

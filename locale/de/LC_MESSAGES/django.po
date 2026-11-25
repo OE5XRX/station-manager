@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 03:03+0100\n"
+"POT-Creation-Date: 2026-11-25 03:27+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2291,19 +2291,19 @@ msgstr "Es läuft kein SSTV-Betrieb"
 msgid "SSTV could not be started"
 msgstr "SSTV konnte nicht gestartet werden"
 
-#: apps/control/consumers.py:1294
+#: apps/control/consumers.py:1300
 msgid "Repeater cannot be applied here"
 msgstr "Repeater kann hier nicht angewendet werden"
 
-#: apps/control/consumers.py:1317
+#: apps/control/consumers.py:1326
 msgid "Repeater could not be authorized"
 msgstr "Repeater konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1524
+#: apps/control/consumers.py:1543
 msgid "Command could not be authorized"
 msgstr "Befehl konnte nicht autorisiert werden"
 
-#: apps/control/consumers.py:1715
+#: apps/control/consumers.py:1734
 #, python-format
 msgid ""
 "Permission denied — taking over control requires %(manage)s or a Station-"
@@ -8662,10 +8662,14 @@ msgid "started"
 msgstr "gestartet"
 
 #: apps/sstv/models.py:181
+msgid "start request"
+msgstr "Start-Anfrage"
+
+#: apps/sstv/models.py:184
 msgid "active SSTV receive session"
 msgstr "laufender SSTV-Empfang"
 
-#: apps/sstv/models.py:182
+#: apps/sstv/models.py:185
 msgid "active SSTV receive sessions"
 msgstr "laufende SSTV-Empfänge"
 

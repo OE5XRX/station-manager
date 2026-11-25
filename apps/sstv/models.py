@@ -176,6 +176,9 @@ class ActiveSstvRx(models.Model):
         _("state"), max_length=8, choices=State.choices, default=State.STARTING
     )
     started_at = models.DateTimeField(_("started"), auto_now_add=True)
+    # request_id of the decoder_start this session is waiting for: ties the agent's result
+    # to this (re)start, never to an earlier one.
+    start_request = models.CharField(_("start request"), max_length=64, blank=True)
 
     class Meta:
         verbose_name = _("active SSTV receive session")

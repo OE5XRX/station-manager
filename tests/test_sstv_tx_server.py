@@ -19,7 +19,7 @@ from apps.control import lock, lock_hooks
 from apps.control.models import AgentConnection, ControlLock, StationModule
 from apps.sstv import control as sstv_control
 from apps.sstv import tx
-from apps.sstv.models import SstvImage, SstvTransmission
+from apps.sstv.models import ActiveSstvRx, SstvImage, SstvTransmission
 from apps.stations.models import Station
 from station_agent.sstv.modes import MODES, duration_s
 from tests.conftest import _make_ed25519_keypair, device_auth_headers
@@ -809,3 +809,80 @@ def test_gallery_picture_survives_the_transmission_row():
     assert not default_storage.exists(preview_name)
     with image.image.open("rb") as f:
         assert Image.open(f).size == (320, 240)
+
+
+# -- review round 2 ------------------------------------------------------------------
+
+
+def test_settings_of_the_transmitting_slot_are_refused(control_agent_auth):
+    # Review Focus 2, second half: no retune between the send guard and the agent's ack.
+    station, user = setup_station("tx-retune")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await sent_start(agent, browser, draft)
+        await browser.send_json_to(
+            {"type": "command", "request_id": "c1", "slot": "1", "module": "fm0",
+             "capability": "tx_frequency", "op": "set", "value": 145.8}
+        )  # fmt: skip
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "sstv_busy" and err["request_id"] == "c1"
+        # Voice PTT (false) is still relayed: the agent treats it as a no-op.
+        await browser.send_json_to(
+            {"type": "command", "request_id": "c2", "slot": "1", "module": "fm0",
+             "capability": "ptt", "op": "set", "value": False}
+        )  # fmt: skip
+        out = await drain(agent)
+        assert [m["capability"] for m in out if m.get("type") == "command"] == ["ptt"]
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
+
+
+def test_lock_loss_while_rx_paused_never_restarts_rx(control_agent_auth):
+    station, user = setup_station("tx-pauselost")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await started(agent, browser)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await sent_start(agent, browser, draft)
+        await until(browser, is_state("paused"))
+        await browser.send_json_to({"type": "lock_release"})
+        await until(agent, lambda m: m.get("type") == "sstv_tx_stop")
+        out = await drain(agent, timeout=0.6)
+        assert not any(is_decoder("decoder_start")(m) for m in out)
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
+    assert not ActiveSstvRx.objects.filter(state__in=sstv_control._LIVE_STATES).exists()
+
+
+def test_rx_resumes_after_the_agent_refuses_the_transmission(control_agent_auth):
+    station, user = setup_station("tx-refresume")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await started(agent, browser)
+        draft = await database_sync_to_async(_draft)(station, user)
+        frame = await sent_start(agent, browser, draft)
+        await agent.send_json_to(
+            {"type": "result", "request_id": frame["request_id"], "ok": False,
+             "error": {"code": "slot_busy", "msg": ""}}
+        )  # fmt: skip
+        restart = await until(agent, is_decoder("decoder_start"))
+        # The pause's late "stopped" must not end the resumed session.
+        await agent.send_json_to(
+            {"type": "decoder_state", "decoder": "sstv", "slot": 1, "state": "stopped"}
+        )
+        await agent.send_json_to(
+            {"type": "result", "request_id": restart["request_id"], "ok": True, "value": None}
+        )
+        await until(browser, is_state("running"))
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
