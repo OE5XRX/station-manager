@@ -22,6 +22,7 @@ from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
 
+from apps.control import scan
 from apps.control.models import StationModule
 from station_agent.sstv.encoder import encode
 from station_agent.sstv.modes import (
@@ -206,6 +207,8 @@ def claim(station, user, transmission_id, *, confirm_no_callsign):
             return "not_found", None
         if timezone.now() - tx.created_at > DRAFT_MAX_AGE:
             return "expired", None
+        if scan.current_scan_id(station) is not None:
+            return "scan_active", None  # the scanner retunes the radio
         if not tx.callsigns and not confirm_no_callsign:
             return "no_callsign", None
         module = StationModule.objects.filter(
@@ -264,6 +267,15 @@ def start_sending(station, tx, audio):
         )
         if row is None:
             return "aborted"  # lock lost / agent gone while synthesising
+        # Second frequency check after the synthesis: a write that was still in flight at
+        # claim time (settings are refused from the claim on) has reported its state by now.
+        module = StationModule.objects.filter(
+            station=station, slot=str(row.slot), module_id=row.module, online=True
+        ).first()
+        code, _hz = frequency_guard(module)
+        if code is not None:
+            fail(station, row.pk, code)
+            return code
         row.sha256 = hashlib.sha256(audio).hexdigest()
         row.size = len(audio)
         row.duration_s = len(audio) / 2 / 8000  # exact: the agent hard-stops 5 s after it
@@ -432,7 +444,8 @@ def sending_frame(station):
 def slot_on_air(station, slot):
     """A transmission owns ``slot``: its settings must not change until it ended (the
     send guards checked the frequency once; the agent refuses writes only from its ack)."""
+    sending = control.sending_transmissions(station)
     key = control.slot_key(slot)
-    return (
-        key is not None and control.sending_transmissions(station).filter(slot=int(key)).exists()
-    )
+    if key is None:
+        return sending.exists()  # an odd slot spelling ("1.0") may still mean that slot
+    return sending.filter(slot=int(key)).exists()

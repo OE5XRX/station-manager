@@ -101,6 +101,7 @@ _SSTV_ERRORS = {
     "iss_downlink": gettext_lazy("Sending on the ISS downlink (145.800 MHz) is not allowed"),
     "out_of_range": gettext_lazy("The TX frequency is outside the module's TX range"),
     "aborted": gettext_lazy("The transmission was aborted"),
+    "scan_active": gettext_lazy("Stop the scanner before sending a picture"),
     "no_active_sstv": gettext_lazy("No SSTV session is running"),
     "internal_error": gettext_lazy("SSTV could not be started"),
 }
@@ -1227,12 +1228,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if not await self._touch_if_holder(station):
             await self._error(msg.get("request_id"), "not_locked", "You do not hold the lock")
             return
-        if msg.get("op") != "get" and msg.get("capability") != "ptt":
-            # Voice PTT false stays a no-op on the agent; every other write waits for the
-            # transmission on that slot to end (the send guards checked it once).
-            if await self._sstv_on_air(station, msg.get("slot")):
-                await self._sstv_error(msg.get("request_id"), "sstv_busy")
-                return
+        if msg.get("op") != "get" and await self._sstv_blocks(station, msg):
+            await self._sstv_error(msg.get("request_id"), "sstv_busy")
+            return
         allowed, module_type = await self._authorize_command(station, msg)
         if not allowed:
             return
@@ -1365,6 +1363,9 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
         if not await self._touch_if_holder(station):
             await self._error(request_id, "not_locked", "You do not hold the lock")
             return
+        if await self._sstv_sending(station):
+            await self._sstv_error(request_id, "sstv_busy")
+            return
         try:
             code, frame = await self._start_scan(station, msg)
         except Exception:
@@ -1396,6 +1397,28 @@ class ControlConsumer(AreaConsumerMixin, AsyncWebsocketConsumer):
             code = "internal_error"
         if code is not None:
             await self._sstv_error(request_id, code)
+
+    async def _sstv_blocks(self, station, msg):
+        """A write that must wait for the transmission on the air to end: any setting of
+        its slot, voice PTT on (the mic would mix into the SSTV audio — PTT off stays a
+        no-op on the agent) and a TX route onto that slot. Settings are only checked once
+        by the send guards."""
+        capability, value = msg.get("capability"), msg.get("value")
+        if capability == "ptt" and not value:
+            return False
+        if capability == "tx_route" and isinstance(value, dict):
+            if await self._sstv_on_air(station, value.get("slot")):
+                return True
+        return await self._sstv_on_air(station, msg.get("slot"))
+
+    async def _sstv_sending(self, station):
+        try:
+            return await database_sync_to_async(
+                lambda: sstv_control.sending_transmissions(station).exists()
+            )()
+        except Exception:
+            logger.exception("control: SSTV sending check failed")
+            return True
 
     async def _sstv_on_air(self, station, slot):
         try:

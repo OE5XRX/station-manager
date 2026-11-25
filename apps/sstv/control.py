@@ -125,7 +125,10 @@ def audit_detail(value):
     scrubbed (before clipping, so a cut address cannot escape), odd characters dropped."""
     from apps.audit.scrub import scrub_message
 
-    return _AUDIT_DETAIL_RE.sub("", scrub_message(str(value)[:1024]))[:_DETAIL_MAX]
+    # Scrub, strip, scrub again: stripping may join an address that was split by an odd
+    # character ("10.1.2<.3"); the second pass catches it. Clip last.
+    stripped = _AUDIT_DETAIL_RE.sub("", scrub_message(str(value)[:1024]))
+    return scrub_message(stripped)[:_DETAIL_MAX]
 
 
 def sending_transmissions(station):
@@ -323,14 +326,14 @@ def on_decoder_state(station, msg):
                 _decoder_stop(station, slot)
             if row is None or str(row.slot) != slot:
                 return
-        if state == "running":
-            if row.state == ActiveSstvRx.State.STARTING:
-                _mark_running(station)
-        elif state in ("stopped", "error"):
+        if row.state == ActiveSstvRx.State.STARTING:
+            # States carry no request id: while a (re)start is pending they may belong to
+            # the instance it replaces (its running/stopped/error). Only the result with
+            # this start's request id confirms or ends it (``on_rx_result``).
+            return
+        if state in ("stopped", "error"):
             if row.state == ActiveSstvRx.State.PAUSED:
                 return  # our own pause stop (or a late one): resumed after the TX
-            if row.state == ActiveSstvRx.State.STARTING and state == "stopped":
-                return  # the stop of the instance this start replaces
             live = row.state != ActiveSstvRx.State.STOPPING
             row.delete()
             if live:
@@ -342,8 +345,8 @@ def on_decoder_state(station, msg):
 
 
 def _mark_running(station):
-    """The agent confirmed the decoder (``running`` state or an ok ``decoder_start``
-    result — a start for a decoder already running on the slot only gets the result)."""
+    """The agent confirmed this start (ok ``decoder_start`` result with its request id;
+    the host always sends it, also for a decoder already running on the slot)."""
     with transaction.atomic():
         row = (
             ActiveSstvRx.objects.select_for_update()

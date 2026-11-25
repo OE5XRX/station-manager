@@ -828,6 +828,26 @@ def test_settings_of_the_transmitting_slot_are_refused(control_agent_auth):
         )  # fmt: skip
         err = await until(browser, lambda m: m.get("type") == "error")
         assert _code(err) == "sstv_busy" and err["request_id"] == "c1"
+        # Voice PTT on would mix the mic into the SSTV audio; a TX route onto the slot too.
+        await browser.send_json_to(
+            {"type": "command", "request_id": "c3", "slot": "1", "module": "fm0",
+             "capability": "ptt", "op": "set", "value": True}
+        )  # fmt: skip
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "sstv_busy" and err["request_id"] == "c3"
+        await browser.send_json_to(
+            {"type": "command", "request_id": "c4", "slot": "9", "module": "router",
+             "capability": "tx_route", "op": "set", "value": {"slot": 1, "module": "fm0"}}
+        )  # fmt: skip
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "sstv_busy" and err["request_id"] == "c4"
+        # An odd slot spelling counts as the transmitting slot.
+        await browser.send_json_to(
+            {"type": "command", "request_id": "c5", "slot": 1.0, "module": "fm0",
+             "capability": "tx_frequency", "op": "set", "value": 145.8}
+        )  # fmt: skip
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "sstv_busy" and err["request_id"] == "c5"
         # Voice PTT (false) is still relayed: the agent treats it as a no-op.
         await browser.send_json_to(
             {"type": "command", "request_id": "c2", "slot": "1", "module": "fm0",
@@ -882,6 +902,49 @@ def test_rx_resumes_after_the_agent_refuses_the_transmission(control_agent_auth)
             {"type": "result", "request_id": restart["request_id"], "ok": True, "value": None}
         )
         await until(browser, is_state("running"))
+        await browser.disconnect()
+        await agent.disconnect()
+
+    asyncio.run(go())
+
+
+# -- review round 3 ------------------------------------------------------------------
+
+
+def test_frequency_rechecked_after_synthesis(ready):
+    # A write still in flight at claim time lands while the audio is made.
+    station, user = ready
+    _, claimed = tx.claim(station, user, str(_draft(station, user).pk), confirm_no_callsign=False)
+    _set_tx(station, 145.8)
+    assert tx.start_sending(station, claimed, b"\0\0" * 100) == "iss_downlink"
+    claimed.refresh_from_db()
+    assert claimed.state == TxState.ERROR and not claimed.audio
+
+
+def test_send_refused_while_scanning(ready):
+    from apps.control.models import ActiveScan
+
+    station, user = ready
+    ActiveScan.objects.create(
+        station=station, user=user, scan_id="s" * 32, list_ids=[], listen_s=2, hang_s=5
+    )
+    assert _claim(station, user, _draft(station, user)) == "scan_active"
+
+
+def test_scan_start_refused_while_sending(control_agent_auth):
+    station, user = setup_station("tx-noscan")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        draft = await database_sync_to_async(_draft)(station, user)
+        await sent_start(agent, browser, draft)
+        await browser.send_json_to(
+            {"type": "scan_start", "request_id": "s1", "radius_km": 50, "list_ids": [],
+             "band_map": {}}
+        )  # fmt: skip
+        err = await until(browser, lambda m: m.get("type") == "error")
+        assert _code(err) == "sstv_busy"
+        assert not any(m.get("type") == "scan_start" for m in await drain(agent))
         await browser.disconnect()
         await agent.disconnect()
 

@@ -118,9 +118,15 @@ def is_state(state):
     return lambda m: m.get("type") == "sstv_state" and m.get("state") == state
 
 
+def ok_result(start):
+    return {"type": "result", "request_id": start["request_id"], "ok": True, "value": None}
+
+
 async def started(agent, browser, slot=1):
+    """Start RX like the real host answers: ok result, then the running state."""
     await browser.send_json_to(rx_start(slot))
     start = await until(agent, is_decoder("decoder_start"))
+    await agent.send_json_to(ok_result(start))
     await agent.send_json_to(
         {"type": "decoder_state", "decoder": "sstv", "slot": slot, "state": "running"}
     )
@@ -282,9 +288,14 @@ def test_start_sends_decoder_start_and_stops_scan(control_agent_auth):
         assert starting["slot"] == 1 and starting["ends_at"]
         row = await database_sync_to_async(ActiveSstvRx.objects.get)(station=station)
         assert (row.state, row.slot, row.user_id) == (State.STARTING, 1, user.pk)
+        # A running state alone does not confirm (it may belong to a replaced instance).
         await agent.send_json_to(
             {"type": "decoder_state", "decoder": "sstv", "slot": 1, "state": "running"}
         )
+        await drain(browser)
+        row = await database_sync_to_async(ActiveSstvRx.objects.get)(station=station)
+        assert row.state == State.STARTING
+        await agent.send_json_to(ok_result(start))
         await until(browser, is_state("running"))
         row = await database_sync_to_async(ActiveSstvRx.objects.get)(station=station)
         assert row.state == State.RUNNING
@@ -383,14 +394,13 @@ def test_decoder_error_reports_error_state(control_agent_auth):
 
     async def go():
         agent, browser = await connect(station, user)
-        await browser.send_json_to(rx_start())
-        await until(agent, is_decoder("decoder_start"))
+        await started(agent, browser)
         await agent.send_json_to(
             {"type": "decoder_state", "decoder": "sstv", "slot": 1, "state": "error",
-             "detail": "no_rx_node"}
+             "detail": "unit failed"}
         )  # fmt: skip
         err = await until(browser, is_state("error"))
-        assert err["detail"] == "no_rx_node"
+        assert err["detail"] == "unit failed"
         await close(browser, agent)
 
     asyncio.run(go())
@@ -1045,3 +1055,42 @@ def test_audit_detail_scrubs_before_clipping():
     out = sstv_control.audit_detail(long)
     assert "@" not in out and "user" not in out
     assert "[email]" in sstv_control.audit_detail("mail a@b.at")
+
+
+# -- review round 3 ------------------------------------------------------------------
+
+
+def test_same_slot_restart_survives_the_old_instance_frames(control_agent_auth):
+    # Restart while the previous start is still pending: the host answers
+    # result(A) running(A) stopped(A) starting(B) result(B) running(B).
+    station, user = setup_station("rx-replay")
+
+    async def go():
+        agent, browser = await connect(station, user)
+        await browser.send_json_to(rx_start())
+        a = await until(agent, is_decoder("decoder_start"))
+        await browser.send_json_to(rx_start(rid="r2"))
+        b = await until(agent, is_decoder("decoder_start"))
+        state = {"type": "decoder_state", "decoder": "sstv", "slot": 1}
+        for frame in (
+            ok_result(a),
+            {**state, "state": "running"},
+            {**state, "state": "stopped", "detail": "requested"},
+            {**state, "state": "error", "detail": "late"},
+            {**state, "state": "starting"},
+            ok_result(b),
+            {**state, "state": "running"},
+        ):
+            await agent.send_json_to(frame)
+        await until(browser, is_state("running"))
+        await drain(browser)
+        row = await database_sync_to_async(ActiveSstvRx.objects.get)(station=station)
+        assert (row.state, row.start_request) == (State.RUNNING, b["request_id"])
+        await close(browser, agent)
+
+    asyncio.run(go())
+
+
+def test_audit_detail_catches_an_address_joined_by_stripping():
+    out = sstv_control.audit_detail("connect 10.1.2<.3 failed")
+    assert "10.1.2.3" not in out and "[ip]" in out
